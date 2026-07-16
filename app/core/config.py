@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     uyumsoft_username: str = "change-me"
     uyumsoft_password: SecretStr = SecretStr("change-me")
     uyumsoft_timeout_seconds: float = 20
+    uyumsoft_retry_attempts: int = Field(default=3, ge=1, le=5)
+    uyumsoft_retry_backoff_seconds: float = Field(default=0.2, ge=0, le=5)
 
     @property
     def uyumsoft_wsdl_url(self) -> str:
@@ -42,4 +44,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
