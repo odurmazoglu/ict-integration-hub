@@ -1,10 +1,12 @@
 from typing import Any
 
 import httpx
-from fastapi import HTTPException, status
 
+from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.core.config import Settings
 from app.schemas.odoo import OdooProbeResponse
+
+JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 
 class OdooJson2Client:
@@ -40,18 +42,17 @@ class OdooJson2Client:
         }
         result = await self._post_json("/json/2/res.company/search_read", payload)
         if not isinstance(result, list) or not result:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Odoo probe did not return company information.",
-            )
+            raise ConnectorError("Odoo probe did not return company information.")
         company = result[0]
+        if not isinstance(company, dict):
+            raise ConnectorError("Odoo probe returned an unexpected company payload.")
         return OdooProbeResponse(
             status="ok",
             company_id=int(company["id"]),
             company_name=str(company["name"]),
         )
 
-    async def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_json(self, path: str, payload: dict[str, Any]) -> JsonValue:
         try:
             headers = {
                 "Authorization": f"bearer {self._api_key}",
@@ -67,13 +68,10 @@ class OdooJson2Client:
                     response = await client.post(path, json=payload, headers=headers)
             response.raise_for_status()
         except httpx.TimeoutException as exc:
-            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="Odoo request timed out.") from exc
+            raise ConnectorTimeoutError("Odoo request timed out.") from exc
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Odoo returned HTTP {exc.response.status_code}.",
-            ) from exc
+            raise ConnectorError(f"Odoo returned HTTP {exc.response.status_code}.") from exc
         except httpx.HTTPError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Odoo request failed.") from exc
+            raise ConnectorError("Odoo request failed.") from exc
 
         return response.json()
