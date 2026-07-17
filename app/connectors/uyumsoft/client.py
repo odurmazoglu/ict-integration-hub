@@ -11,7 +11,12 @@ from zeep.exceptions import TransportError
 from zeep.transports import Transport
 
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
-from app.connectors.uyumsoft.invoice_mapping import build_invoice_list_query, normalize_invoice_list_response
+from app.connectors.uyumsoft.invoice_mapping import (
+    build_invoice_list_query_model,
+    is_unsuccessful_response,
+    normalize_invoice_list_response,
+    response_message,
+)
 from app.core.config import Settings
 from app.schemas.uyumsoft import (
     UyumsoftIdentityResponse,
@@ -109,11 +114,15 @@ class UyumsoftSoapClient:
         direction: InvoiceDirection,
         request: UyumsoftInvoiceListRequest,
     ) -> UyumsoftInvoiceListResponse:
-        query = build_invoice_list_query(request)
+        zeep_client = self._get_client()
+        query = build_invoice_list_query_model(zeep_client, request, direction=direction)
         raw_response = self._call_invoice_list(operation, query)
+        if is_unsuccessful_response(raw_response):
+            detail = response_message(raw_response) or "Uyumsoft invoice list request was not successful."
+            raise ConnectorError(detail)
         return normalize_invoice_list_response(raw_response, direction=direction, request=request)
 
-    def _call_invoice_list(self, operation: str, query: dict[str, Any]) -> Any:
+    def _call_invoice_list(self, operation: str, query: Any) -> Any:
         if operation not in READ_ONLY_OPERATIONS:
             raise ValueError(f"Operation {operation} is not allowed.")
         attempts = 0

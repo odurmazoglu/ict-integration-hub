@@ -62,3 +62,13 @@ Odoo Online JSON-2 API
 - API ve servis katmanlarına SOAP nesneleri taşınmaz; `app/schemas/uyumsoft_invoices.py` DTO modelleri kullanılır.
 - Listeleme tarih aralığı, sayfalama, timeout ve geçici transport hatası retry desteği sağlar.
 - Retry yalnız transport katmanı için yapılır; SOAP fault yanıtları tekrar denenmez.
+- Uyumsoft test WSDL adresi: `https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl`.
+- `GetInboxInvoiceList` input modeli `InboxInvoiceListQueryModel`, `GetOutboxInvoiceList` input modeli `OutboxInvoiceListQueryModel` olarak keşfedildi.
+- Listeleme connector'ı Zeep tip fabrikasıyla WSDL tipli sorgu nesnesi üretir; sözlük payload varsayımı kullanılmaz.
+- Her iki sorgu modelinde kullanılan alanlar: `ExecutionStartDate`, `ExecutionEndDate`, `PageIndex`, `PageSize`, `IncludeTagList`.
+- Inbox sorgu modelinde ayrıca WSDL'de `CreateStartDate`, `CreateEndDate`, `Status`, `InvoiceIds`, `InvoiceNumbers`, `StatusInList`, `StatusNotInList`, `SortColumn`, `SortMode`, `IsArchived`, `TargetTitle`, `TargetTcknVkn`, `Tags`, `OrderDocumentId`, `OnlyNewestInvoices` alanları bulunur.
+- Outbox sorgu modelinde ayrıca WSDL'de `CreateStartDate`, `CreateEndDate`, `Status`, `InvoiceIds`, `InvoiceNumbers`, `StatusInList`, `StatusNotInList`, `SortColumn`, `SortMode`, `IsArchived`, `TargetTitle`, `TargetTcknVkn`, `Tags`, `OrderDocumentId`, `Scenario` alanları bulunur.
+- `InboxInvoiceListResponse` ve `OutboxInvoiceListResponse` yapısı `Value`, `IsSucceded`, `Message` alanlarından oluşur. `Value` içinde `Items`, `PageIndex`, `PageSize`, `TotalCount`, `TotalPages` bulunan paged response döner.
+- Inbox item alanları `InvoiceId`, `DocumentId`, `Type`, `TypeCode`, `TargetTcknVkn`, `TargetTitle`, `EnvelopeIdentifier`, `Status`, `StatusCode`, `EnvelopeStatus`, `EnvelopeStatusCode`, `Message`, `CreateDateUtc`, `ExecutionDate`, `PayableAmount`, `TaxTotal`, `TaxExclusiveAmount`, `DocumentCurrencyCode`, `ExchangeRate`, VAT tutarları, `OrderDocumentId`, `IsArchived`, `InvoiceTipType`, `InvoiceTipTypeCode`, `IsNew`, `IsSeen` olarak keşfedildi.
+- Outbox item alanları inbox alanlarına ek olarak `Scenario`, `ScenarioCode`, `LocalDocumentId`, `ExtraInformation` içerir.
+- Provider-specific alanlar `extra_fields` içinde korunur; credential, token, büyük metin, binary ve XML benzeri içerikler normalize edilmeden önce redakte edilir.
