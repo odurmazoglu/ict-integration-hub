@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from time import sleep
 from typing import Any
@@ -6,9 +7,11 @@ from pydantic import SecretStr
 from requests import ConnectionError as RequestsConnectionError
 from requests import Timeout as RequestsTimeout
 from zeep import Client
+from zeep import Settings as ZeepSettings
 from zeep.exceptions import Error as ZeepError
 from zeep.exceptions import TransportError
 from zeep.transports import Transport
+from zeep.wsse.username import UsernameToken
 
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.connectors.uyumsoft.invoice_mapping import (
@@ -28,6 +31,10 @@ from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceListR
 
 READ_ONLY_OPERATIONS = frozenset(
     {"TestConnection", "WhoAmI", "GetSystemDate", "GetInboxInvoiceList", "GetOutboxInvoiceList"}
+)
+SENSITIVE_FAULT_PATTERNS = (
+    re.compile(r"(Kullanıcı:\s*)[^,]+", re.IGNORECASE),
+    re.compile(r"(Ip:\s*)[0-9a-fA-F:.]+", re.IGNORECASE),
 )
 
 
@@ -102,9 +109,9 @@ class UyumsoftSoapClient:
             raise ValueError(f"Operation {operation} is not allowed.")
         try:
             service = self._get_client().service
-            return getattr(service, operation)(self._username, self._password.get_secret_value())
+            return getattr(service, operation)()
         except ZeepError as exc:
-            raise ConnectorError(f"Uyumsoft SOAP error: {exc}") from exc
+            raise ConnectorError(f"Uyumsoft SOAP error: {_sanitize_fault_message(str(exc))}") from exc
         except Exception as exc:
             raise ConnectorError("Uyumsoft request failed.") from exc
 
@@ -140,7 +147,7 @@ class UyumsoftSoapClient:
                     raise ConnectorError("Uyumsoft transport request failed.") from exc
                 self._sleep_before_retry()
             except ZeepError as exc:
-                raise ConnectorError(f"Uyumsoft SOAP error: {exc}") from exc
+                raise ConnectorError(f"Uyumsoft SOAP error: {_sanitize_fault_message(str(exc))}") from exc
             except Exception as exc:
                 raise ConnectorError("Uyumsoft request failed.") from exc
 
@@ -158,6 +165,8 @@ class UyumsoftSoapClient:
             self._client = Client(
                 wsdl=self._wsdl_url,
                 transport=Transport(timeout=self._timeout_seconds, operation_timeout=self._timeout_seconds),
+                settings=ZeepSettings(strict=False),
+                wsse=UsernameToken(self._username, self._password.get_secret_value(), use_digest=False),
             )
         return self._client
 
@@ -173,3 +182,10 @@ class UyumsoftSoapClient:
 def _is_transient_transport_error(exc: TransportError) -> bool:
     status_code = getattr(exc, "status_code", None)
     return isinstance(status_code, int) and status_code >= 500
+
+
+def _sanitize_fault_message(message: str) -> str:
+    sanitized = message
+    for pattern in SENSITIVE_FAULT_PATTERNS:
+        sanitized = pattern.sub(r"\1<redacted>", sanitized)
+    return sanitized

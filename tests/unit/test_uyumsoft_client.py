@@ -6,7 +6,7 @@ from requests import ConnectionError as RequestsConnectionError
 from zeep.exceptions import Fault
 
 from app.connectors.exceptions import ConnectorError
-from app.connectors.uyumsoft.client import UyumsoftSoapClient
+from app.connectors.uyumsoft.client import UyumsoftSoapClient, _sanitize_fault_message
 from app.schemas.uyumsoft_invoices import UyumsoftInvoiceListRequest
 
 
@@ -16,19 +16,13 @@ class FakeInvoiceListQueryModel:
 
 
 class FakeService:
-    def TestConnection(self, username: str, password: str) -> str:
-        assert username == "user"
-        assert password == "pass"
+    def TestConnection(self) -> str:
         return "OK"
 
-    def WhoAmI(self, username: str, password: str) -> dict[str, str]:
-        assert username == "user"
-        assert password == "pass"
-        return {"username": username}
+    def WhoAmI(self) -> dict[str, str]:
+        return {"username": "user"}
 
-    def GetSystemDate(self, username: str, password: str) -> datetime:
-        assert username == "user"
-        assert password == "pass"
+    def GetSystemDate(self) -> datetime:
         return datetime(2026, 7, 16, 9, 0, tzinfo=UTC)
 
     def GetInboxInvoiceList(self, query: dict[str, Any]) -> dict[str, Any]:
@@ -141,6 +135,14 @@ def test_wsdl_inspection_marks_read_only_operations() -> None:
         "TestConnection",
         "WhoAmI",
     ]
+
+
+def test_fault_message_sanitizer_redacts_username_and_ip() -> None:
+    message = "Bu sisteme erişmek için gerekli yetkiniz yok, Kullanıcı: secret-user, Ip: 192.0.2.10"
+
+    assert _sanitize_fault_message(message) == (
+        "Bu sisteme erişmek için gerekli yetkiniz yok, Kullanıcı: <redacted>, Ip: <redacted>"
+    )
 
 
 def test_uyumsoft_list_inbox_invoices_maps_response() -> None:
