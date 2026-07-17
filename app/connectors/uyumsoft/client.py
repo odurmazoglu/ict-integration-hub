@@ -1,12 +1,12 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import HTTPException, status
 from pydantic import SecretStr
 from zeep import Client
 from zeep.exceptions import Error as ZeepError
 from zeep.transports import Transport
 
+from app.connectors.exceptions import ConnectorError
 from app.core.config import Settings
 from app.schemas.uyumsoft import (
     UyumsoftIdentityResponse,
@@ -79,9 +79,9 @@ class UyumsoftSoapClient:
             service = self._get_client().service
             return getattr(service, operation)(self._username, self._password.get_secret_value())
         except ZeepError as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Uyumsoft SOAP error: {exc}") from exc
+            raise ConnectorError(f"Uyumsoft SOAP error: {exc}") from exc
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Uyumsoft request failed.") from exc
+            raise ConnectorError("Uyumsoft request failed.") from exc
 
     def _get_client(self) -> Client:
         if self._client is None:
