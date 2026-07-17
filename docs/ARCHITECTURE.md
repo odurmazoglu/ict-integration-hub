@@ -72,3 +72,40 @@ Odoo Online JSON-2 API
 - Inbox item alanları `InvoiceId`, `DocumentId`, `Type`, `TypeCode`, `TargetTcknVkn`, `TargetTitle`, `EnvelopeIdentifier`, `Status`, `StatusCode`, `EnvelopeStatus`, `EnvelopeStatusCode`, `Message`, `CreateDateUtc`, `ExecutionDate`, `PayableAmount`, `TaxTotal`, `TaxExclusiveAmount`, `DocumentCurrencyCode`, `ExchangeRate`, VAT tutarları, `OrderDocumentId`, `IsArchived`, `InvoiceTipType`, `InvoiceTipTypeCode`, `IsNew`, `IsSeen` olarak keşfedildi.
 - Outbox item alanları inbox alanlarına ek olarak `Scenario`, `ScenarioCode`, `LocalDocumentId`, `ExtraInformation` içerir.
 - Provider-specific alanlar `extra_fields` içinde korunur; credential, token, büyük metin, binary ve XML benzeri içerikler normalize edilmeden önce redakte edilir.
+
+## Uyumsoft authentication and security
+
+- Uyumsoft test Integration WSDL'i `BasicHttpBinding_IIntegration` için SOAP 1.1 + HTTPS binding yayınlar.
+- WSDL policy içinde `TransportBinding`, `HttpsToken`, `SignedSupportingTokens`, `UsernameToken`, `IncludeTimestamp`, `Basic256` ve `Wss10` assertion'ları bulunur.
+- Zeep operation signature'larına göre `TestConnection`, `WhoAmI` ve `GetSystemDate` body parametresi almaz; kullanıcı adı/parola SOAP body argümanı olarak gönderilmez.
+- Connector kimlik doğrulamayı SOAP header seviyesinde WS-Security `UsernameToken` ile yapar.
+- Canlı testte `UsernameToken` `PasswordText` formatı WCF güvenlik doğrulamasını geçip sağlayıcı yetkilendirme katmanına ulaşmıştır.
+- Canlı testte `PasswordDigest` formatı `a:InvalidSecurity` SOAP fault üretmiştir; bu nedenle varsayılan istemci yapılandırması `PasswordText` kullanır.
+- Zeep otomatik olarak SOAPAction değerlerini WSDL binding'inden kullanır:
+  - `http://tempuri.org/IIntegration/TestConnection`
+  - `http://tempuri.org/IIntegration/WhoAmI`
+  - `http://tempuri.org/IIntegration/GetInboxInvoiceList`
+  - `http://tempuri.org/IIntegration/GetOutboxInvoiceList`
+- Endpoint URL `https://efatura-test.uyumsoft.com.tr/Services/Integration` olarak WSDL service port'undan alınır.
+- Gerekli runtime ayarları:
+  - `UYUMSOFT_ENVIRONMENT=test`
+  - `UYUMSOFT_TEST_WSDL_URL=https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl`
+  - `UYUMSOFT_USERNAME`
+  - `UYUMSOFT_PASSWORD`
+- `.env` içeriği loglanmaz; provider fault mesajlarında kullanıcı adı benzeri alanlar connector sınırında redakte edilir.
+
+### Common authentication failures
+
+- WS-Security header yoksa Uyumsoft SOAP fault: `a:InvalidSecurity` / `An error occurred when verifying security for the message.`
+- Kullanıcı adı/parola body argümanı olarak gönderilirse Zeep signature hatası oluşur; WSDL bu operasyonlarda body credential alanı tanımlamaz.
+- `PasswordDigest` kullanılırsa Uyumsoft test ortamı yine `a:InvalidSecurity` döndürür.
+- `PasswordText` ile güvenlik doğrulaması geçip `s:Client` ve `Bu sisteme erişmek için gerekli yetkiniz yok` dönerse istek provider authorization katmanına ulaşmıştır; credential, hesap yetkisi, IP allowlist veya test ortamı aktivasyonu provider tarafında doğrulanmalıdır.
+- `UYUMSOFT_USERNAME` veya `UYUMSOFT_PASSWORD` placeholder ise canlı smoke testi provider authorization sonucuna ulaşsa bile doğrulanmış başarılı auth sayılmaz.
+
+### Troubleshooting
+
+1. `python3 scripts/inspect_uyumsoft_wsdl.py --wsdl-url https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl` ile WSDL erişimini ve operation signature'larını doğrula.
+2. `ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/diagnose_uyumsoft_auth.py --from <iso> --to <iso>` ile güvenli authentication diagnostic çalıştır.
+3. Diagnostic çıktısında `has_ws_security=true`, `has_username_token=true`, `password_type=PasswordText`, doğru SOAPAction ve doğru endpoint olduğunu doğrula.
+4. Fault code `a:InvalidSecurity` ise client-side security header veya password formatı tekrar incelenmelidir.
+5. Fault code `s:Client` ve provider yetki mesajı varsa client security envelope kabul edilmiştir; provider credential/yetki/IP/test ortamı aktivasyonu gereklidir.

@@ -95,6 +95,24 @@ ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/uyumsoft_readonly_smoke.py \
   --page-size 1
 ```
 
+## Uyumsoft authentication diagnostic
+
+Uyumsoft test ortamı SOAP güvenlik doğrulaması için HTTPS + WS-Security `UsernameToken` kullanır. Connector, WSDL'deki zero-argument read-only operasyonlara kullanıcı adı/parola body parametresi geçmez; credential bilgisi SOAP header içinde `PasswordText` formatıyla gönderilir.
+
+Canlı authentication diagnostic varsayılan olarak kapalıdır. Yalnız güvenli metadata üretir; credential, token, XML/PDF veya fatura içeriği yazdırmaz.
+
+```bash
+ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/diagnose_uyumsoft_auth.py \
+  --from 2026-07-16T00:00:00+00:00 \
+  --to 2026-07-17T00:00:00+00:00
+```
+
+Yorumlama:
+
+- `a:InvalidSecurity`: WS-Security header, binding veya password formatı client tarafında tekrar incelenmelidir.
+- `s:Client` ve yetki mesajı: SOAP security envelope provider tarafından işlenmiştir; credential, hesap yetkisi, IP allowlist veya test ortamı aktivasyonu Uyumsoft tarafında doğrulanmalıdır.
+- `Missing credentials`: runtime ayarlarında gerçek `UYUMSOFT_USERNAME` / `UYUMSOFT_PASSWORD` yoktur.
+
 ## Migration
 
 ```bash
