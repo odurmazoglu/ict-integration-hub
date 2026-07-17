@@ -24,6 +24,35 @@ ICT Teknoloji'nin Odoo Online ERP ortamı ile harici servisler arasında çalı�
 6. Sonraki fazlarda Odoo'da taslak tedarikçi/müşteri faturası oluşturma
 7. Sonraki fazlarda Customer Asset ve maliyet ilişkileri
 
+## Roadmap
+
+Repository work should follow:
+
+```text
+Issue -> Milestone -> Labels -> Branch -> Draft PR -> CI -> Review -> Merge
+```
+
+Milestones:
+
+- `Foundation`: bootstrap, CI/CD, Docker, WSDL discovery, read-only connector probes, read-only listing, and metadata persistence. This milestone can be closed once the merged foundation work is accepted as complete.
+- `Invoice Sync`: incremental sync engine and safe recurring metadata refresh.
+- `Attachments`: XML/UBL download, storage, parsing, and parse diagnostics.
+- `Odoo Integration`: read-only mapping preview and controlled Odoo draft invoice creation.
+- `Production Ready`: production gates, runbooks, monitoring, rollback, and go-live checklist.
+
+Roadmap issues:
+
+- [Incremental Sync Engine](https://github.com/odurmazoglu/ict-integration-hub/issues/12) -> `Invoice Sync`
+- [XML / UBL Download](https://github.com/odurmazoglu/ict-integration-hub/issues/13) -> `Attachments`
+- [UBL Parser](https://github.com/odurmazoglu/ict-integration-hub/issues/14) -> `Attachments`
+- [Odoo Mapping Preview](https://github.com/odurmazoglu/ict-integration-hub/issues/15) -> `Odoo Integration`
+- [Odoo Draft Invoice Creation](https://github.com/odurmazoglu/ict-integration-hub/issues/16) -> `Odoo Integration`
+- [Production Readiness](https://github.com/odurmazoglu/ict-integration-hub/issues/17) -> `Production Ready`
+
+Expected labels are documented in `CONTRIBUTING.md`: `feature`, `bug`, `enhancement`, `refactor`, `documentation`, `security`, `database`, `uyumsoft`, `odoo`, `ci`, `testing`, and `blocked`.
+
+Current automation note: issue creation is available through the GitHub connector, but milestone and label creation are not exposed by the available tools. If the labels or milestones are missing in GitHub, create them manually and assign them to the roadmap issues above.
+
 ## Teknoloji
 
 - Python 3.12
