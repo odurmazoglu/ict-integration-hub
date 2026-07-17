@@ -1,0 +1,80 @@
+name: Feature request
+description: Propose scoped, testable work for ICT Integration Hub.
+title: "[Feature]: "
+labels:
+  - feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for planned product, connector, service, database, or documentation work.
+        Keep first-phase Uyumsoft work read-only unless a later approved issue explicitly changes that boundary.
+  - type: input
+    id: objective
+    attributes:
+      label: Objective
+      description: What outcome should this issue achieve?
+      placeholder: Persist normalized Uyumsoft invoice metadata idempotently.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: List what is included and any explicit non-goals.
+      placeholder: |
+        In scope:
+        - ...
+
+        Out of scope:
+        - ...
+    validations:
+      required: true
+  - type: textarea
+    id: safety_boundaries
+    attributes:
+      label: Safety boundaries
+      description: State provider, data, secret, and read/write boundaries.
+      value: |
+        - Uyumsoft test environment only unless explicitly approved otherwise.
+        - Do not call `SetInvoicesTaken`, `SendInvoice`, `Cancel*`, `RetrySendInvoices`, `MoveToDraftStatus`, or any status-changing SOAP operation.
+        - Do not call Odoo create/write/unlink/action_post unless the issue explicitly authorizes it.
+        - Do not print, log, commit, or expose `.env` contents or secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: Define how completion will be verified.
+      placeholder: |
+        - Tests cover ...
+        - `pytest` passes.
+        - `ruff check .` passes.
+        - Docker starts and `/health` is verified.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Known dependencies
+      description: List prerequisite issues, provider access, migrations, or external approvals.
+      placeholder: "- Depends on #..."
+    validations:
+      required: false
+  - type: input
+    id: milestone
+    attributes:
+      label: Target milestone
+      description: Foundation, Invoice Sync, Attachments, Odoo Integration, or Production Ready.
+      placeholder: Invoice Sync
+    validations:
+      required: true
+  - type: input
+    id: suggested_labels
+    attributes:
+      label: Suggested labels
+      description: Use the repository label set documented in CONTRIBUTING.md.
+      placeholder: feature, uyumsoft, testing
+    validations:
+      required: true

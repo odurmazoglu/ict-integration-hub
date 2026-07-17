@@ -1,0 +1,84 @@
+name: Bug report
+description: Report a reproducible defect, regression, or operational failure.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for failures in existing behavior. Do not include secrets, `.env` values, full invoice payloads, XML/PDF contents, or credentials.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: Uyumsoft read-only sync returns duplicate records after repeated runs.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe reproduction.
+      placeholder: |
+        1. Start Docker Compose.
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Redact secrets and payload content.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Safe logs or diagnostics
+      description: Include only redacted, relevant excerpts.
+      render: text
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Uyumsoft connector
+        - Odoo connector
+        - API
+        - Database / migrations
+        - CI / Docker
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: safety_impact
+    attributes:
+      label: Safety impact
+      description: Does this affect secrets, production access, provider state, Odoo writes, or invoice data?
+      placeholder: No secrets exposed; no provider state changes observed.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation already run
+      description: List commands and results if available.
+      placeholder: |
+        - `pytest` -> ...
+        - `ruff check .` -> ...
+        - `docker compose ps` -> ...
+    validations:
+      required: false
