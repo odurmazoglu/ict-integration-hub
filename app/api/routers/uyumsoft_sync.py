@@ -8,7 +8,13 @@ from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.schemas.invoice_sync import SyncDirection, UyumsoftInvoiceSyncResponse
 from app.schemas.uyumsoft_invoices import InvoiceDirection
 from app.services.invoice_persistence import InvoicePersistenceService
-from app.services.uyumsoft_invoice_sync import MAX_SYNC_PAGES, UyumsoftInvoiceSyncRequest, UyumsoftInvoiceSyncWorkflow
+from app.services.uyumsoft_invoice_sync import (
+    MAX_SYNC_PAGES,
+    SyncRunRepository,
+    UyumsoftInvoiceSyncRequest,
+    UyumsoftInvoiceSyncResult,
+    UyumsoftInvoiceSyncWorkflow,
+)
 
 router = APIRouter(prefix="/api/v1/sync/uyumsoft", tags=["uyumsoft-sync"])
 
@@ -50,6 +56,7 @@ def sync_uyumsoft_invoices(
         workflow = UyumsoftInvoiceSyncWorkflow(
             client=client,
             persistence=InvoicePersistenceService(session),
+            run_repository=SyncRunRepository(session),
         )
         result = workflow.run(
             UyumsoftInvoiceSyncRequest(
@@ -62,10 +69,10 @@ def sync_uyumsoft_invoices(
         )
         session.commit()
     except ConnectorTimeoutError as exc:
-        session.rollback()
+        session.commit()
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=exc.safe_message) from exc
     except ConnectorError as exc:
-        session.rollback()
+        session.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.safe_message) from exc
     except ValueError as exc:
         session.rollback()
@@ -74,11 +81,19 @@ def sync_uyumsoft_invoices(
         session.rollback()
         raise
 
+    return _response_from_result(result)
+
+
+def _response_from_result(result: UyumsoftInvoiceSyncResult) -> UyumsoftInvoiceSyncResponse:
     return UyumsoftInvoiceSyncResponse(
+        run_id=result.run_id,
         provider=result.provider,
+        status=result.status,
         created=result.created,
         updated=result.updated,
         skipped=result.skipped,
+        cursor_state=result.cursor_state,
+        failure_message=result.failure_message,
         directions=[
             {
                 "direction": summary.direction,
@@ -87,6 +102,8 @@ def sync_uyumsoft_invoices(
                 "created": summary.created,
                 "updated": summary.updated,
                 "skipped": summary.skipped,
+                "status": summary.status,
+                "failure_message": summary.failure_message,
             }
             for summary in result.directions
         ],
