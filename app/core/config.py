@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     odoo_timeout_seconds: float = 10
 
     uyumsoft_environment: UyumsoftEnvironment = "test"
-    uyumsoft_test_wsdl_url: AnyHttpUrl = Field(default="https://efaturatest.uyumsoft.com.tr/Services/Integration?wsdl")
+    uyumsoft_test_wsdl_url: AnyHttpUrl = Field(default="https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl")
     uyumsoft_prod_wsdl_url: AnyHttpUrl = Field(default="https://efatura.uyumsoft.com.tr/Services/Integration?wsdl")
     uyumsoft_username: str = "change-me"
     uyumsoft_password: SecretStr = SecretStr("change-me")

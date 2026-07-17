@@ -12,6 +12,12 @@ from app.schemas.uyumsoft_invoices import (
     UyumsoftInvoiceSummary,
 )
 
+UYUMSOFT_NAMESPACE = "http://tempuri.org/"
+QUERY_MODEL_NAMES: dict[InvoiceDirection, str] = {
+    "Inbox": "InboxInvoiceListQueryModel",
+    "Outbox": "OutboxInvoiceListQueryModel",
+}
+
 ITEM_CONTAINER_KEYS = {
     "data",
     "invoice",
@@ -27,28 +33,45 @@ ITEM_CONTAINER_KEYS = {
 }
 
 TOTAL_COUNT_KEYS = ("TotalCount", "TotalRecords", "RecordCount", "Count", "total_count")
+PAGED_RESPONSE_KEYS = ("Value", "value", "Result", "result")
+SENSITIVE_FIELD_MARKERS = ("password", "secret", "token", "apikey", "api_key", "authorization", "credential")
+MAX_EXTRA_TEXT_LENGTH = 500
+REDACTED_TEXT_MARKERS = ("<?xml", "<Invoice", "<Despatch", "<CreditNote", "<ApplicationResponse", "UBLExtensions")
 
 FIELD_ALIASES = {
     "invoice_id": ("InvoiceId", "InvoiceID", "Id", "ID"),
-    "ettn": ("ETTN", "Ettn", "UUID", "Uuid"),
-    "invoice_number": ("InvoiceNumber", "InvoiceNo", "InvoiceNoText", "DocumentNo", "Number"),
-    "invoice_date": ("InvoiceDate", "IssueDate", "Date", "CreateDate"),
+    "ettn": ("ETTN", "Ettn", "UUID", "Uuid", "InvoiceId", "InvoiceID"),
+    "invoice_number": ("InvoiceNumber", "InvoiceNo", "InvoiceNoText", "DocumentNo", "DocumentId", "Number"),
+    "invoice_date": ("InvoiceDate", "IssueDate", "ExecutionDate", "Date", "CreateDate", "CreateDateUtc"),
     "sender": ("Sender", "SenderName", "Supplier", "SupplierName"),
-    "receiver": ("Receiver", "ReceiverName", "Customer", "CustomerName"),
-    "tax_number": ("TaxNumber", "VKN", "TCKN", "SenderTaxNumber", "ReceiverTaxNumber"),
+    "receiver": ("Receiver", "ReceiverName", "Customer", "CustomerName", "TargetTitle"),
+    "tax_number": ("TaxNumber", "VKN", "TCKN", "SenderTaxNumber", "ReceiverTaxNumber", "TargetTcknVkn"),
     "currency": ("Currency", "CurrencyCode", "DocumentCurrencyCode"),
     "total_amount": ("TotalAmount", "PayableAmount", "Amount", "InvoiceTotal", "Total"),
     "status": ("Status", "State", "InvoiceStatus"),
 }
 
 
-def build_invoice_list_query(request: UyumsoftInvoiceListRequest) -> dict[str, Any]:
-    return {
-        "StartDate": request.from_date,
-        "EndDate": request.to_date,
+def build_invoice_list_query_model(
+    zeep_client: Any,
+    request: UyumsoftInvoiceListRequest,
+    *,
+    direction: InvoiceDirection,
+) -> Any:
+    query_model_name = QUERY_MODEL_NAMES[direction]
+    query_model = zeep_client.get_type(f"{{{UYUMSOFT_NAMESPACE}}}{query_model_name}")
+    query_values: dict[str, Any] = {
+        "ExecutionStartDate": request.from_date,
+        "ExecutionEndDate": request.to_date,
         "PageIndex": request.page,
         "PageSize": request.page_size,
+        "IncludeTagList": False,
     }
+    if direction == "Inbox":
+        query_values["OnlyNewestInvoices"] = False
+    return query_model(
+        **query_values,
+    )
 
 
 def normalize_invoice_list_response(
@@ -58,16 +81,29 @@ def normalize_invoice_list_response(
     request: UyumsoftInvoiceListRequest,
 ) -> UyumsoftInvoiceListResponse:
     response_mapping = _to_mapping(raw_response)
+    paged_response = _extract_paged_response(response_mapping)
     raw_items = _extract_items(raw_response)
     invoices = [_normalize_invoice_summary(raw_item, direction=direction) for raw_item in raw_items]
     return UyumsoftInvoiceListResponse(
         direction=direction,
         page=request.page,
         page_size=request.page_size,
-        total_count=_to_int(_first_value(response_mapping, TOTAL_COUNT_KEYS)),
+        total_count=_first_int(
+            _first_value(response_mapping, TOTAL_COUNT_KEYS),
+            _first_value(paged_response, TOTAL_COUNT_KEYS),
+        ),
         invoices=invoices,
         extra_fields=_response_extra_fields(response_mapping),
     )
+
+
+def is_unsuccessful_response(raw_response: Any) -> bool:
+    response_mapping = _to_mapping(raw_response)
+    return response_mapping.get("IsSucceded") is False
+
+
+def response_message(raw_response: Any) -> str | None:
+    return _to_optional_str(_to_mapping(raw_response).get("Message"))
 
 
 def _normalize_invoice_summary(raw_item: Any, *, direction: InvoiceDirection) -> UyumsoftInvoiceSummary:
@@ -93,7 +129,9 @@ def _normalize_invoice_summary(raw_item: Any, *, direction: InvoiceDirection) ->
         total_amount=_to_decimal(values["total_amount"]),
         direction=direction,
         status=_to_optional_str(values["status"]),
-        extra_fields={key: value for key, value in item.items() if key not in known_source_keys},
+        extra_fields={
+            key: _sanitize_extra_value(key, value) for key, value in item.items() if key not in known_source_keys
+        },
     )
 
 
@@ -102,6 +140,16 @@ def _extract_items(raw_response: Any) -> list[Any]:
         return raw_response
 
     mapping = _to_mapping(raw_response)
+    paged_response = _extract_paged_response(mapping)
+    if paged_response:
+        items = paged_response.get("Items")
+        if isinstance(items, list):
+            return items
+        if isinstance(items, tuple):
+            return list(items)
+        if items is None:
+            return []
+
     for key, value in mapping.items():
         if _normalize_key(key) not in ITEM_CONTAINER_KEYS:
             continue
@@ -117,7 +165,20 @@ def _extract_items(raw_response: Any) -> list[Any]:
 
 def _response_extra_fields(mapping: dict[str, Any]) -> dict[str, Any]:
     excluded_keys = {_normalize_key(key) for key in (*ITEM_CONTAINER_KEYS, *TOTAL_COUNT_KEYS)}
-    return {key: value for key, value in mapping.items() if _normalize_key(key) not in excluded_keys}
+    return {
+        key: _sanitize_extra_value(key, value)
+        for key, value in mapping.items()
+        if _normalize_key(key) not in excluded_keys
+    }
+
+
+def _extract_paged_response(mapping: dict[str, Any]) -> dict[str, Any]:
+    for key in PAGED_RESPONSE_KEYS:
+        value = mapping.get(key)
+        nested_mapping = _to_mapping(value)
+        if nested_mapping:
+            return nested_mapping
+    return {}
 
 
 def _to_mapping(value: Any) -> dict[str, Any]:
@@ -166,7 +227,10 @@ def _to_datetime(value: Any) -> datetime | None:
     if not text:
         return None
     normalized = text.replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(normalized)
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed
@@ -195,3 +259,35 @@ def _to_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        parsed = _to_int(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _sanitize_extra_value(key: str, value: Any) -> Any:
+    normalized_key = _normalize_key(key)
+    if any(marker in normalized_key for marker in SENSITIVE_FIELD_MARKERS):
+        return "<redacted>"
+    if isinstance(value, bytes):
+        return f"<redacted binary: {len(value)} bytes>"
+    if isinstance(value, str):
+        stripped = value.strip()
+        if _looks_like_invoice_payload(stripped) or len(stripped) > MAX_EXTRA_TEXT_LENGTH:
+            return f"<redacted text: {len(value)} chars>"
+        return value
+    if isinstance(value, Mapping):
+        return {str(item_key): _sanitize_extra_value(str(item_key), item) for item_key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_extra_value(key, item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_extra_value(key, item) for item in value]
+    return value
+
+
+def _looks_like_invoice_payload(value: str) -> bool:
+    return any(marker in value for marker in REDACTED_TEXT_MARKERS)
