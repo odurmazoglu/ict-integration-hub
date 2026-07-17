@@ -35,8 +35,6 @@ Uyumsoft test servisinden gelen ve giden fatura listelerini salt-okunur olarak �
 ## Bilinen doğrulanmış operasyonlar
 
 - `GetInboxInvoiceList(query: InboxInvoiceListQueryModel)`
-- `GetInboxInvoiceData(invoiceId: string)`
-- `GetInboxInvoicePdf(invoiceId: string)`
 - `GetOutboxInvoiceList(query: OutboxInvoiceListQueryModel)`
 - `TestConnection()`
 - `WhoAmI()`

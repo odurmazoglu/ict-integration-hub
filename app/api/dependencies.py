@@ -2,6 +2,7 @@ from collections.abc import Generator
 from typing import Annotated
 
 from fastapi import Depends
+from sqlalchemy.orm import Session
 
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
@@ -18,6 +19,7 @@ def get_db_session() -> Generator:
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+DbSessionDep = Annotated[Session, Depends(get_db_session)]
 
 
 def get_odoo_client(settings: SettingsDep) -> OdooJson2Client:
