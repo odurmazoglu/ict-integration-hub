@@ -8,11 +8,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.dependencies import get_db_session, get_uyumsoft_client
+from app.connectors.exceptions import ConnectorError
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
 from app.db.base import Base
 from app.main import app
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
+from app.models.uyumsoft_sync_run import UyumsoftSyncRun
 from app.schemas.uyumsoft_invoices import (
     UyumsoftInvoiceListRequest,
     UyumsoftInvoiceListResponse,
@@ -29,6 +31,11 @@ class FakeSyncUyumsoftClient(UyumsoftSoapClient):
 
     def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
         return _response("Outbox", request, "outbox-ettn")
+
+
+class FailingOutboxSyncUyumsoftClient(FakeSyncUyumsoftClient):
+    def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
+        raise ConnectorError("Outbox transport failed")
 
 
 async def test_sync_endpoint_requires_read_only_confirmation(api_client: AsyncClient) -> None:
@@ -91,9 +98,51 @@ async def test_sync_endpoint_persists_read_only_summary(api_client: AsyncClient)
     assert body["created"] == 2
     assert body["updated"] == 0
     assert body["skipped"] == 0
+    assert body["status"] == "completed"
+    assert body["run_id"] is not None
+    assert body["cursor_state"]["Inbox"]["current_page"] == 1
+    assert body["cursor_state"]["Outbox"]["current_page"] == 1
     with session_factory() as session:
         records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+        sync_run = session.scalar(select(UyumsoftSyncRun))
     assert {record.direction for record in records} == {"Inbox", "Outbox"}
+    assert sync_run is not None
+    assert sync_run.status == "completed"
+
+
+async def test_sync_endpoint_records_failed_run_on_connector_error(api_client: AsyncClient) -> None:
+    session_factory = _session_factory()
+
+    def db_override() -> Generator[Session]:
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_uyumsoft_client] = lambda: FailingOutboxSyncUyumsoftClient()
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+                "direction": "Both",
+                "page_size": "10",
+                "max_pages": "1",
+                "confirm_read_only": "true",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 502
+    with session_factory() as session:
+        sync_run = session.scalar(select(UyumsoftSyncRun))
+        records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert sync_run is not None
+    assert sync_run.status == "failed"
+    assert sync_run.cursor_state["Inbox"]["status"] == "completed"
+    assert sync_run.cursor_state["Outbox"]["status"] == "failed"
+    assert {record.direction for record in records} == {"Inbox"}
 
 
 def _session_factory() -> sessionmaker[Session]:
