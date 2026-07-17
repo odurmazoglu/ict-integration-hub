@@ -6,4 +6,3 @@ class ConnectorError(Exception):
 
 class ConnectorTimeoutError(ConnectorError):
     pass
-

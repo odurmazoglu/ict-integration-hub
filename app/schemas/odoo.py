@@ -7,4 +7,3 @@ class OdooProbeResponse(BaseModel):
     status: str
     company_id: int
     company_name: str
-

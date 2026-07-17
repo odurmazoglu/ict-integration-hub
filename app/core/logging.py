@@ -27,4 +27,3 @@ def configure_logging(settings: Settings) -> None:
         }
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
-

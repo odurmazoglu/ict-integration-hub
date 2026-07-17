@@ -1,12 +1,17 @@
 from datetime import datetime
+from time import sleep
 from typing import Any
 
 from pydantic import SecretStr
+from requests import ConnectionError as RequestsConnectionError
+from requests import Timeout as RequestsTimeout
 from zeep import Client
 from zeep.exceptions import Error as ZeepError
+from zeep.exceptions import TransportError
 from zeep.transports import Transport
 
-from app.connectors.exceptions import ConnectorError
+from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
+from app.connectors.uyumsoft.invoice_mapping import build_invoice_list_query, normalize_invoice_list_response
 from app.core.config import Settings
 from app.schemas.uyumsoft import (
     UyumsoftIdentityResponse,
@@ -14,8 +19,11 @@ from app.schemas.uyumsoft import (
     UyumsoftSystemDateResponse,
     UyumsoftTestConnectionResponse,
 )
+from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceListRequest, UyumsoftInvoiceListResponse
 
-READ_ONLY_OPERATIONS = frozenset({"TestConnection", "WhoAmI", "GetSystemDate"})
+READ_ONLY_OPERATIONS = frozenset(
+    {"TestConnection", "WhoAmI", "GetSystemDate", "GetInboxInvoiceList", "GetOutboxInvoiceList"}
+)
 
 
 class UyumsoftSoapClient:
@@ -26,12 +34,16 @@ class UyumsoftSoapClient:
         username: str,
         password: SecretStr,
         timeout_seconds: float,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 0.2,
         zeep_client: Client | None = None,
     ) -> None:
         self._wsdl_url = wsdl_url
         self._username = username
         self._password = password
         self._timeout_seconds = timeout_seconds
+        self._retry_attempts = retry_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._client = zeep_client
 
     @classmethod
@@ -41,6 +53,8 @@ class UyumsoftSoapClient:
             username=settings.uyumsoft_username,
             password=settings.uyumsoft_password,
             timeout_seconds=settings.uyumsoft_timeout_seconds,
+            retry_attempts=settings.uyumsoft_retry_attempts,
+            retry_backoff_seconds=settings.uyumsoft_retry_backoff_seconds,
         )
 
     def test_connection(self) -> UyumsoftTestConnectionResponse:
@@ -72,6 +86,12 @@ class UyumsoftSoapClient:
             read_only_operations=sorted(READ_ONLY_OPERATIONS),
         )
 
+    def list_inbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
+        return self._list_invoices("GetInboxInvoiceList", "Inbox", request)
+
+    def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
+        return self._list_invoices("GetOutboxInvoiceList", "Outbox", request)
+
     def _call(self, operation: str) -> Any:
         if operation not in READ_ONLY_OPERATIONS:
             raise ValueError(f"Operation {operation} is not allowed.")
@@ -82,6 +102,47 @@ class UyumsoftSoapClient:
             raise ConnectorError(f"Uyumsoft SOAP error: {exc}") from exc
         except Exception as exc:
             raise ConnectorError("Uyumsoft request failed.") from exc
+
+    def _list_invoices(
+        self,
+        operation: str,
+        direction: InvoiceDirection,
+        request: UyumsoftInvoiceListRequest,
+    ) -> UyumsoftInvoiceListResponse:
+        query = build_invoice_list_query(request)
+        raw_response = self._call_invoice_list(operation, query)
+        return normalize_invoice_list_response(raw_response, direction=direction, request=request)
+
+    def _call_invoice_list(self, operation: str, query: dict[str, Any]) -> Any:
+        if operation not in READ_ONLY_OPERATIONS:
+            raise ValueError(f"Operation {operation} is not allowed.")
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                service = self._get_client().service
+                return getattr(service, operation)(query)
+            except (RequestsConnectionError, RequestsTimeout) as exc:
+                if attempts >= self._retry_attempts:
+                    self._raise_transport_error(exc)
+                self._sleep_before_retry()
+            except TransportError as exc:
+                if not _is_transient_transport_error(exc) or attempts >= self._retry_attempts:
+                    raise ConnectorError("Uyumsoft transport request failed.") from exc
+                self._sleep_before_retry()
+            except ZeepError as exc:
+                raise ConnectorError(f"Uyumsoft SOAP error: {exc}") from exc
+            except Exception as exc:
+                raise ConnectorError("Uyumsoft request failed.") from exc
+
+    def _sleep_before_retry(self) -> None:
+        if self._retry_backoff_seconds > 0:
+            sleep(self._retry_backoff_seconds)
+
+    def _raise_transport_error(self, exc: RequestsConnectionError | RequestsTimeout) -> None:
+        if isinstance(exc, RequestsTimeout):
+            raise ConnectorTimeoutError("Uyumsoft request timed out.") from exc
+        raise ConnectorError("Uyumsoft transport request failed.") from exc
 
     def _get_client(self) -> Client:
         if self._client is None:
@@ -98,3 +159,8 @@ class UyumsoftSoapClient:
         if hasattr(value, "__dict__"):
             return {key: item for key, item in vars(value).items() if not key.startswith("_")}
         return {"value": str(value)}
+
+
+def _is_transient_transport_error(exc: TransportError) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    return isinstance(status_code, int) and status_code >= 500

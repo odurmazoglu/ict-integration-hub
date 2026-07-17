@@ -32,4 +32,3 @@ class UyumsoftOperationsResponse(BaseModel):
     wsdl_url: str
     operations: list[str]
     read_only_operations: list[str]
-

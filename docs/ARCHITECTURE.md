@@ -53,3 +53,12 @@ Odoo Online JSON-2 API
 - Uyumsoft test ortamı MVP boyunca zorunludur.
 - Durum değiştiren SOAP operasyonları varsayılan olarak kapalıdır.
 - Odoo faturaları otomatik post edilmez.
+
+## Uyumsoft invoice listing connector
+
+- `app/connectors/uyumsoft/client.py` yalnız sağlayıcı çağrılarını yönetir ve FastAPI bağımlılığı içermez.
+- `GetInboxInvoiceList` ve `GetOutboxInvoiceList` salt-okunur kabul edilir; durum değiştiren operasyonlar uygulanmaz.
+- SOAP yanıtları `app/connectors/uyumsoft/invoice_mapping.py` içinde normalize edilir.
+- API ve servis katmanlarına SOAP nesneleri taşınmaz; `app/schemas/uyumsoft_invoices.py` DTO modelleri kullanılır.
+- Listeleme tarih aralığı, sayfalama, timeout ve geçici transport hatası retry desteği sağlar.
+- Retry yalnız transport katmanı için yapılır; SOAP fault yanıtları tekrar denenmez.
