@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routers import health, odoo, uyumsoft
+from app.api.routers import health, odoo, uyumsoft, uyumsoft_sync
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 
@@ -13,6 +13,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(odoo.router)
     app.include_router(uyumsoft.router)
+    app.include_router(uyumsoft_sync.router)
     return app
 
 

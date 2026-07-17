@@ -3,6 +3,8 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://ict:ict@db:5432/ict_integration_hub
     ports:
       - "8000:8000"
     depends_on:
@@ -31,4 +33,3 @@ services:
 
 volumes:
   postgres_data:
-

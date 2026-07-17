@@ -40,12 +40,13 @@ Odoo Online JSON-2 API
 
 1. Bağlantı ve WSDL keşfi
 2. Salt-okunur listeleme
-3. Ham XML/PDF saklama
-4. Parse ve doğrulama
-5. Odoo'ya taslak fatura
-6. Eşleştirme ekranları
-7. Zamanlanmış senkronizasyon
-8. Kontrollü canlı Uyumsoft geçişi
+3. Normalize metadata'nın Integration Hub veritabanına idempotent kaydı
+4. Ham XML/PDF saklama
+5. Parse ve doğrulama
+6. Odoo'ya taslak fatura
+7. Eşleştirme ekranları
+8. Zamanlanmış senkronizasyon
+9. Kontrollü canlı Uyumsoft geçişi
 
 ## Kritik kararlar
 
@@ -72,6 +73,91 @@ Odoo Online JSON-2 API
 - Inbox item alanları `InvoiceId`, `DocumentId`, `Type`, `TypeCode`, `TargetTcknVkn`, `TargetTitle`, `EnvelopeIdentifier`, `Status`, `StatusCode`, `EnvelopeStatus`, `EnvelopeStatusCode`, `Message`, `CreateDateUtc`, `ExecutionDate`, `PayableAmount`, `TaxTotal`, `TaxExclusiveAmount`, `DocumentCurrencyCode`, `ExchangeRate`, VAT tutarları, `OrderDocumentId`, `IsArchived`, `InvoiceTipType`, `InvoiceTipTypeCode`, `IsNew`, `IsSeen` olarak keşfedildi.
 - Outbox item alanları inbox alanlarına ek olarak `Scenario`, `ScenarioCode`, `LocalDocumentId`, `ExtraInformation` içerir.
 - Provider-specific alanlar `extra_fields` içinde korunur; credential, token, büyük metin, binary ve XML benzeri içerikler normalize edilmeden önce redakte edilir.
+
+## Uyumsoft invoice metadata persistence
+
+- Kalıcı metadata modeli `app/models/uyumsoft_invoice.py` içinde `UyumsoftInvoiceMetadata` olarak tanımlıdır.
+- Tablo adı `uyumsoft_invoice_metadata` şeklindedir.
+- Servis katmanı `app/services/invoice_persistence.py` içindedir; FastAPI veya connector nesnesine bağımlı değildir.
+- Sync workflow `app/services/uyumsoft_invoice_sync.py` içinde yalnız read-only listing metotlarını çağırır.
+- Manuel endpoint `POST /api/v1/sync/uyumsoft/invoices` yalnız Uyumsoft test ortamında ve `confirm_read_only=true` ile çalışır.
+- Endpoint structured summary döndürür: direction bazında pages_fetched, invoices_seen, created, updated ve skipped.
+
+### Schema
+
+Tablo alanları:
+
+- `id`
+- `provider`
+- `direction`
+- `provider_invoice_id`
+- `ettn`
+- `identity_key`
+- `identity_strategy`
+- `invoice_number`
+- `invoice_date`
+- `sender_name`
+- `sender_tax_number`
+- `receiver_name`
+- `receiver_tax_number`
+- `currency`
+- `total_amount`
+- `provider_status`
+- `raw_metadata`
+- `first_seen_at`
+- `last_seen_at`
+- `created_at`
+- `updated_at`
+
+Index ve constraint'ler:
+
+- `uq_uyumsoft_invoice_provider_direction_ettn`
+- `uq_uyumsoft_invoice_provider_direction_identity`
+- `ix_uyumsoft_invoice_provider_direction`
+- `ix_uyumsoft_invoice_ettn`
+- `ix_uyumsoft_invoice_invoice_date`
+
+### Idempotency
+
+- ETTN varsa birincil idempotency anahtarı `provider + direction + ettn` şeklindedir.
+- Aynı ETTN tekrar geldiğinde yeni kayıt oluşturulmaz.
+- Provider metadata değişirse mevcut kayıt güncellenir, `first_seen_at` korunur ve `last_seen_at` yenilenir.
+- Metadata değişmezse kayıt skipped sayılır; yine de `last_seen_at` son görülme zamanı olarak güncellenir.
+- ETTN yoksa fallback identity stratejisi kullanılır.
+
+### Fallback identity
+
+ETTN eksik olduğunda `identity_strategy = fallback_v1` olur. `identity_key`, aşağıdaki alanların canonical JSON çıktısından üretilen SHA-256 digest ile oluşturulur:
+
+- direction
+- provider_invoice_id
+- invoice_number
+- invoice_date
+- tax_number
+- currency
+- total_amount
+
+Bu strateji deterministiktir ve `provider + direction + identity_key` unique constraint ile veritabanında korunur.
+
+### Read-only sync flow
+
+1. API veya ilerideki scheduler dar tarih aralığı, direction, page_size ve max_pages ile workflow'u çağırır.
+2. Workflow yalnız `GetInboxInvoiceList` ve/veya `GetOutboxInvoiceList` çağırır.
+3. Connector SOAP yanıtını `UyumsoftInvoiceSummary` DTO'larına normalize eder.
+4. Persistence service kayıtları idempotent şekilde insert/update/skip eder.
+5. API yalnız aggregate summary döndürür; secret, XML/PDF veya tam fatura payload'ı loglanmaz.
+
+Bu akışta aşağıdakiler uygulanmaz: `SetInvoicesTaken`, `SendInvoice`, `Cancel*`, `RetrySendInvoices`, `MoveToDraftStatus`, invoice acknowledgement, status mutation, XML/PDF download, Odoo create/write/unlink/action_post.
+
+### Rollback
+
+Migration rollback için:
+
+```bash
+alembic downgrade -1
+```
+
+Bu rollback `uyumsoft_invoice_metadata` tablosunu ve ilişkili index/constraint'leri kaldırır.
 
 ## Uyumsoft authentication and security
 
