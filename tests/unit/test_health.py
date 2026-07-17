@@ -8,4 +8,3 @@ async def test_health(api_client: AsyncClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-

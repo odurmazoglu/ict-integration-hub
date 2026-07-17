@@ -16,4 +16,3 @@ class ConnectorEvent(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-

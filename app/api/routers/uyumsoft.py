@@ -4,9 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.dependencies import SettingsDep, UyumsoftClientDep
-
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
-
 from app.schemas.uyumsoft import (
     UyumsoftIdentityResponse,
     UyumsoftOperationsResponse,
@@ -61,6 +59,7 @@ def operations(
     except ConnectorError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.safe_message) from exc
 
+
 @router.get("/inbox", response_model=UyumsoftInvoiceListResponse)
 def inbox_invoices(
     client: UyumsoftClientDep,
@@ -108,4 +107,3 @@ def _build_invoice_list_request(
             detail="Query parameter 'from' must be before or equal to query parameter 'to'.",
         )
     return UyumsoftInvoiceListRequest(from_date=from_date, to_date=to_date, page=page, page_size=page_size)
-
