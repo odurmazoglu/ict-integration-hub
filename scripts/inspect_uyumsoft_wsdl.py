@@ -8,12 +8,14 @@ from zeep import Client
 from zeep.transports import Transport
 
 DEFAULT_WSDL_URL = "https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl"
-TARGET_OPERATIONS = ("GetInboxInvoiceList", "GetOutboxInvoiceList")
+TARGET_OPERATIONS = ("GetInboxInvoiceList", "GetOutboxInvoiceList", "GetInboxInvoiceData", "GetOutboxInvoiceData")
 TARGET_TYPES = (
     "InboxInvoiceListQueryModel",
     "OutboxInvoiceListQueryModel",
     "InboxInvoiceListResponse",
     "OutboxInvoiceListResponse",
+    "InvoiceDataResponse",
+    "InvoiceData",
     "PagedResponseOfInboxInvoiceListItem",
     "PagedResponseOfOutboxInvoiceListItem",
     "InboxInvoiceListItem",

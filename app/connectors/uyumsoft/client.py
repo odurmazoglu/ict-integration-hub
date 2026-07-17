@@ -1,4 +1,5 @@
 import re
+from base64 import b64decode
 from datetime import datetime
 from time import sleep
 from typing import Any
@@ -10,6 +11,7 @@ from zeep import Client
 from zeep import Settings as ZeepSettings
 from zeep.exceptions import Error as ZeepError
 from zeep.exceptions import TransportError
+from zeep.helpers import serialize_object
 from zeep.transports import Transport
 from zeep.wsse.username import UsernameToken
 
@@ -30,7 +32,15 @@ from app.schemas.uyumsoft import (
 from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceListRequest, UyumsoftInvoiceListResponse
 
 READ_ONLY_OPERATIONS = frozenset(
-    {"TestConnection", "WhoAmI", "GetSystemDate", "GetInboxInvoiceList", "GetOutboxInvoiceList"}
+    {
+        "TestConnection",
+        "WhoAmI",
+        "GetSystemDate",
+        "GetInboxInvoiceList",
+        "GetOutboxInvoiceList",
+        "GetInboxInvoiceData",
+        "GetOutboxInvoiceData",
+    }
 )
 SENSITIVE_FAULT_PATTERNS = (
     re.compile(r"(Kullanıcı:\s*)[^,]+", re.IGNORECASE),
@@ -104,6 +114,16 @@ class UyumsoftSoapClient:
     def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
         return self._list_invoices("GetOutboxInvoiceList", "Outbox", request)
 
+    def download_invoice_ubl_xml(self, *, direction: InvoiceDirection, invoice_id: str) -> bytes:
+        if not invoice_id.strip():
+            raise ConnectorError("Uyumsoft invoice id is required for document download.")
+        operation = "GetInboxInvoiceData" if direction == "Inbox" else "GetOutboxInvoiceData"
+        raw_response = self._call_invoice_data(operation, invoice_id)
+        if is_unsuccessful_response(raw_response):
+            detail = response_message(raw_response) or "Uyumsoft invoice document request was not successful."
+            raise ConnectorError(detail)
+        return _invoice_data_bytes(raw_response)
+
     def _call(self, operation: str) -> Any:
         if operation not in READ_ONLY_OPERATIONS:
             raise ValueError(f"Operation {operation} is not allowed.")
@@ -138,6 +158,28 @@ class UyumsoftSoapClient:
             try:
                 service = self._get_client().service
                 return getattr(service, operation)(query)
+            except (RequestsConnectionError, RequestsTimeout) as exc:
+                if attempts >= self._retry_attempts:
+                    self._raise_transport_error(exc)
+                self._sleep_before_retry()
+            except TransportError as exc:
+                if not _is_transient_transport_error(exc) or attempts >= self._retry_attempts:
+                    raise ConnectorError("Uyumsoft transport request failed.") from exc
+                self._sleep_before_retry()
+            except ZeepError as exc:
+                raise ConnectorError(f"Uyumsoft SOAP error: {_sanitize_fault_message(str(exc))}") from exc
+            except Exception as exc:
+                raise ConnectorError("Uyumsoft request failed.") from exc
+
+    def _call_invoice_data(self, operation: str, invoice_id: str) -> Any:
+        if operation not in READ_ONLY_OPERATIONS:
+            raise ValueError(f"Operation {operation} is not allowed.")
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                service = self._get_client().service
+                return getattr(service, operation)(invoice_id)
             except (RequestsConnectionError, RequestsTimeout) as exc:
                 if attempts >= self._retry_attempts:
                     self._raise_transport_error(exc)
@@ -189,3 +231,30 @@ def _sanitize_fault_message(message: str) -> str:
     for pattern in SENSITIVE_FAULT_PATTERNS:
         sanitized = pattern.sub(r"\1<redacted>", sanitized)
     return sanitized
+
+
+def _invoice_data_bytes(raw_response: Any) -> bytes:
+    response = _to_mapping(raw_response)
+    value = _to_mapping(response.get("Value"))
+    data = value.get("Data")
+    if data is None:
+        return b""
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, bytearray):
+        return bytes(data)
+    if isinstance(data, str):
+        try:
+            return b64decode(data, validate=True)
+        except ValueError as exc:
+            raise ConnectorError("Uyumsoft invoice document data is not valid base64.") from exc
+    raise ConnectorError("Uyumsoft invoice document data has an unsupported type.")
+
+
+def _to_mapping(value: Any) -> dict[str, Any]:
+    serialized = serialize_object(value)
+    if isinstance(serialized, dict):
+        return serialized
+    if hasattr(serialized, "__dict__"):
+        return {key: item for key, item in vars(serialized).items() if not key.startswith("_")}
+    return {}

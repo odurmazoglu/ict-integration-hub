@@ -20,6 +20,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     inspector = inspect(create_engine(database_url))
     assert "uyumsoft_invoice_metadata" in inspector.get_table_names()
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
+    assert "invoice_documents" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -31,14 +32,27 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "first_seen_at",
         "last_seen_at",
     }.issubset(columns)
+    document_columns = {column["name"] for column in inspector.get_columns("invoice_documents")}
+    assert {
+        "invoice_id",
+        "provider",
+        "direction",
+        "document_type",
+        "storage_backend",
+        "storage_key",
+        "content_hash_sha256",
+        "content_size_bytes",
+    }.issubset(document_columns)
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
-    assert "uyumsoft_sync_runs" not in inspector.get_table_names()
+    assert "invoice_documents" not in inspector.get_table_names()
+    assert "uyumsoft_sync_runs" in inspector.get_table_names()
     assert "uyumsoft_invoice_metadata" in inspector.get_table_names()
 
     command.upgrade(config, "head")
     inspector = inspect(create_engine(database_url))
     assert "uyumsoft_invoice_metadata" in inspector.get_table_names()
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
+    assert "invoice_documents" in inspector.get_table_names()
     get_settings.cache_clear()
