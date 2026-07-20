@@ -4,6 +4,7 @@ from app.api.dependencies import DbSessionDep, OdooClientDep, SettingsDep
 from app.schemas.normalized_invoice import NormalizedInvoice
 from app.schemas.odoo_draft_invoice import OdooDraftInvoiceCreateRequest, OdooDraftInvoiceCreateResponse
 from app.schemas.odoo_mapping import OdooMappingPreview
+from app.schemas.odoo_resolution import OdooResolutionRequest, OdooResolutionResult
 from app.services.odoo_draft_invoice import (
     OdooDraftInvoiceConnectorFailure,
     OdooDraftInvoiceDuplicateInProgressError,
@@ -13,6 +14,13 @@ from app.services.odoo_draft_invoice import (
     OdooDraftInvoiceValidationError,
 )
 from app.services.odoo_mapping_preview import OdooMappingPreviewService
+from app.services.odoo_resolution import (
+    OdooResolutionConfigurationError,
+    OdooResolutionConnectorError,
+    OdooResolutionService,
+    OdooResolutionTimeoutError,
+    OdooResolutionValidationError,
+)
 
 router = APIRouter(prefix="/api/v1/odoo", tags=["odoo-mapping"])
 
@@ -20,6 +28,29 @@ router = APIRouter(prefix="/api/v1/odoo", tags=["odoo-mapping"])
 @router.post("/mapping-preview", response_model=OdooMappingPreview)
 def preview_odoo_mapping(invoice: NormalizedInvoice) -> OdooMappingPreview:
     return OdooMappingPreviewService().build_preview(invoice)
+
+
+@router.post("/resolution", response_model=OdooResolutionResult)
+async def resolve_odoo_mapping(
+    request: OdooResolutionRequest,
+    settings: SettingsDep,
+    client: OdooClientDep,
+) -> OdooResolutionResult:
+    effective_request = request.model_copy(
+        update={
+            "purchase_journal_id": request.purchase_journal_id or settings.odoo_purchase_journal_id,
+            "purchase_journal_code": request.purchase_journal_code or settings.odoo_purchase_journal_code,
+        }
+    )
+    service = OdooResolutionService(client=client)
+    try:
+        return await service.resolve(effective_request)
+    except (OdooResolutionValidationError, OdooResolutionConfigurationError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=exc.safe_message) from exc
+    except OdooResolutionTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=exc.safe_message) from exc
+    except OdooResolutionConnectorError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.safe_message) from exc
 
 
 @router.post("/draft-invoices", response_model=OdooDraftInvoiceCreateResponse)

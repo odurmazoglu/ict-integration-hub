@@ -25,7 +25,7 @@ Odoo Online JSON-2 API
 - UBL XML belgelerinin indirilmesi ve saklanması
 - UBL-TR ayrıştırma
 - ETTN bazlı tekillik
-- Partner/ürün/vergi eşleştirme kararlarının uygulanması
+- Partner/ürün/vergi/currency/journal eşleştirme kararlarının hazırlanması
 - Odoo API çağrıları
 - Hata, retry ve audit kayıtları
 
@@ -43,10 +43,11 @@ Odoo Online JSON-2 API
 3. Normalize metadata'nın Integration Hub veritabanına idempotent kaydı
 4. Ham UBL XML saklama
 5. Parse ve doğrulama
-6. Odoo'ya taslak fatura
-7. Eşleştirme ekranları
-8. Zamanlanmış senkronizasyon
-9. Kontrollü canlı Uyumsoft geçişi
+6. Odoo kayıt çözümleme
+7. Odoo'ya taslak fatura
+8. Eşleştirme ekranları
+9. Zamanlanmış senkronizasyon
+10. Kontrollü canlı Uyumsoft geçişi
 
 ## Kritik kararlar
 
@@ -251,8 +252,29 @@ Bu akışta PDF, XSLT, ZIP, UBL parsing, Odoo create/write/unlink/action_post ve
 - Mapping status eksik alan yoksa `ready`, aksi durumda `needs_review` olur.
 - Partner, currency, tax, mandatory invoice values, quantity, unit price ve timezone-aware date eksikleri açık biçimde `missing_fields` içinde raporlanır.
 - Bu katman Odoo JSON-2 API çağırmaz, connector kullanmaz, kayıt oluşturmaz ve veritabanına yazmaz.
-- Partner/product/tax/journal adayları deterministik preview olarak üretilir; lookup, otomatik matching ve Odoo draft invoice creation sonraki issue kapsamındadır.
+- Partner/product/tax/journal adayları deterministik preview olarak üretilir; lookup ve Odoo draft invoice creation sonraki issue kapsamındadır.
 - Structured log yalnız invoice id, mapping status, warning count ve line count içerir; XML, SOAP payload, credential, secret veya tam invoice payload loglanmaz.
+
+## Odoo resolution engine
+
+- Resolution iş mantığı `app/services/odoo_resolution.py` içindedir.
+- Input yalnız `app/schemas/odoo_mapping.py` içindeki provider-independent `OdooMappingPreview` modelidir.
+- Output `app/schemas/odoo_resolution.py` içindeki typed resolution modelleridir.
+- Endpoint `POST /api/v1/odoo/resolution` mapping preview JSON alır ve reviewed preview ile structured resolution sonuçlarını döndürür.
+- Service Uyumsoft SOAP modellerini, XML parser implementation detaylarını, document storage'ı veya UBL XML içeriğini bilmez.
+- Connector erişimi yalnız existing Odoo JSON-2 `search_read` çağrılarıyla yapılır.
+- İzin verilen read-only lookup modelleri `res.partner`, `product.product`, `account.tax`, `res.currency` ve `account.journal` ile sınırlıdır.
+- Partner matching önce exact VAT/VKN, sonra exact normalized name kullanır.
+- Product matching önce `default_code`, sonra exact normalized name kullanır.
+- Tax matching yalnız purchase usage, percent amount, company, `price_include` ve active alanlarıyla exact match yapar.
+- Currency matching exact active ISO code kullanır.
+- Journal matching yalnız explicit configured purchase journal id veya code kullanır.
+- Fuzzy, contains, AI tabanlı veya silent fallback matching uygulanmaz.
+- Ambiguous veya missing candidate durumunda Odoo id seçilmez; `unresolved` veya `ambiguous` durumları consumer'a structured olarak döner.
+- Response durumları `resolved`, `unresolved`, `ambiguous`, `invalid` ve `not_required` değerleridir.
+- Overall status tüm entity'ler çözüldüyse `resolved`, review gerektiriyorsa `needs_review`, yapılandırma/girdi geçersizse `invalid` olur.
+- Bu katman veritabanına yazmaz, Odoo create/write/unlink/archive/action_post çağırmaz ve draft invoice oluşturmaz.
+- Structured log yalnız invoice id, ETTN, entity type, status, match method, candidate count, duration ve güvenli hata kategorisi içerir.
 
 ## Odoo draft invoice creation
 
