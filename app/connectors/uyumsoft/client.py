@@ -29,7 +29,12 @@ from app.schemas.uyumsoft import (
     UyumsoftSystemDateResponse,
     UyumsoftTestConnectionResponse,
 )
-from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceListRequest, UyumsoftInvoiceListResponse
+from app.schemas.uyumsoft_invoices import (
+    InvoiceDirection,
+    UyumsoftInvoiceDocument,
+    UyumsoftInvoiceListRequest,
+    UyumsoftInvoiceListResponse,
+)
 
 READ_ONLY_OPERATIONS = frozenset(
     {
@@ -114,7 +119,7 @@ class UyumsoftSoapClient:
     def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
         return self._list_invoices("GetOutboxInvoiceList", "Outbox", request)
 
-    def download_invoice_ubl_xml(self, *, direction: InvoiceDirection, invoice_id: str) -> bytes:
+    def download_invoice(self, *, direction: InvoiceDirection, invoice_id: str) -> UyumsoftInvoiceDocument:
         if not invoice_id.strip():
             raise ConnectorError("Uyumsoft invoice id is required for document download.")
         operation = "GetInboxInvoiceData" if direction == "Inbox" else "GetOutboxInvoiceData"
@@ -122,7 +127,14 @@ class UyumsoftSoapClient:
         if is_unsuccessful_response(raw_response):
             detail = response_message(raw_response) or "Uyumsoft invoice document request was not successful."
             raise ConnectorError(detail)
-        return _invoice_data_bytes(raw_response)
+        return UyumsoftInvoiceDocument(
+            direction=direction,
+            invoice_id=invoice_id,
+            content=_invoice_data_bytes(raw_response),
+        )
+
+    def download_invoice_ubl_xml(self, *, direction: InvoiceDirection, invoice_id: str) -> bytes:
+        return self.download_invoice(direction=direction, invoice_id=invoice_id).content
 
     def _call(self, operation: str) -> Any:
         if operation not in READ_ONLY_OPERATIONS:
