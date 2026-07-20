@@ -21,6 +21,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "uyumsoft_invoice_metadata" in inspector.get_table_names()
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
     assert "invoice_documents" in inspector.get_table_names()
+    assert "odoo_draft_invoices" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -43,10 +44,22 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "content_hash_sha256",
         "content_size_bytes",
     }.issubset(document_columns)
+    draft_columns = {column["name"] for column in inspector.get_columns("odoo_draft_invoices")}
+    assert {
+        "integration_invoice_id",
+        "ettn",
+        "odoo_model",
+        "odoo_move_id",
+        "creation_status",
+        "safe_error_category",
+        "safe_error_message",
+        "attempt_count",
+    }.issubset(draft_columns)
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
-    assert "invoice_documents" not in inspector.get_table_names()
+    assert "odoo_draft_invoices" not in inspector.get_table_names()
+    assert "invoice_documents" in inspector.get_table_names()
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
     assert "uyumsoft_invoice_metadata" in inspector.get_table_names()
 
@@ -55,4 +68,5 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "uyumsoft_invoice_metadata" in inspector.get_table_names()
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
     assert "invoice_documents" in inspector.get_table_names()
+    assert "odoo_draft_invoices" in inspector.get_table_names()
     get_settings.cache_clear()

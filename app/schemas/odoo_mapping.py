@@ -20,6 +20,7 @@ class OdooMappingIssue(BaseModel):
 class OdooPartnerCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    odoo_id: int | None = None
     role: Literal["supplier", "customer"]
     lookup_key: Literal["tax_id", "name"]
     name: str | None = None
@@ -34,6 +35,7 @@ class OdooPartnerCandidate(BaseModel):
 class OdooTaxCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    odoo_id: int | None = None
     name: str | None = None
     percent: Decimal | None = None
     exemption_reason_code: str | None = None
@@ -43,6 +45,7 @@ class OdooTaxCandidate(BaseModel):
 class OdooProductCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    odoo_id: int | None = None
     lookup_key: Literal["name"]
     name: str
 
@@ -50,6 +53,7 @@ class OdooProductCandidate(BaseModel):
 class OdooJournalCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    odoo_id: int | None = None
     journal_type: Literal["purchase"]
     currency: str | None = None
 
@@ -73,6 +77,7 @@ class OdooDraftInvoicePayload(BaseModel):
     move_type: Literal["in_invoice"]
     invoice_date: date | None = None
     currency: str | None = None
+    currency_id: int | None = None
     journal: OdooJournalCandidate | None = None
     partner: OdooPartnerCandidate | None = None
     invoice_lines: list[OdooInvoiceLinePayload]
@@ -80,6 +85,7 @@ class OdooDraftInvoicePayload(BaseModel):
     references: list[str]
     notes: list[str]
     payment_terms: str | None = None
+    payment_term_id: int | None = None
     invoice_number: str | None = None
     ettn: str | None = None
 
