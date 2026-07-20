@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -9,7 +10,10 @@ UyumsoftEnvironment = Literal["test", "production"]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file_encoding="utf-8", extra="ignore")
+
+    def __init__(self, **values: object) -> None:
+        super().__init__(_env_file=_selected_env_file(), **values)
 
     app_env: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
@@ -49,3 +53,7 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def _selected_env_file() -> str:
+    return os.getenv("APP_ENV_FILE", ".env.local")

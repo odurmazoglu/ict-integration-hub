@@ -16,7 +16,7 @@ The application fails fast when production configuration is unsafe. Production a
 - `DATABASE_URL` does not point to localhost
 - Odoo and Uyumsoft credentials are not placeholders
 
-Outside production, `PRODUCTION_OPERATIONS_ENABLED` must be false, `PRODUCTION_APPROVAL_ACK` must be empty, and `UYUMSOFT_ENVIRONMENT=production` is rejected.
+Outside production, `PRODUCTION_OPERATIONS_ENABLED` must be false and `PRODUCTION_APPROVAL_ACK` must be empty. `UYUMSOFT_ENVIRONMENT=production` is allowed only for explicit live-readonly validation when `LIVE_CONNECTOR_READONLY=true`, the production WSDL host is approved, the test WSDL is not pointed at production, and Uyumsoft credentials are not placeholders.
 
 Odoo draft invoice creation remains draft-only. Production `action_post`, unlink, master-data mutation, and Uyumsoft state-changing operations remain forbidden.
 
@@ -38,16 +38,43 @@ Errors mention setting names and safe policy failures only. They must not includ
 
 ## Environment Separation
 
-Use separate `.env` files and secret stores per environment.
+Use separate environment profile files and secret stores per environment. The selected profile is explicit:
+
+```bash
+APP_ENV_FILE=.env.local docker compose up -d
+APP_ENV_FILE=.env.test docker compose up -d
+APP_ENV_FILE=.env.production docker compose up -d
+APP_ENV_FILE=.env.live-readonly docker compose up -d
+```
+
+If `APP_ENV_FILE` is not set, `.env.local` is used. The application loads only one selected profile. It does not merge `.env`, `.env.local`, and `.env.production`, and `.env` is not implicitly preferred.
 
 | Environment | Purpose | Provider access | Production gates |
 | --- | --- | --- | --- |
 | local development | local coding and mock tests | test or placeholders only | disabled |
 | CI/test | automated unit tests | mocks only | disabled |
 | staging/test provider | Uyumsoft test and non-production Odoo validation | test endpoints only | disabled |
+| live-readonly validation | production Uyumsoft read-only validation with Odoo staging | Uyumsoft production read-only and Odoo staging | disabled |
 | production | approved production operation | approved production endpoints only | explicitly enabled |
 
-`.env.example` is for local development. `.env.production.example` is a placeholder-only production template. Do not commit real `.env` files.
+`APP_ENV` controls application runtime mode. Connector targets are separate: `UYUMSOFT_ENVIRONMENT` selects Uyumsoft `test` or `production`; Odoo staging/production is selected by `ODOO_BASE_URL`, `ODOO_DATABASE`, and the Odoo API key. Do not set `APP_ENV=production` merely because a connector targets a production host.
+
+The supported live-readonly validation profile is:
+
+```text
+APP_ENV=development
+LIVE_CONNECTOR_READONLY=true
+PRODUCTION_OPERATIONS_ENABLED=false
+PRODUCTION_APPROVAL_ACK=
+UYUMSOFT_ENVIRONMENT=production
+UYUMSOFT_TEST_WSDL_URL=https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl
+UYUMSOFT_PROD_WSDL_URL=https://efatura.uyumsoft.com.tr/Services/Integration?wsdl
+ODOO_BASE_URL=https://test-ictteknoloji.odoo.com
+```
+
+`.env.local.example`, `.env.test.example`, `.env.production.example`, and `.env.live-readonly.example` are placeholder-only templates. Do not commit real profile files such as `.env.local`, `.env.test`, `.env.production`, or `.env.live-readonly`.
+
+Do not source dotenv files directly in a shell. Prefer `APP_ENV_FILE=<profile> docker compose ...` or let `Settings` load the profile. If a dotenv file is ever sourced manually, quote values containing spaces.
 
 ## Health, Readiness, And Liveness
 
@@ -170,7 +197,7 @@ The runtime logging filter redacts common secret key/value patterns and XML-like
 ## Deployment Runbook
 
 1. Confirm CI is green for the exact commit to deploy.
-2. Confirm no secrets are committed and `.env` remains untracked.
+2. Confirm no secrets are committed and real environment profile files remain untracked.
 3. Review the go-live checklist below and record approvals.
 4. Back up PostgreSQL and document storage.
 5. Build and tag the application image from the approved commit.
@@ -234,7 +261,7 @@ Use environment-specific secure storage for backups. Do not commit backups.
 - Storage unavailable: stop document downloads and parsing, restore storage mount, verify hash/read access.
 - Duplicate draft concern: search local `odoo_draft_invoices` by ETTN, then manually inspect Odoo draft bills by ETTN/reference; do not unlink automatically.
 - Partial Odoo creation/local persistence failure: use the reconciliation steps below.
-- Credential exposure suspicion: rotate affected credentials, revoke tokens, inspect logs/backups, confirm `.env` was not committed.
+- Credential exposure suspicion: rotate affected credentials, revoke tokens, inspect logs/backups, confirm no real environment profile file was committed.
 - Invalid production configuration: keep service stopped, fix secret-store values, rerun readiness after startup.
 - Excessive failures or retries: disable manual triggering, inspect safe error categories, and escalate to technical owner.
 

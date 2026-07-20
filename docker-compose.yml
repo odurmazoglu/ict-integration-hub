@@ -2,7 +2,7 @@ services:
   api:
     build: .
     env_file:
-      - .env
+      - ${APP_ENV_FILE:-.env.local}
     environment:
       DATABASE_URL: postgresql+psycopg://ict:ict@db:5432/ict_integration_hub
     ports:

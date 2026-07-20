@@ -4,7 +4,7 @@
 
 Projeyi eski uygulama kodunu taşımadan, temiz bir mimariyle sıfırdan oluşturmak.
 
-Eski projeden yalnızca yerel `.env` değerleri korunacaktır. `.env` hiçbir koşulda Git'e eklenmeyecektir.
+Eski projeden yalnızca yerel environment profile değerleri korunacaktır. Gerçek `.env.local`, `.env.test`, `.env.production`, `.env.live-readonly` veya benzeri secret-bearing dosyalar hiçbir koşulda Git'e eklenmeyecektir.
 
 ## Hedef mimari
 
@@ -75,7 +75,7 @@ provider + direction + ettn
 
 - Secret değerler sadece environment üzerinden alınır
 - Secret veya token loglanmaz
-- `.env` repoya eklenmez
+- Gerçek environment profile dosyaları repoya eklenmez
 - İlk sprintte durum değiştiren SOAP operasyonları çağrılmaz
 - `SetInvoicesTaken`, `SendInvoice`, `Cancel*`, retry ve status-change operasyonları yasaktır
 
@@ -99,7 +99,10 @@ tests/
   unit/
   integration/
   fixtures/
-.env.example
+.env.local.example
+.env.test.example
+.env.production.example
+.env.live-readonly.example
 Dockerfile
 docker-compose.yml
 pyproject.toml

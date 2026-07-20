@@ -1,7 +1,10 @@
 .env
 .env.*
 !.env.example
+!.env.local.example
+!.env.test.example
 !.env.production.example
+!.env.live-readonly.example
 __pycache__/
 *.py[cod]
 .pytest_cache/
