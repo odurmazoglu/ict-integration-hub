@@ -10,6 +10,9 @@ class DocumentStorageError(Exception):
 class DocumentStorage(Protocol):
     backend_name: str
 
+    def read(self, storage_key: str) -> bytes:
+        pass
+
     def write(self, storage_key: str, content: bytes) -> None:
         pass
 
@@ -33,6 +36,12 @@ class LocalDocumentStorage:
         except OSError as exc:
             _delete_if_exists(temp_path)
             raise DocumentStorageError("Document storage write failed.") from exc
+
+    def read(self, storage_key: str) -> bytes:
+        try:
+            return self._resolve(storage_key).read_bytes()
+        except OSError as exc:
+            raise DocumentStorageError("Document storage read failed.") from exc
 
     def delete(self, storage_key: str) -> None:
         try:

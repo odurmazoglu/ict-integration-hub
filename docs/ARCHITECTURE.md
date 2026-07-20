@@ -224,6 +224,21 @@ Constraint ve index'ler:
 
 Bu akışta PDF, XSLT, ZIP, UBL parsing, Odoo create/write/unlink/action_post ve Uyumsoft durum değiştiren operasyonlar uygulanmaz.
 
+## UBL parser
+
+- Parser `app/services/document_parser.py` içinde local-only çalışır.
+- Parser input'u mevcut document layer'daki `InvoiceDocument` metadata ve `DocumentStorage.read(storage_key)` bytes içeriğidir.
+- Parser Uyumsoft SOAP modellerine, Odoo modellerine, connector layer'a veya transport detaylarına bağımlı değildir.
+- Normalize çıktı `app/schemas/normalized_invoice.py` içindeki provider-independent Pydantic modelleridir.
+- Parse edilen başlık alanları invoice number, ETTN/UUID, invoice type code, profile id, issue datetime, currency, notes ve references alanlarını içerir.
+- Party modelleri supplier/customer tax id, party name, address, tax office ve contact alanlarını içerir.
+- Monetary, tax ve line modellerinde parasal alanlar `Decimal` olarak tutulur.
+- Tarih/saat çıktısı timezone-aware `datetime` olarak döner; UBL `IssueTime` yoksa UTC midnight kullanılır.
+- XML parse local yapılır; DOCTYPE ve entity declaration reddedilir, external entity veya network erişimi kullanılmaz.
+- Parser hataları structured ve güvenlidir: malformed XML, missing required field, invalid Decimal, invalid date/time, unsupported invoice structure, unsupported document type ve storage read failure kategorileri ayrılır.
+- Hata mesajları ve structured log kayıtları XML içeriği, SOAP payload, credential veya secret içermez.
+- Issue #14 kapsamında normalized parse sonuçları persist edilmez; Odoo mapping ve UBL business validation Issue #15 ve sonraki işler için bırakılmıştır.
+
 ### Rollback
 
 Migration rollback için:
