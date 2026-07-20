@@ -340,7 +340,7 @@ Issue #16 migration rollback'i yalnız `odoo_draft_invoices` tablosunu ve ilişk
   - `UYUMSOFT_TEST_WSDL_URL=https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl`
   - `UYUMSOFT_USERNAME`
   - `UYUMSOFT_PASSWORD`
-- `.env` içeriği loglanmaz; provider fault mesajlarında kullanıcı adı benzeri alanlar connector sınırında redakte edilir.
+- Environment profile içeriği loglanmaz; provider fault mesajlarında kullanıcı adı benzeri alanlar connector sınırında redakte edilir.
 
 ### Common authentication failures
 
@@ -353,7 +353,7 @@ Issue #16 migration rollback'i yalnız `odoo_draft_invoices` tablosunu ve ilişk
 ### Troubleshooting
 
 1. `python3 scripts/inspect_uyumsoft_wsdl.py --wsdl-url https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl` ile WSDL erişimini ve operation signature'larını doğrula.
-2. `ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/diagnose_uyumsoft_auth.py --from <iso> --to <iso>` ile güvenli authentication diagnostic çalıştır.
+2. `APP_ENV_FILE=.env.live-readonly ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/diagnose_uyumsoft_auth.py --from <iso> --to <iso>` ile güvenli authentication diagnostic çalıştır.
 3. Diagnostic çıktısında `has_ws_security=true`, `has_username_token=true`, `password_type=PasswordText`, doğru SOAPAction ve doğru endpoint olduğunu doğrula.
 4. Fault code `a:InvalidSecurity` ise client-side security header veya password formatı tekrar incelenmelidir.
 5. Fault code `s:Client` ve provider yetki mesajı varsa client security envelope kabul edilmiştir; provider credential/yetki/IP/test ortamı aktivasyonu gereklidir.

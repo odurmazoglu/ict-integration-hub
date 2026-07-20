@@ -176,6 +176,71 @@ def test_live_readonly_profile_accepts_odoo_staging_url() -> None:
     assert errors == []
 
 
+def test_live_readonly_example_profile_enables_live_smoke_only() -> None:
+    values = _profile_values(Path(".env.live-readonly.example"))
+
+    assert values["LIVE_CONNECTOR_READONLY"] == "true"
+    assert values["ICT_UYUMSOFT_ENABLE_LIVE_SMOKE"] == "1"
+    assert values["PRODUCTION_OPERATIONS_ENABLED"] == "false"
+    assert values["UYUMSOFT_ENVIRONMENT"] == "production"
+
+
+def test_non_live_readonly_example_profiles_disable_live_smoke() -> None:
+    for path in [
+        Path(".env.example"),
+        Path(".env.local.example"),
+        Path(".env.test.example"),
+        Path(".env.production.example"),
+    ]:
+        values = _profile_values(path)
+
+        assert values["ICT_UYUMSOFT_ENABLE_LIVE_SMOKE"] == "0"
+
+
+def test_smoke_flag_does_not_bypass_live_readonly_requirement() -> None:
+    settings = Settings(
+        app_env="development",
+        live_connector_readonly=False,
+        production_operations_enabled=False,
+        production_approval_ack="",
+        uyumsoft_environment="production",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "UYUMSOFT_ENVIRONMENT=production outside production requires LIVE_CONNECTOR_READONLY=true." in errors
+
+
+def test_smoke_flag_does_not_enable_write_operations() -> None:
+    settings = Settings(
+        app_env="development",
+        live_connector_readonly=True,
+        production_operations_enabled=True,
+        production_approval_ack=PRODUCTION_APPROVAL_ACK,
+        uyumsoft_environment="production",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "PRODUCTION_OPERATIONS_ENABLED must be false outside production." in errors
+    assert "PRODUCTION_APPROVAL_ACK must be empty outside production." in errors
+
+
+def _profile_values(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        values[key] = value
+    return values
+
+
 def _clear_env(monkeypatch) -> None:
     for key in ENV_KEYS:
         monkeypatch.delenv(key, raising=False)

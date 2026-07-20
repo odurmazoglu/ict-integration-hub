@@ -64,6 +64,7 @@ The supported live-readonly validation profile is:
 ```text
 APP_ENV=development
 LIVE_CONNECTOR_READONLY=true
+ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1
 PRODUCTION_OPERATIONS_ENABLED=false
 PRODUCTION_APPROVAL_ACK=
 UYUMSOFT_ENVIRONMENT=production
@@ -71,6 +72,8 @@ UYUMSOFT_TEST_WSDL_URL=https://efatura-test.uyumsoft.com.tr/Services/Integration
 UYUMSOFT_PROD_WSDL_URL=https://efatura.uyumsoft.com.tr/Services/Integration?wsdl
 ODOO_BASE_URL=https://test-ictteknoloji.odoo.com
 ```
+
+`ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1` only permits running the explicit read-only Uyumsoft smoke script. It never enables provider mutation, Odoo mutation, production operations, acknowledgement, accept/reject, status update, mark-as-read, send, retry, cancel, move-to-draft, or draft bill creation. `LIVE_CONNECTOR_READONLY=true` must still be set, `PRODUCTION_OPERATIONS_ENABLED` must remain false, and strict `APP_ENV=production` safety gates are unchanged.
 
 `.env.local.example`, `.env.test.example`, `.env.production.example`, and `.env.live-readonly.example` are placeholder-only templates. Do not commit real profile files such as `.env.local`, `.env.test`, `.env.production`, or `.env.live-readonly`.
 
@@ -83,6 +86,30 @@ Do not source dotenv files directly in a shell. Prefer `APP_ENV_FILE=<profile> d
 - `GET /health/ready`: readiness check for runtime configuration, database connectivity, and document storage writability.
 
 Readiness does not call Uyumsoft or Odoo. Provider smoke checks remain explicit operational actions and must be read-only.
+
+## Live-Readonly Uyumsoft Smoke Validation
+
+The `.env.live-readonly` profile is the only example profile that sets `ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1`. All local, test, and production templates set it to `0`.
+
+Run the smoke script with a narrow date range and `--page-size 1`:
+
+```bash
+APP_ENV_FILE=.env.live-readonly python3 scripts/uyumsoft_readonly_smoke.py \
+  --from <iso-datetime> \
+  --to <iso-datetime> \
+  --page-size 1
+```
+
+Safety boundaries:
+
+- `APP_ENV=development`
+- `LIVE_CONNECTOR_READONLY=true`
+- `ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1`
+- `PRODUCTION_OPERATIONS_ENABLED=false`
+- `PRODUCTION_APPROVAL_ACK=` empty
+- `UYUMSOFT_ENVIRONMENT=production`
+- only `GetInboxInvoiceList` and `GetOutboxInvoiceList` are used by the smoke script
+- no provider write operation or Odoo write operation is enabled by the smoke flag
 
 ## Odoo Staging Connectivity Validation
 
