@@ -57,6 +57,38 @@ Use separate `.env` files and secret stores per environment.
 
 Readiness does not call Uyumsoft or Odoo. Provider smoke checks remain explicit operational actions and must be read-only.
 
+## Odoo Staging Connectivity Validation
+
+Use the dedicated staging validation script before Resolution Validation or draft creation tests:
+
+```bash
+APP_ENV=development \
+ODOO_BASE_URL=https://test-ictteknoloji.odoo.com \
+ODOO_DATABASE=<staging-database> \
+ODOO_API_KEY=<staging-api-key> \
+ODOO_PURCHASE_JOURNAL_ID=<purchase-journal-id> \
+python3 scripts/validate_odoo_staging.py --pretty
+```
+
+`ODOO_PURCHASE_JOURNAL_CODE=<purchase-journal-code>` can be used instead of `ODOO_PURCHASE_JOURNAL_ID`.
+
+Expected output is a sanitized JSON report with the environment, target host, authentication status, database access status, company read status, per-model read status for `res.company`, `res.partner`, `product.product`, `account.tax`, `res.currency`, and `account.journal`, configured purchase journal status, permission/configuration failures, Resolution Validation blockers, and `no_write_operation_attempted=true`.
+
+Safety guarantees:
+
+- the script fails before any Odoo call unless `ODOO_BASE_URL` resolves to `test-ictteknoloji.odoo.com`
+- `APP_ENV=production` is rejected
+- only JSON-2 `search_read` probes and the existing read-only company probe are used
+- `create`, `write`, `unlink`, and `action_post` are not attempted
+- API keys, passwords, database URLs, full database names, raw JSON-2 payloads, and full master-data datasets are not included in the report
+
+Troubleshooting:
+
+- `configuration_failures`: fix the named environment variable; do not substitute production Odoo values
+- `permission_failures`: grant least-privilege read access for the listed model in staging
+- purchase journal `missing` or `ambiguous`: set exactly one of `ODOO_PURCHASE_JOURNAL_ID` or a unique purchase `ODOO_PURCHASE_JOURNAL_CODE`
+- authentication failure: rotate or replace the staging API key without printing it in logs
+
 ## Logging And Redaction
 
 Structured logs may include safe correlation fields:
