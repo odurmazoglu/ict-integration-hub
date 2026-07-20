@@ -1,25 +1,54 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
+from app.connectors.exceptions import ConnectorError
 from app.connectors.uyumsoft.invoice_mapping import build_invoice_list_query_model, normalize_invoice_list_response
 from app.schemas.uyumsoft_invoices import UyumsoftInvoiceListRequest
 
 
 class FakeQueryModel:
+    def __init__(self, fields: set[str]) -> None:
+        self.elements = [(field, object()) for field in fields]
+
     def __call__(self, **kwargs: object) -> dict[str, object]:
         return kwargs
 
 
 class FakeZeepClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        inbox_fields: set[str] | None = None,
+        outbox_fields: set[str] | None = None,
+    ) -> None:
         self.requested_type: str | None = None
+        self.inbox_fields = inbox_fields or _fields(
+            "ExecutionStartDate",
+            "ExecutionEndDate",
+            "PageIndex",
+            "PageSize",
+            "OnlyNewestInvoices",
+        )
+        self.outbox_fields = outbox_fields or _fields(
+            "ExecutionStartDate",
+            "ExecutionEndDate",
+            "PageIndex",
+            "PageSize",
+            "IncludeTagList",
+        )
 
     def get_type(self, name: str) -> FakeQueryModel:
         self.requested_type = name
-        return FakeQueryModel()
+        if name == "{http://tempuri.org/}InboxInvoiceListQueryModel":
+            return FakeQueryModel(self.inbox_fields)
+        if name == "{http://tempuri.org/}OutboxInvoiceListQueryModel":
+            return FakeQueryModel(self.outbox_fields)
+        raise AssertionError(f"Unexpected type requested: {name}")
 
 
-def test_build_invoice_list_query_model_uses_wsdl_fields_for_inbox() -> None:
+def test_build_invoice_list_query_model_uses_supported_wsdl_fields_for_inbox() -> None:
     request = UyumsoftInvoiceListRequest(
         from_date=datetime(2026, 7, 15, tzinfo=UTC),
         to_date=datetime(2026, 7, 16, tzinfo=UTC),
@@ -36,12 +65,11 @@ def test_build_invoice_list_query_model_uses_wsdl_fields_for_inbox() -> None:
         "ExecutionEndDate": datetime(2026, 7, 16, tzinfo=UTC),
         "PageIndex": 2,
         "PageSize": 25,
-        "IncludeTagList": False,
         "OnlyNewestInvoices": False,
     }
 
 
-def test_build_invoice_list_query_model_uses_wsdl_fields_for_outbox() -> None:
+def test_build_invoice_list_query_model_uses_supported_wsdl_fields_for_outbox() -> None:
     request = UyumsoftInvoiceListRequest(
         from_date=datetime(2026, 7, 15, tzinfo=UTC),
         to_date=datetime(2026, 7, 16, tzinfo=UTC),
@@ -50,9 +78,93 @@ def test_build_invoice_list_query_model_uses_wsdl_fields_for_outbox() -> None:
     )
     zeep_client = FakeZeepClient()
 
-    build_invoice_list_query_model(zeep_client, request, direction="Outbox")
+    query = build_invoice_list_query_model(zeep_client, request, direction="Outbox")
 
     assert zeep_client.requested_type == "{http://tempuri.org/}OutboxInvoiceListQueryModel"
+    assert query == {
+        "ExecutionStartDate": datetime(2026, 7, 15, tzinfo=UTC),
+        "ExecutionEndDate": datetime(2026, 7, 16, tzinfo=UTC),
+        "PageIndex": 1,
+        "PageSize": 1,
+        "IncludeTagList": False,
+    }
+
+
+def test_inbox_model_without_include_tag_list_omits_optional_field() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Inbox")
+
+    assert "IncludeTagList" not in query
+
+
+def test_outbox_model_with_include_tag_list_includes_optional_field() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Outbox")
+
+    assert query["IncludeTagList"] is False
+
+
+def test_inbox_model_with_only_newest_invoices_includes_optional_field() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Inbox")
+
+    assert query["OnlyNewestInvoices"] is False
+
+
+def test_model_without_only_newest_invoices_omits_optional_field() -> None:
+    zeep_client = FakeZeepClient(
+        inbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize")
+    )
+
+    query = build_invoice_list_query_model(zeep_client, _request(), direction="Inbox")
+
+    assert "OnlyNewestInvoices" not in query
+
+
+def test_unsupported_optional_fields_are_omitted() -> None:
+    zeep_client = FakeZeepClient(
+        inbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize", "OnlyNewestInvoices")
+    )
+
+    query = build_invoice_list_query_model(zeep_client, _request(), direction="Inbox")
+
+    assert "IncludeTagList" not in query
+    assert set(query) == {
+        "ExecutionStartDate",
+        "ExecutionEndDate",
+        "PageIndex",
+        "PageSize",
+        "OnlyNewestInvoices",
+    }
+
+
+def test_required_pagination_and_date_fields_remain_included() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Inbox")
+
+    assert query["ExecutionStartDate"] == datetime(2026, 7, 15, tzinfo=UTC)
+    assert query["ExecutionEndDate"] == datetime(2026, 7, 16, tzinfo=UTC)
+    assert query["PageIndex"] == 1
+    assert query["PageSize"] == 10
+
+
+def test_missing_required_wsdl_fields_produces_safe_connector_error() -> None:
+    zeep_client = FakeZeepClient(inbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex"))
+
+    with pytest.raises(ConnectorError) as exc_info:
+        build_invoice_list_query_model(zeep_client, _request(), direction="Inbox")
+
+    assert exc_info.value.safe_message == (
+        "Uyumsoft InboxInvoiceListQueryModel WSDL query model is missing required fields: PageSize."
+    )
+    assert "password" not in exc_info.value.safe_message.lower()
+    assert "secret" not in exc_info.value.safe_message.lower()
+
+
+def test_query_model_construction_does_not_introduce_provider_write_operations() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Inbox")
+
+    assert "SendInvoice" not in query
+    assert "SetInvoicesTaken" not in query
+    assert "CancelInvoice" not in query
+    assert "RetrySendInvoices" not in query
+    assert "MoveToDraftStatus" not in query
 
 
 def test_normalize_invoice_list_response_maps_real_paged_inbox_shape() -> None:
@@ -182,3 +294,16 @@ def test_normalize_invoice_list_response_accepts_list_root() -> None:
 
     assert result.direction == "Outbox"
     assert result.invoices[0].invoice_id == "out-1"
+
+
+def _request() -> UyumsoftInvoiceListRequest:
+    return UyumsoftInvoiceListRequest(
+        from_date=datetime(2026, 7, 15, tzinfo=UTC),
+        to_date=datetime(2026, 7, 16, tzinfo=UTC),
+        page=1,
+        page_size=10,
+    )
+
+
+def _fields(*names: str) -> set[str]:
+    return set(names)
