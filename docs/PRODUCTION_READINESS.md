@@ -89,6 +89,50 @@ Troubleshooting:
 - purchase journal `missing` or `ambiguous`: set exactly one of `ODOO_PURCHASE_JOURNAL_ID` or a unique purchase `ODOO_PURCHASE_JOURNAL_CODE`
 - authentication failure: rotate or replace the staging API key without printing it in logs
 
+## Uyumsoft Test Connectivity And UBL Acquisition Validation
+
+Run the Uyumsoft acquisition validation only against the approved test WSDL host:
+
+```bash
+docker compose exec api python3 scripts/validate_uyumsoft_test.py --pretty --limit 5
+```
+
+Required environment variables:
+
+- `UYUMSOFT_ENVIRONMENT=test`
+- `UYUMSOFT_TEST_WSDL_URL=https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl`
+- `UYUMSOFT_USERNAME=<test-username>`
+- `UYUMSOFT_PASSWORD=<test-password>`
+- `DATABASE_URL=<integration-hub-database-url>`
+- `DOCUMENT_STORAGE_ROOT=<local-or-mounted-document-storage-path>`
+
+Optional controls:
+
+- `--from-date <iso-datetime>`
+- `--to-date <iso-datetime>`
+- `--limit <1-100>`
+- `--output-report <path-to-sanitized-json>`
+
+The report is sanitized and includes WSDL reachability, authentication, incoming invoice listing, records inspected, detail/UBL retrieval, document persistence, SHA-256 verification, collected representative scenarios, missing scenarios, planned read-only operations, successfully validated read-only operations, configuration failures, permission failures, parser-validation blockers, and `no_provider_state_change_attempted=true`.
+
+Safety boundaries:
+
+- production Uyumsoft is forbidden for this validation
+- the script fails before any provider call unless the configured test WSDL host is `efatura-test.uyumsoft.com.tr`
+- only `TestConnection`, `WhoAmI`, `GetInboxInvoiceList`, and `GetInboxInvoiceData` are used
+- acknowledgement, accept/reject, cancel, status update, mark-as-read, send, retry, and move-to-draft operations are not attempted
+- credentials, SOAP envelopes, raw SOAP responses, full UBL/XML contents, full invoice contents, and sensitive company/person invoice data are omitted
+
+Troubleshooting:
+
+- `configuration_failures`: fix the named environment variable and never substitute production Uyumsoft values
+- authentication or permission failure: verify the test account has listing and invoice-data read permission only
+- empty listing: widen `--from-date`/`--to-date` or confirm the Uyumsoft test inbox contains documents
+- missing dataset scenarios: record the missing scenario names from the sanitized report; do not fabricate fixtures
+- persistence/hash failure: inspect database connectivity and `DOCUMENT_STORAGE_ROOT` writability
+
+Downloaded UBL files live under `DOCUMENT_STORAGE_ROOT` and must not be committed. Record collected dataset evidence by storing only the sanitized report or internal document ids/hashes in validation notes.
+
 ## Logging And Redaction
 
 Structured logs may include safe correlation fields:
