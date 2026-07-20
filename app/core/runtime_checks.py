@@ -138,6 +138,8 @@ def _validate_non_production_settings(settings: Settings, errors: list[str]) -> 
 def _validate_live_readonly_connector_settings(settings: Settings, errors: list[str]) -> None:
     if _host(settings.uyumsoft_prod_wsdl_url) not in APPROVED_UYUMSOFT_PRODUCTION_HOSTS:
         errors.append("UYUMSOFT_PROD_WSDL_URL host is not approved for production.")
+    if _host(settings.uyumsoft_test_wsdl_url) in APPROVED_UYUMSOFT_PRODUCTION_HOSTS:
+        errors.append("UYUMSOFT_TEST_WSDL_URL must not point to the production host.")
     if _is_placeholder(settings.uyumsoft_username):
         errors.append("UYUMSOFT_USERNAME must not be a placeholder for live connector readonly mode.")
     if _is_placeholder(settings.uyumsoft_password.get_secret_value()):

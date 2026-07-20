@@ -141,6 +141,21 @@ def test_live_readonly_rejects_unapproved_production_connector_host() -> None:
     assert "UYUMSOFT_PROD_WSDL_URL host is not approved for production." in errors
 
 
+def test_live_readonly_rejects_test_wsdl_pointing_to_production_host() -> None:
+    settings = Settings(
+        app_env="development",
+        live_connector_readonly=True,
+        uyumsoft_environment="production",
+        uyumsoft_test_wsdl_url="https://efatura.uyumsoft.com.tr/Services/Integration?wsdl",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "UYUMSOFT_TEST_WSDL_URL must not point to the production host." in errors
+
+
 def test_runtime_configuration_error_exposes_only_safe_messages() -> None:
     settings = Settings(
         app_env="production",

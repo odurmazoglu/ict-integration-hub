@@ -69,7 +69,7 @@ def test_smoke_run_only_reaches_read_only_list_operations() -> None:
 
     assert result["inbox"]["ok"] is True
     assert result["outbox"]["ok"] is True
-    assert client.calls == ["GetInboxInvoiceList", "GetOutboxInvoiceList"]
+    assert client.calls == ["list_inbox_invoices", "list_outbox_invoices"]
 
 
 class RecordingSmokeClient:
@@ -77,15 +77,21 @@ class RecordingSmokeClient:
         self.calls: list[str] = []
 
     def list_inbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
-        self.calls.append("GetInboxInvoiceList")
+        self.calls.append("list_inbox_invoices")
         return _response("Inbox", request)
 
     def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
-        self.calls.append("GetOutboxInvoiceList")
+        self.calls.append("list_outbox_invoices")
         return _response("Outbox", request)
 
     def __getattribute__(self, name: str) -> Any:
-        forbidden = {"SetInvoicesTaken", "SendInvoice", "CancelInvoice", "RetrySendInvoices", "MoveToDraftStatus"}
+        forbidden = {
+            "send_invoice",
+            "set_invoices_taken",
+            "cancel_invoice",
+            "retry_send_invoices",
+            "move_to_draft_status",
+        }
         if name in forbidden:
             raise AssertionError(f"Forbidden operation accessed: {name}")
         return super().__getattribute__(name)
