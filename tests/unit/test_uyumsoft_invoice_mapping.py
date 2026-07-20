@@ -135,6 +135,28 @@ def test_unsupported_optional_fields_are_omitted() -> None:
     }
 
 
+def test_test_and_production_shaped_models_with_different_optional_fields_are_supported() -> None:
+    test_shaped = FakeZeepClient(
+        inbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize", "IncludeTagList"),
+        outbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize", "IncludeTagList"),
+    )
+    production_shaped = FakeZeepClient(
+        inbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize", "OnlyNewestInvoices"),
+        outbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize"),
+    )
+
+    test_inbox_query = build_invoice_list_query_model(test_shaped, _request(), direction="Inbox")
+    production_inbox_query = build_invoice_list_query_model(production_shaped, _request(), direction="Inbox")
+    production_outbox_query = build_invoice_list_query_model(production_shaped, _request(), direction="Outbox")
+
+    assert test_inbox_query["IncludeTagList"] is False
+    assert "OnlyNewestInvoices" not in test_inbox_query
+    assert production_inbox_query["OnlyNewestInvoices"] is False
+    assert "IncludeTagList" not in production_inbox_query
+    assert "IncludeTagList" not in production_outbox_query
+    assert "OnlyNewestInvoices" not in production_outbox_query
+
+
 def test_required_pagination_and_date_fields_remain_included() -> None:
     query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Inbox")
 
