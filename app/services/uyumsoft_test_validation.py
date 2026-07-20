@@ -137,7 +137,9 @@ class UyumsoftTestValidationService:
     def _validate_authentication(self, report: dict[str, Any]) -> bool:
         try:
             self.client.test_connection()
+            _record_validated_operation(report, "TestConnection")
             self.client.who_am_i()
+            _record_validated_operation(report, "WhoAmI")
         except (ConnectorTimeoutError, ConnectorError) as exc:
             _record_connector_failure(report, "authentication", exc)
             return False
@@ -157,6 +159,7 @@ class UyumsoftTestValidationService:
         )
         try:
             response = self.client.list_inbox_invoices(list_request)
+            _record_validated_operation(report, "GetInboxInvoiceList")
         except (ConnectorTimeoutError, ConnectorError) as exc:
             _record_connector_failure(report, "invoice_listing", exc)
             return []
@@ -216,6 +219,7 @@ class UyumsoftTestValidationService:
         item = result.items[0]
         report["detail_retrieval"] = {"status": "ok"}
         report["ubl_download"] = {"status": "ok"}
+        _record_validated_operation(report, "GetInboxInvoiceData")
         report["document_persistence"] = {
             "status": "ok",
             "last_document_status": item.status,
@@ -295,7 +299,8 @@ def _initial_report(settings: Settings, target_host: str, configuration_failures
         "permission_failures": [],
         "configuration_failures": configuration_failures,
         "blockers_for_parser_validation": list(configuration_failures),
-        "read_only_operations_validated": list(READ_ONLY_OPERATIONS_VALIDATED),
+        "read_only_operations_planned": list(READ_ONLY_OPERATIONS_VALIDATED),
+        "read_only_operations_validated": [],
         "no_provider_state_change_attempted": True,
         "forbidden_provider_operations_not_attempted": list(FORBIDDEN_PROVIDER_OPERATIONS),
         "overall_status": "failed" if configuration_failures else "pending",
@@ -353,6 +358,12 @@ def _record_document_failure(report: dict[str, Any], message: str) -> None:
     report["blockers_for_parser_validation"].append("UBL document retrieval or persistence failed.")
 
 
+def _record_validated_operation(report: dict[str, Any], operation: str) -> None:
+    validated = report["read_only_operations_validated"]
+    if operation not in validated:
+        validated.append(operation)
+
+
 def _failure_status(exc: Exception) -> str:
     message = _safe_message(exc)
     if "HTTP 401" in message or "HTTP 403" in message or "authorization" in message.lower():
@@ -383,9 +394,9 @@ def _classify_scenarios(content: bytes, invoice: UyumsoftInvoiceSummary) -> list
 
 
 def _likely_missing_or_ambiguous_resolution(root: ElementTree.Element, invoice: UyumsoftInvoiceSummary) -> bool:
-    product_names = [text.strip().lower() for text in _texts(root, "Name") if text.strip()]
+    product_names = [text.strip().lower() for text in _invoice_line_item_names(root) if text.strip()]
     has_duplicate_product_names = len(product_names) != len(set(product_names))
-    has_product_code = any(text.strip() for text in _texts(root, "SellersItemIdentification"))
+    has_product_code = any(text.strip() for text in _seller_item_ids(root))
     return has_duplicate_product_names or not has_product_code or not invoice.tax_number
 
 
@@ -410,6 +421,31 @@ def _first_text(root: ElementTree.Element, local_name: str) -> str | None:
         if stripped:
             return stripped
     return None
+
+
+def _invoice_line_item_names(root: ElementTree.Element) -> list[str]:
+    names: list[str] = []
+    for line in _descendants(root, "InvoiceLine"):
+        for item in _direct_children(line, "Item"):
+            names.extend(text for name in _direct_children(item, "Name") if (text := name.text or ""))
+    return names
+
+
+def _seller_item_ids(root: ElementTree.Element) -> list[str]:
+    ids: list[str] = []
+    for line in _descendants(root, "InvoiceLine"):
+        for item in _direct_children(line, "Item"):
+            for seller_identification in _direct_children(item, "SellersItemIdentification"):
+                ids.extend(text for node in _direct_children(seller_identification, "ID") if (text := node.text or ""))
+    return ids
+
+
+def _descendants(root: ElementTree.Element, local_name: str) -> list[ElementTree.Element]:
+    return [element for element in root.iter() if _local_name(element.tag) == local_name]
+
+
+def _direct_children(root: ElementTree.Element, local_name: str) -> list[ElementTree.Element]:
+    return [element for element in list(root) if _local_name(element.tag) == local_name]
 
 
 def _local_name(tag: str) -> str:

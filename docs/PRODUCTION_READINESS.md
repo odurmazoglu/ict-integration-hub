@@ -113,7 +113,7 @@ Optional controls:
 - `--limit <1-100>`
 - `--output-report <path-to-sanitized-json>`
 
-The report is sanitized and includes WSDL reachability, authentication, incoming invoice listing, records inspected, detail/UBL retrieval, document persistence, SHA-256 verification, collected representative scenarios, missing scenarios, configuration failures, permission failures, parser-validation blockers, and `no_provider_state_change_attempted=true`.
+The report is sanitized and includes WSDL reachability, authentication, incoming invoice listing, records inspected, detail/UBL retrieval, document persistence, SHA-256 verification, collected representative scenarios, missing scenarios, planned read-only operations, successfully validated read-only operations, configuration failures, permission failures, parser-validation blockers, and `no_provider_state_change_attempted=true`.
 
 Safety boundaries:
 

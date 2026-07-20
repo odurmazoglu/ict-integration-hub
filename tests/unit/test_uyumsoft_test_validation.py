@@ -30,18 +30,38 @@ from app.services.uyumsoft_test_validation import (
 STANDARD_XML = b"""<?xml version="1.0"?>
 <Invoice>
   <DocumentCurrencyCode>TRY</DocumentCurrencyCode>
-  <InvoiceLine><Item><Name>Consulting</Name></Item></InvoiceLine>
+  <InvoiceLine>
+    <Item>
+      <Name>Consulting</Name>
+      <SellersItemIdentification><ID>CONSULT-001</ID></SellersItemIdentification>
+    </Item>
+  </InvoiceLine>
 </Invoice>
 """
 MULTI_LINE_XML = b"""<Invoice>
   <DocumentCurrencyCode>TRY</DocumentCurrencyCode>
-  <InvoiceLine><Item><Name>Consulting</Name></Item></InvoiceLine>
-  <InvoiceLine><Item><Name>Implementation</Name></Item></InvoiceLine>
+  <InvoiceLine>
+    <Item>
+      <Name>Consulting</Name>
+      <SellersItemIdentification><ID>CONSULT-001</ID></SellersItemIdentification>
+    </Item>
+  </InvoiceLine>
+  <InvoiceLine>
+    <Item>
+      <Name>Implementation</Name>
+      <SellersItemIdentification><ID>IMPL-001</ID></SellersItemIdentification>
+    </Item>
+  </InvoiceLine>
 </Invoice>
 """
 FOREIGN_CURRENCY_XML = b"""<Invoice>
   <DocumentCurrencyCode>USD</DocumentCurrencyCode>
-  <InvoiceLine><Item><Name>Service</Name></Item></InvoiceLine>
+  <InvoiceLine>
+    <Item>
+      <Name>Service</Name>
+      <SellersItemIdentification><ID>SERVICE-001</ID></SellersItemIdentification>
+    </Item>
+  </InvoiceLine>
 </Invoice>
 """
 DISCOUNT_XML = b"""<Invoice>
@@ -49,7 +69,12 @@ DISCOUNT_XML = b"""<Invoice>
   <AllowanceCharge><Amount>1.00</Amount></AllowanceCharge>
   <TaxSubtotal><Percent>10</Percent></TaxSubtotal>
   <TaxSubtotal><Percent>20</Percent></TaxSubtotal>
-  <InvoiceLine><Item><Name>Discounted</Name></Item></InvoiceLine>
+  <InvoiceLine>
+    <Item>
+      <Name>Discounted</Name>
+      <SellersItemIdentification><ID>DISC-001</ID></SellersItemIdentification>
+    </Item>
+  </InvoiceLine>
 </Invoice>
 """
 AMBIGUOUS_XML = b"""<Invoice>
@@ -76,12 +101,14 @@ class FakeUyumsoftValidationClient(UyumsoftSoapClient):
         invoices: list[UyumsoftInvoiceSummary] | None = None,
         documents: dict[str, bytes] | None = None,
         fail_auth: Exception | None = None,
+        fail_identity: Exception | None = None,
         fail_listing: Exception | None = None,
         fail_download_ids: set[str] | None = None,
     ) -> None:
         self.invoices = invoices if invoices is not None else [_invoice("standard", currency="TRY")]
         self.documents = documents or {"standard": STANDARD_XML}
         self.fail_auth = fail_auth
+        self.fail_identity = fail_identity
         self.fail_listing = fail_listing
         self.fail_download_ids = fail_download_ids or set()
         self.calls: list[str] = []
@@ -105,6 +132,8 @@ class FakeUyumsoftValidationClient(UyumsoftSoapClient):
         self.calls.append("WhoAmI")
         if self.fail_auth is not None:
             raise self.fail_auth
+        if self.fail_identity is not None:
+            raise self.fail_identity
         return UyumsoftIdentityResponse(status="ok", identity={"authenticated": True})
 
     def list_inbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
@@ -170,7 +199,44 @@ def test_production_or_non_approved_host_rejected_before_network_access(session:
 
     assert report["overall_status"] == "failed"
     assert "UYUMSOFT_TEST_WSDL_URL host is not approved for test validation." in report["configuration_failures"]
+    assert report["read_only_operations_planned"] == [
+        "TestConnection",
+        "WhoAmI",
+        "GetInboxInvoiceList",
+        "GetInboxInvoiceData",
+    ]
+    assert report["read_only_operations_validated"] == []
     assert client.calls == []
+
+
+def test_configuration_failure_reports_no_validated_operations(session: Session, tmp_path: Path) -> None:
+    client = FakeUyumsoftValidationClient()
+    report = _validate(
+        session=session,
+        tmp_path=tmp_path,
+        client=client,
+        settings=_settings(uyumsoft_username="change-me", uyumsoft_password=SecretStr("change-me")),
+    )
+
+    assert report["configuration_failures"] == [
+        "UYUMSOFT_USERNAME must be configured with test credentials.",
+        "UYUMSOFT_PASSWORD must be configured with test credentials.",
+    ]
+    assert report["read_only_operations_validated"] == []
+    assert client.calls == []
+
+
+def test_partial_operation_success_reports_only_actual_successes(session: Session, tmp_path: Path) -> None:
+    report = _validate(
+        session=session,
+        tmp_path=tmp_path,
+        client=FakeUyumsoftValidationClient(fail_identity=ConnectorError("Uyumsoft returned HTTP 403.")),
+    )
+
+    assert report["authentication"]["status"] == "permission_failure"
+    assert report["read_only_operations_validated"] == ["TestConnection"]
+    assert report["invoice_listing"]["status"] == "pending"
+    assert report["ubl_download"]["status"] == "pending"
 
 
 def test_authentication_failure_is_sanitized(session: Session, tmp_path: Path) -> None:
@@ -236,6 +302,7 @@ def test_missing_representative_scenarios_reported_honestly(session: Session, tm
     report = _validate(session=session, tmp_path=tmp_path)
 
     assert "standard_single_line_invoice" in report["collected_dataset_scenarios"]
+    assert "likely_missing_or_ambiguous_odoo_resolution_invoice" not in report["collected_dataset_scenarios"]
     assert "multi_line_invoice" in report["missing_dataset_scenarios"]
     assert (
         "One or more representative UBL dataset scenarios were not found." in report["blockers_for_parser_validation"]
@@ -272,6 +339,42 @@ def test_collects_representative_scenarios_where_available(session: Session, tmp
         "likely_missing_or_ambiguous_odoo_resolution_invoice",
     }
     assert report["missing_dataset_scenarios"] == []
+
+
+def test_seller_item_id_nested_under_identification_is_recognized(session: Session, tmp_path: Path) -> None:
+    report = _validate(session=session, tmp_path=tmp_path)
+
+    assert "standard_single_line_invoice" in report["collected_dataset_scenarios"]
+    assert "likely_missing_or_ambiguous_odoo_resolution_invoice" not in report["collected_dataset_scenarios"]
+
+
+def test_unrelated_name_elements_do_not_create_false_duplicate_product_match(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    xml = b"""<Invoice>
+      <AccountingSupplierParty>
+        <Party><PartyName><Name>Duplicated Header</Name></PartyName></Party>
+      </AccountingSupplierParty>
+      <AccountingCustomerParty>
+        <Party><PartyName><Name>Duplicated Header</Name></PartyName></Party>
+      </AccountingCustomerParty>
+      <InvoiceLine>
+        <Item>
+          <Name>Line Product</Name>
+          <SellersItemIdentification><ID>LINE-001</ID></SellersItemIdentification>
+        </Item>
+      </InvoiceLine>
+    </Invoice>
+    """
+    report = _validate(
+        session=session,
+        tmp_path=tmp_path,
+        client=FakeUyumsoftValidationClient(documents={"standard": xml}),
+    )
+
+    assert "standard_single_line_invoice" in report["collected_dataset_scenarios"]
+    assert "likely_missing_or_ambiguous_odoo_resolution_invoice" not in report["collected_dataset_scenarios"]
 
 
 def test_secrets_and_xml_content_absent_from_report(session: Session, tmp_path: Path) -> None:
