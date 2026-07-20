@@ -110,6 +110,7 @@ Operasyon dokümanları:
 
 - [Production Readiness](docs/PRODUCTION_READINESS.md): production gates, environment separation, readiness, logging/redaction, timeout/retry policy, deployment/rollback/incident runbooks, backup/restore, permissions and go-live checklist.
 - [Integration Flow](docs/INTEGRATION_FLOW.md): Uyumsoft -> incremental sync -> document download -> UBL parser -> mapping preview -> Odoo resolution -> draft vendor bill creation stage boundaries.
+- [Testing Documentation](docs/testing/README.md): integration testing, UAT, failure injection, performance validation, and go-live validation package.
 
 ## Uygulanan endpointler
 
