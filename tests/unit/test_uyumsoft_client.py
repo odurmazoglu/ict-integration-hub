@@ -3,9 +3,10 @@ from typing import Any
 
 from pydantic import SecretStr
 from requests import ConnectionError as RequestsConnectionError
+from requests import Timeout as RequestsTimeout
 from zeep.exceptions import Fault
 
-from app.connectors.exceptions import ConnectorError
+from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.connectors.uyumsoft.client import UyumsoftSoapClient, _sanitize_fault_message
 from app.schemas.uyumsoft_invoices import UyumsoftInvoiceListRequest
 
@@ -47,12 +48,22 @@ class FakeService:
             "Message": None,
         }
 
+    def GetInboxInvoiceData(self, invoice_id: str) -> dict[str, Any]:
+        assert invoice_id == "in-1"
+        return {"Value": {"Data": "PD94bWwgdmVyc2lvbj0iMS4wIj8+PEludm9pY2UvPg=="}, "IsSucceded": True}
+
+    def GetOutboxInvoiceData(self, invoice_id: str) -> dict[str, Any]:
+        assert invoice_id == "out-1"
+        return {"Value": {"Data": b"<Invoice/>"}, "IsSucceded": True}
+
 
 class FakeBinding:
     _operations = {
         "GetSystemDate": object(),
         "GetInboxInvoiceList": object(),
+        "GetInboxInvoiceData": object(),
         "GetOutboxInvoiceList": object(),
+        "GetOutboxInvoiceData": object(),
         "SendInvoice": object(),
         "TestConnection": object(),
         "WhoAmI": object(),
@@ -129,7 +140,9 @@ def test_wsdl_inspection_marks_read_only_operations() -> None:
     assert "SendInvoice" in result.operations
     assert "SendInvoice" not in result.read_only_operations
     assert result.read_only_operations == [
+        "GetInboxInvoiceData",
         "GetInboxInvoiceList",
+        "GetOutboxInvoiceData",
         "GetOutboxInvoiceList",
         "GetSystemDate",
         "TestConnection",
@@ -162,6 +175,18 @@ def test_uyumsoft_list_outbox_invoices_maps_response() -> None:
     assert result.invoices[0].invoice_id == "out-1"
 
 
+def test_uyumsoft_downloads_inbox_invoice_xml_data() -> None:
+    result = build_client().download_invoice_ubl_xml(direction="Inbox", invoice_id="in-1")
+
+    assert result == b'<?xml version="1.0"?><Invoice/>'
+
+
+def test_uyumsoft_downloads_outbox_invoice_xml_data() -> None:
+    result = build_client().download_invoice_ubl_xml(direction="Outbox", invoice_id="out-1")
+
+    assert result == b"<Invoice/>"
+
+
 class TransientInvoiceService(FakeService):
     def __init__(self) -> None:
         self.calls = 0
@@ -180,6 +205,21 @@ class FaultingInvoiceService(FakeService):
     def GetInboxInvoiceList(self, query: dict[str, Any]) -> dict:
         self.calls += 1
         raise Fault("SOAP fault")
+
+
+class FaultingInvoiceDataService(FakeService):
+    def GetInboxInvoiceData(self, invoice_id: str) -> dict:
+        raise Fault("SOAP fault")
+
+
+class TimeoutInvoiceDataService(FakeService):
+    def GetInboxInvoiceData(self, invoice_id: str) -> dict:
+        raise RequestsTimeout("timeout")
+
+
+class InvalidBase64InvoiceDataService(FakeService):
+    def GetInboxInvoiceData(self, invoice_id: str) -> dict[str, Any]:
+        return {"Value": {"Data": "not-base64"}, "IsSucceded": True}
 
 
 class UnsuccessfulInvoiceService(FakeService):
@@ -247,5 +287,62 @@ def test_invoice_listing_raises_connector_error_for_unsuccessful_response() -> N
         client.list_inbox_invoices(build_request())
     except ConnectorError as exc:
         assert exc.safe_message == "Query rejected"
+    else:
+        raise AssertionError("Expected ConnectorError")
+
+
+def test_invoice_data_timeout_maps_to_timeout_error() -> None:
+    client = UyumsoftSoapClient(
+        wsdl_url="https://uyumsoft.test/wsdl",
+        username="user",
+        password=SecretStr("pass"),
+        timeout_seconds=1,
+        retry_attempts=1,
+        retry_backoff_seconds=0,
+        zeep_client=CustomZeepClient(TimeoutInvoiceDataService()),
+    )
+
+    try:
+        client.download_invoice_ubl_xml(direction="Inbox", invoice_id="in-1")
+    except ConnectorTimeoutError as exc:
+        assert exc.safe_message == "Uyumsoft request timed out."
+    else:
+        raise AssertionError("Expected ConnectorTimeoutError")
+
+
+def test_invoice_data_fault_maps_to_connector_error() -> None:
+    client = UyumsoftSoapClient(
+        wsdl_url="https://uyumsoft.test/wsdl",
+        username="user",
+        password=SecretStr("pass"),
+        timeout_seconds=1,
+        retry_attempts=1,
+        retry_backoff_seconds=0,
+        zeep_client=CustomZeepClient(FaultingInvoiceDataService()),
+    )
+
+    try:
+        client.download_invoice_ubl_xml(direction="Inbox", invoice_id="in-1")
+    except ConnectorError as exc:
+        assert "Uyumsoft SOAP error" in exc.safe_message
+    else:
+        raise AssertionError("Expected ConnectorError")
+
+
+def test_invoice_data_invalid_base64_maps_to_connector_error() -> None:
+    client = UyumsoftSoapClient(
+        wsdl_url="https://uyumsoft.test/wsdl",
+        username="user",
+        password=SecretStr("pass"),
+        timeout_seconds=1,
+        retry_attempts=1,
+        retry_backoff_seconds=0,
+        zeep_client=CustomZeepClient(InvalidBase64InvoiceDataService()),
+    )
+
+    try:
+        client.download_invoice_ubl_xml(direction="Inbox", invoice_id="in-1")
+    except ConnectorError as exc:
+        assert exc.safe_message == "Uyumsoft invoice document data is not valid base64."
     else:
         raise AssertionError("Expected ConnectorError")

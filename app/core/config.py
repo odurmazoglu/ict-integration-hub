@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, SecretStr
@@ -13,6 +14,7 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://ict:ict@localhost:5432/ict_integration_hub"
+    document_storage_root: Path = Path("var/document_storage")
 
     odoo_base_url: AnyHttpUrl = Field(default="https://example.odoo.com")
     odoo_database: str = "example"

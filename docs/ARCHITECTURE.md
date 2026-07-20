@@ -22,7 +22,7 @@ Odoo Online JSON-2 API
 
 - Uyumsoft kimlik doğrulama ve SOAP çağrıları
 - Gelen/giden fatura listesinin alınması
-- XML/PDF belgelerinin indirilmesi
+- UBL XML belgelerinin indirilmesi ve saklanması
 - UBL-TR ayrıştırma
 - ETTN bazlı tekillik
 - Partner/ürün/vergi eşleştirme kararlarının uygulanması
@@ -41,7 +41,7 @@ Odoo Online JSON-2 API
 1. Bağlantı ve WSDL keşfi
 2. Salt-okunur listeleme
 3. Normalize metadata'nın Integration Hub veritabanına idempotent kaydı
-4. Ham XML/PDF saklama
+4. Ham UBL XML saklama
 5. Parse ve doğrulama
 6. Odoo'ya taslak fatura
 7. Eşleştirme ekranları
@@ -176,6 +176,54 @@ Index'ler:
 
 Bu akışta aşağıdakiler uygulanmaz: `SetInvoicesTaken`, `SendInvoice`, `Cancel*`, `RetrySendInvoices`, `MoveToDraftStatus`, invoice acknowledgement, status mutation, XML/PDF download, Odoo create/write/unlink/action_post.
 
+## Invoice document management
+
+- Doküman iş mantığı `app/services/document_service.py` içindedir; API veya connector nesnelerine ait business rule içermez.
+- Storage boundary `app/services/document_storage.py` içindedir. İlk backend `LocalDocumentStorage` olup gelecekte object storage eklenebilmesi için business logic storage protokolüne bağımlıdır.
+- Kalıcı doküman metadata modeli `app/models/invoice_document.py` içindeki `InvoiceDocument` modelidir.
+- Tablo adı `invoice_documents` şeklindedir.
+- Desteklenen tek doküman tipi `UBL_XML` değeridir.
+- UBL XML bytes veritabanında tutulmaz; yalnız storage key, hash ve metadata saklanır.
+- Endpoint `POST /api/v1/documents/uyumsoft/invoices/download` yalnız Uyumsoft test ortamında ve `confirm_read_only=true` ile çalışır.
+- Connector yalnız provider iletişimini yapar ve `GetInboxInvoiceData` / `GetOutboxInvoiceData` çağrılarından bytes döndürür.
+- Service katmanı invoice metadata kaydını doğrular, dokümanı indirir, XML-like validation yapar, SHA-256 hesaplar, duplicate/conflict kontrolünü uygular, dosyayı storage'a yazar ve metadata kaydını persist eder.
+- Storage key uygulama tarafından üretilir; provider filename kullanılmaz. Local storage absolute path ve directory traversal girişimlerini reddeder.
+
+### Document schema
+
+`invoice_documents` alanları:
+
+- `id`
+- `invoice_id`
+- `provider`
+- `direction`
+- `document_type`
+- `storage_backend`
+- `storage_key`
+- `content_hash_sha256`
+- `mime_type`
+- `content_size_bytes`
+- `downloaded_at`
+- `created_at`
+
+Constraint ve index'ler:
+
+- `uq_invoice_document_invoice_type`
+- `uq_invoice_document_storage_key`
+- `ix_invoice_documents_provider_direction`
+- `ix_invoice_documents_content_hash`
+
+### Document idempotency and consistency
+
+- `invoice_id + document_type` unique constraint ile aynı doküman tipi için tek aktif kayıt korunur.
+- Tekrarlanan indirmede hash aynıysa yeni kayıt oluşturulmaz ve `existing` sonucu döner.
+- Hash farklıysa mevcut doküman overwrite edilmez; conflict hatası döner.
+- Storage write başarılı olmadan metadata kaydı oluşturulmaz.
+- Metadata persistence başarısız olursa yazılan local dosya temizlenmeye çalışılır.
+- Structured log yalnız provider, document type, aggregate result ve süre içerir; XML içeriği, SOAP payload, credential veya secret içermez.
+
+Bu akışta PDF, XSLT, ZIP, UBL parsing, Odoo create/write/unlink/action_post ve Uyumsoft durum değiştiren operasyonlar uygulanmaz.
+
 ### Rollback
 
 Migration rollback için:
@@ -187,6 +235,8 @@ alembic downgrade -1
 Bu rollback `uyumsoft_invoice_metadata` tablosunu ve ilişkili index/constraint'leri kaldırır.
 
 Issue #12 migration rollback'i yalnız `uyumsoft_sync_runs` tablosunu ve ilişkili index'leri kaldırır. Bir önceki metadata migration'ı ayrıca rollback edilmedikçe invoice metadata tablosu korunur.
+
+Issue #13 migration rollback'i yalnız `invoice_documents` tablosunu ve ilişkili index/constraint'leri kaldırır. Yerel storage dosyaları veritabanı rollback'iyle otomatik silinmez; operasyonel rollback sırasında `DOCUMENT_STORAGE_ROOT` altındaki ilgili dosyalar ayrıca değerlendirilmelidir.
 
 ## Uyumsoft authentication and security
 
@@ -201,6 +251,8 @@ Issue #12 migration rollback'i yalnız `uyumsoft_sync_runs` tablosunu ve ilişki
   - `http://tempuri.org/IIntegration/WhoAmI`
   - `http://tempuri.org/IIntegration/GetInboxInvoiceList`
   - `http://tempuri.org/IIntegration/GetOutboxInvoiceList`
+  - `http://tempuri.org/IIntegration/GetInboxInvoiceData`
+  - `http://tempuri.org/IIntegration/GetOutboxInvoiceData`
 - Endpoint URL `https://efatura-test.uyumsoft.com.tr/Services/Integration` olarak WSDL service port'undan alınır.
 - Gerekli runtime ayarları:
   - `UYUMSOFT_ENVIRONMENT=test`
