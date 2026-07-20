@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     odoo_database: str = "example"
     odoo_api_key: SecretStr = SecretStr("change-me")
     odoo_timeout_seconds: float = 10
+    odoo_purchase_journal_id: int | None = None
+    odoo_purchase_journal_code: str | None = None
 
     uyumsoft_environment: UyumsoftEnvironment = "test"
     uyumsoft_test_wsdl_url: AnyHttpUrl = Field(default="https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl")

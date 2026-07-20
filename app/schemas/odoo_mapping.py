@@ -38,6 +38,7 @@ class OdooTaxCandidate(BaseModel):
     odoo_id: int | None = None
     name: str | None = None
     percent: Decimal | None = None
+    price_include: bool | None = None
     exemption_reason_code: str | None = None
     exemption_reason: str | None = None
 
@@ -46,6 +47,7 @@ class OdooProductCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     odoo_id: int | None = None
+    default_code: str | None = None
     lookup_key: Literal["name"]
     name: str
 

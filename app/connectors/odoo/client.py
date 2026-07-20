@@ -8,6 +8,16 @@ from app.schemas.odoo import OdooProbeResponse
 
 JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
+READ_ONLY_MODELS = frozenset(
+    {
+        "res.partner",
+        "product.product",
+        "account.tax",
+        "res.currency",
+        "account.journal",
+    }
+)
+
 
 class OdooJson2Client:
     def __init__(
@@ -59,6 +69,33 @@ class OdooJson2Client:
         if isinstance(result, dict) and isinstance(result.get("id"), int):
             return int(result["id"])
         raise ConnectorError("Odoo account.move create returned an unexpected response.")
+
+    async def search_read(
+        self,
+        *,
+        model: str,
+        domain: list[Any],
+        fields: list[str],
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        if model not in READ_ONLY_MODELS:
+            raise ConnectorError("Odoo read-only model is not allowed.")
+        result = await self._post_json(
+            f"/json/2/{model}/search_read",
+            {
+                "domain": domain,
+                "fields": fields,
+                "limit": limit,
+            },
+        )
+        if not isinstance(result, list):
+            raise ConnectorError("Odoo search_read returned an unexpected response.")
+        records: list[dict[str, Any]] = []
+        for item in result:
+            if not isinstance(item, dict):
+                raise ConnectorError("Odoo search_read returned an unexpected record.")
+            records.append(item)
+        return records
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> JsonValue:
         try:
