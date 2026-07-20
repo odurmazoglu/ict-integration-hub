@@ -114,11 +114,14 @@ Do not commit real `.env.local`, `.env.test`, `.env.production`, `.env.live-read
 ```text
 APP_ENV=development
 LIVE_CONNECTOR_READONLY=true
+ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1
 PRODUCTION_OPERATIONS_ENABLED=false
 PRODUCTION_APPROVAL_ACK=
 UYUMSOFT_ENVIRONMENT=production
 ODOO_BASE_URL=https://test-ictteknoloji.odoo.com
 ```
+
+`ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1` only enables the explicit read-only Uyumsoft smoke script. It does not enable provider writes, Odoo writes, production operations, acknowledgements, status updates, or draft creation. `LIVE_CONNECTOR_READONLY=true` and `PRODUCTION_OPERATIONS_ENABLED=false` are still required for the live-readonly profile, and strict `APP_ENV=production` safety gates are unchanged.
 
 Do not source dotenv files directly in a shell. Prefer `APP_ENV_FILE=<profile> docker compose ...` or let the application load the selected profile. If a dotenv file is ever sourced manually, quote values containing spaces.
 
@@ -296,10 +299,12 @@ Bu keşfe göre listeleme sorguları `ExecutionStartDate`, `ExecutionEndDate`, `
 
 ## Opsiyonel canlı smoke testi
 
-Canlı smoke testi varsayılan olarak kapalıdır. Yalnız Uyumsoft test ortamında, dar tarih aralığıyla, `page_size=1` kullanarak `GetInboxInvoiceList` ve `GetOutboxInvoiceList` çağırır. Kimlik bilgisi veya fatura XML/PDF içeriği yazdırmaz; yalnız güvenli özet döndürür.
+Canlı smoke testi varsayılan olarak kapalıdır. `ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1` yalnız explicit read-only validation scriptini açar; write operasyonlarını, acknowledgement/status değişikliklerini, Odoo draft creation'ı veya production operation gate'lerini açmaz. Uyumsoft production hedefleniyorsa `LIVE_CONNECTOR_READONLY=true`, `PRODUCTION_OPERATIONS_ENABLED=false`, boş `PRODUCTION_APPROVAL_ACK` ve `UYUMSOFT_ENVIRONMENT=production` birlikte gereklidir.
+
+Dar tarih aralığıyla, `page_size=1` kullanarak yalnız `GetInboxInvoiceList` ve `GetOutboxInvoiceList` çağırır. Kimlik bilgisi veya fatura XML/PDF içeriği yazdırmaz; yalnız güvenli özet döndürür.
 
 ```bash
-ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/uyumsoft_readonly_smoke.py \
+APP_ENV_FILE=.env.live-readonly ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/uyumsoft_readonly_smoke.py \
   --from 2026-07-16T00:00:00+00:00 \
   --to 2026-07-17T00:00:00+00:00 \
   --page-size 1
