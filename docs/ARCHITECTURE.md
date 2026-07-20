@@ -55,6 +55,15 @@ Odoo Online JSON-2 API
 - Uyumsoft test ortamı MVP boyunca zorunludur.
 - Durum değiştiren SOAP operasyonları varsayılan olarak kapalıdır.
 - Odoo faturaları otomatik post edilmez.
+- Production access explicit gate gerektirir; tek başına `APP_ENV=production` yeterli değildir.
+
+## Production readiness boundary
+
+- Runtime production gates ve operasyon runbook'ları `docs/PRODUCTION_READINESS.md` içinde tanımlıdır.
+- End-to-end stage sorumlulukları ve allowed/forbidden operasyonlar `docs/INTEGRATION_FLOW.md` içinde özetlenir.
+- `GET /health/live` yalnız process liveness döndürür.
+- `GET /health/ready` config, database connectivity ve document storage writability kontrol eder; Uyumsoft veya Odoo provider çağrısı yapmaz.
+- Unsafe production config startup sırasında fail-fast davranışıyla reddedilir ve hata mesajları secret veya full connection string içermez.
 
 ## Uyumsoft invoice listing connector
 

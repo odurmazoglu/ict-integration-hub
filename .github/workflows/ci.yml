@@ -26,3 +26,6 @@ jobs:
 
       - name: Run Ruff
         run: ruff check .
+
+      - name: Check formatting
+        run: ruff format --check .
