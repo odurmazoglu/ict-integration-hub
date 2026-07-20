@@ -65,7 +65,95 @@ def test_non_production_rejects_production_flags_and_provider_environment() -> N
 
     assert "PRODUCTION_OPERATIONS_ENABLED must be false outside production." in errors
     assert "PRODUCTION_APPROVAL_ACK must be empty outside production." in errors
-    assert "UYUMSOFT_ENVIRONMENT=production is only allowed when APP_ENV=production." in errors
+    assert "UYUMSOFT_ENVIRONMENT=production outside production requires LIVE_CONNECTOR_READONLY=true." in errors
+
+
+def test_non_production_production_connector_requires_live_readonly() -> None:
+    settings = Settings(
+        app_env="development",
+        uyumsoft_environment="production",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "UYUMSOFT_ENVIRONMENT=production outside production requires LIVE_CONNECTOR_READONLY=true." in errors
+
+
+def test_development_production_connector_live_readonly_is_accepted() -> None:
+    settings = Settings(
+        app_env="development",
+        live_connector_readonly=True,
+        uyumsoft_environment="production",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert errors == []
+
+
+def test_test_environment_production_connector_live_readonly_is_accepted() -> None:
+    settings = Settings(
+        app_env="test",
+        live_connector_readonly=True,
+        uyumsoft_environment="production",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert errors == []
+
+
+def test_live_readonly_rejects_production_operations_flag_and_ack() -> None:
+    settings = Settings(
+        app_env="development",
+        live_connector_readonly=True,
+        production_operations_enabled=True,
+        production_approval_ack=PRODUCTION_APPROVAL_ACK,
+        uyumsoft_environment="production",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "PRODUCTION_OPERATIONS_ENABLED must be false outside production." in errors
+    assert "PRODUCTION_APPROVAL_ACK must be empty outside production." in errors
+
+
+def test_live_readonly_rejects_unapproved_production_connector_host() -> None:
+    settings = Settings(
+        app_env="development",
+        live_connector_readonly=True,
+        uyumsoft_environment="production",
+        uyumsoft_prod_wsdl_url="https://not-approved.example.com/Services/Integration?wsdl",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "UYUMSOFT_PROD_WSDL_URL host is not approved for production." in errors
+
+
+def test_live_readonly_rejects_test_wsdl_pointing_to_production_host() -> None:
+    settings = Settings(
+        app_env="development",
+        live_connector_readonly=True,
+        uyumsoft_environment="production",
+        uyumsoft_test_wsdl_url="https://efatura.uyumsoft.com.tr/Services/Integration?wsdl",
+        uyumsoft_username="live-user",
+        uyumsoft_password=SecretStr("live-password"),
+    )
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "UYUMSOFT_TEST_WSDL_URL must not point to the production host." in errors
 
 
 def test_runtime_configuration_error_exposes_only_safe_messages() -> None:

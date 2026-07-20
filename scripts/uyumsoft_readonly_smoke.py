@@ -30,12 +30,14 @@ def main() -> None:
     if args.page_size != 1:
         raise SystemExit("Live smoke check requires --page-size 1.")
 
+    settings = get_settings()
+    _validate_live_readonly_mode(settings)
+
     to_date = _parse_datetime(args.to_date) if args.to_date else datetime.now(tz=UTC)
     from_date = _parse_datetime(args.from_date) if args.from_date else to_date - timedelta(days=1)
     if from_date > to_date:
         raise SystemExit("--from must be before or equal to --to.")
 
-    settings = get_settings()
     client = UyumsoftSoapClient.from_settings(settings)
     request = UyumsoftInvoiceListRequest(from_date=from_date, to_date=to_date, page=1, page_size=args.page_size)
 
@@ -65,6 +67,12 @@ def _run_smoke(client: UyumsoftSoapClient, request: UyumsoftInvoiceListRequest) 
         "inbox": _call_safely(lambda: client.list_inbox_invoices(request)),
         "outbox": _call_safely(lambda: client.list_outbox_invoices(request)),
     }
+
+
+def _validate_live_readonly_mode(settings: Any) -> None:
+    if settings.app_env != "production" and settings.uyumsoft_environment == "production":
+        if not settings.live_connector_readonly:
+            raise SystemExit("Live production connector smoke requires LIVE_CONNECTOR_READONLY=true.")
 
 
 def _call_safely(callback: Any) -> dict[str, Any]:

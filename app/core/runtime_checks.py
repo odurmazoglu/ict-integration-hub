@@ -130,7 +130,20 @@ def _validate_non_production_settings(settings: Settings, errors: list[str]) -> 
     if settings.production_approval_ack:
         errors.append("PRODUCTION_APPROVAL_ACK must be empty outside production.")
     if settings.uyumsoft_environment == "production":
-        errors.append("UYUMSOFT_ENVIRONMENT=production is only allowed when APP_ENV=production.")
+        if not settings.live_connector_readonly:
+            errors.append("UYUMSOFT_ENVIRONMENT=production outside production requires LIVE_CONNECTOR_READONLY=true.")
+        _validate_live_readonly_connector_settings(settings, errors)
+
+
+def _validate_live_readonly_connector_settings(settings: Settings, errors: list[str]) -> None:
+    if _host(settings.uyumsoft_prod_wsdl_url) not in APPROVED_UYUMSOFT_PRODUCTION_HOSTS:
+        errors.append("UYUMSOFT_PROD_WSDL_URL host is not approved for production.")
+    if _host(settings.uyumsoft_test_wsdl_url) in APPROVED_UYUMSOFT_PRODUCTION_HOSTS:
+        errors.append("UYUMSOFT_TEST_WSDL_URL must not point to the production host.")
+    if _is_placeholder(settings.uyumsoft_username):
+        errors.append("UYUMSOFT_USERNAME must not be a placeholder for live connector readonly mode.")
+    if _is_placeholder(settings.uyumsoft_password.get_secret_value()):
+        errors.append("UYUMSOFT_PASSWORD must not be a placeholder for live connector readonly mode.")
 
 
 def _host(value: object) -> str:
