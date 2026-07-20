@@ -109,6 +109,8 @@ class OdooStagingValidationService:
             records = await self.client.search_read(model=model, domain=[], fields=MODEL_FIELDS[model], limit=1)
         except (ConnectorTimeoutError, ConnectorError) as exc:
             return {"status": _failure_status(exc), "message": _safe_connector_message(exc)}
+        if not records:
+            return {"status": "empty", "records_sampled": 0}
         return {"status": "ok", "records_sampled": len(records)}
 
     async def _validate_purchase_journal(self) -> dict[str, Any]:
@@ -162,6 +164,11 @@ def _configuration_failures(settings: Settings, target_host: str) -> list[str]:
         failures.append("ODOO_DATABASE must be configured.")
     if not settings.odoo_api_key.get_secret_value().strip():
         failures.append("ODOO_API_KEY must be configured.")
+    if (
+        settings.odoo_purchase_journal_id is not None
+        and _normalized_code(settings.odoo_purchase_journal_code) is not None
+    ):
+        failures.append("Configure only one of ODOO_PURCHASE_JOURNAL_ID or ODOO_PURCHASE_JOURNAL_CODE.")
     return failures
 
 

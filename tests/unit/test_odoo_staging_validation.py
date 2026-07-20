@@ -82,6 +82,22 @@ async def test_unsafe_host_rejected_before_network_calls() -> None:
     assert client.calls == []
 
 
+async def test_purchase_journal_id_and_code_rejected_before_network_calls() -> None:
+    client = FakeValidationOdooClient()
+    report = await _validate(
+        settings=_settings(odoo_purchase_journal_id=55, odoo_purchase_journal_code="BILL"),
+        client=client,
+    )
+
+    assert report["overall_status"] == "failed"
+    assert report["configuration_failures"] == [
+        "Configure only one of ODOO_PURCHASE_JOURNAL_ID or ODOO_PURCHASE_JOURNAL_CODE."
+    ]
+    assert report["authentication"]["status"] == "not_run"
+    assert report["purchase_journal"]["status"] == "not_run"
+    assert client.calls == []
+
+
 async def test_authentication_failure_is_structured() -> None:
     report = await _validate(client=FakeValidationOdooClient(probe_error=ConnectorError("Odoo returned HTTP 401.")))
 
@@ -99,6 +115,14 @@ async def test_model_read_permission_failure_is_structured() -> None:
     assert report["overall_status"] == "failed"
     assert report["models"]["account.tax"]["status"] == "permission_failure"
     assert {"target": "account.tax", "message": "Odoo returned HTTP 403."} in report["permission_failures"]
+
+
+async def test_empty_model_read_is_reported_without_blocking_validation() -> None:
+    report = await _validate(client=FakeValidationOdooClient(records={**_records(), "product.product": []}))
+
+    assert report["overall_status"] == "ok"
+    assert report["models"]["product.product"] == {"status": "empty", "records_sampled": 0}
+    assert "One or more required Odoo models could not be read." not in report["blockers_for_resolution_validation"]
 
 
 async def test_purchase_journal_missing_and_ambiguous_are_blockers() -> None:
