@@ -239,6 +239,21 @@ Bu akışta PDF, XSLT, ZIP, UBL parsing, Odoo create/write/unlink/action_post ve
 - Hata mesajları ve structured log kayıtları XML içeriği, SOAP payload, credential veya secret içermez.
 - Issue #14 kapsamında normalized parse sonuçları persist edilmez; Odoo mapping ve UBL business validation Issue #15 ve sonraki işler için bırakılmıştır.
 
+## Odoo mapping preview
+
+- Mapping preview iş mantığı `app/services/odoo_mapping_preview.py` içindedir.
+- Input yalnız `app/schemas/normalized_invoice.py` içindeki provider-independent normalize invoice modelidir.
+- Mapper Uyumsoft SOAP modellerine, XML parser implementation detaylarına, Odoo connector'a veya transport katmanına bağımlı değildir.
+- Output `app/schemas/odoo_mapping.py` içindeki typed preview modelleridir.
+- Endpoint `POST /api/v1/odoo/mapping-preview` normalized invoice JSON alır ve preview döndürür.
+- Preview `invoice`, `lines`, `warnings`, `missing_fields` ve `mapping_status` alanlarından oluşur.
+- Odoo draft invoice payload preview `move_type`, `invoice_date`, `currency`, journal adayı, partner adayı, product adayları, invoice lines, tax adayları, references, notes, invoice number ve ETTN içerir.
+- Mapping status eksik alan yoksa `ready`, aksi durumda `needs_review` olur.
+- Partner, currency, tax, mandatory invoice values, quantity, unit price ve timezone-aware date eksikleri açık biçimde `missing_fields` içinde raporlanır.
+- Bu katman Odoo JSON-2 API çağırmaz, connector kullanmaz, kayıt oluşturmaz ve veritabanına yazmaz.
+- Partner/product/tax/journal adayları deterministik preview olarak üretilir; lookup, otomatik matching ve Odoo draft invoice creation sonraki issue kapsamındadır.
+- Structured log yalnız invoice id, mapping status, warning count ve line count içerir; XML, SOAP payload, credential, secret veya tam invoice payload loglanmaz.
+
 ### Rollback
 
 Migration rollback için:
