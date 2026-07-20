@@ -14,6 +14,7 @@ from app.db.base import Base
 from app.main import app
 from app.models.invoice_document import InvoiceDocument
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
+from app.schemas.uyumsoft_invoices import UyumsoftInvoiceDocument
 from app.services.document_storage import LocalDocumentStorage
 
 
@@ -21,8 +22,12 @@ class FakeDocumentUyumsoftClient(UyumsoftSoapClient):
     def __init__(self) -> None:
         pass
 
-    def download_invoice_ubl_xml(self, *, direction: str, invoice_id: str) -> bytes:
-        return b"<Invoice><ID>route</ID></Invoice>"
+    def download_invoice(self, *, direction: str, invoice_id: str) -> UyumsoftInvoiceDocument:
+        return UyumsoftInvoiceDocument(
+            direction=direction,
+            invoice_id=invoice_id,
+            content=b"<Invoice><ID>route</ID></Invoice>",
+        )
 
 
 async def test_document_download_requires_read_only_confirmation(api_client: AsyncClient) -> None:

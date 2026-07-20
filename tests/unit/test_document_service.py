@@ -13,6 +13,7 @@ from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.db.base import Base
 from app.models.invoice_document import InvoiceDocument
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
+from app.schemas.uyumsoft_invoices import UyumsoftInvoiceDocument
 from app.services import document_service
 from app.services.document_service import (
     DocumentConflictError,
@@ -47,11 +48,15 @@ class RecordingDocumentClient(UyumsoftSoapClient):
         self.fail_with = fail_with
         self.calls: list[tuple[str, str]] = []
 
-    def download_invoice_ubl_xml(self, *, direction: str, invoice_id: str) -> bytes:
+    def download_invoice(self, *, direction: str, invoice_id: str) -> UyumsoftInvoiceDocument:
         self.calls.append((direction, invoice_id))
         if self.fail_with is not None:
             raise self.fail_with
-        return self.content if direction == "Inbox" else OUTBOX_XML
+        return UyumsoftInvoiceDocument(
+            direction=direction,
+            invoice_id=invoice_id,
+            content=self.content if direction == "Inbox" else OUTBOX_XML,
+        )
 
     def __getattribute__(self, name: str) -> Any:
         forbidden = {"SetInvoicesTaken", "SendInvoice", "CancelInvoice", "RetrySendInvoices", "MoveToDraftStatus"}
@@ -224,10 +229,16 @@ def test_safe_structured_logging(monkeypatch: pytest.MonkeyPatch, session: Sessi
     _service(session, RecordingDocumentClient(content=INBOX_XML), tmp_path).download_documents(invoice_ids=[invoice.id])
 
     assert log_calls
-    assert log_calls[0]["message"] == "invoice_document_download_completed"
-    assert log_calls[0]["extra"]["provider"] == "uyumsoft"
-    assert log_calls[0]["extra"]["document_type"] == "UBL_XML"
-    assert log_calls[0]["extra"]["downloaded"] == 1
+    success_log = next(log for log in log_calls if log["message"] == "invoice_document_download_succeeded")
+    assert success_log["extra"]["provider"] == "uyumsoft"
+    assert success_log["extra"]["invoice_id"] == invoice.id
+    assert success_log["extra"]["provider_invoice_id"] == "in-1"
+    assert success_log["extra"]["direction"] == "Inbox"
+    assert success_log["extra"]["document_size_bytes"] == len(INBOX_XML)
+    assert success_log["extra"]["content_hash_sha256"] == sha256(INBOX_XML).hexdigest()
+    completed_log = next(log for log in log_calls if log["message"] == "invoice_document_download_completed")
+    assert completed_log["extra"]["document_type"] == "UBL_XML"
+    assert completed_log["extra"]["downloaded"] == 1
     assert "Invoice><ID>" not in str(log_calls)
     assert "secret" not in str(log_calls).lower()
 

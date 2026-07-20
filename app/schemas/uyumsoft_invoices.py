@@ -42,3 +42,12 @@ class UyumsoftInvoiceListResponse(BaseModel):
     total_count: int | None = None
     invoices: list[UyumsoftInvoiceSummary]
     extra_fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class UyumsoftInvoiceDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    direction: InvoiceDirection
+    invoice_id: str
+    content: bytes
+    mime_type: str = "application/xml"

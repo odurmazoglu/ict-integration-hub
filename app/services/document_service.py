@@ -111,7 +111,8 @@ class InvoiceDocumentService:
     def _download_one(self, *, invoice_id: int, document_type: DocumentType) -> DocumentDownloadItem:
         invoice = self._get_invoice(invoice_id)
         provider_invoice_id = _required_provider_invoice_id(invoice)
-        content = self._client.download_invoice_ubl_xml(direction=invoice.direction, invoice_id=provider_invoice_id)
+        downloaded = self._client.download_invoice(direction=invoice.direction, invoice_id=provider_invoice_id)
+        content = downloaded.content
         _validate_xml_like(content)
         content_hash = hashlib.sha256(content).hexdigest()
         content_size = len(content)
@@ -155,6 +156,19 @@ class InvoiceDocumentService:
         except SQLAlchemyError as exc:
             self._storage.delete(storage_key)
             raise DocumentPersistenceError(DocumentPersistenceError.safe_message) from exc
+        logger.info(
+            "invoice_document_download_succeeded",
+            extra={
+                "provider": self._provider,
+                "invoice_id": invoice.id,
+                "provider_invoice_id": provider_invoice_id,
+                "direction": invoice.direction,
+                "document_type": document_type,
+                "document_size_bytes": content_size,
+                "content_hash_sha256": content_hash,
+                "result": "success",
+            },
+        )
         return _item_from_record(record, status="downloaded")
 
     def _get_invoice(self, invoice_id: int) -> UyumsoftInvoiceMetadata:

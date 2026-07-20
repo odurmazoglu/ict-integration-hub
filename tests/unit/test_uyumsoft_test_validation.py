@@ -16,6 +16,7 @@ from app.models.invoice_document import InvoiceDocument
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.schemas.uyumsoft import UyumsoftIdentityResponse, UyumsoftOperationsResponse, UyumsoftTestConnectionResponse
 from app.schemas.uyumsoft_invoices import (
+    UyumsoftInvoiceDocument,
     UyumsoftInvoiceListRequest,
     UyumsoftInvoiceListResponse,
     UyumsoftInvoiceSummary,
@@ -148,13 +149,13 @@ class FakeUyumsoftValidationClient(UyumsoftSoapClient):
             invoices=self.invoices[: request.page_size],
         )
 
-    def download_invoice_ubl_xml(self, *, direction: str, invoice_id: str) -> bytes:
+    def download_invoice(self, *, direction: str, invoice_id: str) -> UyumsoftInvoiceDocument:
         self.calls.append("GetInboxInvoiceData")
         if direction != "Inbox":
             raise AssertionError("Issue #30 validation must only acquire incoming invoices.")
         if invoice_id in self.fail_download_ids:
             raise ConnectorError("Uyumsoft invoice document request was not successful.")
-        return self.documents[invoice_id]
+        return UyumsoftInvoiceDocument(direction=direction, invoice_id=invoice_id, content=self.documents[invoice_id])
 
     def __getattribute__(self, name: str) -> Any:
         forbidden = {

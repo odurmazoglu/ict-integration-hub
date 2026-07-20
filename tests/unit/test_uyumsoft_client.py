@@ -181,6 +181,15 @@ def test_uyumsoft_downloads_inbox_invoice_xml_data() -> None:
     assert result == b'<?xml version="1.0"?><Invoice/>'
 
 
+def test_uyumsoft_download_invoice_returns_typed_document() -> None:
+    result = build_client().download_invoice(direction="Inbox", invoice_id="in-1")
+
+    assert result.direction == "Inbox"
+    assert result.invoice_id == "in-1"
+    assert result.mime_type == "application/xml"
+    assert result.content == b'<?xml version="1.0"?><Invoice/>'
+
+
 def test_uyumsoft_downloads_outbox_invoice_xml_data() -> None:
     result = build_client().download_invoice_ubl_xml(direction="Outbox", invoice_id="out-1")
 
