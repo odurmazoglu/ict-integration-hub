@@ -5,6 +5,7 @@ from typing import Any
 
 from zeep.helpers import serialize_object
 
+from app.connectors.exceptions import ConnectorError
 from app.schemas.uyumsoft_invoices import (
     InvoiceDirection,
     UyumsoftInvoiceListRequest,
@@ -17,6 +18,7 @@ QUERY_MODEL_NAMES: dict[InvoiceDirection, str] = {
     "Inbox": "InboxInvoiceListQueryModel",
     "Outbox": "OutboxInvoiceListQueryModel",
 }
+REQUIRED_QUERY_FIELDS = frozenset({"ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize"})
 
 ITEM_CONTAINER_KEYS = {
     "data",
@@ -60,7 +62,13 @@ def build_invoice_list_query_model(
 ) -> Any:
     query_model_name = QUERY_MODEL_NAMES[direction]
     query_model = zeep_client.get_type(f"{{{UYUMSOFT_NAMESPACE}}}{query_model_name}")
-    query_values: dict[str, Any] = {
+    supported_fields = get_supported_zeep_fields(query_model)
+    missing_required_fields = sorted(REQUIRED_QUERY_FIELDS - supported_fields)
+    if missing_required_fields:
+        missing = ", ".join(missing_required_fields)
+        raise ConnectorError(f"Uyumsoft {query_model_name} WSDL query model is missing required fields: {missing}.")
+
+    candidate_values: dict[str, Any] = {
         "ExecutionStartDate": request.from_date,
         "ExecutionEndDate": request.to_date,
         "PageIndex": request.page,
@@ -68,10 +76,17 @@ def build_invoice_list_query_model(
         "IncludeTagList": False,
     }
     if direction == "Inbox":
-        query_values["OnlyNewestInvoices"] = False
+        candidate_values["OnlyNewestInvoices"] = False
+    query_values = {key: value for key, value in candidate_values.items() if key in supported_fields}
     return query_model(
         **query_values,
     )
+
+
+def get_supported_zeep_fields(query_model: Any) -> set[str]:
+    fields: set[str] = set()
+    _collect_zeep_fields(query_model, fields)
+    return fields
 
 
 def normalize_invoice_list_response(
@@ -179,6 +194,26 @@ def _extract_paged_response(mapping: dict[str, Any]) -> dict[str, Any]:
         if nested_mapping:
             return nested_mapping
     return {}
+
+
+def _collect_zeep_fields(value: Any, fields: set[str]) -> None:
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name:
+        fields.add(name)
+
+    for attr in ("elements", "elements_nested"):
+        raw_elements = getattr(value, attr, ())
+        if callable(raw_elements):
+            raw_elements = raw_elements()
+        for item in raw_elements or ():
+            if isinstance(item, tuple) and item:
+                item_name = item[0]
+                if isinstance(item_name, str) and item_name:
+                    fields.add(item_name)
+                if len(item) > 1:
+                    _collect_zeep_fields(item[1], fields)
+                continue
+            _collect_zeep_fields(item, fields)
 
 
 def _to_mapping(value: Any) -> dict[str, Any]:

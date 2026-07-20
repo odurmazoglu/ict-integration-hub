@@ -12,6 +12,9 @@ from app.schemas.uyumsoft_invoices import UyumsoftInvoiceListRequest
 
 
 class FakeInvoiceListQueryModel:
+    def __init__(self, fields: set[str]) -> None:
+        self.elements = [(field, object()) for field in fields]
+
     def __call__(self, **kwargs: Any) -> dict[str, Any]:
         return {"__model__": "InvoiceListQueryModel", **kwargs}
 
@@ -32,7 +35,8 @@ class FakeService:
         assert query["ExecutionEndDate"] == datetime(2026, 7, 16, tzinfo=UTC)
         assert query["PageIndex"] == 1
         assert query["PageSize"] == 10
-        assert query["IncludeTagList"] is False
+        assert "IncludeTagList" not in query
+        assert query["OnlyNewestInvoices"] is False
         return {
             "Value": {"Items": [{"InvoiceId": "in-1", "DocumentId": "GIB2026001"}], "TotalCount": 1},
             "IsSucceded": True,
@@ -87,11 +91,15 @@ class FakeZeepClient:
     wsdl = FakeWsdl()
 
     def get_type(self, name: str) -> FakeInvoiceListQueryModel:
-        assert name in {
-            "{http://tempuri.org/}InboxInvoiceListQueryModel",
-            "{http://tempuri.org/}OutboxInvoiceListQueryModel",
-        }
-        return FakeInvoiceListQueryModel()
+        if name == "{http://tempuri.org/}InboxInvoiceListQueryModel":
+            return FakeInvoiceListQueryModel(
+                {"ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize", "OnlyNewestInvoices"}
+            )
+        if name == "{http://tempuri.org/}OutboxInvoiceListQueryModel":
+            return FakeInvoiceListQueryModel(
+                {"ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize", "IncludeTagList"}
+            )
+        raise AssertionError(f"Unexpected type requested: {name}")
 
 
 def build_client() -> UyumsoftSoapClient:
