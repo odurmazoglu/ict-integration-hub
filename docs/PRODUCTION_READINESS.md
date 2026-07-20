@@ -1,0 +1,243 @@
+# Production Readiness
+
+Production is disabled by default. Enabling production requires all runtime gates, environment separation, approvals, backups, and smoke validation below.
+
+## Production Enablement Gates
+
+The application fails fast when production configuration is unsafe. Production access requires all of the following:
+
+- `APP_ENV=production`
+- `PRODUCTION_OPERATIONS_ENABLED=true`
+- `PRODUCTION_APPROVAL_ACK=APPROVED_FOR_PRODUCTION`
+- `UYUMSOFT_ENVIRONMENT=production`
+- `UYUMSOFT_PROD_WSDL_URL` host is `efatura.uyumsoft.com.tr`
+- `UYUMSOFT_TEST_WSDL_URL` does not point to the production host
+- `ODOO_BASE_URL` is not an example host
+- `DATABASE_URL` does not point to localhost
+- Odoo and Uyumsoft credentials are not placeholders
+
+Outside production, `PRODUCTION_OPERATIONS_ENABLED` must be false, `PRODUCTION_APPROVAL_ACK` must be empty, and `UYUMSOFT_ENVIRONMENT=production` is rejected.
+
+Odoo draft invoice creation remains draft-only. Production `action_post`, unlink, master-data mutation, and Uyumsoft state-changing operations remain forbidden.
+
+## Configuration Validation
+
+Startup and readiness validate safe configuration characteristics without printing secrets:
+
+- application environment
+- database URL presence and production localhost rejection
+- Uyumsoft environment and WSDL host policy
+- Uyumsoft credential presence
+- Odoo base URL, database, API credential presence
+- document storage path
+- optional configured purchase journal id/code
+- timeout and retry bounds
+- production enablement and approval gates
+
+Errors mention setting names and safe policy failures only. They must not include passwords, API keys, full database URLs, SOAP payloads, XML, or full invoice payloads.
+
+## Environment Separation
+
+Use separate `.env` files and secret stores per environment.
+
+| Environment | Purpose | Provider access | Production gates |
+| --- | --- | --- | --- |
+| local development | local coding and mock tests | test or placeholders only | disabled |
+| CI/test | automated unit tests | mocks only | disabled |
+| staging/test provider | Uyumsoft test and non-production Odoo validation | test endpoints only | disabled |
+| production | approved production operation | approved production endpoints only | explicitly enabled |
+
+`.env.example` is for local development. `.env.production.example` is a placeholder-only production template. Do not commit real `.env` files.
+
+## Health, Readiness, And Liveness
+
+- `GET /health`: backward-compatible liveness response, returns `{"status":"ok"}`.
+- `GET /health/live`: process liveness, no dependencies.
+- `GET /health/ready`: readiness check for runtime configuration, database connectivity, and document storage writability.
+
+Readiness does not call Uyumsoft or Odoo. Provider smoke checks remain explicit operational actions and must be read-only.
+
+## Logging And Redaction
+
+Structured logs may include safe correlation fields:
+
+- operation status
+- duration
+- integration invoice id
+- ETTN/UUID
+- sync run id
+- document id
+- Odoo move id
+- safe error category
+
+Never log:
+
+- passwords
+- API keys
+- tokens
+- full database URLs
+- full XML
+- SOAP payloads
+- full Odoo payloads
+- sensitive invoice content
+
+The runtime logging filter redacts common secret key/value patterns and XML-like payload strings. Services must still avoid sending full payloads to logging APIs.
+
+## Timeout And Retry Policy
+
+- Uyumsoft list and document calls use bounded retries for transient transport failures only.
+- Uyumsoft SOAP faults, validation failures, and authorization failures are not retried as transient transport errors.
+- Odoo JSON-2 calls use bounded HTTP client timeouts and do not run implicit infinite retries.
+- Odoo draft creation relies on ETTN idempotency before any retry or repeated operation.
+- No unsafe write operation is retried without an idempotency guarantee.
+
+## Deployment Runbook
+
+1. Confirm CI is green for the exact commit to deploy.
+2. Confirm no secrets are committed and `.env` remains untracked.
+3. Review the go-live checklist below and record approvals.
+4. Back up PostgreSQL and document storage.
+5. Build and tag the application image from the approved commit.
+6. Run `ruff check .`, `ruff format --check .`, and `pytest`.
+7. Run migration validation in staging: `alembic upgrade head`.
+8. Start the application with production env values from the secret store.
+9. Verify startup succeeds; unsafe production config must fail fast.
+10. Verify `GET /health/live` and `GET /health/ready`.
+11. Run explicit read-only provider smoke checks in the approved environment.
+12. Observe API and DB logs for startup errors, retry spikes, and redaction.
+13. Keep finance/business owner available during first controlled sync.
+
+## Migration And Rollback
+
+Before migration:
+
+```bash
+docker compose exec db pg_dump -U <db-user> -d <db-name> -Fc -f /tmp/pre_migration.dump
+alembic current
+alembic upgrade head
+```
+
+Rollback decision process:
+
+- If application startup fails before traffic, roll back the image first.
+- If migration changed schema and no production writes occurred, consider `alembic downgrade -1` after confirming the target revision.
+- If production writes occurred, prefer restoring from backup or applying a forward fix after owner approval.
+- Database rollback does not remove Odoo draft records that were already created.
+
+Application rollback:
+
+1. Stop traffic to the failing version.
+2. Deploy the previous approved image.
+3. Verify `/health/live` and `/health/ready`.
+4. Inspect logs for repeated connector or database errors.
+5. Reconcile any in-flight sync/document/draft operation by ETTN and operation id.
+
+## Backup And Restore Checklist
+
+- PostgreSQL backup captured and restore-tested.
+- Document storage root backed up with hashes preserved.
+- Runtime configuration backed up through the secret manager without exporting secret values to logs.
+- Alembic revision before and after migration recorded.
+- Restore verification includes database connectivity, document storage readability, and representative metadata lookup.
+
+Docker-compatible examples:
+
+```bash
+docker compose exec db pg_dump -U <db-user> -d <db-name> -Fc -f /tmp/ict_backup.dump
+docker compose cp db:/tmp/ict_backup.dump ./backups/ict_backup.dump
+docker compose exec db pg_restore --list /tmp/ict_backup.dump
+```
+
+Use environment-specific secure storage for backups. Do not commit backups.
+
+## Incident Response Runbook
+
+- Provider unavailable: pause manual sync/download actions, verify retries are bounded, notify provider owner, resume only after read-only smoke succeeds.
+- Odoo unavailable: pause resolution and draft creation, preserve local sync/document state, retry only after Odoo health is restored.
+- Database unavailable: stop write workflows, restore DB connectivity, verify Alembic current, inspect failed operation records.
+- Storage unavailable: stop document downloads and parsing, restore storage mount, verify hash/read access.
+- Duplicate draft concern: search local `odoo_draft_invoices` by ETTN, then manually inspect Odoo draft bills by ETTN/reference; do not unlink automatically.
+- Partial Odoo creation/local persistence failure: use the reconciliation steps below.
+- Credential exposure suspicion: rotate affected credentials, revoke tokens, inspect logs/backups, confirm `.env` was not committed.
+- Invalid production configuration: keep service stopped, fix secret-store values, rerun readiness after startup.
+- Excessive failures or retries: disable manual triggering, inspect safe error categories, and escalate to technical owner.
+
+## Recovery And Reconciliation
+
+Known risk: Odoo draft is created successfully but local persistence fails afterward.
+
+Safe manual procedure:
+
+1. Find the invoice ETTN/UUID from the approved source record.
+2. Search Odoo draft vendor bills by reference/ETTN and confirm `state=draft`.
+3. Confirm no duplicate draft exists for the same ETTN.
+4. If one draft exists, record the Odoo move id in the incident notes.
+5. Restore or repair local persistence with owner approval.
+6. Re-run the idempotent draft workflow only after local state is consistent.
+7. Never post, unlink, cancel, or mutate provider state as part of reconciliation.
+
+## Production Permissions
+
+### Uyumsoft
+
+Minimum permissions:
+
+- invoice listing
+- invoice detail retrieval
+- UBL document download
+
+Not required by default:
+
+- status-changing permissions
+- acknowledgement or receipt permissions
+- acceptance, rejection, cancellation, retry-send, move-to-draft, or send permissions
+
+### Odoo
+
+Minimum permissions:
+
+- read partner, product, tax, currency, and journal records for resolution
+- create draft vendor bills only when explicitly approved
+
+The integration user does not need invoice posting permission. Do not grant unlink. Do not grant partner, product, or tax master-data creation unless separately approved.
+
+## Go-Live Checklist
+
+Production must remain disabled until every mandatory gate is explicitly approved.
+
+- CI green
+- local tests green
+- Docker build/start validated
+- migrations validated
+- backup completed
+- restore procedure reviewed
+- production endpoints approved
+- credentials stored securely
+- least-privilege permissions reviewed
+- logging redaction verified
+- no secrets committed
+- staging/test end-to-end validation completed
+- idempotency validated
+- manual reconciliation procedure reviewed
+- Odoo draft-only behavior verified
+- `action_post` prohibition verified
+- Uyumsoft read-only behavior verified
+- finance/business owner approval recorded
+- technical owner approval recorded
+- rollback owner identified
+- monitoring owner identified
+
+## Monitoring Expectations
+
+Track these signals with the deployment platform already in use:
+
+- API process health and restart count
+- `/health/ready` status
+- database connectivity and migration revision
+- sync run failures and retry counts
+- document download conflicts/failures
+- parser failures by safe category
+- Odoo resolution missing/ambiguous counts
+- Odoo draft creation failures and duplicate-in-progress counts
+
+Do not add production traffic until owners agree how these signals are observed and escalated.
