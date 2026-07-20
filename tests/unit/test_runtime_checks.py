@@ -210,7 +210,13 @@ def test_logging_redaction_filter_removes_secret_values_and_xml_payloads() -> No
 
 
 def test_example_environment_files_contain_placeholders_only() -> None:
-    for path in [Path(".env.example"), Path(".env.production.example")]:
+    for path in [
+        Path(".env.example"),
+        Path(".env.local.example"),
+        Path(".env.test.example"),
+        Path(".env.production.example"),
+        Path(".env.live-readonly.example"),
+    ]:
         content = path.read_text(encoding="utf-8")
 
         assert "super-secret" not in content

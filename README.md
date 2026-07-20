@@ -82,12 +82,45 @@ Current automation note: issue creation is available through the GitHub connecto
 ## Çalıştırma
 
 ```bash
-cp .env.example .env
-docker compose up --build -d
+cp .env.local.example .env.local
+APP_ENV_FILE=.env.local docker compose up --build -d
 curl http://localhost:8000/health
 ```
 
-Docker Compose uses the bundled PostgreSQL service on port `5432` and sets the API container database URL to `postgresql+psycopg://ict:ict@db:5432/ict_integration_hub`. Local `.env` remains for runtime connector configuration and is not committed.
+Docker Compose uses the bundled PostgreSQL service on port `5432` and sets the API container database URL to `postgresql+psycopg://ict:ict@db:5432/ict_integration_hub`.
+
+Runtime configuration is selected through exactly one environment profile file. Compose and the application both use `APP_ENV_FILE`; if it is not set, `.env.local` is used.
+
+Examples:
+
+```bash
+APP_ENV_FILE=.env.local docker compose up -d
+APP_ENV_FILE=.env.test docker compose up -d
+APP_ENV_FILE=.env.production docker compose up -d
+APP_ENV_FILE=.env.live-readonly docker compose up -d
+```
+
+Placeholder-only templates are provided:
+
+- `.env.local.example`: local development
+- `.env.test.example`: automated/local test profile
+- `.env.production.example`: production deployment profile
+- `.env.live-readonly.example`: development runtime with read-only Uyumsoft production access and Odoo staging
+
+Do not commit real `.env.local`, `.env.test`, `.env.production`, `.env.live-readonly`, or other secret-bearing profile files.
+
+`APP_ENV` controls application runtime mode. Connector environments are separate: `UYUMSOFT_ENVIRONMENT` selects Uyumsoft `test` or `production`, while Odoo is selected by `ODOO_BASE_URL` and related Odoo settings. The supported live-readonly validation profile uses:
+
+```text
+APP_ENV=development
+LIVE_CONNECTOR_READONLY=true
+PRODUCTION_OPERATIONS_ENABLED=false
+PRODUCTION_APPROVAL_ACK=
+UYUMSOFT_ENVIRONMENT=production
+ODOO_BASE_URL=https://test-ictteknoloji.odoo.com
+```
+
+Do not source dotenv files directly in a shell. Prefer `APP_ENV_FILE=<profile> docker compose ...` or let the application load the selected profile. If a dotenv file is ever sourced manually, quote values containing spaces.
 
 ## Lokal geliştirme
 
@@ -100,7 +133,7 @@ ruff check .
 uvicorn app.main:app --reload
 ```
 
-Yerel `.env` dosyası yalnız runtime konfigürasyonu içindir; içeriği repoya eklenmez, testlerde basılmaz ve loglanmaz.
+Yerel environment profile dosyaları yalnız runtime konfigürasyonu içindir; içerikleri repoya eklenmez, testlerde basılmaz ve loglanmaz.
 
 ## Üretim hazırlığı
 
