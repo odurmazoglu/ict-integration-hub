@@ -56,6 +56,7 @@ Odoo Online JSON-2 API
 - Durum değiştiren SOAP operasyonları varsayılan olarak kapalıdır.
 - Odoo faturaları otomatik post edilmez.
 - Production access explicit gate gerektirir; tek başına `APP_ENV=production` yeterli değildir.
+- Kalıcı mimari kararların gerekçeleri [Architecture Decision Records](adr/README.md) altında tutulur.
 
 ## Production readiness boundary
 
