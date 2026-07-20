@@ -254,6 +254,23 @@ Bu akışta PDF, XSLT, ZIP, UBL parsing, Odoo create/write/unlink/action_post ve
 - Partner/product/tax/journal adayları deterministik preview olarak üretilir; lookup, otomatik matching ve Odoo draft invoice creation sonraki issue kapsamındadır.
 - Structured log yalnız invoice id, mapping status, warning count ve line count içerir; XML, SOAP payload, credential, secret veya tam invoice payload loglanmaz.
 
+## Odoo draft invoice creation
+
+- Draft creation iş mantığı `app/services/odoo_draft_invoice.py` içindedir.
+- Input `app/schemas/odoo_draft_invoice.py` içindeki request modelidir ve reviewed `OdooMappingPreview` çıktısını taşır.
+- API endpoint `POST /api/v1/odoo/draft-invoices` şeklindedir.
+- Endpoint `APP_ENV=production` için kapalıdır ve `confirm_create_draft=true` ister.
+- Service yalnız mevcut Odoo JSON-2 client üzerindeki `account.move/create` operasyonunu çağırır.
+- Oluşturulan Odoo kayıt tipi yalnız draft `account.move` ve `move_type=in_invoice` değeridir.
+- `action_post`, `unlink`, existing invoice update, partner/product/tax/payment term creation, payment registration ve reconciliation uygulanmaz.
+- Required reviewed identifier alanları: `partner.odoo_id`, `currency_id`, `journal.odoo_id`, line `product.odoo_id` ve line tax `odoo_id`.
+- Service Odoo lookup veya automatic matching yapmaz; eksik identifier varsa structured validation error döner.
+- Odoo referansları `odoo_draft_invoices` tablosunda saklanır.
+- ETTN unique constraint duplicate draft creation'ı engeller.
+- Aynı ETTN için başarılı kayıt varsa ikinci Odoo create çağrısı yapılmaz; mevcut `account.move` referansı döner.
+- Başarısız connector denemeleri `failed` status, safe error category/message, attempt count ve last attempt timestamp ile saklanır; başarı olarak işaretlenmez.
+- Structured log yalnız Integration Hub invoice id, ETTN, operation status, Odoo move id, duration, error category ve attempt count içerir; full Odoo payload, XML, SOAP payload, credential veya secret loglanmaz.
+
 ### Rollback
 
 Migration rollback için:
@@ -267,6 +284,8 @@ Bu rollback `uyumsoft_invoice_metadata` tablosunu ve ilişkili index/constraint'
 Issue #12 migration rollback'i yalnız `uyumsoft_sync_runs` tablosunu ve ilişkili index'leri kaldırır. Bir önceki metadata migration'ı ayrıca rollback edilmedikçe invoice metadata tablosu korunur.
 
 Issue #13 migration rollback'i yalnız `invoice_documents` tablosunu ve ilişkili index/constraint'leri kaldırır. Yerel storage dosyaları veritabanı rollback'iyle otomatik silinmez; operasyonel rollback sırasında `DOCUMENT_STORAGE_ROOT` altındaki ilgili dosyalar ayrıca değerlendirilmelidir.
+
+Issue #16 migration rollback'i yalnız `odoo_draft_invoices` tablosunu ve ilişkili index/constraint'leri kaldırır. Odoo tarafında oluşturulmuş draft `account.move` kayıtları veritabanı rollback'iyle otomatik silinmez; operasyonel rollback sırasında ayrıca değerlendirilmelidir.
 
 ## Uyumsoft authentication and security
 

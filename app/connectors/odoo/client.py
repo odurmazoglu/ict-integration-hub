@@ -52,6 +52,14 @@ class OdooJson2Client:
             company_name=str(company["name"]),
         )
 
+    async def create_account_move(self, payload: dict[str, Any]) -> int:
+        result = await self._post_json("/json/2/account.move/create", payload)
+        if isinstance(result, int):
+            return result
+        if isinstance(result, dict) and isinstance(result.get("id"), int):
+            return int(result["id"])
+        raise ConnectorError("Odoo account.move create returned an unexpected response.")
+
     async def _post_json(self, path: str, payload: dict[str, Any]) -> JsonValue:
         try:
             headers = {
