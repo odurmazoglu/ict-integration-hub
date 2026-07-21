@@ -224,7 +224,41 @@ Doküman davranışı:
 - Aynı invoice ve document type tekrar indirildiğinde içerik hash'i aynıysa idempotent `existing` sonucu döner; içerik değişmişse doküman overwrite edilmez ve conflict hatası üretilir.
 - Structured log kayıtları yalnız aggregate sonuç içerir; XML içeriği, SOAP payload, credential veya secret loglanmaz.
 
-## UBL parser
+## Internal invoice domain
+
+`app/domain/invoice` ICT Integration Hub içindeki canonical invoice representation için provider-independent domain paketidir. Bu paket Odoo, Uyumsoft, SOAP, Zeep, SQLAlchemy, database ve HTTP katmanlarından bağımsızdır; yalnız UBL XML bytes/string alır ve immutable dataclass DTO'ları döndürür.
+
+Architecture:
+
+```text
+UBL XML bytes/string
+        |
+        v
+app.domain.invoice.parser.parse_ubl_invoice()
+        |
+        v
+InternalInvoice
+  |-- Header
+  |-- Party supplier/customer
+  |-- MonetaryTotals
+  |-- InvoiceLine + Tax + Discount
+  `-- Attachment metadata
+```
+
+Example usage:
+
+```python
+from app.domain.invoice import parse_ubl_invoice, validate_invoice
+
+invoice = parse_ubl_invoice(xml_bytes)
+issues = validate_invoice(invoice)
+```
+
+Supported input is UBL 2.x Invoice XML using the standard OASIS Invoice, Common Aggregate Components and Common Basic Components namespaces. The parser extracts available header, supplier/customer party, monetary total, line, tax, discount and attachment metadata. Missing optional elements become `None` or empty tuples. It raises domain exceptions only for invalid XML, non-UBL XML, or missing mandatory invoice identifiers.
+
+Limitations: this domain parser does not perform product lookup, partner lookup, tax mapping, currency conversion, Odoo mapping, database writes, SOAP calls or provider-specific normalization. Real production invoice fixtures must be anonymized before committing.
+
+## Legacy UBL parser
 
 Saklanan `UBL_XML` dokümanları `app/services/document_parser.py` içinde local olarak parse edilir. Parser Uyumsoft SOAP DTO'larını, Odoo modellerini veya transport detaylarını bilmez; çıktı `app/schemas/normalized_invoice.py` içindeki provider-independent typed modellerdir.
 
