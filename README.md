@@ -288,11 +288,43 @@ Idempotency:
 
 ## Uyumsoft WSDL keşfi
 
-Güvenli WSDL şema keşfi kimlik bilgisi gerektirmez ve yalnız operasyon/model meta verisi yazar:
+Güvenli WSDL model keşfi kimlik bilgisi gerektirmez ve yalnız Zeep'in yüklediği WSDL model meta verisini yazar.
+Bu geliştirici aracı SOAP business operation çağırmaz, fatura indirmez/yüklemez, provider durumunu değiştirmez,
+kullanıcı adı/parola/token/API key, SOAP XML veya fatura payload'u yazdırmaz.
 
 ```bash
 python3 scripts/inspect_uyumsoft_wsdl.py \
+  --list-models \
   --wsdl-url https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl
+```
+
+Belirli bir query modelinin desteklediği alanları incelemek için:
+
+```bash
+python3 scripts/inspect_uyumsoft_wsdl.py --model InboxInvoiceListQueryModel
+python3 scripts/inspect_uyumsoft_wsdl.py --model OutboxInvoiceListQueryModel --json
+```
+
+Beklenen çıktı yalnız güvenli metadata içerir:
+
+```text
+Model:
+InboxInvoiceListQueryModel
+
+Factory type:
+Factory
+
+Underlying Zeep type:
+InboxInvoiceListQueryModel(...)
+
+Supported fields:
+- ExecutionStartDate
+- ExecutionEndDate
+- PageIndex
+- PageSize
+
+Discovery path:
+- elements
 ```
 
 Bu keşfe göre listeleme sorguları WSDL tipli `InboxInvoiceListQueryModel` ve `OutboxInvoiceListQueryModel` nesneleriyle oluşturulur. Query construction capability-based çalışır: aktif Zeep modelindeki desteklenen alanlar okunur, zorunlu `ExecutionStartDate`, `ExecutionEndDate`, `PageIndex`, `PageSize` alanları yoksa provider çağrısından önce güvenli connector hatası üretilir, `IncludeTagList` ve `OnlyNewestInvoices` gibi opsiyonel alanlar yalnız ilgili WSDL modeli destekliyorsa gönderilir. Test ve production WSDL'leri farklı opsiyonel alanlar gösterebilir; desteklenmeyen opsiyonel alanlar sessizce atlanır. UBL XML indirme için `GetInboxInvoiceData(invoiceId: string)` ve `GetOutboxInvoiceData(invoiceId: string)` operasyonları `InvoiceDataResponse.Value.Data` alanından bytes döndürür.
