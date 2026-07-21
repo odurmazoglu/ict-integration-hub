@@ -315,6 +315,49 @@ Result status meanings:
 
 Current limitations: line-level taxes are mapped independently, lookup caching is local to one mapping execution, and no Odoo repository implementation is included yet.
 
+## Read-only ERP repository layer
+
+`app/erp` defines the provider-independent repository boundary for ERP master data. Business services can depend on a `RepositoryProvider` instead of constructing Odoo clients directly.
+
+Architecture:
+
+```text
+Business service / future matching engine
+      |
+      v
+RepositoryProvider
+      |
+      +-- PartnerRepository
+      +-- ProductRepository
+      +-- TaxRepository
+      +-- CurrencyRepository
+      `-- CompanyRepository
+              |
+              v
+        OdooReadOnlyAdapter
+              |
+              v
+        Odoo JSON-2 search_read
+```
+
+The package returns immutable DTOs for only the master data fields currently needed downstream:
+
+- `Partner`: id, name, tax number, active flag and company.
+- `Product`: id, name, default code, barcode, active flag and company.
+- `Tax`: id, company, canonical tax type, rate, active flag and usage type.
+- `Currency`: id, code and active flag.
+- `Company`: id and name.
+
+The first concrete implementation is `app.erp.odoo`, backed by the existing Odoo JSON-2 configuration and client. The adapter owns authentication, read-only JSON-2 calls, pagination, retries, timeout translation and sanitized error propagation. Repositories translate adapter records into DTOs and do not perform raw HTTP requests.
+
+Readonly scope:
+
+- Allowed operation: `search_read` on already allowlisted read-only Odoo models.
+- Forbidden operations remain out of scope: `create`, `write`, `unlink`, `action_post`, `button_validate`, payment/reconciliation actions and any other mutating endpoint.
+- The ERP layer does not perform matching, scoring, invoice parsing, normalization, validation, Vendor Bill creation, SOAP calls, database writes or SQLAlchemy access.
+
+Future write behavior must be introduced as a separate explicitly gated layer. This read-only repository package is intentionally not a foundation for implicit Odoo mutations.
+
 ## Legacy UBL parser
 
 Saklanan `UBL_XML` dokümanları `app/services/document_parser.py` içinde local olarak parse edilir. Parser Uyumsoft SOAP DTO'larını, Odoo modellerini veya transport detaylarını bilmez; çıktı `app/schemas/normalized_invoice.py` içindeki provider-independent typed modellerdir.
