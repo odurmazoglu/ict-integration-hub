@@ -372,6 +372,26 @@ The engine stops immediately after the first unique active match. Multiple activ
 
 Product name and description matching are intentionally excluded. They are unstable across supplier catalogs, languages, abbreviations and invoice formatting, and would introduce fuzzy/scored behavior that can silently select the wrong ERP product. Future roadmap work can add a separate reviewed candidate suggestion layer, but product creation, Odoo writes, invoice creation, fuzzy matching, AI similarity and keyword search remain out of scope for this deterministic matcher.
 
+## Vendor Bill Builder
+
+`app/billing` converts a fully matched `InternalInvoice` into an ERP-neutral `VendorBill` DTO, then into a deterministic Odoo `account.move` payload dictionary. It is a pure transformation layer and does not call Odoo, Uyumsoft, HTTP clients, repositories, SOAP, SQLAlchemy or the database.
+
+Input requirements:
+
+- `InternalInvoice` with invoice number, invoice date, currency and valid line quantities/prices.
+- `PartnerMatchResult` with a matched supplier partner id.
+- `InvoiceProductMatchResult` with exactly one matched product per invoice line.
+- `InvoiceTaxMappingResult` with matched tax ids for every invoice line tax.
+
+The builder rejects missing partner/product/tax mappings, duplicate line mappings, missing invoice header fields, invalid quantities and negative prices with explicit `VendorBillBuildError` messages. It never falls back to names, descriptions, repository lookups or inferred products/taxes.
+
+Output DTOs are frozen dataclasses:
+
+- `VendorBill`: supplier id, invoice number/date, currency code, external UUID, reference, lines and notes.
+- `VendorBillLine`: product id, quantity, unit of measure, unit price, tax ids and description.
+
+`to_odoo_account_move_payload()` converts the DTO to a plain Python dict using Odoo command tuple syntax for `invoice_line_ids`, for example `(0, 0, {...})`. The converter does not send the payload. A future write service must be introduced separately with explicit safety gates, idempotency and operator approval before any Odoo mutation is allowed.
+
 ## Legacy UBL parser
 
 Saklanan `UBL_XML` dokümanları `app/services/document_parser.py` içinde local olarak parse edilir. Parser Uyumsoft SOAP DTO'larını, Odoo modellerini veya transport detaylarını bilmez; çıktı `app/schemas/normalized_invoice.py` içindeki provider-independent typed modellerdir.

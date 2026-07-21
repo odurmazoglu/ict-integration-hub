@@ -12,6 +12,23 @@ class ProductMatchStatus(StrEnum):
     INVALID_INPUT = "INVALID_INPUT"
 
 
+class PartnerMatchStatus(StrEnum):
+    MATCHED = "MATCHED"
+    NOT_FOUND = "NOT_FOUND"
+    MULTIPLE_MATCHES = "MULTIPLE_MATCHES"
+    INVALID_INPUT = "INVALID_INPUT"
+
+
+@dataclass(frozen=True, slots=True)
+class PartnerMatchResult:
+    status: PartnerMatchStatus
+    partner_id: int | None
+    matched_by: str | None
+    reason: str
+    candidate_count: int
+    confidence: Decimal | None
+
+
 @dataclass(frozen=True, slots=True)
 class ProductMatchResult:
     status: ProductMatchStatus
