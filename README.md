@@ -358,6 +358,20 @@ Readonly scope:
 
 Future write behavior must be introduced as a separate explicitly gated layer. This read-only repository package is intentionally not a foundation for implicit Odoo mutations.
 
+## Product matching
+
+`app/matching` resolves `InternalInvoice` line products through the read-only ERP `RepositoryProvider`. The matcher depends only on `provider.product_repository`; it never reaches into the Odoo adapter, JSON-2 client, SOAP, SQLAlchemy or persistence code.
+
+Deterministic priority order:
+
+1. Internal reference: invoice `buyer_item_code` looked up against ERP `default_code`.
+2. Barcode: invoice `barcode` looked up against ERP barcode.
+3. Seller item code: invoice `seller_item_code` looked up against ERP `default_code`.
+
+The engine stops immediately after the first unique active match. Multiple active candidates at a higher-priority identifier return `MULTIPLE_MATCHES` and do not fall through to lower-priority identifiers. Missing identifiers, missing line numbers, invalid DTOs and repository failures return safe `INVALID_INPUT` results or invoice-level errors.
+
+Product name and description matching are intentionally excluded. They are unstable across supplier catalogs, languages, abbreviations and invoice formatting, and would introduce fuzzy/scored behavior that can silently select the wrong ERP product. Future roadmap work can add a separate reviewed candidate suggestion layer, but product creation, Odoo writes, invoice creation, fuzzy matching, AI similarity and keyword search remain out of scope for this deterministic matcher.
+
 ## Legacy UBL parser
 
 Saklanan `UBL_XML` dokümanları `app/services/document_parser.py` içinde local olarak parse edilir. Parser Uyumsoft SOAP DTO'larını, Odoo modellerini veya transport detaylarını bilmez; çıktı `app/schemas/normalized_invoice.py` içindeki provider-independent typed modellerdir.
