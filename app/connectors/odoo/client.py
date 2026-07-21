@@ -78,6 +78,7 @@ class OdooJson2Client:
         domain: list[Any],
         fields: list[str],
         limit: int = 20,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         if model not in READ_ONLY_MODELS:
             raise ConnectorError("Odoo read-only model is not allowed.")
@@ -87,6 +88,7 @@ class OdooJson2Client:
                 "domain": domain,
                 "fields": fields,
                 "limit": limit,
+                "offset": offset,
             },
         )
         if not isinstance(result, list):

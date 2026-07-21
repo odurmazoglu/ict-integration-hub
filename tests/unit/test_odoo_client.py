@@ -45,6 +45,7 @@ async def test_search_read_uses_read_only_endpoint() -> None:
         assert request.url.path == "/json/2/res.partner/search_read"
         assert b"create" not in request.content
         assert b"write" not in request.content
+        assert b'"offset":0' in request.content
         return httpx.Response(200, json=[{"id": 1, "name": "Supplier"}])
 
     client = OdooJson2Client(
