@@ -295,7 +295,7 @@ python3 scripts/inspect_uyumsoft_wsdl.py \
   --wsdl-url https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl
 ```
 
-Bu keşfe göre listeleme sorguları `ExecutionStartDate`, `ExecutionEndDate`, `PageIndex`, `PageSize` alanlarını içeren WSDL tipli `InboxInvoiceListQueryModel` ve `OutboxInvoiceListQueryModel` nesneleriyle oluşturulur. UBL XML indirme için `GetInboxInvoiceData(invoiceId: string)` ve `GetOutboxInvoiceData(invoiceId: string)` operasyonları `InvoiceDataResponse.Value.Data` alanından bytes döndürür.
+Bu keşfe göre listeleme sorguları WSDL tipli `InboxInvoiceListQueryModel` ve `OutboxInvoiceListQueryModel` nesneleriyle oluşturulur. Query construction capability-based çalışır: aktif Zeep modelindeki desteklenen alanlar okunur, zorunlu `ExecutionStartDate`, `ExecutionEndDate`, `PageIndex`, `PageSize` alanları yoksa provider çağrısından önce güvenli connector hatası üretilir, `IncludeTagList` ve `OnlyNewestInvoices` gibi opsiyonel alanlar yalnız ilgili WSDL modeli destekliyorsa gönderilir. Test ve production WSDL'leri farklı opsiyonel alanlar gösterebilir; desteklenmeyen opsiyonel alanlar sessizce atlanır. UBL XML indirme için `GetInboxInvoiceData(invoiceId: string)` ve `GetOutboxInvoiceData(invoiceId: string)` operasyonları `InvoiceDataResponse.Value.Data` alanından bytes döndürür.
 
 ## Opsiyonel canlı smoke testi
 
