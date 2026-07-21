@@ -18,7 +18,7 @@ QUERY_MODEL_NAMES: dict[InvoiceDirection, str] = {
     "Inbox": "InboxInvoiceListQueryModel",
     "Outbox": "OutboxInvoiceListQueryModel",
 }
-REQUIRED_QUERY_FIELDS = frozenset({"ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize"})
+PAGINATION_QUERY_FIELDS = frozenset({"PageIndex", "PageSize"})
 
 ITEM_CONTAINER_KEYS = {
     "data",
@@ -63,20 +63,22 @@ def build_invoice_list_query_model(
     query_model_name = QUERY_MODEL_NAMES[direction]
     query_model = zeep_client.get_type(f"{{{UYUMSOFT_NAMESPACE}}}{query_model_name}")
     supported_fields = get_supported_zeep_fields(query_model)
-    missing_required_fields = sorted(REQUIRED_QUERY_FIELDS - supported_fields)
+    date_fields = _date_query_fields(request)
+    required_fields = PAGINATION_QUERY_FIELDS | set(date_fields)
+    missing_required_fields = sorted(required_fields - supported_fields)
     if missing_required_fields:
         missing = ", ".join(missing_required_fields)
         raise ConnectorError(f"Uyumsoft {query_model_name} WSDL query model is missing required fields: {missing}.")
 
     candidate_values: dict[str, Any] = {
-        "ExecutionStartDate": request.from_date,
-        "ExecutionEndDate": request.to_date,
+        date_fields[0]: request.from_date,
+        date_fields[1]: request.to_date,
         "PageIndex": request.page,
         "PageSize": request.page_size,
         "IncludeTagList": False,
     }
     if direction == "Inbox":
-        candidate_values["OnlyNewestInvoices"] = False
+        candidate_values["OnlyNewestInvoices"] = request.only_newest_invoices
     query_values = {key: value for key, value in candidate_values.items() if key in supported_fields}
     return query_model(
         **query_values,
@@ -87,6 +89,12 @@ def get_supported_zeep_fields(query_model: Any) -> set[str]:
     fields: set[str] = set()
     _collect_zeep_fields(query_model, fields, set())
     return fields
+
+
+def _date_query_fields(request: UyumsoftInvoiceListRequest) -> tuple[str, str]:
+    if request.date_field == "create":
+        return "CreateStartDate", "CreateEndDate"
+    return "ExecutionStartDate", "ExecutionEndDate"
 
 
 def normalize_invoice_list_response(

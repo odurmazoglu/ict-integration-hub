@@ -309,13 +309,14 @@ Bu keşfe göre listeleme sorguları WSDL tipli `InboxInvoiceListQueryModel` ve 
 
 Canlı smoke testi varsayılan olarak kapalıdır. `ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1` yalnız explicit read-only validation scriptini açar; write operasyonlarını, acknowledgement/status değişikliklerini, Odoo draft creation'ı veya production operation gate'lerini açmaz. Uyumsoft production hedefleniyorsa `LIVE_CONNECTOR_READONLY=true`, `PRODUCTION_OPERATIONS_ENABLED=false`, boş `PRODUCTION_APPROVAL_ACK` ve `UYUMSOFT_ENVIRONMENT=production` birlikte gereklidir.
 
-Dar tarih aralığıyla, `page_size=1` kullanarak yalnız `GetInboxInvoiceList` ve `GetOutboxInvoiceList` çağırır. Kimlik bilgisi veya fatura XML/PDF içeriği yazdırmaz; yalnız güvenli özet döndürür.
+Dar tarih aralığıyla, `page_size=1` kullanarak yalnız `GetInboxInvoiceList` ve `GetOutboxInvoiceList` çağırır. `--from` ve `--to` değerleri `YYYY-MM-DD`, timezone'sız ISO datetime, timezone-aware ISO datetime veya `Z` ile biten UTC formatında verilebilir. Date-only `--from` gün başına, date-only `--to` gün sonuna genişletilir. `--date-field execution` invoice date filtresini (`ExecutionStartDate` / `ExecutionEndDate`), `--date-field create` sistem oluşturma/alım filtresini (`CreateStartDate` / `CreateEndDate`) kullanır. `--only-newest` verilmediği sürece `OnlyNewestInvoices=false` gönderilir. Kimlik bilgisi veya fatura XML/PDF içeriği yazdırmaz; yalnız güvenli sorgu özeti ve sonuç özeti döndürür.
 
 ```bash
 APP_ENV_FILE=.env.live-readonly ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/uyumsoft_readonly_smoke.py \
   --from 2026-07-16T00:00:00+00:00 \
   --to 2026-07-17T00:00:00+00:00 \
-  --page-size 1
+  --page-size 1 \
+  --date-field execution
 ```
 
 ## Uyumsoft authentication diagnostic

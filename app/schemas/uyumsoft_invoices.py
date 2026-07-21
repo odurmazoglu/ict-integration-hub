@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 InvoiceDirection = Literal["Inbox", "Outbox"]
+InvoiceListDateField = Literal["execution", "create"]
 
 
 class UyumsoftInvoiceListRequest(BaseModel):
@@ -14,6 +15,8 @@ class UyumsoftInvoiceListRequest(BaseModel):
     to_date: datetime
     page: int = Field(ge=1)
     page_size: int = Field(ge=1, le=100)
+    only_newest_invoices: bool = False
+    date_field: InvoiceListDateField = "execution"
 
 
 class UyumsoftInvoiceSummary(BaseModel):
