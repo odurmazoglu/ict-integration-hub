@@ -5,6 +5,8 @@ from app.matching.product import ProductMatchingEngine
 from app.matching.result import (
     InvoiceProductLineResult,
     InvoiceProductMatchResult,
+    PartnerMatchResult,
+    PartnerMatchStatus,
     ProductMatchResult,
     ProductMatchStatus,
 )
@@ -12,6 +14,8 @@ from app.matching.result import (
 __all__ = [
     "InvoiceProductLineResult",
     "InvoiceProductMatchResult",
+    "PartnerMatchResult",
+    "PartnerMatchStatus",
     "ProductMatchResult",
     "ProductMatchStatus",
     "ProductMatchingEngine",
