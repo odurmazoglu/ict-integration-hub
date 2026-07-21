@@ -46,6 +46,8 @@ class FakeZeepClient:
         self.inbox_fields = inbox_fields or _fields(
             "ExecutionStartDate",
             "ExecutionEndDate",
+            "CreateStartDate",
+            "CreateEndDate",
             "PageIndex",
             "PageSize",
             "OnlyNewestInvoices",
@@ -53,6 +55,8 @@ class FakeZeepClient:
         self.outbox_fields = outbox_fields or _fields(
             "ExecutionStartDate",
             "ExecutionEndDate",
+            "CreateStartDate",
+            "CreateEndDate",
             "PageIndex",
             "PageSize",
             "IncludeTagList",
@@ -167,6 +171,14 @@ def test_inbox_model_with_only_newest_invoices_includes_optional_field() -> None
     query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Inbox")
 
     assert query["OnlyNewestInvoices"] is False
+
+
+def test_inbox_only_newest_true_is_sent_when_requested() -> None:
+    request = _request(only_newest_invoices=True)
+
+    query = build_invoice_list_query_model(FakeZeepClient(), request, direction="Inbox")
+
+    assert query["OnlyNewestInvoices"] is True
 
 
 def test_model_without_only_newest_invoices_omits_optional_field() -> None:
@@ -370,6 +382,45 @@ def test_required_pagination_and_date_fields_remain_included() -> None:
     assert query["PageSize"] == 10
 
 
+def test_create_date_field_uses_create_start_and_end_dates() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(date_field="create"), direction="Inbox")
+
+    assert "ExecutionStartDate" not in query
+    assert "ExecutionEndDate" not in query
+    assert query["CreateStartDate"] == datetime(2026, 7, 15, tzinfo=UTC)
+    assert query["CreateEndDate"] == datetime(2026, 7, 16, tzinfo=UTC)
+
+
+def test_execution_date_field_uses_execution_start_and_end_dates() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(date_field="execution"), direction="Inbox")
+
+    assert query["ExecutionStartDate"] == datetime(2026, 7, 15, tzinfo=UTC)
+    assert query["ExecutionEndDate"] == datetime(2026, 7, 16, tzinfo=UTC)
+    assert "CreateStartDate" not in query
+    assert "CreateEndDate" not in query
+
+
+def test_zeep_model_receives_datetime_values_not_strings() -> None:
+    query = build_invoice_list_query_model(FakeZeepClient(), _request(), direction="Inbox")
+
+    assert isinstance(query["ExecutionStartDate"], datetime)
+    assert isinstance(query["ExecutionEndDate"], datetime)
+
+
+def test_missing_selected_create_date_fields_produces_safe_connector_error() -> None:
+    zeep_client = FakeZeepClient(
+        inbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize")
+    )
+
+    with pytest.raises(ConnectorError) as exc_info:
+        build_invoice_list_query_model(zeep_client, _request(date_field="create"), direction="Inbox")
+
+    assert exc_info.value.safe_message == (
+        "Uyumsoft InboxInvoiceListQueryModel WSDL query model is missing required fields: "
+        "CreateEndDate, CreateStartDate."
+    )
+
+
 def test_missing_required_wsdl_fields_produces_safe_connector_error() -> None:
     zeep_client = FakeZeepClient(inbox_fields=_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex"))
 
@@ -522,12 +573,14 @@ def test_normalize_invoice_list_response_accepts_list_root() -> None:
     assert result.invoices[0].invoice_id == "out-1"
 
 
-def _request() -> UyumsoftInvoiceListRequest:
+def _request(*, only_newest_invoices: bool = False, date_field: str = "execution") -> UyumsoftInvoiceListRequest:
     return UyumsoftInvoiceListRequest(
         from_date=datetime(2026, 7, 15, tzinfo=UTC),
         to_date=datetime(2026, 7, 16, tzinfo=UTC),
         page=1,
         page_size=10,
+        only_newest_invoices=only_newest_invoices,
+        date_field=date_field,
     )
 
 

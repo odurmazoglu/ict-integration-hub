@@ -72,6 +72,70 @@ def test_smoke_run_only_reaches_read_only_list_operations() -> None:
     assert client.calls == ["list_inbox_invoices", "list_outbox_invoices"]
 
 
+def test_parse_date_only_from_uses_start_of_day() -> None:
+    parsed = uyumsoft_readonly_smoke._parse_cli_datetime("2026-07-20", boundary="start")
+
+    assert parsed == datetime(2026, 7, 20, 0, 0, 0, 0, tzinfo=UTC)
+
+
+def test_parse_date_only_to_uses_end_of_day() -> None:
+    parsed = uyumsoft_readonly_smoke._parse_cli_datetime("2026-07-20", boundary="end")
+
+    assert parsed == datetime(2026, 7, 20, 23, 59, 59, 999999, tzinfo=UTC)
+
+
+def test_parse_timezone_aware_datetime_preserves_offset() -> None:
+    parsed = uyumsoft_readonly_smoke._parse_cli_datetime("2026-07-20T13:45:00+03:00", boundary="start")
+
+    assert parsed.isoformat() == "2026-07-20T13:45:00+03:00"
+
+
+def test_parse_z_datetime_as_utc() -> None:
+    parsed = uyumsoft_readonly_smoke._parse_cli_datetime("2026-07-20T10:45:00Z", boundary="start")
+
+    assert parsed == datetime(2026, 7, 20, 10, 45, tzinfo=UTC)
+
+
+def test_safe_query_debug_defaults_only_newest_false_for_execution_filter() -> None:
+    request = UyumsoftInvoiceListRequest(
+        from_date=datetime(2026, 7, 19, tzinfo=UTC),
+        to_date=datetime(2026, 7, 20, tzinfo=UTC),
+        page=1,
+        page_size=1,
+    )
+
+    query = uyumsoft_readonly_smoke._safe_query_debug(request)
+
+    assert query == {
+        "PageIndex": 1,
+        "PageSize": 1,
+        "OnlyNewestInvoices": False,
+        "ExecutionStartDate": datetime(2026, 7, 19, tzinfo=UTC),
+        "ExecutionEndDate": datetime(2026, 7, 20, tzinfo=UTC),
+        "CreateStartDate": None,
+        "CreateEndDate": None,
+    }
+
+
+def test_safe_query_debug_uses_create_filter_when_selected() -> None:
+    request = UyumsoftInvoiceListRequest(
+        from_date=datetime(2026, 7, 19, tzinfo=UTC),
+        to_date=datetime(2026, 7, 20, tzinfo=UTC),
+        page=1,
+        page_size=1,
+        only_newest_invoices=True,
+        date_field="create",
+    )
+
+    query = uyumsoft_readonly_smoke._safe_query_debug(request)
+
+    assert query["OnlyNewestInvoices"] is True
+    assert query["ExecutionStartDate"] is None
+    assert query["ExecutionEndDate"] is None
+    assert query["CreateStartDate"] == datetime(2026, 7, 19, tzinfo=UTC)
+    assert query["CreateEndDate"] == datetime(2026, 7, 20, tzinfo=UTC)
+
+
 class RecordingSmokeClient:
     def __init__(self) -> None:
         self.calls: list[str] = []

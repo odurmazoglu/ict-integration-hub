@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,13 @@ def main() -> None:
     parser.add_argument("--from", dest="from_date", required=False, help="Inclusive ISO datetime.")
     parser.add_argument("--to", dest="to_date", required=False, help="Inclusive ISO datetime.")
     parser.add_argument("--page-size", type=int, default=1)
+    parser.add_argument("--only-newest", action="store_true", help="Set OnlyNewestInvoices=true when supported.")
+    parser.add_argument(
+        "--date-field",
+        choices=("execution", "create"),
+        default="execution",
+        help="Select invoice execution date or system create/receipt date filtering.",
+    )
     args = parser.parse_args()
 
     if os.getenv(ENABLE_FLAG) != "1":
@@ -33,22 +40,57 @@ def main() -> None:
     settings = get_settings()
     _validate_live_readonly_mode(settings)
 
-    to_date = _parse_datetime(args.to_date) if args.to_date else datetime.now(tz=UTC)
-    from_date = _parse_datetime(args.from_date) if args.from_date else to_date - timedelta(days=1)
+    to_date = _parse_cli_datetime(args.to_date, boundary="end") if args.to_date else datetime.now(tz=UTC)
+    from_date = _parse_cli_datetime(args.from_date, boundary="start") if args.from_date else to_date - timedelta(days=1)
     if from_date > to_date:
         raise SystemExit("--from must be before or equal to --to.")
 
     client = UyumsoftSoapClient.from_settings(settings)
-    request = UyumsoftInvoiceListRequest(from_date=from_date, to_date=to_date, page=1, page_size=args.page_size)
+    request = UyumsoftInvoiceListRequest(
+        from_date=from_date,
+        to_date=to_date,
+        page=1,
+        page_size=args.page_size,
+        only_newest_invoices=args.only_newest,
+        date_field=args.date_field,
+    )
 
-    print(json.dumps(_run_smoke(client, request), indent=2, default=str))
+    print(json.dumps({"query": _safe_query_debug(request), **_run_smoke(client, request)}, indent=2, default=str))
 
 
-def _parse_datetime(value: str) -> datetime:
+def _parse_cli_datetime(value: str, *, boundary: str) -> datetime:
+    if _is_date_only(value):
+        parsed_date = date.fromisoformat(value)
+        parsed_time = time.max if boundary == "end" else time.min
+        return datetime.combine(parsed_date, parsed_time, tzinfo=UTC)
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _is_date_only(value: str) -> bool:
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return "T" not in value
+
+
+def _safe_query_debug(request: UyumsoftInvoiceListRequest) -> dict[str, Any]:
+    execution_start = request.from_date if request.date_field == "execution" else None
+    execution_end = request.to_date if request.date_field == "execution" else None
+    create_start = request.from_date if request.date_field == "create" else None
+    create_end = request.to_date if request.date_field == "create" else None
+    return {
+        "PageIndex": request.page,
+        "PageSize": request.page_size,
+        "OnlyNewestInvoices": request.only_newest_invoices,
+        "ExecutionStartDate": execution_start,
+        "ExecutionEndDate": execution_end,
+        "CreateStartDate": create_start,
+        "CreateEndDate": create_end,
+    }
 
 
 def _safe_summary(response: UyumsoftInvoiceListResponse) -> dict[str, Any]:
