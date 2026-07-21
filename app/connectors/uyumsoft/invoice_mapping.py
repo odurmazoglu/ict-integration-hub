@@ -85,7 +85,7 @@ def build_invoice_list_query_model(
 
 def get_supported_zeep_fields(query_model: Any) -> set[str]:
     fields: set[str] = set()
-    _collect_zeep_fields(query_model, fields)
+    _collect_zeep_fields(query_model, fields, set())
     return fields
 
 
@@ -196,10 +196,13 @@ def _extract_paged_response(mapping: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _collect_zeep_fields(value: Any, fields: set[str]) -> None:
-    name = getattr(value, "name", None)
-    if isinstance(name, str) and name:
-        fields.add(name)
+def _collect_zeep_fields(value: Any, fields: set[str], visited: set[int]) -> None:
+    if value is None:
+        return
+    value_id = id(value)
+    if value_id in visited:
+        return
+    visited.add(value_id)
 
     for attr in ("elements", "elements_nested"):
         raw_elements = getattr(value, attr, ())
@@ -208,12 +211,41 @@ def _collect_zeep_fields(value: Any, fields: set[str]) -> None:
         for item in raw_elements or ():
             if isinstance(item, tuple) and item:
                 item_name = item[0]
-                if isinstance(item_name, str) and item_name:
+                if _is_supported_field_name(item_name):
                     fields.add(item_name)
                 if len(item) > 1:
-                    _collect_zeep_fields(item[1], fields)
+                    _collect_zeep_fields(item[1], fields, visited)
                 continue
-            _collect_zeep_fields(item, fields)
+            item_name = getattr(item, "name", None)
+            if _is_supported_field_name(item_name):
+                fields.add(item_name)
+            _collect_zeep_fields(item, fields, visited)
+
+    for attr in ("attributes", "_attributes", "_attributes_unwrapped"):
+        raw_attributes = getattr(value, attr, ())
+        if callable(raw_attributes):
+            raw_attributes = raw_attributes()
+        for item in raw_attributes or ():
+            if isinstance(item, tuple) and item:
+                item_name = item[0]
+                if _is_supported_field_name(item_name):
+                    fields.add(item_name)
+                if len(item) > 1:
+                    _collect_zeep_fields(item[1], fields, visited)
+                continue
+            item_name = getattr(item, "name", None)
+            if _is_supported_field_name(item_name):
+                fields.add(item_name)
+            _collect_zeep_fields(item, fields, visited)
+
+    for attr in ("_xsd_type", "type", "_element"):
+        nested = getattr(value, attr, None)
+        if nested is not value:
+            _collect_zeep_fields(nested, fields, visited)
+
+
+def _is_supported_field_name(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and not value.startswith("_")
 
 
 def _to_mapping(value: Any) -> dict[str, Any]:

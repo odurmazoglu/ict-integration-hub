@@ -19,6 +19,11 @@ class FakeInvoiceListQueryModel:
         return {"__model__": "InvoiceListQueryModel", **kwargs}
 
 
+class MissingPageSizeQueryModel(FakeInvoiceListQueryModel):
+    def __init__(self) -> None:
+        super().__init__({"ExecutionStartDate", "ExecutionEndDate", "PageIndex"})
+
+
 class FakeService:
     def TestConnection(self) -> str:
         return "OK"
@@ -249,6 +254,25 @@ class CustomZeepClient(FakeZeepClient):
         self.service = service
 
 
+class MissingRequiredFieldZeepClient(FakeZeepClient):
+    def __init__(self) -> None:
+        self.service = ProviderCallFailingService()
+
+    def get_type(self, name: str) -> MissingPageSizeQueryModel:
+        if name == "{http://tempuri.org/}InboxInvoiceListQueryModel":
+            return MissingPageSizeQueryModel()
+        raise AssertionError(f"Unexpected type requested: {name}")
+
+
+class ProviderCallFailingService(FakeService):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def GetInboxInvoiceList(self, query: dict[str, Any]) -> dict[str, Any]:
+        self.calls += 1
+        raise AssertionError("Provider method must not be invoked when query model is missing required fields.")
+
+
 def test_invoice_listing_retries_transient_transport_failure() -> None:
     service = TransientInvoiceService()
     client = UyumsoftSoapClient(
@@ -306,6 +330,30 @@ def test_invoice_listing_raises_connector_error_for_unsuccessful_response() -> N
         assert exc.safe_message == "Query rejected"
     else:
         raise AssertionError("Expected ConnectorError")
+
+
+def test_missing_required_query_field_fails_before_provider_call() -> None:
+    zeep_client = MissingRequiredFieldZeepClient()
+    client = UyumsoftSoapClient(
+        wsdl_url="https://uyumsoft.test/wsdl",
+        username="user",
+        password=SecretStr("pass"),
+        timeout_seconds=1,
+        retry_attempts=1,
+        retry_backoff_seconds=0,
+        zeep_client=zeep_client,
+    )
+
+    try:
+        client.list_inbox_invoices(build_request())
+    except ConnectorError as exc:
+        assert exc.safe_message == (
+            "Uyumsoft InboxInvoiceListQueryModel WSDL query model is missing required fields: PageSize."
+        )
+    else:
+        raise AssertionError("Expected ConnectorError")
+
+    assert zeep_client.service.calls == 0
 
 
 def test_invoice_data_timeout_maps_to_timeout_error() -> None:

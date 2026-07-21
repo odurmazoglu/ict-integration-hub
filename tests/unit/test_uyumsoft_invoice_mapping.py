@@ -2,15 +2,34 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from zeep import xsd
 
 from app.connectors.exceptions import ConnectorError
-from app.connectors.uyumsoft.invoice_mapping import build_invoice_list_query_model, normalize_invoice_list_response
+from app.connectors.uyumsoft.invoice_mapping import (
+    build_invoice_list_query_model,
+    get_supported_zeep_fields,
+    normalize_invoice_list_response,
+)
 from app.schemas.uyumsoft_invoices import UyumsoftInvoiceListRequest
+
+
+class FieldElement:
+    def __init__(self, name: str) -> None:
+        self.name = name
 
 
 class FakeQueryModel:
     def __init__(self, fields: set[str]) -> None:
-        self.elements = [(field, object()) for field in fields]
+        self.elements = [(field, FieldElement(field)) for field in fields]
+
+    def __call__(self, **kwargs: object) -> dict[str, object]:
+        return kwargs
+
+
+class AttributeBackedQueryModel:
+    def __init__(self, *, element_fields: set[str], attribute_fields: set[str]) -> None:
+        self.elements = [(field, FieldElement(field)) for field in element_fields]
+        self.attributes = [(field, FieldElement(field)) for field in attribute_fields]
 
     def __call__(self, **kwargs: object) -> dict[str, object]:
         return kwargs
@@ -46,6 +65,48 @@ class FakeZeepClient:
         if name == "{http://tempuri.org/}OutboxInvoiceListQueryModel":
             return FakeQueryModel(self.outbox_fields)
         raise AssertionError(f"Unexpected type requested: {name}")
+
+
+class XsdTypeBackedQueryModel:
+    def __init__(self, fields: set[str]) -> None:
+        self._xsd_type = FakeQueryModel(fields)
+
+    def __call__(self, **kwargs: object) -> dict[str, object]:
+        return kwargs
+
+
+class XsdTypeBackedZeepClient(FakeZeepClient):
+    def get_type(self, name: str) -> XsdTypeBackedQueryModel:
+        self.requested_type = name
+        if name == "{http://tempuri.org/}InboxInvoiceListQueryModel":
+            return XsdTypeBackedQueryModel(self.inbox_fields)
+        if name == "{http://tempuri.org/}OutboxInvoiceListQueryModel":
+            return XsdTypeBackedQueryModel(self.outbox_fields)
+        raise AssertionError(f"Unexpected type requested: {name}")
+
+
+class AttributeBackedZeepClient(FakeZeepClient):
+    def get_type(self, name: str) -> AttributeBackedQueryModel:
+        self.requested_type = name
+        if name == "{http://tempuri.org/}InboxInvoiceListQueryModel":
+            return AttributeBackedQueryModel(
+                element_fields=_fields("ExecutionStartDate", "ExecutionEndDate"),
+                attribute_fields=_fields("PageIndex", "PageSize", "OnlyNewestInvoices"),
+            )
+        if name == "{http://tempuri.org/}OutboxInvoiceListQueryModel":
+            return AttributeBackedQueryModel(
+                element_fields=_fields("ExecutionStartDate", "ExecutionEndDate"),
+                attribute_fields=_fields("PageIndex", "PageSize"),
+            )
+        raise AssertionError(f"Unexpected type requested: {name}")
+
+
+class NestedElement:
+    def __init__(self, name: str | None = None) -> None:
+        self.name = name
+        self.elements: list[object] = []
+        self.elements_nested: list[object] = []
+        self.type: object | None = None
 
 
 def test_build_invoice_list_query_model_uses_supported_wsdl_fields_for_inbox() -> None:
@@ -155,6 +216,149 @@ def test_test_and_production_shaped_models_with_different_optional_fields_are_su
     assert "IncludeTagList" not in production_inbox_query
     assert "IncludeTagList" not in production_outbox_query
     assert "OnlyNewestInvoices" not in production_outbox_query
+
+
+def test_real_zeep_complex_type_factory_fields_are_discovered() -> None:
+    query_model = xsd.ComplexType(
+        xsd.Sequence(
+            [
+                xsd.Element("ExecutionStartDate", xsd.DateTime()),
+                xsd.Element("ExecutionEndDate", xsd.DateTime()),
+                xsd.Element("PageIndex", xsd.Int()),
+                xsd.Element("PageSize", xsd.Int()),
+                xsd.Element("OnlyNewestInvoices", xsd.Boolean()),
+            ]
+        )
+    )
+
+    assert get_supported_zeep_fields(query_model) >= _fields(
+        "ExecutionStartDate",
+        "ExecutionEndDate",
+        "PageIndex",
+        "PageSize",
+        "OnlyNewestInvoices",
+    )
+
+
+def test_real_zeep_value_object_xsd_type_fields_are_discovered() -> None:
+    query_model = xsd.ComplexType(
+        xsd.Sequence(
+            [
+                xsd.Element("ExecutionStartDate", xsd.DateTime()),
+                xsd.Element("ExecutionEndDate", xsd.DateTime()),
+                xsd.Element("PageIndex", xsd.Int()),
+                xsd.Element("PageSize", xsd.Int()),
+            ]
+        )
+    )
+    value = query_model(
+        ExecutionStartDate=datetime(2026, 7, 15, tzinfo=UTC),
+        ExecutionEndDate=datetime(2026, 7, 16, tzinfo=UTC),
+        PageIndex=1,
+        PageSize=10,
+    )
+
+    assert get_supported_zeep_fields(value) >= _fields(
+        "ExecutionStartDate",
+        "ExecutionEndDate",
+        "PageIndex",
+        "PageSize",
+    )
+
+
+def test_xsd_type_backed_factory_fields_are_used_for_query_construction() -> None:
+    query = build_invoice_list_query_model(XsdTypeBackedZeepClient(), _request(), direction="Inbox")
+
+    assert query["PageIndex"] == 1
+    assert query["PageSize"] == 10
+    assert query["OnlyNewestInvoices"] is False
+    assert "IncludeTagList" not in query
+
+
+def test_real_zeep_complex_type_attribute_fields_are_discovered() -> None:
+    query_model = xsd.ComplexType(
+        xsd.Sequence(
+            [
+                xsd.Element("ExecutionStartDate", xsd.DateTime()),
+                xsd.Element("ExecutionEndDate", xsd.DateTime()),
+            ]
+        ),
+        [
+            xsd.Attribute("PageIndex", xsd.Int()),
+            xsd.Attribute("PageSize", xsd.Int()),
+            xsd.Attribute("OnlyNewestInvoices", xsd.Boolean()),
+        ],
+    )
+
+    assert get_supported_zeep_fields(query_model) >= _fields(
+        "ExecutionStartDate",
+        "ExecutionEndDate",
+        "PageIndex",
+        "PageSize",
+        "OnlyNewestInvoices",
+    )
+
+
+def test_attribute_backed_production_shaped_query_model_keeps_required_pagination_fields() -> None:
+    query = build_invoice_list_query_model(AttributeBackedZeepClient(), _request(), direction="Inbox")
+
+    assert query["ExecutionStartDate"] == datetime(2026, 7, 15, tzinfo=UTC)
+    assert query["ExecutionEndDate"] == datetime(2026, 7, 16, tzinfo=UTC)
+    assert query["PageIndex"] == 1
+    assert query["PageSize"] == 10
+    assert query["OnlyNewestInvoices"] is False
+    assert "IncludeTagList" not in query
+
+
+def test_direct_elements_are_discovered() -> None:
+    query_model = FakeQueryModel(_fields("ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize"))
+
+    assert get_supported_zeep_fields(query_model) >= _fields(
+        "ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize"
+    )
+
+
+def test_elements_nested_are_discovered() -> None:
+    query_model = NestedElement()
+    query_model.elements_nested = [
+        ("ExecutionStartDate", FieldElement("ExecutionStartDate")),
+        ("ExecutionEndDate", FieldElement("ExecutionEndDate")),
+        ("PageIndex", FieldElement("PageIndex")),
+        ("PageSize", FieldElement("PageSize")),
+    ]
+
+    assert get_supported_zeep_fields(query_model) >= _fields(
+        "ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize"
+    )
+
+
+def test_tuple_and_nested_group_representations_are_discovered() -> None:
+    group = NestedElement()
+    group.elements = [
+        ("PageIndex", FieldElement("PageIndex")),
+        ("PageSize", FieldElement("PageSize")),
+    ]
+    sequence = NestedElement()
+    sequence.elements_nested = [
+        ("ExecutionStartDate", FieldElement("ExecutionStartDate")),
+        ("ExecutionEndDate", FieldElement("ExecutionEndDate")),
+        ("_value_1", group),
+    ]
+
+    assert get_supported_zeep_fields(sequence) >= _fields(
+        "ExecutionStartDate", "ExecutionEndDate", "PageIndex", "PageSize"
+    )
+    assert "_value_1" not in get_supported_zeep_fields(sequence)
+
+
+def test_duplicate_and_cyclic_references_do_not_recurse_forever() -> None:
+    root = NestedElement()
+    child = NestedElement("PageIndex")
+    root.elements = [("ExecutionStartDate", FieldElement("ExecutionStartDate")), ("PageIndex", child)]
+    root.elements_nested = [("PageIndex", child)]
+    child.type = root
+
+    assert get_supported_zeep_fields(root) >= _fields("ExecutionStartDate", "PageIndex")
 
 
 def test_required_pagination_and_date_fields_remain_included() -> None:
