@@ -303,7 +303,7 @@ python3 scripts/inspect_uyumsoft_wsdl.py \
   --query-fields-only
 ```
 
-Bu keşfe göre listeleme sorguları WSDL tipli `InboxInvoiceListQueryModel` ve `OutboxInvoiceListQueryModel` nesneleriyle oluşturulur. Query construction capability-based çalışır: aktif Zeep modelindeki desteklenen alanlar okunur, zorunlu `ExecutionStartDate`, `ExecutionEndDate`, `PageIndex`, `PageSize` alanları yoksa provider çağrısından önce güvenli connector hatası üretilir, `IncludeTagList` ve `OnlyNewestInvoices` gibi opsiyonel alanlar yalnız ilgili WSDL modeli destekliyorsa gönderilir. Test ve production WSDL'leri farklı opsiyonel alanlar gösterebilir; desteklenmeyen opsiyonel alanlar sessizce atlanır. UBL XML indirme için `GetInboxInvoiceData(invoiceId: string)` ve `GetOutboxInvoiceData(invoiceId: string)` operasyonları `InvoiceDataResponse.Value.Data` alanından bytes döndürür.
+Bu keşfe göre listeleme sorguları WSDL tipli `InboxInvoiceListQueryModel` ve `OutboxInvoiceListQueryModel` nesneleriyle oluşturulur. Query construction capability-based çalışır: aktif Zeep modelindeki desteklenen alanlar okunur, seçilen tarih filtresi için gereken `ExecutionStartDate` / `ExecutionEndDate` veya `CreateStartDate` / `CreateEndDate` alanları ile `PageIndex`, `PageSize` yoksa provider çağrısından önce güvenli connector hatası üretilir, `IncludeTagList` ve `OnlyNewestInvoices` gibi opsiyonel alanlar yalnız ilgili WSDL modeli destekliyorsa gönderilir. Test ve production WSDL'leri farklı opsiyonel alanlar gösterebilir; desteklenmeyen opsiyonel alanlar sessizce atlanır. UBL XML indirme için `GetInboxInvoiceData(invoiceId: string)` ve `GetOutboxInvoiceData(invoiceId: string)` operasyonları `InvoiceDataResponse.Value.Data` alanından bytes döndürür.
 
 ## Opsiyonel canlı smoke testi
 
@@ -317,6 +317,45 @@ APP_ENV_FILE=.env.live-readonly ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts
   --to 2026-07-17T00:00:00+00:00 \
   --page-size 1 \
   --date-field execution
+```
+
+### Canlı read-only UBL indirme doğrulaması
+
+`scripts/uyumsoft_invoice_download_readonly_smoke.py` tek bir gerçek Inbox faturasının UBL/XML içeriğini mevcut connector, invoice metadata persistence, document storage ve SHA-256/idempotency akışı üzerinden doğrular. Bu script gerçek Uyumsoft production read yapar ve yalnız yerel document storage/metadata yazar; provider tarafında acknowledgement, mark-as-read, status update, send/cancel/retry/move-to-draft veya herhangi bir mutation çağrısı yapmaz. Odoo bağlantısı veya Odoo write çağrısı yapılmaz.
+
+Gerekli profil sınırları değişmez: `APP_ENV_FILE=.env.live-readonly`, `APP_ENV=development`, `UYUMSOFT_ENVIRONMENT=production`, `LIVE_CONNECTOR_READONLY=true`, `PRODUCTION_OPERATIONS_ENABLED=false`, boş `PRODUCTION_APPROVAL_ACK` ve `ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1` birlikte gereklidir. Çıktı yalnız success/failure, direction, identifier varlığı, güvenli document id/filename, content type, byte size, SHA-256, created/reused ve idempotency özetini içerir; credential, SOAP envelope, raw XML veya fatura taraf bilgileri yazdırılmaz.
+
+Explicit provider invoice id ile:
+
+```bash
+APP_ENV_FILE=.env.live-readonly ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/uyumsoft_invoice_download_readonly_smoke.py \
+  --direction inbox \
+  --invoice-id "<provider-invoice-id>"
+```
+
+İlk Inbox faturasını page-size-1 liste sorgusundan seçerek:
+
+```bash
+APP_ENV_FILE=.env.live-readonly ICT_UYUMSOFT_ENABLE_LIVE_SMOKE=1 python3 scripts/uyumsoft_invoice_download_readonly_smoke.py \
+  --direction inbox \
+  --from 2026-07-20 \
+  --to 2026-07-21 \
+  --date-field execution
+```
+
+Beklenen güvenli çıktı şekli:
+
+```json
+{
+  "success": true,
+  "direction": "Inbox",
+  "invoice_identifier_present": true,
+  "content_type": "application/xml",
+  "byte_size": 12345,
+  "sha256": "<sha256>",
+  "newly_created": true,
+  "idempotency": {"ok": true, "duplicate_document_created": false}
+}
 ```
 
 ## Uyumsoft authentication diagnostic

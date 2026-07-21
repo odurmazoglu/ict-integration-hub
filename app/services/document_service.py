@@ -194,6 +194,8 @@ def _validate_document_type(document_type: DocumentType) -> None:
 
 
 def _required_provider_invoice_id(invoice: UyumsoftInvoiceMetadata) -> str:
+    if invoice.invoice_number is not None and invoice.invoice_number.strip():
+        return invoice.invoice_number
     if invoice.provider_invoice_id is None or not invoice.provider_invoice_id.strip():
         raise DocumentValidationError("Invoice metadata does not contain a provider invoice id.")
     return invoice.provider_invoice_id

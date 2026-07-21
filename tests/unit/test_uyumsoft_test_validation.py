@@ -153,9 +153,13 @@ class FakeUyumsoftValidationClient(UyumsoftSoapClient):
         self.calls.append("GetInboxInvoiceData")
         if direction != "Inbox":
             raise AssertionError("Issue #30 validation must only acquire incoming invoices.")
-        if invoice_id in self.fail_download_ids:
+        document_key = invoice_id.removesuffix("-number")
+        if invoice_id in self.fail_download_ids or document_key in self.fail_download_ids:
             raise ConnectorError("Uyumsoft invoice document request was not successful.")
-        return UyumsoftInvoiceDocument(direction=direction, invoice_id=invoice_id, content=self.documents[invoice_id])
+        content = self.documents.get(invoice_id)
+        if content is None:
+            content = self.documents[document_key]
+        return UyumsoftInvoiceDocument(direction=direction, invoice_id=invoice_id, content=content)
 
     def __getattribute__(self, name: str) -> Any:
         forbidden = {

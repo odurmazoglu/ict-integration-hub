@@ -100,7 +100,7 @@ def test_successful_inbox_xml_download_persists_metadata_and_file(session: Sessi
     assert document.content_size_bytes == len(INBOX_XML)
     assert document.content_hash_sha256 == sha256(INBOX_XML).hexdigest()
     assert (tmp_path / document.storage_key).read_bytes() == INBOX_XML
-    assert client.calls == [("Inbox", "in-1")]
+    assert client.calls == [("Inbox", "in-1-number")]
 
 
 def test_successful_outbox_xml_download_uses_outbox_direction(session: Session, tmp_path: Path) -> None:
@@ -114,7 +114,7 @@ def test_successful_outbox_xml_download_uses_outbox_direction(session: Session, 
     assert document is not None
     assert document.direction == "Outbox"
     assert (tmp_path / document.storage_key).read_bytes() == OUTBOX_XML
-    assert client.calls == [("Outbox", "out-1")]
+    assert client.calls == [("Outbox", "out-1-number")]
 
 
 def test_invoice_metadata_not_found(session: Session, tmp_path: Path) -> None:
@@ -134,6 +134,19 @@ def test_repeated_identical_download_is_idempotent(session: Session, tmp_path: P
     assert first.downloaded == 1
     assert second.downloaded == 0
     assert second.existing == 1
+
+
+def test_download_identifier_falls_back_to_provider_invoice_id_when_number_missing(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    invoice = _invoice(session, direction="Inbox", provider_invoice_id="in-1")
+    invoice.invoice_number = None
+    client = RecordingDocumentClient(content=INBOX_XML)
+
+    _service(session, client, tmp_path).download_documents(invoice_ids=[invoice.id])
+
+    assert client.calls == [("Inbox", "in-1")]
 
 
 def test_different_repeated_download_fails_as_conflict(session: Session, tmp_path: Path) -> None:
@@ -232,7 +245,7 @@ def test_safe_structured_logging(monkeypatch: pytest.MonkeyPatch, session: Sessi
     success_log = next(log for log in log_calls if log["message"] == "invoice_document_download_succeeded")
     assert success_log["extra"]["provider"] == "uyumsoft"
     assert success_log["extra"]["invoice_id"] == invoice.id
-    assert success_log["extra"]["provider_invoice_id"] == "in-1"
+    assert success_log["extra"]["provider_invoice_id"] == "in-1-number"
     assert success_log["extra"]["direction"] == "Inbox"
     assert success_log["extra"]["document_size_bytes"] == len(INBOX_XML)
     assert success_log["extra"]["content_hash_sha256"] == sha256(INBOX_XML).hexdigest()
@@ -249,7 +262,7 @@ def test_read_only_operation_enforcement(session: Session, tmp_path: Path) -> No
 
     _service(session, client, tmp_path).download_documents(invoice_ids=[invoice.id])
 
-    assert client.calls == [("Inbox", "in-1")]
+    assert client.calls == [("Inbox", "in-1-number")]
 
 
 def _service(session: Session, client: RecordingDocumentClient, storage_root: Path) -> InvoiceDocumentService:
