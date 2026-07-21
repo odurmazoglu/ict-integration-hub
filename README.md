@@ -258,6 +258,63 @@ Supported input is UBL 2.x Invoice XML using the standard OASIS Invoice, Common 
 
 Limitations: this domain parser does not perform product lookup, partner lookup, tax mapping, currency conversion, Odoo mapping, database writes, SOAP calls or provider-specific normalization. Real production invoice fixtures must be anonymized before committing.
 
+## Tax mapping engine
+
+`app/tax_mapping` internal invoice domain modelindeki line-level tax bilgilerini mevcut ERP tax kayıtlarına deterministik olarak eşlemek için hazırlanmış bağımsız katmandır. Bu PR yalnız matching sonucu üretir; tax oluşturmaz/güncellemez, Vendor Bill oluşturmaz, Uyumsoft/SOAP çağırmaz, Odoo write yapmaz ve veritabanına yazmaz. Concrete Odoo-backed `TaxRepository` sonraki aşamada eklenecektir.
+
+Architecture:
+
+```text
+InternalInvoice
+      |
+      v
+TaxMappingEngine
+      |
+      v
+TaxRepository Protocol -> Sequence[TaxCandidate]
+      |
+      v
+InvoiceTaxMappingResult
+```
+
+Exact matching rules:
+
+- Match yalnız `company_id`, canonical `tax_type` ve normalized `Decimal` rate tam eşleştiğinde `MATCHED` olur.
+- Tax name, display name, description, partial string matching, fuzzy matching veya similarity score kullanılmaz.
+- `company_id` verilirse başka company adayları asla match edilmez.
+- `company_id=None` ise repository company filter uygulamadan aday dönebilir; birden fazla exact aday varsa `MULTIPLE_MATCHES` kalır ve otomatik seçim yapılmaz.
+- Inactive candidates repository tarafından dönse bile engine tarafından geçerli match sayılmaz.
+- `Decimal("20")`, `Decimal("20.0")` ve `Decimal("20.00")` aynı oran kabul edilir; float karşılaştırması yapılmaz.
+- Zero-rate VAT geçerlidir ve exact match edilebilir. `EXEMPTION` ayrı tax type olarak kalır; yalnız rate zero diye exemption çıkarımı yapılmaz.
+
+Supported canonical tax types: `VAT`, `WITHHOLDING`, `EXEMPTION`, `UNKNOWN`. `UNKNOWN`, unsupported/missing type, negative rate, malformed/missing rate, missing required line identifier ve boş invoice lines güvenli `INVALID_INPUT` veya mapping error sonucu üretir.
+
+Example usage with a fake repository:
+
+```python
+from decimal import Decimal
+
+from app.tax_mapping import TaxCandidate, TaxMappingEngine, TaxType
+
+repository = FakeTaxRepository(
+    [
+        TaxCandidate(tax_id=42, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20"), active=True),
+    ]
+)
+engine = TaxMappingEngine(repository)
+
+result = engine.map_invoice(invoice, company_id=3)
+```
+
+Result status meanings:
+
+- `MATCHED`: exactly one active candidate matched company, type and rate.
+- `NOT_FOUND`: no active exact candidate matched.
+- `MULTIPLE_MATCHES`: more than one active exact candidate matched; no candidate is selected.
+- `INVALID_INPUT`: input tax/line/invoice data or repository lookup could not be safely mapped.
+
+Current limitations: line-level taxes are mapped independently, lookup caching is local to one mapping execution, and no Odoo repository implementation is included yet.
+
 ## Legacy UBL parser
 
 Saklanan `UBL_XML` dokümanları `app/services/document_parser.py` içinde local olarak parse edilir. Parser Uyumsoft SOAP DTO'larını, Odoo modellerini veya transport detaylarını bilmez; çıktı `app/schemas/normalized_invoice.py` içindeki provider-independent typed modellerdir.
