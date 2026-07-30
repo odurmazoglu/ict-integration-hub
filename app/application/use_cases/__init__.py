@@ -6,9 +6,11 @@ from app.application.use_cases.import_invoice import (
     ImportInvoiceUseCase,
     ImportInvoiceValidationError,
 )
+from app.application.use_cases.import_session import ImportSession
 
 __all__ = [
     "ImportInvoiceInfrastructureError",
+    "ImportSession",
     "ImportInvoiceUseCase",
     "ImportInvoiceValidationError",
     "UseCase",

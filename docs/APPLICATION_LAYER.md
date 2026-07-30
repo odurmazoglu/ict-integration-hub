@@ -42,6 +42,9 @@ Current foundation contracts:
 - `VendorBillWriter`
 - `VendorBillWriteCommand`
 - `VendorBillWriteResult`
+- `ImportSessionCommand`
+- `ImportSessionResult`
+- `ImportSession`
 
 ## Use Case Convention
 
@@ -66,6 +69,7 @@ Use cases should:
 Current executable use cases:
 
 - `ImportInvoiceUseCase`
+- `ImportSession`
 
 ## ImportInvoiceUseCase
 
@@ -218,6 +222,44 @@ flowchart TB
 The deterministic idempotency key is stored on the Odoo draft via `invoice_origin` and used for duplicate lookup before create. Duplicate detection remains part of the write boundary; it does not authorize workflow selection or matching decisions.
 
 Infrastructure exceptions are translated to application-safe Vendor Bill write exceptions for authentication, authorization, validation, transport, duplicate detection, and unexpected ERP failures.
+
+## ImportSession
+
+`ImportSession` is the sequential in-memory orchestration layer for importing multiple `InternalInvoice` DTOs.
+
+It coordinates already existing single-invoice processing by calling `ImportInvoiceUseCase` once per invoice. It does not select workflows, run rules, match products, build Vendor Bills, or call ERP adapters.
+
+It may:
+
+- accept a collection of `InternalInvoice` DTOs through `ImportSessionCommand`
+- execute `ImportInvoiceUseCase` sequentially
+- collect immutable `ImportInvoiceResult` values
+- measure elapsed time
+- count processed, successful, duplicate, and failed invoices
+- continue processing when one invoice fails
+- return immutable `ImportSessionResult`
+
+It must not:
+
+- contain Rule Engine, Decision Engine, AI Advisor, or Company Memory logic
+- contain matching, tax mapping, Vendor Bill creation, ERP, HTTP, SOAP, SQL, retry, batching, scheduler, or workflow-selection logic
+- import Odoo, Uyumsoft, connector, persistence, or infrastructure modules
+
+```mermaid
+flowchart TB
+    InvoiceList[Invoice List]
+    ImportSession[ImportSession]
+    ImportInvoiceUseCase[ImportInvoiceUseCase]
+    VendorBillWriter[VendorBillWriter]
+    Odoo[Odoo]
+
+    InvoiceList --> ImportSession
+    ImportSession --> ImportInvoiceUseCase
+    ImportInvoiceUseCase --> VendorBillWriter
+    VendorBillWriter --> Odoo
+```
+
+`ImportSession` status is in-memory only. Current statuses are `CREATED`, `RUNNING`, `COMPLETED`, and `FAILED`; `CANCELLED` is reserved in the DTO status type for future explicit cancellation work.
 
 ## Boundaries
 
