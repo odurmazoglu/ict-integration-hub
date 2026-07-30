@@ -1,125 +1,309 @@
 # ICT Intelligent Procurement Platform (IPP) — Project Constitution
 
-## Identity
+The Project Constitution is the binding architectural guide for **ICT Integration Hub** and its internal **ICT Intelligent Procurement Platform (IPP)** architecture.
 
-- External product name: **ICT Integration Hub**
-- Internal architecture name: **ICT Intelligent Procurement Platform (IPP)**
-- Vision: **AI-assisted procurement automation built on deterministic business rules.**
+If any future issue, pull request, code generation task, AI assistant instruction, or implementation conflicts with this document, **this Constitution takes precedence unless superseded by an accepted ADR.**
 
-## Purpose
+---
 
-ICT IPP receives supplier invoices from Uyumsoft, converts UBL documents into an ERP-neutral domain model, evaluates the correct business workflow, and applies approved decisions to Odoo while preserving procurement and profitability traceability.
+# Product Identity
 
-## Source of Truth
+- **External Product Name:** ICT Integration Hub
+- **Internal Architecture Name:** ICT Intelligent Procurement Platform (IPP)
+- **Vision:** AI-assisted Procurement Automation built on deterministic business rules.
 
-Use sources in this order:
+The public product is referred to as **ICT Integration Hub**.
 
-1. `main` branch code
-2. This constitution
-3. `docs/architecture.md`
-4. `docs/vision.md`
-5. `docs/roadmap.md`
-6. Accepted ADRs under `docs/adr/`
-7. Current issue and pull-request context
+Architecture discussions may use **ICT IPP** when referring to the internal Decision Engine, Rule Engine, Workflow Engine, Matching Engine, Company Memory, and ERP Adapter architecture.
 
-Accepted ADRs are authoritative. Changes that conflict with an accepted ADR require a new superseding ADR.
+---
 
-## Non-negotiable Architecture Principles
+# Source of Truth
 
-- Clean Architecture
-- Lightweight Domain-Driven Design
-- Repository Pattern
-- Immutable DTOs
-- Deterministic matching and decision rules
-- Small, production-ready pull requests
-- Business logic remains ERP-independent
-- Odoo is an adapter and execution surface, not the decision authority
-- No fuzzy partner or product matching in automatic workflows
-- AI is advisory only and never performs an ERP write by itself
-- Rule Engine always executes before AI Advisor
-- Production writes require explicit safety gates and remain auditable
-- Procurement traceability is preserved whenever possible
+Architecture decisions shall be interpreted in the following order:
 
-## Decision Boundary
+1. Main branch implementation
+2. This Project Constitution
+3. Accepted Architecture Decision Records (ADRs)
+4. Architecture documentation
+5. Current GitHub Issue / Pull Request context
 
-ICT IPP owns:
+Any architectural change that conflicts with an accepted ADR requires a new superseding ADR.
+
+---
+
+# Non-Negotiable Principles
+
+The following principles are mandatory:
+
+1. Clean Architecture
+2. Lightweight Domain Driven Design
+3. Repository Pattern
+4. Immutable DTOs
+5. ERP-independent business logic
+6. Deterministic matching
+7. Deterministic workflow selection
+8. Small production-ready pull requests
+9. Odoo is an Adapter
+10. Hub owns business decisions
+11. AI is advisory only
+12. Rule Engine executes before AI Advisor
+13. Production writes require explicit safety gates
+14. Procurement traceability should be preserved whenever possible
+
+---
+
+# Decision Authority
+
+ICT IPP owns all business decisions.
+
+This includes:
 
 - Uyumsoft integration
-- UBL parsing and validation
-- Internal invoice domain
-- deterministic partner, product, and tax matching
+- UBL parsing
+- Internal Invoice Domain
+- Partner matching
+- Product matching
+- Tax mapping
 - Rule Engine
 - Decision Engine
-- workflow selection
-- AI Advisor and company-memory retrieval
-- import-session orchestration
+- Workflow selection
+- Strategy selection
+- Company Memory
+- AI Advisor
+- Import Session orchestration
+- Procurement traceability
+
+ERP systems execute decisions.
+
+ERP systems do **not** make procurement decisions.
+
+**Hub decides. Odoo executes.**
+
+---
+
+# ERP Boundary
+
+Odoo is an execution platform.
 
 Odoo owns:
 
-- user-facing Import Workbench
-- ERP master and transactional records
-- RFQ and Purchase Order records
+- Import Workbench user interface
+- ERP master data
+- Purchase Orders
+- RFQs
 - Vendor Bills
-- expense and asset records
-- sales, opportunity, project, and analytical links
-- profitability reporting
+- Expenses
+- Assets
+- Subscriptions
+- Accounting records
+- Sales documents
+- Profitability reporting
 
-**Hub decides; Odoo executes.**
+Business logic never belongs inside Odoo.
 
-## Supported Workflow Decisions
+---
 
-An incoming invoice can be routed to one of these outcomes:
+# Safety Boundaries
 
-- match an existing Purchase Order
-- create a new RFQ and Purchase Order flow
-- create a direct Vendor Bill
-- process as an operating expense
-- process as a fixed asset
-- process as a subscription or service
-- send to manual review
-- ignore or hide with an auditable reason
+## Uyumsoft
 
-## AI Policy
+Uyumsoft is **read-only by default**.
 
-- Deterministic rules have priority.
-- AI runs only when no sufficient deterministic rule exists.
-- AI produces a recommendation, rationale, and confidence indicator.
-- A user or an approved deterministic policy makes the final decision.
-- Default AI deployment is local through Ollama-compatible models.
-- Company data must not leave the controlled environment by default.
-- User-approved outcomes may create or refine deterministic rules.
+Allowed operations include:
 
-## Procurement Traceability Requirement
+- Authentication
+- Invoice listing
+- Invoice download
+- XML / UBL retrieval
+- Connectivity validation
 
-The platform must preserve or reconstruct this chain when applicable:
+Forbidden operations include (unless a future ADR explicitly changes this):
 
-`Opportunity → Sales Quotation → Sales Order → RFQ → Purchase Order → Vendor Invoice → Vendor Bill → Actual Cost → Sales Profitability`
+- SetInvoicesTaken
+- SendInvoice
+- Cancel*
+- RetrySendInvoices
+- MoveToDraftStatus
+- Any provider-side state mutation
 
-The goal is not merely invoice posting. The goal is reliable linkage between purchasing cost and the related sale, customer, project, proposal scenario, or opportunity.
+---
 
-## Development Workflow
+## Odoo
 
-1. Architecture review
-2. ADR when a structural decision is introduced or changed
-3. GitHub issue
-4. Codex implementation on a dedicated branch
-5. Draft pull request
-6. Code review
+Current write scope is intentionally limited.
+
+The Hub may create **Draft Vendor Bills** only after successful validation and explicit approval.
+
+The Hub must **not**:
+
+- Post accounting entries
+- Register payments
+- Reconcile
+- Delete accounting documents
+- Modify ERP master data automatically
+
+Production deployments require explicit operational gates, validation, backups, and rollback procedures.
+
+---
+
+# Workflow Decisions
+
+Every imported invoice must result in exactly one workflow.
+
+Supported workflows:
+
+- Match existing Purchase Order
+- Create RFQ + Purchase Order
+- Direct Vendor Bill
+- Expense
+- Fixed Asset
+- Subscription / Service
+- Manual Review
+- Ignore
+
+Workflow selection belongs exclusively to the Decision Engine.
+
+---
+
+# AI Boundary
+
+AI Advisor executes **only after deterministic Rule Engine evaluation**.
+
+AI may:
+
+- Recommend workflows
+- Explain rule failures
+- Summarize invoices
+- Suggest missing ERP master data
+- Retrieve historical Company Memory
+- Explain previous decisions
+
+AI must **never**:
+
+- Choose workflow
+- Choose strategy
+- Select ambiguous ERP records
+- Override deterministic rules
+- Approve invoices
+- Reject invoices
+- Create ERP records
+- Update ERP records
+- Delete ERP records
+- Post accounting entries
+
+AI recommendations always require deterministic policy or user approval.
+
+Default AI deployment is local through Ollama-compatible models.
+
+Company data should remain inside the controlled environment by default.
+
+---
+
+# Procurement Traceability
+
+Whenever possible the platform preserves the complete procurement chain.
+
+```
+Opportunity
+        ↓
+Sales Quotation
+        ↓
+Sales Order
+        ↓
+RFQ
+        ↓
+Purchase Order
+        ↓
+Vendor Invoice
+        ↓
+Vendor Bill
+        ↓
+Actual Cost
+        ↓
+Sales Profitability
+```
+
+If one relationship cannot be reconstructed, the platform should explicitly record the missing link instead of silently breaking traceability.
+
+---
+
+# Current Baseline
+
+The current implementation includes:
+
+- Uyumsoft Authentication
+- Invoice Listing
+- Invoice Download
+- Production Read-only Validation
+- Immutable InternalInvoice Domain
+- UBL Parser
+- Deterministic Tax Mapping
+- Read-only ERP Repository Layer
+- Odoo JSON-2 Adapter
+- Deterministic Partner Matching
+- Deterministic Product Matching
+- Vendor Bill Builder
+- Deterministic account.move payload generation
+
+The next implementation milestone is:
+
+- Production-safe Vendor Bill Write Service
+
+Future milestones include:
+
+- Import Session
+- Decision Engine
+- Rule Engine
+- Import Workbench
+- AI Advisor
+- Company Memory
+
+---
+
+# Development Workflow
+
+Every architectural change follows this lifecycle:
+
+1. Architecture Discussion
+2. Architecture Decision Record (ADR)
+3. GitHub Issue
+4. Codex Implementation
+5. Draft Pull Request
+6. Architecture Review
 7. Merge
-8. Production-safe validation
+8. Production Validation
 
-Each pull request must have one focused responsibility, tests, rollback notes where relevant, and no unnecessary refactor.
+Each Pull Request should have a single responsibility, include appropriate documentation updates, and remain production-safe.
 
-## Current Baseline
+---
 
-Completed capabilities include:
+# Documentation Policy
 
-- Uyumsoft authentication, invoice listing, and invoice download
-- production read-only validation
-- UBL parser and immutable `InternalInvoice` domain
-- deterministic tax mapping
-- read-only ERP repositories with Odoo JSON-2 adapter
-- deterministic partner and product matching
-- pure Vendor Bill builder and deterministic `account.move` payload generation
+Documentation must describe:
 
-The next implementation milestone remains a production-safe Odoo Vendor Bill Write Service. Import Session, Rule Engine, Decision Engine, Workbench orchestration, and AI Advisor follow as separate focused milestones.
+- Current implementation
+- Accepted architecture
+- Operational boundaries
+- Safety constraints
+- Developer expectations
+
+Documentation must **never** describe future features as already implemented.
+
+Whenever architecture changes, the corresponding documentation and ADRs must be updated within the same Pull Request.
+
+---
+
+# Related Documentation
+
+- Vision
+- Architecture
+- Rule Engine
+- AI Advisor
+- Workflows
+- Company Memory
+- Import Session
+- Import Workbench
+- Matching
+- Roadmap
+- Architecture Decision Records

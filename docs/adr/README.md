@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Architecture Decision Records (ADRs) document permanent architectural decisions for ICT Integration Hub. They explain why the system is shaped the way it is, the trade-offs accepted, and the operational consequences future work must respect.
+Architecture Decision Records (ADRs) document durable architectural decisions for ICT Integration Hub and its internal ICT Intelligent Procurement Platform (IPP) architecture. They explain why the system is shaped the way it is, the trade-offs accepted, and the operational consequences future work must respect.
 
 ADRs are not sprint history, issue logs, release notes, or approval records. Use issues and pull requests for implementation tracking.
 
@@ -37,7 +37,24 @@ NNNN-short-title.md
 
 Do not reuse numbers. Keep titles stable after acceptance unless a typo prevents understanding.
 
-## ADR Index
+## Canonical IPP ADR Index
+
+The `ADR-....md` files are the canonical architecture foundation for ICT IPP. Earlier ADR files are preserved below as existing accepted implementation decisions.
+
+| Number | Title | Status | Decision Summary |
+| --- | --- | --- | --- |
+| [ADR-0001](ADR-0001-architecture-principles.md) | Architecture Principles | Accepted | Establish Clean Architecture, DDD, Repository Pattern, immutable DTOs, deterministic matching, and advisory-only AI. |
+| [ADR-0002](ADR-0002-ict-ipp.md) | ICT Intelligent Procurement Platform | Accepted | Use ICT Integration Hub as product name and ICT IPP as internal architecture name. |
+| [ADR-0003](ADR-0003-erp-boundary.md) | ERP Boundary | Accepted | Keep business decisions in the Hub; treat Odoo and future ERPs as adapters. |
+| [ADR-0004](ADR-0004-decision-engine.md) | Decision Engine | Accepted | Decision Engine lives inside ICT IPP and chooses workflow and strategy. |
+| [ADR-0005](ADR-0005-rule-engine.md) | Rule Engine | Accepted | Rule Engine is deterministic, runs before AI, and is the source of workflow decisions. |
+| [ADR-0006](ADR-0006-ai-advisor.md) | AI Advisor | Accepted | AI produces recommendations only, runs after rules, and uses local Ollama when implemented. |
+| [ADR-0007](ADR-0007-company-memory.md) | Company Memory | Accepted | Company Memory provides context but never overrides deterministic decisions. |
+| [ADR-0008](ADR-0008-import-session.md) | Import Session | Accepted | Import Session is the future audit unit for imports, rules, recommendations, review, and execution. |
+| [ADR-0009](ADR-0009-procurement-traceability.md) | Procurement Traceability | Accepted | Preserve Sales-to-Profitability traceability whenever possible. |
+| [ADR-0010](ADR-0010-strategy-pattern.md) | Strategy Pattern | Accepted | Use explicit strategies for workflow execution paths selected by the Decision Engine. |
+
+## Existing Implementation ADR Index
 
 | Number | Title | Status | Decision Summary |
 | --- | --- | --- | --- |

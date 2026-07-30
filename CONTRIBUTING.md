@@ -2,6 +2,8 @@
 
 This repository follows the delivery rules in `AGENTS.md`. Keep work small, issue-backed, and safe by default.
 
+For the full ICT IPP architecture contribution guide, read `docs/CONTRIBUTING.md`, `docs/DEVELOPMENT_WORKFLOW.md`, and `docs/CODING_STANDARDS.md`.
+
 ## Expected Workflow
 
 ```text
