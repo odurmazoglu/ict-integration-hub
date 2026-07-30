@@ -20,6 +20,7 @@ from app.application.ports import InvoiceImportHistory, RuleEngine, VendorBillWr
 from app.application.queries import Query
 from app.application.services import UnitOfWork
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
+from app.application.workflow import WorkflowDecision, WorkflowType
 from app.billing import VendorBill, VendorBillLine
 
 
@@ -54,11 +55,11 @@ def test_application_dtos_are_immutable() -> None:
     decision = DecisionResult(
         success=True,
         invoice_id="ettn:abc",
-        workflow="vendor_bill",
-        strategy="vendor_bill",
+        workflow=WorkflowType.VENDOR_BILL,
+        strategy=WorkflowType.VENDOR_BILL.value,
         status="dry_run",
     )
-    rules = RuleEvaluationResult(workflow="vendor_bill")
+    rules = RuleEvaluationResult(workflow_decision=WorkflowDecision(WorkflowType.VENDOR_BILL))
 
     with pytest.raises(FrozenInstanceError):
         command.dry_run = False
@@ -71,7 +72,7 @@ def test_application_dtos_are_immutable() -> None:
     with pytest.raises(FrozenInstanceError):
         decision.status = "created"
     with pytest.raises(FrozenInstanceError):
-        rules.workflow = "expense"
+        rules.workflow_decision = WorkflowDecision(WorkflowType.EXPENSE)
 
 
 def test_vendor_bill_writer_port_is_protocol_only() -> None:
