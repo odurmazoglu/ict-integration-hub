@@ -53,7 +53,7 @@ Current implemented capabilities:
 - Provider-independent UBL parsing into normalized invoice models.
 - ERP-neutral immutable invoice domain DTOs for deterministic matching and billing transformations.
 - Read-only ERP repository layer backed by Odoo JSON-2 `search_read`.
-- Application layer contracts for future use-case orchestration, commands, queries, DTOs, services, and ports.
+- Application layer contracts and `ImportInvoiceUseCase` orchestration for the deterministic Vendor Bill path.
 - Deterministic tax mapping and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.

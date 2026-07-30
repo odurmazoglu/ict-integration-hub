@@ -58,6 +58,10 @@ Examples:
 
 Use cases coordinate application flow. They should consume commands or queries, call domain services/builders, invoke ports, and return immutable application DTOs. They should not contain provider transport logic, ORM models, HTTP exceptions, or AI decision authority.
 
+Current executable use case:
+
+- `ImportInvoiceUseCase`: coordinates duplicate detection, deterministic matching, Vendor Bill DTO construction, and `VendorBillWriter` execution for the direct Vendor Bill path only.
+
 See [Application Layer](APPLICATION_LAYER.md) for the package and port conventions.
 
 ## Strategy Selection

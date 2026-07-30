@@ -35,6 +35,10 @@ Current foundation contracts:
 - `UseCase`
 - `ApplicationError`
 - `UnitOfWork`
+- `InvoiceImportHistory`
+- `ImportInvoiceCommand`
+- `ImportInvoiceResult`
+- `ImportInvoiceUseCase`
 - `VendorBillWriter`
 - `VendorBillWriteCommand`
 - `VendorBillWriteResult`
@@ -59,7 +63,51 @@ Use cases should:
 - return immutable application DTOs
 - keep provider transport, ORM, HTTP, and adapter code outside the use case
 
-No use case implementation is introduced by this PR.
+Current executable use cases:
+
+- `ImportInvoiceUseCase`
+
+## ImportInvoiceUseCase
+
+`ImportInvoiceUseCase` is the first executable ICT IPP application workflow. It coordinates one deterministic invoice import through the direct Vendor Bill path.
+
+It may:
+
+- validate the import request
+- check duplicate import state through `InvoiceImportHistory`
+- call deterministic supplier, product, and tax matching dependencies
+- call `VendorBillBuilder`
+- call `VendorBillWriter`
+- return immutable `ImportInvoiceResult`
+
+It must not:
+
+- contain SOAP, HTTP, SQL, Odoo JSON-2, or ORM code
+- instantiate ERP adapters or provider clients
+- implement Rule Engine, Decision Engine, AI Advisor, Import Session, RFQ, Purchase Order, expense, asset, or subscription logic
+- choose between workflows or strategies
+- retry provider operations
+- parse configuration or own logging framework behavior
+
+```mermaid
+flowchart TB
+    Connector[Connector]
+    Parser[Parser]
+    InternalInvoice[InternalInvoice]
+    ImportInvoiceUseCase[ImportInvoiceUseCase]
+    VendorBillBuilder[VendorBillBuilder]
+    VendorBillWriter[VendorBillWriter Port]
+    OdooAdapter[Odoo Adapter]
+    Odoo[Odoo]
+
+    Connector --> Parser
+    Parser --> InternalInvoice
+    InternalInvoice --> ImportInvoiceUseCase
+    ImportInvoiceUseCase --> VendorBillBuilder
+    ImportInvoiceUseCase --> VendorBillWriter
+    VendorBillWriter --> OdooAdapter
+    OdooAdapter --> Odoo
+```
 
 ## Command And Query Convention
 
@@ -88,6 +136,7 @@ Future infrastructure services must be accessed through application ports. Ports
 Examples:
 
 - `VendorBillWriter`
+- `InvoiceImportHistory`
 - `InvoiceRepository`
 - `CompanyRepository`
 - `PartnerRepository`
@@ -124,7 +173,7 @@ Odoo Adapter
 Odoo
 ```
 
-The current foundation only defines the `VendorBillWriter` port and immutable write command/result DTOs. It does not implement Vendor Bill Write Service, Odoo write behavior, production writes, import sessions, decision logic, rules, AI, or company memory.
+`ImportInvoiceUseCase` consumes `VendorBillWriter` through this port. It does not implement Vendor Bill Write Service, Odoo write behavior, production writes, import sessions, decision logic, rules, AI, or company memory.
 
 ## Boundaries
 
