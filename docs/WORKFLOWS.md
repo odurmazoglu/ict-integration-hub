@@ -96,7 +96,9 @@ Existing Odoo resolution states use `resolved`, `unresolved`, `ambiguous`, `inva
 ERP adapters execute reviewed decisions. For Odoo today:
 
 - read-only lookup uses `search_read`
-- draft creation uses `account.move/create` for `move_type=in_invoice`
+- draft Vendor Bill creation uses `OdooVendorBillWriter` through the `VendorBillWriter` port
+- the writer performs duplicate `account.move/search_read` before `account.move/create`
+- draft creation uses `move_type=in_invoice`
 - posting remains a finance-controlled Odoo action outside Integration Hub
 
 Future ERP adapters must keep equivalent boundaries.

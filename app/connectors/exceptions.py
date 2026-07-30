@@ -6,3 +6,15 @@ class ConnectorError(Exception):
 
 class ConnectorTimeoutError(ConnectorError):
     pass
+
+
+class ConnectorAuthenticationError(ConnectorError):
+    pass
+
+
+class ConnectorAuthorizationError(ConnectorError):
+    pass
+
+
+class ConnectorValidationError(ConnectorError):
+    pass

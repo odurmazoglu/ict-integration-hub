@@ -173,7 +173,51 @@ Odoo Adapter
 Odoo
 ```
 
-`ImportInvoiceUseCase` consumes `VendorBillWriter` through this port. It does not implement Vendor Bill Write Service, Odoo write behavior, production writes, import sessions, decision logic, rules, AI, or company memory.
+`ImportInvoiceUseCase` consumes `VendorBillWriter` through this port. The Odoo implementation lives outside the Application layer.
+
+## Odoo Vendor Bill Writer
+
+`OdooVendorBillWriter` is the production-safe infrastructure implementation of the `VendorBillWriter` application port.
+
+It:
+
+- accepts immutable `VendorBillWriteCommand`
+- returns immutable `VendorBillWriteResult`
+- defaults to dry-run behavior through the command
+- requires explicit production operation gates before real draft creation
+- checks for an existing Odoo Vendor Bill before creating one
+- delegates account.move payload construction and JSON-2 calls to `AccountMoveRepository`
+- creates only draft `account.move` records with `move_type=in_invoice`
+
+It must not:
+
+- post Vendor Bills
+- register payments
+- reconcile accounting entries
+- delete records
+- update partners, products, taxes, journals, or other master data
+- choose workflows or strategies
+- contain Rule Engine, Decision Engine, AI Advisor, or Import Session logic
+
+```mermaid
+flowchart TB
+    ImportInvoiceUseCase[ImportInvoiceUseCase]
+    VendorBillWriter[VendorBillWriter Port]
+    OdooVendorBillWriter[OdooVendorBillWriter]
+    AccountMoveRepository[AccountMoveRepository]
+    Json2Client[Odoo JSON-2 Client]
+    OdooDraft[Odoo Draft Vendor Bill]
+
+    ImportInvoiceUseCase --> VendorBillWriter
+    VendorBillWriter --> OdooVendorBillWriter
+    OdooVendorBillWriter --> AccountMoveRepository
+    AccountMoveRepository --> Json2Client
+    Json2Client --> OdooDraft
+```
+
+The deterministic idempotency key is stored on the Odoo draft via `invoice_origin` and used for duplicate lookup before create. Duplicate detection remains part of the write boundary; it does not authorize workflow selection or matching decisions.
+
+Infrastructure exceptions are translated to application-safe Vendor Bill write exceptions for authentication, authorization, validation, transport, duplicate detection, and unexpected ERP failures.
 
 ## Boundaries
 

@@ -2,7 +2,13 @@ from typing import Any
 
 import httpx
 
-from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
+from app.connectors.exceptions import (
+    ConnectorAuthenticationError,
+    ConnectorAuthorizationError,
+    ConnectorError,
+    ConnectorTimeoutError,
+    ConnectorValidationError,
+)
 from app.core.config import Settings
 from app.schemas.odoo import OdooProbeResponse
 
@@ -10,6 +16,7 @@ JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 READ_ONLY_MODELS = frozenset(
     {
+        "account.move",
         "res.company",
         "res.partner",
         "product.product",
@@ -118,7 +125,14 @@ class OdooJson2Client:
         except httpx.TimeoutException as exc:
             raise ConnectorTimeoutError("Odoo request timed out.") from exc
         except httpx.HTTPStatusError as exc:
-            raise ConnectorError(f"Odoo returned HTTP {exc.response.status_code}.") from exc
+            status_code = exc.response.status_code
+            if status_code == 401:
+                raise ConnectorAuthenticationError("Odoo authentication failed.") from exc
+            if status_code == 403:
+                raise ConnectorAuthorizationError("Odoo authorization failed.") from exc
+            if status_code in {400, 422}:
+                raise ConnectorValidationError("Odoo rejected the request payload.") from exc
+            raise ConnectorError(f"Odoo returned HTTP {status_code}.") from exc
         except httpx.HTTPError as exc:
             raise ConnectorError("Odoo request failed.") from exc
 

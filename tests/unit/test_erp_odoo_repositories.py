@@ -273,15 +273,22 @@ def test_repository_errors_are_sanitized_and_propagated() -> None:
 def test_erp_package_does_not_import_provider_or_persistence_layers() -> None:
     package_root = Path(__file__).resolve().parents[2] / "app" / "erp"
     combined_source = "\n".join(path.read_text() for path in package_root.rglob("*.py"))
+    readonly_source = "\n".join(path.read_text() for path in (package_root / "odoo").rglob("*.py"))
     repository_source = "\n".join(path.read_text() for path in (package_root / "odoo").glob("*_repository.py"))
+    write_source = "\n".join(path.read_text() for path in (package_root / "write").rglob("*.py"))
 
     assert "sqlalchemy" not in combined_source.lower()
     assert "app.models" not in combined_source
     assert "app.db" not in combined_source
     assert "parse_ubl_invoice" not in combined_source
-    assert "create_account_move" not in combined_source
+    assert "create_account_move" not in readonly_source
     assert ".create(" not in repository_source
     assert ".write(" not in repository_source
     assert "unlink" not in repository_source
     assert "action_post" not in repository_source
     assert "button_validate" not in repository_source
+    assert ".write(" not in write_source
+    assert ".unlink(" not in write_source
+    assert ".action_post(" not in write_source
+    assert "account.payment/create" not in write_source
+    assert "button_validate" not in write_source
