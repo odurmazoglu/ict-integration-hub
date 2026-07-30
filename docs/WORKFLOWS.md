@@ -61,8 +61,29 @@ Use cases coordinate application flow. They should consume commands or queries, 
 Current executable use case:
 
 - `ImportInvoiceUseCase`: coordinates duplicate detection, deterministic matching, Vendor Bill DTO construction, and `VendorBillWriter` execution for the direct Vendor Bill path only.
+- `ImportSession`: coordinates multiple `InternalInvoice` imports sequentially by delegating each invoice to `ImportInvoiceUseCase` and collecting immutable results.
 
 See [Application Layer](APPLICATION_LAYER.md) for the package and port conventions.
+
+## Import Session Orchestration
+
+Current multi-invoice orchestration is intentionally sequential and in-memory.
+
+```mermaid
+flowchart TB
+    InvoiceList[Invoice List]
+    ImportSession[ImportSession]
+    ImportInvoiceUseCase[ImportInvoiceUseCase]
+    VendorBillWriter[VendorBillWriter]
+    Odoo[Odoo]
+
+    InvoiceList --> ImportSession
+    ImportSession --> ImportInvoiceUseCase
+    ImportInvoiceUseCase --> VendorBillWriter
+    VendorBillWriter --> Odoo
+```
+
+`ImportSession` does not run Rule Engine, Decision Engine, AI Advisor, matching, Vendor Bill building, ERP calls, retries, batching, or persistence. Those responsibilities remain in their existing layers or future accepted implementation slices.
 
 ## Strategy Selection
 

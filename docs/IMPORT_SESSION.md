@@ -1,12 +1,55 @@
 # Import Session
 
-Import Session is the durable audit unit for an import attempt in ICT IPP.
+Import Session is the orchestration and future durable audit unit for import attempts in ICT IPP.
 
-The current repository already tracks sync runs, invoice metadata, document metadata, and draft invoice references. A consolidated Import Session model is an accepted future architecture decision, not yet implemented as a single table or package.
+The current repository implements an in-memory `ImportSession` application orchestrator for sequential multi-invoice imports. It does not persist sessions yet.
+
+The repository also already tracks sync runs, invoice metadata, document metadata, and draft invoice references. A consolidated persistent Import Session model remains an accepted future architecture decision, not yet implemented as a single table.
+
+## Current Implementation
+
+`ImportSession` lives in the Application layer and coordinates multiple `InternalInvoice` DTOs by delegating every invoice to `ImportInvoiceUseCase`.
+
+```mermaid
+flowchart TB
+    InvoiceList[Invoice List]
+    ImportSession[ImportSession]
+    ImportInvoiceUseCase[ImportInvoiceUseCase]
+    VendorBillWriter[VendorBillWriter]
+    Odoo[Odoo]
+
+    InvoiceList --> ImportSession
+    ImportSession --> ImportInvoiceUseCase
+    ImportInvoiceUseCase --> VendorBillWriter
+    VendorBillWriter --> Odoo
+```
+
+Current responsibilities:
+
+- execute imports sequentially
+- collect `ImportInvoiceResult` values
+- measure started, finished, and elapsed duration
+- count processed, successful, duplicate, and failed invoices
+- continue processing remaining invoices after one invoice fails
+- return immutable `ImportSessionResult`
+
+Current boundaries:
+
+- no persistence
+- no parallel processing
+- no retry loop
+- no scheduler
+- no Rule Engine
+- no Decision Engine
+- no AI Advisor
+- no Company Memory
+- no matching, workflow-selection, Vendor Bill creation, ERP, HTTP, SOAP, or SQL logic
 
 ## Purpose
 
-An Import Session groups source data, rule execution, workflow decisions, AI recommendations, user review, ERP execution, and traceability outcomes.
+The current in-memory Import Session groups the result of one sequential multi-invoice import run.
+
+The future durable Import Session should group source data, rule execution, workflow decisions, AI recommendations, user review, ERP execution, and traceability outcomes.
 
 It should answer:
 
@@ -59,7 +102,17 @@ Future Import Session records should include:
 
 ## Status Model
 
-Recommended statuses:
+Current in-memory statuses:
+
+- CREATED
+- RUNNING
+- COMPLETED
+- FAILED
+- CANCELLED
+
+`CANCELLED` is reserved for future explicit cancellation behavior and is not currently produced by the sequential executor.
+
+Recommended future durable statuses:
 
 - created
 - ingesting
