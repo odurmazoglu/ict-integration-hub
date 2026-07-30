@@ -39,6 +39,12 @@ Current foundation contracts:
 - `ImportInvoiceCommand`
 - `ImportInvoiceResult`
 - `ImportInvoiceUseCase`
+- `DecisionEngine`
+- `DecisionResult`
+- `RuleEngine`
+- `WorkflowStrategyResolver`
+- `WorkflowStrategy`
+- `VendorBillStrategy`
 - `VendorBillWriter`
 - `VendorBillWriteCommand`
 - `VendorBillWriteResult`
@@ -53,6 +59,7 @@ Every future business workflow should be represented by a dedicated use case.
 Examples:
 
 - `ImportInvoiceUseCase`
+- `DecisionEngine`
 - `CreateVendorBillUseCase`
 - `CreateRFQUseCase`
 - `CreatePurchaseOrderUseCase`
@@ -79,16 +86,14 @@ It may:
 
 - validate the import request
 - check duplicate import state through `InvoiceImportHistory`
-- call deterministic supplier, product, and tax matching dependencies
-- call `VendorBillBuilder`
-- call `VendorBillWriter`
+- call `DecisionEngine`
 - return immutable `ImportInvoiceResult`
 
 It must not:
 
 - contain SOAP, HTTP, SQL, Odoo JSON-2, or ORM code
 - instantiate ERP adapters or provider clients
-- implement Rule Engine, Decision Engine, AI Advisor, Import Session, RFQ, Purchase Order, expense, asset, or subscription logic
+- implement Rule Engine, AI Advisor, Import Session, RFQ, Purchase Order, expense, asset, or subscription logic
 - choose between workflows or strategies
 - retry provider operations
 - parse configuration or own logging framework behavior
@@ -99,6 +104,11 @@ flowchart TB
     Parser[Parser]
     InternalInvoice[InternalInvoice]
     ImportInvoiceUseCase[ImportInvoiceUseCase]
+    DecisionEngine[DecisionEngine]
+    RuleEngine[RuleEngine Port]
+    StrategyResolver[WorkflowStrategyResolver]
+    WorkflowStrategy[WorkflowStrategy]
+    VendorBillStrategy[VendorBillStrategy]
     VendorBillBuilder[VendorBillBuilder]
     VendorBillWriter[VendorBillWriter Port]
     OdooAdapter[Odoo Adapter]
@@ -107,10 +117,63 @@ flowchart TB
     Connector --> Parser
     Parser --> InternalInvoice
     InternalInvoice --> ImportInvoiceUseCase
-    ImportInvoiceUseCase --> VendorBillBuilder
-    ImportInvoiceUseCase --> VendorBillWriter
+    ImportInvoiceUseCase --> DecisionEngine
+    DecisionEngine --> RuleEngine
+    DecisionEngine --> StrategyResolver
+    StrategyResolver --> WorkflowStrategy
+    WorkflowStrategy --> VendorBillStrategy
+    VendorBillStrategy --> VendorBillBuilder
+    VendorBillStrategy --> VendorBillWriter
     VendorBillWriter --> OdooAdapter
     OdooAdapter --> Odoo
+```
+
+## DecisionEngine
+
+`DecisionEngine` is the application orchestration component responsible for selecting and executing one procurement workflow for a single imported invoice.
+
+It:
+
+- calls the deterministic `RuleEngine` port
+- reads the workflow selected by the Rule Engine result
+- resolves the workflow through `WorkflowStrategyResolver`
+- executes the selected `WorkflowStrategy`
+- returns immutable `DecisionResult`
+
+It must not:
+
+- evaluate rules
+- contain matching logic
+- contain workflow if/else trees
+- call AI
+- call ERP/provider clients
+- build Vendor Bill DTOs directly
+- know Odoo, SOAP, HTTP, SQL, or persistence details
+
+Current implemented strategy:
+
+- `VendorBillStrategy`
+
+Future strategies such as RFQ, Purchase Order, expense, asset, subscription, manual review, and ignored-import strategies should be added by registering new `WorkflowStrategy` implementations without modifying `DecisionEngine`.
+
+```mermaid
+flowchart TB
+    ImportInvoiceUseCase[ImportInvoiceUseCase]
+    DecisionEngine[DecisionEngine]
+    RuleEngine[RuleEngine Port]
+    Resolver[WorkflowStrategyResolver]
+    Strategy[WorkflowStrategy]
+    VendorBillStrategy[VendorBillStrategy]
+    VendorBillBuilder[VendorBillBuilder]
+    VendorBillWriter[VendorBillWriter]
+
+    ImportInvoiceUseCase --> DecisionEngine
+    DecisionEngine --> RuleEngine
+    DecisionEngine --> Resolver
+    Resolver --> Strategy
+    Strategy --> VendorBillStrategy
+    VendorBillStrategy --> VendorBillBuilder
+    VendorBillStrategy --> VendorBillWriter
 ```
 
 ## Command And Query Convention
@@ -177,7 +240,7 @@ Odoo Adapter
 Odoo
 ```
 
-`ImportInvoiceUseCase` consumes `VendorBillWriter` through this port. The Odoo implementation lives outside the Application layer.
+`VendorBillStrategy` consumes `VendorBillWriter` through this port. The Odoo implementation lives outside the Application layer.
 
 ## Odoo Vendor Bill Writer
 

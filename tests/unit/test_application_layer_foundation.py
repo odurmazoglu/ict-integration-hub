@@ -7,9 +7,16 @@ import pytest
 
 import app.application
 from app.application.commands import Command, ImportSessionCommand, VendorBillWriteCommand
-from app.application.dto import ApplicationDTO, ImportSessionResult, VendorBillWriteResult
+from app.application.decision import DecisionEngine, VendorBillStrategy, WorkflowStrategyResolver
+from app.application.dto import (
+    ApplicationDTO,
+    DecisionResult,
+    ImportSessionResult,
+    RuleEvaluationResult,
+    VendorBillWriteResult,
+)
 from app.application.exceptions import ApplicationError
-from app.application.ports import InvoiceImportHistory, VendorBillWriter
+from app.application.ports import InvoiceImportHistory, RuleEngine, VendorBillWriter
 from app.application.queries import Query
 from app.application.services import UnitOfWork
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
@@ -24,6 +31,9 @@ def test_application_foundation_exports_core_conventions() -> None:
     assert app.application.ApplicationError is ApplicationError
     assert app.application.ImportInvoiceUseCase is ImportInvoiceUseCase
     assert app.application.ImportSession is ImportSession
+    assert app.application.DecisionEngine is DecisionEngine
+    assert app.application.WorkflowStrategyResolver is WorkflowStrategyResolver
+    assert app.application.VendorBillStrategy is VendorBillStrategy
 
 
 def test_application_dtos_are_immutable() -> None:
@@ -41,6 +51,14 @@ def test_application_dtos_are_immutable() -> None:
         duplicates=0,
         failed=0,
     )
+    decision = DecisionResult(
+        success=True,
+        invoice_id="ettn:abc",
+        workflow="vendor_bill",
+        strategy="vendor_bill",
+        status="dry_run",
+    )
+    rules = RuleEvaluationResult(workflow="vendor_bill")
 
     with pytest.raises(FrozenInstanceError):
         command.dry_run = False
@@ -50,10 +68,15 @@ def test_application_dtos_are_immutable() -> None:
         result.status = "created"
     with pytest.raises(FrozenInstanceError):
         session_result.status = "FAILED"
+    with pytest.raises(FrozenInstanceError):
+        decision.status = "created"
+    with pytest.raises(FrozenInstanceError):
+        rules.workflow = "expense"
 
 
 def test_vendor_bill_writer_port_is_protocol_only() -> None:
     assert hasattr(VendorBillWriter, "write_vendor_bill")
+    assert hasattr(RuleEngine, "evaluate")
     assert hasattr(InvoiceImportHistory, "find_imported_invoice")
     assert hasattr(UnitOfWork, "commit")
     assert hasattr(UnitOfWork, "rollback")
@@ -88,7 +111,6 @@ def test_import_invoice_use_case_does_not_import_future_workflow_engines_or_prov
         "httpx",
         "zeep",
         "rule_engine",
-        "decision_engine",
         "ai_advisor",
         "import_session",
         "OdooJson2Client",

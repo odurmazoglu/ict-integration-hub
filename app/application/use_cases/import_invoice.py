@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from time import perf_counter
-from typing import Protocol
 
-from app.application.commands import ImportInvoiceCommand, VendorBillWriteCommand
-from app.application.dto import ImportInvoiceResult, VendorBillWriteResult
+from app.application.commands import ImportInvoiceCommand
+from app.application.decision import DecisionEngine
+from app.application.dto import DecisionResult, ImportInvoiceResult
 from app.application.exceptions import ApplicationError
-from app.application.ports import InvoiceImportHistory, VendorBillWriter
-from app.billing import VendorBillBuilder
+from app.application.ports import InvoiceImportHistory
 from app.domain.invoice import InternalInvoice
-from app.matching import InvoiceProductMatchResult, PartnerMatchResult
-from app.tax_mapping import InvoiceTaxMappingResult
 
 
 class ImportInvoiceValidationError(ApplicationError):
@@ -22,46 +20,17 @@ class ImportInvoiceInfrastructureError(ApplicationError):
     error_category = "import_invoice_infrastructure_error"
 
 
-class SupplierPartnerMatcher(Protocol):
-    """Deterministic supplier matcher used by ImportInvoiceUseCase."""
-
-    def match_supplier(self, invoice: InternalInvoice, *, company_id: int | None = None) -> PartnerMatchResult:
-        pass
-
-
-class InvoiceProductMatcher(Protocol):
-    """Deterministic product matcher used by ImportInvoiceUseCase."""
-
-    def match_invoice(self, invoice: InternalInvoice, *, company_id: int | None = None) -> InvoiceProductMatchResult:
-        pass
-
-
-class InvoiceTaxMapper(Protocol):
-    """Deterministic tax mapper used by ImportInvoiceUseCase."""
-
-    def map_invoice(self, invoice: InternalInvoice, *, company_id: int | None = None) -> InvoiceTaxMappingResult:
-        pass
-
-
 class ImportInvoiceUseCase:
-    """Coordinate one deterministic invoice import through the Vendor Bill path."""
+    """Coordinate one invoice import through the Decision Engine."""
 
     def __init__(
         self,
         *,
         import_history: InvoiceImportHistory,
-        partner_matcher: SupplierPartnerMatcher,
-        product_matcher: InvoiceProductMatcher,
-        tax_mapper: InvoiceTaxMapper,
-        vendor_bill_builder: VendorBillBuilder,
-        vendor_bill_writer: VendorBillWriter,
+        decision_engine: DecisionEngine,
     ) -> None:
         self._import_history = import_history
-        self._partner_matcher = partner_matcher
-        self._product_matcher = product_matcher
-        self._tax_mapper = tax_mapper
-        self._vendor_bill_builder = vendor_bill_builder
-        self._vendor_bill_writer = vendor_bill_writer
+        self._decision_engine = decision_engine
 
     async def execute(self, command: ImportInvoiceCommand) -> ImportInvoiceResult:
         started = perf_counter()
@@ -81,30 +50,14 @@ class ImportInvoiceUseCase:
                 duration=_duration(started),
             )
 
-        partner_match = _translate_infrastructure(
-            lambda: self._partner_matcher.match_supplier(command.invoice, company_id=command.company_id),
-            "Supplier partner matching failed.",
+        decision_result = await _translate_decision(
+            self._decision_engine.decide(replace(command, idempotency_key=idempotency_key)),
         )
-        product_match = _translate_infrastructure(
-            lambda: self._product_matcher.match_invoice(command.invoice, company_id=command.company_id),
-            "Product matching failed.",
+        return _result_from_decision(
+            invoice_id=invoice_id,
+            decision_result=decision_result,
+            duration=_duration(started),
         )
-        tax_match = _translate_infrastructure(
-            lambda: self._tax_mapper.map_invoice(command.invoice, company_id=command.company_id),
-            "Tax mapping failed.",
-        )
-        vendor_bill = self._vendor_bill_builder.build(command.invoice, partner_match, product_match, tax_match)
-        write_result = await _translate_writer(
-            self._vendor_bill_writer.write_vendor_bill(
-                VendorBillWriteCommand(
-                    vendor_bill=vendor_bill,
-                    idempotency_key=idempotency_key,
-                    dry_run=command.dry_run,
-                    approved_by=command.approved_by,
-                )
-            )
-        )
-        return _result_from_write(invoice_id=invoice_id, write_result=write_result, duration=_duration(started))
 
 
 def _invoice_id(command: ImportInvoiceCommand) -> str:
@@ -121,23 +74,19 @@ def _idempotency_key(command: ImportInvoiceCommand) -> str:
     return idempotency_key
 
 
-def _result_from_write(
+def _result_from_decision(
     *,
     invoice_id: str,
-    write_result: VendorBillWriteResult,
+    decision_result: DecisionResult,
     duration: float,
 ) -> ImportInvoiceResult:
-    success = write_result.status in {"dry_run", "created", "existing"}
-    status = "already_exists" if write_result.status == "existing" else write_result.status
-    errors = () if success else _safe_errors(write_result.safe_message)
-    warnings = _safe_warnings(write_result.safe_message) if success and write_result.safe_message else ()
     return ImportInvoiceResult(
-        success=success,
+        success=decision_result.success,
         invoice_id=invoice_id,
-        status=status,
-        vendor_bill_id=write_result.external_id,
-        warnings=warnings,
-        errors=errors,
+        status=decision_result.status,
+        vendor_bill_id=decision_result.vendor_bill_id,
+        warnings=decision_result.warnings,
+        errors=decision_result.errors,
         duration=duration,
     )
 
@@ -151,26 +100,18 @@ def _translate_infrastructure[T](operation: Callable[[], T], fallback_message: s
         raise ImportInvoiceInfrastructureError(_safe_message(exc, fallback_message)) from exc
 
 
-async def _translate_writer(awaitable: Awaitable[VendorBillWriteResult]) -> VendorBillWriteResult:
+async def _translate_decision(awaitable: Awaitable[DecisionResult]) -> DecisionResult:
     try:
         return await awaitable
     except ApplicationError:
         raise
     except Exception as exc:
-        raise ImportInvoiceInfrastructureError(_safe_message(exc, "Vendor Bill write operation failed.")) from exc
+        raise ImportInvoiceInfrastructureError(_safe_message(exc, "Decision Engine execution failed.")) from exc
 
 
 def _safe_message(exc: Exception, fallback_message: str) -> str:
     safe_message = getattr(exc, "safe_message", None)
     return safe_message if isinstance(safe_message, str) and safe_message.strip() else fallback_message
-
-
-def _safe_errors(message: str | None) -> tuple[str, ...]:
-    return (message,) if message else ("Vendor Bill write operation failed.",)
-
-
-def _safe_warnings(message: str | None) -> tuple[str, ...]:
-    return (message,) if message else ()
 
 
 def _duration(started: float) -> float:

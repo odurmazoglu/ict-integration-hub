@@ -2,7 +2,7 @@
 
 The Rule Engine is the deterministic policy execution layer for ICT IPP. It lives inside the Hub, executes before AI, and is the source of workflow decisions.
 
-No single `app/rule_engine` package exists yet. This document formalizes the accepted boundary and maps it to current deterministic implementation points.
+No concrete rule evaluation package exists yet. The current implementation provides the `RuleEngine` application port consumed by `DecisionEngine`; concrete rule evaluation remains outside this PR.
 
 ## Purpose
 
@@ -81,6 +81,15 @@ Example:
 - Rule Engine: product line 3 has multiple exact candidates by default code.
 - Decision Engine: choose manual review strategy instead of draft creation strategy.
 - AI Advisor: explain why the line needs review and suggest what data the user may inspect.
+
+Current implementation:
+
+- `RuleEngine` is a port under `app/application/ports`.
+- `DecisionEngine` calls that port and receives a `RuleEvaluationResult`.
+- `DecisionEngine` resolves the workflow from that result through `WorkflowStrategyResolver`.
+- This repository currently implements only `VendorBillStrategy`.
+
+The Decision Engine does not evaluate rules itself.
 
 ## Rule Engine vs AI Advisor
 
