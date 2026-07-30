@@ -54,6 +54,7 @@ Current implemented capabilities:
 - ERP-neutral immutable invoice domain DTOs for deterministic matching and billing transformations.
 - Read-only ERP repository layer backed by Odoo JSON-2 `search_read`.
 - Application layer contracts and `ImportInvoiceUseCase` orchestration for the deterministic Vendor Bill path.
+- Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic tax mapping and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.
@@ -79,6 +80,7 @@ app/
   db/                 SQLAlchemy base/session/types
   domain/             ERP-independent invoice domain DTOs and parser
   erp/                repository protocols and Odoo read-only implementation
+  erp/write/          draft-only ERP write adapters behind application ports
   matching/           deterministic product matching
   models/             Integration Hub persistence models
   schemas/            API and workflow Pydantic schemas
