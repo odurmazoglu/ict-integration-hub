@@ -55,6 +55,7 @@ Current implemented capabilities:
 - Read-only ERP repository layer backed by Odoo JSON-2 `search_read`.
 - Application layer contracts and `ImportInvoiceUseCase` orchestration for the deterministic Vendor Bill path.
 - In-memory `ImportSession` orchestration for sequential multi-invoice imports through `ImportInvoiceUseCase`.
+- Decision Engine orchestration with a Rule Engine port and extensible workflow strategy resolver.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic tax mapping and product matching.
 - Odoo mapping preview and read-only Odoo resolution.

@@ -42,7 +42,7 @@ flowchart TB
     DecisionEngine --> FutureFlow[Future Procurement Workflow]
 ```
 
-The current codebase does not yet contain a centralized Decision Engine. Existing services should be treated as workflow execution steps that future Decision Engine work can orchestrate.
+The current codebase contains the first centralized `DecisionEngine` implementation. It delegates rule evaluation to the `RuleEngine` port and executes the selected workflow through `WorkflowStrategyResolver`.
 
 ## Use Case Convention
 
@@ -60,7 +60,7 @@ Use cases coordinate application flow. They should consume commands or queries, 
 
 Current executable use case:
 
-- `ImportInvoiceUseCase`: coordinates duplicate detection, deterministic matching, Vendor Bill DTO construction, and `VendorBillWriter` execution for the direct Vendor Bill path only.
+- `ImportInvoiceUseCase`: coordinates duplicate detection and delegates workflow selection/execution to `DecisionEngine`.
 - `ImportSession`: coordinates multiple `InternalInvoice` imports sequentially by delegating each invoice to `ImportInvoiceUseCase` and collecting immutable results.
 
 See [Application Layer](APPLICATION_LAYER.md) for the package and port conventions.
@@ -74,12 +74,14 @@ flowchart TB
     InvoiceList[Invoice List]
     ImportSession[ImportSession]
     ImportInvoiceUseCase[ImportInvoiceUseCase]
+    DecisionEngine[DecisionEngine]
     VendorBillWriter[VendorBillWriter]
     Odoo[Odoo]
 
     InvoiceList --> ImportSession
     ImportSession --> ImportInvoiceUseCase
-    ImportInvoiceUseCase --> VendorBillWriter
+    ImportInvoiceUseCase --> DecisionEngine
+    DecisionEngine --> VendorBillWriter
     VendorBillWriter --> Odoo
 ```
 
@@ -87,17 +89,39 @@ flowchart TB
 
 ## Strategy Selection
 
-Strategies are deterministic execution paths chosen by the Decision Engine:
+Strategies are deterministic execution paths resolved by the Decision Engine from Rule Engine output:
 
-- read-only ingestion strategy
-- document acquisition strategy
-- mapping preview strategy
-- exact resolution strategy
-- manual review strategy
 - draft vendor bill strategy
-- blocked import strategy
+
+Current implemented strategy:
+
+- `VendorBillStrategy`: delegates to `VendorBillBuilder` and `VendorBillWriter`
+
+Future strategies may include read-only ingestion, document acquisition, mapping preview, exact resolution, manual review, blocked import, RFQ, Purchase Order, expense, asset, and subscription paths. Future strategies should be added by implementing `WorkflowStrategy` and registering it with `WorkflowStrategyResolver`, not by modifying `DecisionEngine`.
 
 Strategy selection must be explainable and based on Rule Engine output.
+
+```mermaid
+flowchart TB
+    ImportInvoiceUseCase[ImportInvoiceUseCase]
+    DecisionEngine[DecisionEngine]
+    RuleEngine[RuleEngine Port]
+    Resolver[WorkflowStrategyResolver]
+    Strategy[WorkflowStrategy]
+    VendorBillStrategy[VendorBillStrategy]
+    VendorBillBuilder[VendorBillBuilder]
+    VendorBillWriter[VendorBillWriter]
+    Odoo[Odoo]
+
+    ImportInvoiceUseCase --> DecisionEngine
+    DecisionEngine --> RuleEngine
+    DecisionEngine --> Resolver
+    Resolver --> Strategy
+    Strategy --> VendorBillStrategy
+    VendorBillStrategy --> VendorBillBuilder
+    VendorBillStrategy --> VendorBillWriter
+    VendorBillWriter --> Odoo
+```
 
 ## Review States
 
