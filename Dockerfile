@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN pip install --no-cache-dir --upgrade pip
-COPY pyproject.toml README.md .env.example .env.local.example .env.test.example .env.production.example .env.live-readonly.example ./
+COPY pyproject.toml README.md .env.example .env.production.example ./
 RUN pip install --no-cache-dir -e ".[dev]"
 
 COPY alembic ./alembic
