@@ -4,12 +4,13 @@ from typing import Protocol
 
 from app.application.commands import ImportInvoiceCommand
 from app.application.dto import DecisionResult, RuleEvaluationResult
+from app.application.workflow import WorkflowType
 
 
 class WorkflowStrategy(Protocol):
     """Executable workflow selected by the Decision Engine."""
 
-    workflow: str
+    workflow: WorkflowType
     name: str
 
     async def execute(self, command: ImportInvoiceCommand, rule_result: RuleEvaluationResult) -> DecisionResult:

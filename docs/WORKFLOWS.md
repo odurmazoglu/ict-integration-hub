@@ -32,13 +32,24 @@ Forbidden inside this workflow:
 
 Workflow selection is an accepted Decision Engine responsibility.
 
+Workflow names are not free-form strings. The Application layer owns the shared Workflow Model:
+
+- `WorkflowType.VENDOR_BILL`
+- `WorkflowType.RFQ`
+- `WorkflowType.EXPENSE`
+- `WorkflowType.ASSET`
+- `WorkflowType.SUBSCRIPTION`
+- `WorkflowType.MANUAL_REVIEW`
+
+The Rule Engine returns a `WorkflowDecision` containing one `WorkflowType`, the matched rule reference, explanation, warnings, and errors. `DecisionEngine`, `WorkflowStrategyResolver`, `WorkflowStrategy`, and `DecisionResult` consume that same vocabulary. The future AI Advisor may read this model to explain or recommend, but it must not replace deterministic workflow selection.
+
 ```mermaid
 flowchart TB
     ImportSession[Import Session] --> RuleResults[Rule Engine Results]
-    RuleResults --> DecisionEngine[Decision Engine]
-    DecisionEngine --> InvoiceFlow[Invoice Import Workflow]
-    DecisionEngine --> ReviewFlow[Manual Review Workflow]
-    DecisionEngine --> BlockedFlow[Blocked Import Workflow]
+    RuleResults --> WorkflowDecision[WorkflowDecision]
+    WorkflowDecision --> WorkflowType[WorkflowType]
+    WorkflowType --> DecisionEngine[Decision Engine]
+    DecisionEngine --> VendorBill[Vendor Bill Workflow]
     DecisionEngine --> FutureFlow[Future Procurement Workflow]
 ```
 

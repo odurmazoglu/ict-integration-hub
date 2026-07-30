@@ -17,6 +17,7 @@ from app.application.decision import (
 )
 from app.application.dto import DecisionResult, RuleEvaluationResult, VendorBillWriteResult
 from app.application.ports import RuleEngine
+from app.application.workflow import WorkflowDecision, WorkflowType
 from app.billing import VendorBillBuilder
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.matching import (
@@ -40,7 +41,7 @@ from app.tax_mapping import (
 async def test_decision_engine_selects_and_executes_resolved_strategy() -> None:
     rule_result = _rule_result()
     rule_engine = FakeRuleEngine(rule_result)
-    strategy = FakeWorkflowStrategy("vendor_bill")
+    strategy = FakeWorkflowStrategy(WorkflowType.VENDOR_BILL)
     engine = DecisionEngine(rule_engine=rule_engine, strategy_resolver=WorkflowStrategyResolver([strategy]))
     command = _command()
 
@@ -49,7 +50,7 @@ async def test_decision_engine_selects_and_executes_resolved_strategy() -> None:
     assert result == DecisionResult(
         success=True,
         invoice_id="INV-ETTN",
-        workflow="vendor_bill",
+        workflow=WorkflowType.VENDOR_BILL,
         strategy="fake_vendor_bill",
         status="created",
         vendor_bill_id=42,
@@ -66,7 +67,7 @@ async def test_decision_engine_selects_and_executes_resolved_strategy() -> None:
 async def test_decision_engine_propagates_rule_engine_errors() -> None:
     engine = DecisionEngine(
         rule_engine=FakeRuleEngine(RuntimeError("rule failure")),
-        strategy_resolver=WorkflowStrategyResolver([FakeWorkflowStrategy("vendor_bill")]),
+        strategy_resolver=WorkflowStrategyResolver([FakeWorkflowStrategy(WorkflowType.VENDOR_BILL)]),
     )
 
     with pytest.raises(RuntimeError, match="rule failure"):
@@ -77,7 +78,9 @@ async def test_decision_engine_propagates_rule_engine_errors() -> None:
 async def test_decision_engine_propagates_strategy_errors() -> None:
     engine = DecisionEngine(
         rule_engine=FakeRuleEngine(_rule_result()),
-        strategy_resolver=WorkflowStrategyResolver([FakeWorkflowStrategy("vendor_bill", error=RuntimeError("boom"))]),
+        strategy_resolver=WorkflowStrategyResolver(
+            [FakeWorkflowStrategy(WorkflowType.VENDOR_BILL, error=RuntimeError("boom"))]
+        ),
     )
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -87,8 +90,8 @@ async def test_decision_engine_propagates_strategy_errors() -> None:
 @pytest.mark.asyncio
 async def test_decision_engine_rejects_unsupported_workflow() -> None:
     engine = DecisionEngine(
-        rule_engine=FakeRuleEngine(RuleEvaluationResult(workflow="expense")),
-        strategy_resolver=WorkflowStrategyResolver([FakeWorkflowStrategy("vendor_bill")]),
+        rule_engine=FakeRuleEngine(RuleEvaluationResult(workflow_decision=WorkflowDecision(WorkflowType.EXPENSE))),
+        strategy_resolver=WorkflowStrategyResolver([FakeWorkflowStrategy(WorkflowType.VENDOR_BILL)]),
     )
 
     with pytest.raises(UnsupportedWorkflowError) as exc_info:
@@ -113,8 +116,8 @@ async def test_vendor_bill_strategy_delegates_to_builder_and_writer() -> None:
 
     assert result.success is True
     assert result.invoice_id == "INV-ETTN"
-    assert result.workflow == "vendor_bill"
-    assert result.strategy == "vendor_bill"
+    assert result.workflow is WorkflowType.VENDOR_BILL
+    assert result.strategy == WorkflowType.VENDOR_BILL.value
     assert result.status == "created"
     assert result.vendor_bill_id == 99
     assert writer.commands == [
@@ -171,7 +174,10 @@ async def test_vendor_bill_strategy_rejects_missing_rule_outputs() -> None:
     )
 
     with pytest.raises(UnsupportedWorkflowError) as exc_info:
-        await strategy.execute(_command(), RuleEvaluationResult(workflow="vendor_bill"))
+        await strategy.execute(
+            _command(),
+            RuleEvaluationResult(workflow_decision=WorkflowDecision(WorkflowType.VENDOR_BILL)),
+        )
 
     assert exc_info.value.safe_message == "Vendor Bill workflow requires matching rule outputs."
 
@@ -181,13 +187,13 @@ def test_decision_dtos_are_immutable() -> None:
     decision_result = DecisionResult(
         success=True,
         invoice_id="INV-ETTN",
-        workflow="vendor_bill",
-        strategy="vendor_bill",
+        workflow=WorkflowType.VENDOR_BILL,
+        strategy=WorkflowType.VENDOR_BILL.value,
         status="dry_run",
     )
 
     with pytest.raises(FrozenInstanceError):
-        rule_result.workflow = "expense"
+        rule_result.workflow_decision = WorkflowDecision(WorkflowType.EXPENSE)
     with pytest.raises(FrozenInstanceError):
         decision_result.status = "failed"
 
@@ -232,9 +238,9 @@ class FakeRuleEngine:
 
 
 class FakeWorkflowStrategy:
-    def __init__(self, workflow: str, error: Exception | None = None) -> None:
+    def __init__(self, workflow: WorkflowType, error: Exception | None = None) -> None:
         self.workflow = workflow
-        self.name = f"fake_{workflow}"
+        self.name = f"fake_{workflow.value}"
         self.error = error
         self.calls: list[tuple[ImportInvoiceCommand, RuleEvaluationResult]] = []
 
@@ -299,7 +305,12 @@ def _rule_result(
     product_match: InvoiceProductMatchResult | None = None,
 ) -> RuleEvaluationResult:
     return RuleEvaluationResult(
-        workflow="vendor_bill",
+        workflow_decision=WorkflowDecision(
+            workflow=WorkflowType.VENDOR_BILL,
+            matched_rule="vendor_bill_direct_import",
+            explanation="Direct vendor bill import is currently the only executable workflow.",
+            warnings=warnings,
+        ),
         partner_match=_partner_match(),
         product_match=product_match or _product_match(ProductMatchStatus.MATCHED),
         tax_match=_tax_match(),

@@ -25,6 +25,7 @@ app/application/
   services/      shared application service contracts
   use_cases/     executable workflow boundaries
   exceptions/    application-safe exception base types
+  workflow.py    shared workflow vocabulary and decisions
 ```
 
 Current foundation contracts:
@@ -42,6 +43,8 @@ Current foundation contracts:
 - `DecisionEngine`
 - `DecisionResult`
 - `RuleEngine`
+- `WorkflowType`
+- `WorkflowDecision`
 - `WorkflowStrategyResolver`
 - `WorkflowStrategy`
 - `VendorBillStrategy`
@@ -135,7 +138,7 @@ flowchart TB
 It:
 
 - calls the deterministic `RuleEngine` port
-- reads the workflow selected by the Rule Engine result
+- reads the canonical `WorkflowDecision` selected by the Rule Engine result
 - resolves the workflow through `WorkflowStrategyResolver`
 - executes the selected `WorkflowStrategy`
 - returns immutable `DecisionResult`
@@ -155,6 +158,38 @@ Current implemented strategy:
 - `VendorBillStrategy`
 
 Future strategies such as RFQ, Purchase Order, expense, asset, subscription, manual review, and ignored-import strategies should be added by registering new `WorkflowStrategy` implementations without modifying `DecisionEngine`.
+
+## Workflow Model
+
+The shared Workflow Model is the canonical workflow vocabulary for the Decision Engine, Rule Engine, Workflow Strategies, and future AI Advisor recommendations.
+
+Current contracts:
+
+- `WorkflowType`: immutable enum values for `VENDOR_BILL`, `RFQ`, `EXPENSE`, `ASSET`, `SUBSCRIPTION`, and `MANUAL_REVIEW`
+- `WorkflowDecision`: immutable Rule Engine workflow selection output containing the selected `WorkflowType`, matched rule reference, explanation, warnings, and errors
+
+`RuleEvaluationResult` wraps `WorkflowDecision` and exposes the selected `WorkflowType` to `DecisionEngine`. `DecisionResult` also carries `WorkflowType`, so workflow identity remains stable across orchestration and result DTOs.
+
+No component should introduce ad-hoc workflow string literals. New workflow implementations must add or reuse a `WorkflowType`, register a `WorkflowStrategy`, and keep workflow execution outside the model itself.
+
+```mermaid
+flowchart TB
+    RuleEngine[RuleEngine Port]
+    WorkflowDecision[WorkflowDecision]
+    WorkflowType[WorkflowType]
+    DecisionEngine[DecisionEngine]
+    Resolver[WorkflowStrategyResolver]
+    Strategy[WorkflowStrategy]
+    DecisionResult[DecisionResult]
+
+    RuleEngine --> WorkflowDecision
+    WorkflowDecision --> WorkflowType
+    WorkflowDecision --> DecisionEngine
+    DecisionEngine --> Resolver
+    Resolver --> Strategy
+    Strategy --> DecisionResult
+    DecisionResult --> WorkflowType
+```
 
 ```mermaid
 flowchart TB

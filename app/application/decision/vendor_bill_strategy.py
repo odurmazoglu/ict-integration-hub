@@ -6,17 +6,15 @@ from app.application.commands import ImportInvoiceCommand, VendorBillWriteComman
 from app.application.decision.exceptions import UnsupportedWorkflowError
 from app.application.dto import DecisionResult, RuleEvaluationResult, VendorBillWriteResult
 from app.application.ports import VendorBillWriter
+from app.application.workflow import WorkflowType
 from app.billing import VendorBillBuilder
-
-VENDOR_BILL_WORKFLOW = "vendor_bill"
-VENDOR_BILL_STRATEGY = "vendor_bill"
 
 
 class VendorBillStrategy:
     """Direct Vendor Bill workflow execution strategy."""
 
-    workflow = VENDOR_BILL_WORKFLOW
-    name = VENDOR_BILL_STRATEGY
+    workflow = WorkflowType.VENDOR_BILL
+    name = WorkflowType.VENDOR_BILL.value
 
     def __init__(self, *, vendor_bill_builder: VendorBillBuilder, vendor_bill_writer: VendorBillWriter) -> None:
         self._vendor_bill_builder = vendor_bill_builder
@@ -50,8 +48,8 @@ class VendorBillStrategy:
 
 
 def _validate_rule_result(rule_result: RuleEvaluationResult) -> None:
-    if rule_result.workflow != VENDOR_BILL_WORKFLOW:
-        raise UnsupportedWorkflowError(f"VendorBillStrategy cannot execute workflow: {rule_result.workflow}.")
+    if rule_result.workflow != WorkflowType.VENDOR_BILL:
+        raise UnsupportedWorkflowError(f"VendorBillStrategy cannot execute workflow: {rule_result.workflow.value}.")
     if rule_result.partner_match is None or rule_result.product_match is None or rule_result.tax_match is None:
         raise UnsupportedWorkflowError("Vendor Bill workflow requires matching rule outputs.")
 
@@ -67,8 +65,8 @@ def _decision_from_write(
     return DecisionResult(
         success=success,
         invoice_id=invoice_id,
-        workflow=VENDOR_BILL_WORKFLOW,
-        strategy=VENDOR_BILL_STRATEGY,
+        workflow=WorkflowType.VENDOR_BILL,
+        strategy=WorkflowType.VENDOR_BILL.value,
         status=status,
         vendor_bill_id=write_result.external_id,
         warnings=_warnings(write_result) if success else (),

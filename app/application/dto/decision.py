@@ -1,25 +1,35 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
 
 from app.application.dto.base import ApplicationDTO
+from app.application.workflow import WorkflowDecision, WorkflowType
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult
 from app.tax_mapping import InvoiceTaxMappingResult
-
-WorkflowType = Literal["vendor_bill"]
 
 
 @dataclass(frozen=True, slots=True)
 class RuleEvaluationResult(ApplicationDTO):
     """Rule Engine output consumed by the Decision Engine."""
 
-    workflow: str
+    workflow_decision: WorkflowDecision
     partner_match: PartnerMatchResult | None = None
     product_match: InvoiceProductMatchResult | None = None
     tax_match: InvoiceTaxMappingResult | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def workflow(self) -> WorkflowType:
+        return self.workflow_decision.workflow
+
+    @property
+    def matched_rule(self) -> str | None:
+        return self.workflow_decision.matched_rule
+
+    @property
+    def explanation(self) -> str | None:
+        return self.workflow_decision.explanation
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +38,7 @@ class DecisionResult(ApplicationDTO):
 
     success: bool
     invoice_id: str
-    workflow: str
+    workflow: WorkflowType
     strategy: str
     status: str
     vendor_bill_id: int | None = None

@@ -14,6 +14,7 @@ from app.application.use_cases import (
     ImportInvoiceUseCase,
     ImportInvoiceValidationError,
 )
+from app.application.workflow import WorkflowType
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party
 
 
@@ -23,8 +24,8 @@ async def test_import_invoice_delegates_to_decision_engine_after_duplicate_check
         DecisionResult(
             success=True,
             invoice_id="INV-ETTN",
-            workflow="vendor_bill",
-            strategy="vendor_bill",
+            workflow=WorkflowType.VENDOR_BILL,
+            strategy=WorkflowType.VENDOR_BILL.value,
             status="dry_run",
             warnings=("Decision completed.",),
         )
@@ -73,8 +74,8 @@ async def test_decision_existing_result_is_returned_without_erp_model_leakage() 
             DecisionResult(
                 success=True,
                 invoice_id="INV-ETTN",
-                workflow="vendor_bill",
-                strategy="vendor_bill",
+                workflow=WorkflowType.VENDOR_BILL,
+                strategy=WorkflowType.VENDOR_BILL.value,
                 status="already_exists",
                 vendor_bill_id=99,
                 warnings=("Existing draft found.",),
@@ -98,8 +99,8 @@ async def test_decision_failed_result_is_returned_as_safe_failure_result() -> No
             DecisionResult(
                 success=False,
                 invoice_id="INV-ETTN",
-                workflow="vendor_bill",
-                strategy="vendor_bill",
+                workflow=WorkflowType.VENDOR_BILL,
+                strategy=WorkflowType.VENDOR_BILL.value,
                 status="failed",
                 errors=("Vendor Bill write failed safely.",),
             )
@@ -197,8 +198,8 @@ class FakeDecisionEngine:
         self.result = result or DecisionResult(
             success=True,
             invoice_id="INV-ETTN",
-            workflow="vendor_bill",
-            strategy="vendor_bill",
+            workflow=WorkflowType.VENDOR_BILL,
+            strategy=WorkflowType.VENDOR_BILL.value,
             status="dry_run",
         )
         self.commands: list[ImportInvoiceCommand] = []
