@@ -53,6 +53,7 @@ Current implemented capabilities:
 - Provider-independent UBL parsing into normalized invoice models.
 - ERP-neutral immutable invoice domain DTOs for deterministic matching and billing transformations.
 - Read-only ERP repository layer backed by Odoo JSON-2 `search_read`.
+- Application layer contracts for future use-case orchestration, commands, queries, DTOs, services, and ports.
 - Deterministic tax mapping and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.
@@ -71,6 +72,7 @@ Not implemented or not allowed by default:
 ```text
 app/
   api/                FastAPI routers and dependency wiring
+  application/        Use-case, command/query, DTO, service, and port contracts
   billing/            ERP-neutral vendor bill DTO builder
   connectors/         Uyumsoft and Odoo transport adapters
   core/               configuration, logging, runtime safety checks
@@ -121,6 +123,7 @@ For documentation-only work, do not modify runtime behavior, source code, tests,
 Core documentation:
 
 - [Project Constitution](docs/PROJECT_CONSTITUTION.md)
+- [Application Layer](docs/APPLICATION_LAYER.md)
 - [Vision](docs/VISION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Workflows](docs/WORKFLOWS.md)

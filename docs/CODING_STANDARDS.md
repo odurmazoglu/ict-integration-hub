@@ -15,6 +15,7 @@ These standards apply to implementation work in ICT Integration Hub. Documentati
 - Keep provider-specific SOAP/WSDL code under `app/connectors/uyumsoft`.
 - Keep Odoo JSON-2 transport code under Odoo connector/adapter modules.
 - Keep business workflows under `app/services`.
+- Keep future use-case orchestration contracts under `app/application`.
 - Keep immutable ERP-independent domain concepts under `app/domain`, `app/matching`, `app/tax_mapping`, and `app/billing` where applicable.
 - Keep SQLAlchemy persistence under `app/models` and `app/db`.
 - Keep HTTP behavior under `app/api`.
@@ -24,6 +25,7 @@ Connector layers must not raise FastAPI `HTTPException`. They should raise provi
 ## DTOs
 
 - Prefer frozen dataclasses for domain DTOs and matching results.
+- Application DTOs under `app/application` coordinate use-case flow; they are not ORM models and not API schemas.
 - Prefer typed Pydantic models for API schemas.
 - Do not pass Zeep objects, raw SOAP responses, or Odoo transport payloads across application boundaries.
 - Use `Decimal` for monetary values and rates.
@@ -35,6 +37,16 @@ Connector layers must not raise FastAPI `HTTPException`. They should raise provi
 - Make priority order explicit.
 - Return ambiguous and missing states instead of selecting silently.
 - Do not introduce fuzzy matching or AI matching into business decisions without a new accepted ADR.
+
+## Application Use Cases
+
+- Represent each future business workflow as a dedicated use case.
+- Use commands for state-changing workflows and queries for read-only workflows.
+- Access future infrastructure services through ports.
+- Do not place business rules in adapters, API routers, or infrastructure services.
+- Do not duplicate existing repository abstractions; reuse `app/erp` repository protocols where they already fit.
+
+See [Application Layer](APPLICATION_LAYER.md) for the foundational package convention.
 
 ## External Systems
 

@@ -44,6 +44,22 @@ flowchart TB
 
 The current codebase does not yet contain a centralized Decision Engine. Existing services should be treated as workflow execution steps that future Decision Engine work can orchestrate.
 
+## Use Case Convention
+
+Every future business workflow should be represented by a dedicated application use case under `app/application/use_cases` or a task-specific subpackage.
+
+Examples:
+
+- `ImportInvoiceUseCase`
+- `CreateVendorBillUseCase`
+- `CreateRFQUseCase`
+- `CreatePurchaseOrderUseCase`
+- `ReviewInvoiceUseCase`
+
+Use cases coordinate application flow. They should consume commands or queries, call domain services/builders, invoke ports, and return immutable application DTOs. They should not contain provider transport logic, ORM models, HTTP exceptions, or AI decision authority.
+
+See [Application Layer](APPLICATION_LAYER.md) for the package and port conventions.
+
 ## Strategy Selection
 
 Strategies are deterministic execution paths chosen by the Decision Engine:
