@@ -32,6 +32,19 @@ Documentation-only PRs must not:
 
 Validation should still include Markdown review and repository checks that do not require external providers. If the maintainer requires full validation, run the standard commands.
 
+## Application-Layer Work
+
+Application-layer PRs should establish or extend orchestration boundaries without moving business behavior unless the issue explicitly asks for behavior implementation.
+
+- Add commands for state-changing use-case input.
+- Add queries for read-only use-case input.
+- Add immutable application DTOs for use-case results.
+- Add ports for future infrastructure dependencies.
+- Add use cases only when they coordinate a real workflow.
+- Keep infrastructure implementations outside `app/application`.
+
+See [Application Layer](APPLICATION_LAYER.md) for the accepted foundation.
+
 ## Required Local Validation
 
 Default validation:
