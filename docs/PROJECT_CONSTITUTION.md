@@ -245,17 +245,15 @@ The current implementation includes:
 - Deterministic Product Matching
 - Vendor Bill Builder
 - Deterministic account.move payload generation
+- Import Workbench application contracts for future review queue and explicit user decision adapters
 
 The next implementation milestone is:
 
-- Production-safe Vendor Bill Write Service
+- Durable Import Session and Import Workbench persistence when explicitly scoped
 
 Future milestones include:
 
-- Import Session
-- Decision Engine
-- Rule Engine
-- Import Workbench
+- Import Workbench UI
 - AI Advisor
 - Company Memory
 
