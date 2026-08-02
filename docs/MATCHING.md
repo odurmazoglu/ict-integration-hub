@@ -43,7 +43,8 @@ Behavior:
 - exactly one active candidate: `MATCHED`
 - zero active candidates: `NOT_FOUND`
 - multiple active candidates: `MULTIPLE_MATCHES`
-- missing supplier tax number, invalid invoice DTO, or repository failure: `INVALID_INPUT`
+- missing supplier tax number or invalid invoice DTO: `INVALID_INPUT`
+- repository/provider failure: raise `PartnerMatchingError` with safe diagnostic text
 
 The matcher does not use supplier name fallback, fuzzy scoring, keyword search, or AI similarity.
 

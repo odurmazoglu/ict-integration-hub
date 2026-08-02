@@ -58,7 +58,7 @@ WorkflowDecision(
 
 Current deterministic dependencies:
 
-- supplier matching: `PartnerMatchingEngine`, using supplier tax number only
+- supplier matching: `PartnerMatchingEngine`, using supplier tax number only and raising safe `PartnerMatchingError` values for repository/provider failures
 - product matching: `ProductMatchingEngine`, preserving buyer item code, barcode, seller item code priority
 - tax mapping: `TaxMappingEngine`, preserving exact company, type, and `Decimal` rate matching
 
@@ -68,7 +68,7 @@ The rule engine coordinates these components through injected dependencies. It d
 
 Rule failures are safe and explicit application exceptions:
 
-- `PartnerRuleEvaluationError`: supplier missing, ambiguous, invalid, or matcher failure
+- `PartnerRuleEvaluationError`: supplier missing, ambiguous, invalid, or safe matcher failure
 - `ProductRuleEvaluationError`: product missing, ambiguous, invalid, incomplete, or matcher failure
 - `TaxRuleEvaluationError`: tax missing, ambiguous, invalid, incomplete, or mapper failure
 

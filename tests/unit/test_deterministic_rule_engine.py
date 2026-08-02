@@ -21,6 +21,7 @@ from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTot
 from app.matching import (
     InvoiceProductLineResult,
     InvoiceProductMatchResult,
+    PartnerMatchingError,
     PartnerMatchResult,
     PartnerMatchStatus,
     ProductMatchResult,
@@ -168,6 +169,20 @@ def test_mapper_exception_is_translated_without_raw_exception_leakage() -> None:
     assert "raw database timeout" not in exc_info.value.safe_message
 
 
+def test_partner_matching_exception_is_translated_without_sensitive_leakage() -> None:
+    matching_error = PartnerMatchingError("Partner repository lookup failed.")
+    engine = _engine(partner_matcher=FakePartnerMatcher(matching_error))
+
+    with pytest.raises(PartnerRuleEvaluationError) as exc_info:
+        engine.evaluate(_command())
+
+    assert exc_info.value.safe_message == "Partner repository lookup failed."
+    assert "password=secret" not in exc_info.value.safe_message
+    assert exc_info.value.__cause__ is matching_error
+    assert engine.product_matcher.calls == []
+    assert engine.tax_mapper.calls == []
+
+
 def test_rule_evaluation_result_is_immutable() -> None:
     result = _engine().evaluate(_command())
 
@@ -255,11 +270,12 @@ class FakeTaxMapper:
 def _engine(
     *,
     partner_match: PartnerMatchResult | None = None,
+    partner_matcher: FakePartnerMatcher | None = None,
     product_match: InvoiceProductMatchResult | None = None,
     tax_match: InvoiceTaxMappingResult | None = None,
     tax_mapper: FakeTaxMapper | None = None,
 ) -> RuleEngineFixture:
-    partner_matcher = FakePartnerMatcher(partner_match or _partner_match())
+    partner_matcher = partner_matcher or FakePartnerMatcher(partner_match or _partner_match())
     product_matcher = FakeProductMatcher(product_match or _product_match(ProductMatchStatus.MATCHED, product_id=20))
     mapper = tax_mapper or FakeTaxMapper(tax_match or _tax_match(TaxMatchStatus.MATCHED, tax_id=30))
     engine = RuleEngineFixture(

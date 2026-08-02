@@ -6,6 +6,7 @@ from decimal import Decimal
 from app.domain.invoice import InternalInvoice
 from app.erp.models import Partner
 from app.erp.provider import RepositoryProvider
+from app.matching.exceptions import PartnerMatchingError
 from app.matching.result import PartnerMatchResult, PartnerMatchStatus
 
 EXACT_MATCH_CONFIDENCE = Decimal("1.00")
@@ -41,15 +42,8 @@ class PartnerMatchingEngine:
 
         try:
             candidates = self._provider.partner_repository.find_by_tax_number(tax_number, company_id=company_id)
-        except Exception:
-            return _result(
-                status=PartnerMatchStatus.INVALID_INPUT,
-                partner_id=None,
-                matched_by=None,
-                reason="Partner repository lookup failed.",
-                candidate_count=0,
-                confidence=None,
-            )
+        except Exception as exc:
+            raise PartnerMatchingError("Partner repository lookup failed.") from exc
 
         active_candidates = _active_candidates(candidates)
         if len(active_candidates) == 1:

@@ -9,7 +9,7 @@ import pytest
 
 from app.domain.invoice import Header, InternalInvoice, MonetaryTotals, Party
 from app.erp.models import Partner
-from app.matching import PartnerMatchingEngine, PartnerMatchStatus
+from app.matching import PartnerMatchingEngine, PartnerMatchingError, PartnerMatchStatus
 
 
 class FakePartnerRepository:
@@ -21,7 +21,7 @@ class FakePartnerRepository:
     def find_by_tax_number(self, tax_number: str, *, company_id: int | None = None) -> Sequence[Partner]:
         self.calls.append((tax_number, company_id))
         if self.fail:
-            raise RuntimeError("repository failed")
+            raise RuntimeError("raw HTTP 403 token=secret password=secret")
         return tuple(self.records.get(tax_number, ()))
 
     def find_by_ids(self, ids: Sequence[int]) -> Sequence[Partner]:
@@ -86,14 +86,24 @@ def test_supplier_not_found_is_reviewable_result() -> None:
     assert repository.calls == [("404", None)]
 
 
-def test_repository_failure_is_sanitized() -> None:
+def test_repository_failure_raises_safe_matching_exception() -> None:
     repository = FakePartnerRepository(fail=True)
 
-    result = _match(_invoice(tax_number="1234567890"), repository)
+    with pytest.raises(PartnerMatchingError) as exc_info:
+        _match(_invoice(tax_number="1234567890"), repository)
 
-    assert result.status is PartnerMatchStatus.INVALID_INPUT
-    assert result.reason == "Partner repository lookup failed."
-    assert "repository failed" not in result.reason
+    assert exc_info.value.safe_message == "Partner repository lookup failed."
+    assert "token=secret" not in exc_info.value.safe_message
+    assert "password=secret" not in exc_info.value.safe_message
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert repository.calls == [("1234567890", None)]
+
+
+def test_repository_failure_is_not_returned_as_invalid_input() -> None:
+    repository = FakePartnerRepository(fail=True)
+
+    with pytest.raises(PartnerMatchingError):
+        _match(_invoice(tax_number="1234567890"), repository)
 
 
 def test_partner_match_result_is_immutable() -> None:
