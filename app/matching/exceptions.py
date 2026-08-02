@@ -1,4 +1,12 @@
-class ProductMatchingError(Exception):
+class MatchingError(Exception):
     def __init__(self, safe_message: str) -> None:
         super().__init__(safe_message)
         self.safe_message = safe_message
+
+
+class ProductMatchingError(MatchingError):
+    pass
+
+
+class PartnerMatchingError(MatchingError):
+    pass

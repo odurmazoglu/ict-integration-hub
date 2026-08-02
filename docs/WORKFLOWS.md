@@ -55,6 +55,12 @@ flowchart TB
 
 The current codebase contains the first centralized `DecisionEngine` implementation. It delegates rule evaluation to the `RuleEngine` port and executes the selected workflow through `WorkflowStrategyResolver`.
 
+The current Rule Engine implementation contains one concrete workflow rule:
+
+- `RULE-DIRECT-VENDOR-BILL-001`: selects `WorkflowType.VENDOR_BILL` when supplier partner matching, product matching, and tax mapping all succeed deterministically and completely
+
+If any prerequisite is missing, ambiguous, invalid, or incomplete, the Rule Engine raises an application-safe rule error. It does not silently choose Manual Review because Manual Review remains future vocabulary only in this implementation.
+
 ## Use Case Convention
 
 Every future business workflow should be represented by a dedicated application use case under `app/application/use_cases` or a task-specific subpackage.
@@ -117,6 +123,7 @@ flowchart TB
     ImportInvoiceUseCase[ImportInvoiceUseCase]
     DecisionEngine[DecisionEngine]
     RuleEngine[RuleEngine Port]
+    DeterministicRuleEngine[DeterministicRuleEngine]
     Resolver[WorkflowStrategyResolver]
     Strategy[WorkflowStrategy]
     VendorBillStrategy[VendorBillStrategy]
@@ -126,6 +133,7 @@ flowchart TB
 
     ImportInvoiceUseCase --> DecisionEngine
     DecisionEngine --> RuleEngine
+    RuleEngine --> DeterministicRuleEngine
     DecisionEngine --> Resolver
     Resolver --> Strategy
     Strategy --> VendorBillStrategy

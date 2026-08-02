@@ -25,6 +25,7 @@ app/application/
   services/      shared application service contracts
   use_cases/     executable workflow boundaries
   exceptions/    application-safe exception base types
+  rules/         deterministic RuleEngine implementations
   workflow.py    shared workflow vocabulary and decisions
 ```
 
@@ -43,6 +44,7 @@ Current foundation contracts:
 - `DecisionEngine`
 - `DecisionResult`
 - `RuleEngine`
+- `DeterministicRuleEngine`
 - `WorkflowType`
 - `WorkflowDecision`
 - `WorkflowStrategyResolver`
@@ -189,6 +191,49 @@ flowchart TB
     Resolver --> Strategy
     Strategy --> DecisionResult
     DecisionResult --> WorkflowType
+```
+
+## DeterministicRuleEngine
+
+`DeterministicRuleEngine` is the first concrete implementation of the `RuleEngine` application port.
+
+It evaluates `RULE-DIRECT-VENDOR-BILL-001` for a single `ImportInvoiceCommand` by coordinating injected deterministic dependencies:
+
+- supplier partner matcher
+- product matcher
+- tax mapper
+
+It returns `RuleEvaluationResult` with an immutable `WorkflowDecision` selecting `WorkflowType.VENDOR_BILL` only when all supplier, product, and tax prerequisites are complete and deterministic.
+
+It raises application-safe rule evaluation errors for missing, ambiguous, invalid, or incomplete prerequisites. It does not select Manual Review in this PR because no Manual Review strategy exists yet.
+
+It must not:
+
+- instantiate ERP adapters or provider clients
+- call HTTP, SOAP, SQL, Odoo JSON-2, or persistence
+- build Vendor Bills
+- execute workflow strategies
+- perform duplicate detection
+- contain AI, fuzzy matching, or configurable rule storage
+
+```mermaid
+flowchart TB
+    DecisionEngine[DecisionEngine]
+    RuleEngine[RuleEngine Port]
+    DeterministicRuleEngine[DeterministicRuleEngine]
+    PartnerMatcher[Partner Matcher]
+    ProductMatcher[Product Matcher]
+    TaxMapper[Tax Mapper]
+    RuleEvaluationResult[RuleEvaluationResult]
+    WorkflowDecision[WorkflowDecision]
+
+    DecisionEngine --> RuleEngine
+    RuleEngine --> DeterministicRuleEngine
+    DeterministicRuleEngine --> PartnerMatcher
+    DeterministicRuleEngine --> ProductMatcher
+    DeterministicRuleEngine --> TaxMapper
+    DeterministicRuleEngine --> RuleEvaluationResult
+    RuleEvaluationResult --> WorkflowDecision
 ```
 
 ```mermaid
