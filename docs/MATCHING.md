@@ -32,6 +32,21 @@ Behavior:
 
 The matcher does not use product name, description, fuzzy scoring, keyword search, or AI similarity.
 
+## Supplier Partner Matching
+
+Current implementation: `app/matching/partner.py`.
+
+Supplier matching consumes `InternalInvoice` and a `RepositoryProvider`. It matches only by supplier tax number through the partner repository.
+
+Behavior:
+
+- exactly one active candidate: `MATCHED`
+- zero active candidates: `NOT_FOUND`
+- multiple active candidates: `MULTIPLE_MATCHES`
+- missing supplier tax number, invalid invoice DTO, or repository failure: `INVALID_INPUT`
+
+The matcher does not use supplier name fallback, fuzzy scoring, keyword search, or AI similarity.
+
 ## Tax Mapping
 
 Current implementation: `app/tax_mapping/engine.py`.

@@ -1,6 +1,7 @@
 """Deterministic matching helpers for internal invoice domain models."""
 
 from app.matching.exceptions import ProductMatchingError
+from app.matching.partner import PartnerMatchingEngine
 from app.matching.product import ProductMatchingEngine
 from app.matching.result import (
     InvoiceProductLineResult,
@@ -16,6 +17,7 @@ __all__ = [
     "InvoiceProductMatchResult",
     "PartnerMatchResult",
     "PartnerMatchStatus",
+    "PartnerMatchingEngine",
     "ProductMatchResult",
     "ProductMatchStatus",
     "ProductMatchingEngine",
