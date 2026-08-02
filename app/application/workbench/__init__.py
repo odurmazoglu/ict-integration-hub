@@ -12,8 +12,9 @@ from app.application.workbench.dto import (
     TaxResolution,
 )
 from app.application.workbench.exceptions import WorkbenchContractError
-from app.application.workbench.ports import ReviewQueueReader
+from app.application.workbench.ports import ReviewItemWriter, ReviewQueueReader
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
+from app.application.workbench.services import ReviewItemCreationService
 
 __all__ = [
     "BusinessContextDecision",
@@ -23,6 +24,8 @@ __all__ = [
     "ReviewDecisionType",
     "ReviewDetailQuery",
     "ReviewItem",
+    "ReviewItemCreationService",
+    "ReviewItemWriter",
     "ReviewQueueQuery",
     "ReviewQueueReader",
     "ReviewQueueResult",

@@ -20,7 +20,14 @@ from app.application.ports import InvoiceImportHistory, RuleEngine, VendorBillWr
 from app.application.queries import Query
 from app.application.services import UnitOfWork
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
-from app.application.workbench import ReviewDecisionCommand, ReviewItem, ReviewQueueReader, ReviewStatus
+from app.application.workbench import (
+    ReviewDecisionCommand,
+    ReviewItem,
+    ReviewItemCreationService,
+    ReviewItemWriter,
+    ReviewQueueReader,
+    ReviewStatus,
+)
 from app.application.workflow import (
     ManualReviewDecision,
     ManualReviewReason,
@@ -45,6 +52,8 @@ def test_application_foundation_exports_core_conventions() -> None:
     assert app.application.ManualReviewReasonCode is ManualReviewReasonCode
     assert app.application.ReviewDecisionCommand is ReviewDecisionCommand
     assert app.application.ReviewItem is ReviewItem
+    assert app.application.ReviewItemCreationService is ReviewItemCreationService
+    assert app.application.ReviewItemWriter is ReviewItemWriter
     assert app.application.ReviewQueueReader is ReviewQueueReader
     assert app.application.ReviewStatus is ReviewStatus
 

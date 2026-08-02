@@ -296,7 +296,7 @@ Manual Review is an application outcome for deterministic business mismatches on
 
 ## Import Workbench Contracts
 
-`app/application/workbench` defines the application-layer contract surface for a future Odoo Import Workbench adapter. This package contains immutable DTOs, queries, commands, safe validation errors, and a read-only review queue port.
+`app/application/workbench` defines the application-layer contract surface for a future Odoo Import Workbench adapter. This package contains immutable DTOs, queries, commands, safe validation errors, a read-only review queue port, a create-only review item writer port, and a small creation service.
 
 Current contracts:
 
@@ -309,8 +309,14 @@ Current contracts:
 - `ReviewDecisionCommand`: explicit user decision command with canonical decision type, expected version, user identity, idempotency key, optional selected workflow, explicit line/tax resolutions, and optional procurement traceability context
 - `ReviewDecisionAcknowledgement`: immutable acknowledgement contract for a future command handler
 - `ReviewQueueReader`: read-only port for future queue/detail adapters
+- `ReviewItemWriter`: create-only port for idempotent persistence of pending review items
+- `ReviewItemCreationService`: application service that delegates pending review item creation to the writer port
 
-These contracts do not implement Odoo UI, FastAPI routes, persistence, user approval writes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching.
+The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation and queue/detail reads. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, and scopes detail reads by `review_id` plus `company_id`.
+
+This slice does not implement Odoo UI, FastAPI routes, user approval writes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching. Review item persistence only supports idempotent creation of pending review records and read-only queue/detail access.
+
+Repeated creation with the same company-scoped idempotency key returns the existing item when immutable business content matches. Reusing the same key for different content raises a safe idempotency conflict and does not overwrite existing data.
 
 Recommendation acceptance is future work. A future recommendation contract must include recommendation identity, version metadata, source, and rationale before a user can accept it safely. Current decision commands support only explicit workflow selection or dismissal. `WorkflowType.MANUAL_REVIEW` represents the unresolved review state and cannot be selected as a resolution.
 
@@ -319,12 +325,19 @@ flowchart TB
     Workbench[Odoo Import Workbench Adapter]
     Contracts[Application Workbench Contracts]
     Hub[ICT IPP Application Layer]
-    FutureReader[Future Review Queue Reader]
+    Reader[ReviewQueueReader Port]
+    Writer[ReviewItemWriter Port]
+    Repository[SQLAlchemy Review Repository]
+    Database[(PostgreSQL workbench_review_items)]
     FutureHandler[Future Decision Handler]
 
     Workbench --> Contracts
     Contracts --> Hub
-    Hub --> FutureReader
+    Hub --> Reader
+    Hub --> Writer
+    Reader --> Repository
+    Writer --> Repository
+    Repository --> Database
     Hub --> FutureHandler
 ```
 

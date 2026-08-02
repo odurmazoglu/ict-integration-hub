@@ -22,6 +22,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
     assert "invoice_documents" in inspector.get_table_names()
     assert "odoo_draft_invoices" in inspector.get_table_names()
+    assert "workbench_review_items" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -55,10 +56,46 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "safe_error_message",
         "attempt_count",
     }.issubset(draft_columns)
+    review_columns = {column["name"] for column in inspector.get_columns("workbench_review_items")}
+    assert {
+        "review_id",
+        "company_id",
+        "invoice_id",
+        "invoice_number",
+        "supplier_tax_number",
+        "supplier_name",
+        "invoice_date",
+        "currency",
+        "total_amount",
+        "workflow",
+        "status",
+        "review_reasons",
+        "warnings",
+        "created_at",
+        "updated_at",
+        "version",
+        "idempotency_key",
+    }.issubset(review_columns)
+    review_indexes = {index["name"] for index in inspector.get_indexes("workbench_review_items")}
+    assert {
+        "ix_workbench_review_items_company_id",
+        "ix_workbench_review_items_status",
+        "ix_workbench_review_items_created_at",
+        "ix_workbench_review_items_supplier_tax_number",
+        "ix_workbench_review_items_company_status_created",
+    }.issubset(review_indexes)
+    review_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("workbench_review_items")
+    }
+    assert {
+        "uq_workbench_review_items_review_id",
+        "uq_workbench_review_items_company_idempotency_key",
+    }.issubset(review_unique_constraints)
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
-    assert "odoo_draft_invoices" not in inspector.get_table_names()
+    assert "workbench_review_items" not in inspector.get_table_names()
+    assert "odoo_draft_invoices" in inspector.get_table_names()
     assert "invoice_documents" in inspector.get_table_names()
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
     assert "uyumsoft_invoice_metadata" in inspector.get_table_names()
@@ -69,4 +106,5 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "uyumsoft_sync_runs" in inspector.get_table_names()
     assert "invoice_documents" in inspector.get_table_names()
     assert "odoo_draft_invoices" in inspector.get_table_names()
+    assert "workbench_review_items" in inspector.get_table_names()
     get_settings.cache_clear()

@@ -60,6 +60,7 @@ Current implemented capabilities:
 - Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.
+- Durable Import Workbench review persistence for idempotent pending review creation and company-scoped queue/detail reads.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
@@ -89,6 +90,7 @@ app/
   erp/write/          draft-only ERP write adapters behind application ports
   matching/           deterministic product matching
   models/             Integration Hub persistence models
+  persistence/        SQLAlchemy adapters behind application ports
   schemas/            API and workflow Pydantic schemas
   services/           workflows, persistence, parsing, mapping, resolution
   tax_mapping/        deterministic tax matching

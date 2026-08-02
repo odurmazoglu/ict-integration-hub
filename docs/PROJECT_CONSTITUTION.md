@@ -246,10 +246,11 @@ The current implementation includes:
 - Vendor Bill Builder
 - Deterministic account.move payload generation
 - Import Workbench application contracts for future review queue and explicit user decision adapters
+- Import Workbench review item persistence for idempotent pending review creation and company-scoped read-only queue/detail access
 
 The next implementation milestone is:
 
-- Durable Import Session and Import Workbench persistence when explicitly scoped
+- Durable Import Session persistence and Workbench UI when explicitly scoped
 
 Future milestones include:
 
