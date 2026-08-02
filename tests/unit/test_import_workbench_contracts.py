@@ -46,6 +46,13 @@ def test_review_status_is_canonical_enum() -> None:
     }
 
 
+def test_review_decision_type_contains_only_explicit_supported_decisions() -> None:
+    assert {decision.value for decision in ReviewDecisionType} == {
+        "select_workflow",
+        "dismiss",
+    }
+
+
 def test_review_queue_query_defaults_are_safe() -> None:
     query = ReviewQueueQuery(company_id=7)
 
@@ -90,18 +97,10 @@ def test_review_detail_query_validates_required_values() -> None:
 
 
 def test_review_decision_command_is_immutable() -> None:
-    command = _command(decision=ReviewDecisionType.ACCEPT_RECOMMENDATION)
+    command = _command(decision=ReviewDecisionType.SELECT_WORKFLOW, selected_workflow=WorkflowType.VENDOR_BILL)
 
     with pytest.raises(FrozenInstanceError):
         command.review_id = "changed"
-
-
-def test_accept_recommendation_validation_rejects_overrides() -> None:
-    command = _command(decision=ReviewDecisionType.ACCEPT_RECOMMENDATION)
-    assert command.selected_workflow is None
-
-    with pytest.raises(WorkbenchContractError):
-        _command(decision=ReviewDecisionType.ACCEPT_RECOMMENDATION, selected_workflow=WorkflowType.VENDOR_BILL)
 
 
 def test_select_workflow_requires_selected_workflow() -> None:
@@ -110,6 +109,27 @@ def test_select_workflow_requires_selected_workflow() -> None:
 
     command = _command(decision=ReviewDecisionType.SELECT_WORKFLOW, selected_workflow=WorkflowType.VENDOR_BILL)
     assert command.selected_workflow is WorkflowType.VENDOR_BILL
+
+
+def test_select_workflow_rejects_manual_review_as_resolution() -> None:
+    with pytest.raises(WorkbenchContractError):
+        _command(decision=ReviewDecisionType.SELECT_WORKFLOW, selected_workflow=WorkflowType.MANUAL_REVIEW)
+
+
+@pytest.mark.parametrize(
+    "workflow",
+    [
+        WorkflowType.VENDOR_BILL,
+        WorkflowType.RFQ,
+        WorkflowType.EXPENSE,
+        WorkflowType.ASSET,
+        WorkflowType.SUBSCRIPTION,
+    ],
+)
+def test_select_workflow_accepts_canonical_resolution_workflows(workflow: WorkflowType) -> None:
+    command = _command(decision=ReviewDecisionType.SELECT_WORKFLOW, selected_workflow=workflow)
+
+    assert command.selected_workflow is workflow
 
 
 def test_dismiss_rejects_incompatible_workflow_specific_fields() -> None:
@@ -173,17 +193,17 @@ def test_business_context_decision_requires_positive_ids() -> None:
 
 def test_decision_command_requires_decided_by() -> None:
     with pytest.raises(WorkbenchContractError):
-        _command(decision=ReviewDecisionType.ACCEPT_RECOMMENDATION, decided_by=" ")
+        _command(decision=ReviewDecisionType.DISMISS, decided_by=" ")
 
 
 def test_decision_command_requires_idempotency_key() -> None:
     with pytest.raises(WorkbenchContractError):
-        _command(decision=ReviewDecisionType.ACCEPT_RECOMMENDATION, idempotency_key="")
+        _command(decision=ReviewDecisionType.DISMISS, idempotency_key="")
 
 
 def test_decision_command_rejects_unsafe_comment_length() -> None:
     with pytest.raises(WorkbenchContractError):
-        _command(decision=ReviewDecisionType.ACCEPT_RECOMMENDATION, comment="x" * 1001)
+        _command(decision=ReviewDecisionType.DISMISS, comment="x" * 1001)
 
 
 def test_decision_acknowledgement_is_immutable_and_serializable_by_future_adapter() -> None:
@@ -238,6 +258,13 @@ def test_workbench_contracts_do_not_use_ai_or_fuzzy_matching() -> None:
 
     for token in forbidden:
         assert token not in source.lower()
+
+
+def test_workbench_contracts_have_no_recommendation_acceptance_contract() -> None:
+    source = _workbench_source() + Path(__file__).read_text(encoding="utf-8").lower()
+    removed_decision_value = "accept" + "_recommendation"
+
+    assert removed_decision_value not in source
 
 
 def _review_item() -> ReviewItem:

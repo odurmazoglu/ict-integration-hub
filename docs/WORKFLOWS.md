@@ -105,7 +105,9 @@ flowchart TB
     FutureHandler --> Ack
 ```
 
-Traceability choices in `ReviewDecisionCommand` are explicit user-provided identifiers through `BusinessContextDecision`. The contract supports future choices such as direct Vendor Bill, RFQ/Purchase Order, existing Purchase Order matching, expense, asset, subscription, Manual Review, or dismissal without executing those workflows in this slice.
+Traceability choices in `ReviewDecisionCommand` are explicit user-provided identifiers through `BusinessContextDecision`. The contract supports future choices such as direct Vendor Bill, RFQ/Purchase Order, existing Purchase Order matching, expense, asset, subscription, or dismissal without executing those workflows in this slice. Manual Review is the unresolved state; it cannot be selected as a resolution workflow.
+
+Recommendation acceptance is future work. It must be introduced together with a versioned recommendation contract that carries identity, source, and rationale metadata so stale recommendations cannot be accepted silently.
 
 ## Import Session Orchestration
 

@@ -51,17 +51,8 @@ def _validate_decision_combination(command: ReviewDecisionCommand) -> None:
     if command.decision is ReviewDecisionType.SELECT_WORKFLOW:
         if command.selected_workflow is None:
             raise WorkbenchContractError("selected_workflow is required for SELECT_WORKFLOW.")
-        return
-
-    if command.decision is ReviewDecisionType.ACCEPT_RECOMMENDATION:
-        if (
-            command.selected_workflow is not None
-            or command.selected_partner_id is not None
-            or command.line_resolutions
-            or command.tax_resolutions
-            or command.business_context is not None
-        ):
-            raise WorkbenchContractError("ACCEPT_RECOMMENDATION cannot include workflow-specific selections.")
+        if command.selected_workflow is WorkflowType.MANUAL_REVIEW:
+            raise WorkbenchContractError("MANUAL_REVIEW cannot be selected as a resolution.")
         return
 
     if command.decision is ReviewDecisionType.DISMISS:

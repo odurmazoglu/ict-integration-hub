@@ -305,11 +305,14 @@ Current contracts:
 - `ReviewQueueQuery`: bounded list query with exact supplier tax-number filtering and optional `WorkflowType` filtering
 - `ReviewDetailQuery`: one-item query scoped by review id and company id
 - `ReviewQueueResult`: immutable paginated result
+- `ReviewDecisionType`: canonical explicit user decisions: `SELECT_WORKFLOW` and `DISMISS`
 - `ReviewDecisionCommand`: explicit user decision command with canonical decision type, expected version, user identity, idempotency key, optional selected workflow, explicit line/tax resolutions, and optional procurement traceability context
 - `ReviewDecisionAcknowledgement`: immutable acknowledgement contract for a future command handler
 - `ReviewQueueReader`: read-only port for future queue/detail adapters
 
 These contracts do not implement Odoo UI, FastAPI routes, persistence, user approval writes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching.
+
+Recommendation acceptance is future work. A future recommendation contract must include recommendation identity, version metadata, source, and rationale before a user can accept it safely. Current decision commands support only explicit workflow selection or dismissal. `WorkflowType.MANUAL_REVIEW` represents the unresolved review state and cannot be selected as a resolution.
 
 ```mermaid
 flowchart TB

@@ -69,7 +69,7 @@ Implemented contract types:
 - `ReviewStatus`: canonical states for pending, submitted, resolved, and dismissed review records
 - `ReviewQueueQuery` and `ReviewQueueResult`: bounded queue listing contract
 - `ReviewDetailQuery`: one-item lookup contract
-- `ReviewDecisionCommand`: explicit user decision command
+- `ReviewDecisionCommand`: explicit user decision command for `SELECT_WORKFLOW` or `DISMISS`
 - `ReviewDecisionAcknowledgement`: safe acknowledgement contract
 - `LineResolution` and `TaxResolution`: explicit selected ERP IDs for invoice lines and taxes
 - `BusinessContextDecision`: explicit procurement traceability identifiers selected by the user
@@ -88,6 +88,8 @@ Not implemented in this slice:
 - attachments or raw XML display
 
 The contracts keep supplier name as display data only. Matching remains deterministic and does not use supplier name, fuzzy text search, AI similarity, or name-only selections.
+
+Recommendation acceptance is intentionally not part of the current contract. A future recommendation contract must include recommendation id, recommendation version, source, and rationale to prevent stale acceptance. Until that exists, users can only submit explicit workflow selections or dismissals. `WorkflowType.MANUAL_REVIEW` is the unresolved state and cannot be selected as a resolution.
 
 ```mermaid
 flowchart TB
@@ -124,6 +126,8 @@ Future Workbench screens should support:
 - Business decisions must remain API calls into ICT IPP.
 - UI actions must send explicit user intent and confirmation.
 - User decisions must include explicit user identity, idempotency key, and expected version.
+- Current explicit decisions are `SELECT_WORKFLOW` and `DISMISS`.
+- `MANUAL_REVIEW` must not be submitted as a selected resolution workflow.
 - Procurement traceability fields must be explicit user choices, not inferred by Odoo UI logic.
 - The Hub must revalidate rules before execution.
 - Workbench must display AI recommendations as advisory.

@@ -22,7 +22,6 @@ class ReviewStatus(StrEnum):
 class ReviewDecisionType(StrEnum):
     """Canonical explicit user decisions accepted by the Workbench contract."""
 
-    ACCEPT_RECOMMENDATION = "accept_recommendation"
     SELECT_WORKFLOW = "select_workflow"
     DISMISS = "dismiss"
 
