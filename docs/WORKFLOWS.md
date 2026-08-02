@@ -83,6 +83,30 @@ Current executable use case:
 
 See [Application Layer](APPLICATION_LAYER.md) for the package and port conventions.
 
+## Import Workbench Contract Flow
+
+The current repository defines application contracts that a future Odoo Import Workbench adapter can consume. It does not implement UI, API routes, persistence, user decision execution, ERP writes, or AI recommendations.
+
+```mermaid
+flowchart TB
+    ReviewRequired[Manual Review result]
+    ReviewItem[ReviewItem contract]
+    Queue[ReviewQueueQuery / ReviewQueueResult]
+    Detail[ReviewDetailQuery]
+    Decision[ReviewDecisionCommand]
+    Ack[ReviewDecisionAcknowledgement]
+    FutureHandler[Future review decision handler]
+
+    ReviewRequired --> ReviewItem
+    Queue --> ReviewItem
+    Detail --> ReviewItem
+    ReviewItem --> Decision
+    Decision --> FutureHandler
+    FutureHandler --> Ack
+```
+
+Traceability choices in `ReviewDecisionCommand` are explicit user-provided identifiers through `BusinessContextDecision`. The contract supports future choices such as direct Vendor Bill, RFQ/Purchase Order, existing Purchase Order matching, expense, asset, subscription, Manual Review, or dismissal without executing those workflows in this slice.
+
 ## Import Session Orchestration
 
 Current multi-invoice orchestration is intentionally sequential and in-memory.

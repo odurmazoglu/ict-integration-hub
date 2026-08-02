@@ -59,6 +59,7 @@ Current implemented capabilities:
 - Deterministic Rule Engine implementation for the direct Vendor Bill workflow rule.
 - Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
+- Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.

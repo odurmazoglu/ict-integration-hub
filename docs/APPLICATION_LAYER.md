@@ -24,6 +24,7 @@ app/application/
   ports/         protocols implemented by infrastructure adapters
   services/      shared application service contracts
   use_cases/     executable workflow boundaries
+  workbench/     Import Workbench application contracts
   exceptions/    application-safe exception base types
   rules/         deterministic RuleEngine implementations
   workflow.py    shared workflow vocabulary and decisions
@@ -60,6 +61,18 @@ Current foundation contracts:
 - `ImportSessionCommand`
 - `ImportSessionResult`
 - `ImportSession`
+- `ReviewItem`
+- `ReviewStatus`
+- `ReviewQueueQuery`
+- `ReviewDetailQuery`
+- `ReviewQueueResult`
+- `ReviewDecisionCommand`
+- `ReviewDecisionAcknowledgement`
+- `ReviewDecisionType`
+- `LineResolution`
+- `TaxResolution`
+- `BusinessContextDecision`
+- `ReviewQueueReader`
 
 ## Use Case Convention
 
@@ -280,6 +293,37 @@ It must not:
 - transform technical failures into review results
 
 Manual Review is an application outcome for deterministic business mismatches only. It gives future Import Workbench and AI Advisor slices a stable, safe review contract without introducing UI, persistence, or ERP writes.
+
+## Import Workbench Contracts
+
+`app/application/workbench` defines the application-layer contract surface for a future Odoo Import Workbench adapter. This package contains immutable DTOs, queries, commands, safe validation errors, and a read-only review queue port.
+
+Current contracts:
+
+- `ReviewItem`: safe review-required invoice summary with `WorkflowType`, `ReviewStatus`, `ManualReviewReason` values, warnings, timestamps, and optimistic-concurrency `version`
+- `ReviewStatus`: canonical review states: `PENDING_REVIEW`, `DECISION_SUBMITTED`, `RESOLVED`, and `DISMISSED`
+- `ReviewQueueQuery`: bounded list query with exact supplier tax-number filtering and optional `WorkflowType` filtering
+- `ReviewDetailQuery`: one-item query scoped by review id and company id
+- `ReviewQueueResult`: immutable paginated result
+- `ReviewDecisionCommand`: explicit user decision command with canonical decision type, expected version, user identity, idempotency key, optional selected workflow, explicit line/tax resolutions, and optional procurement traceability context
+- `ReviewDecisionAcknowledgement`: immutable acknowledgement contract for a future command handler
+- `ReviewQueueReader`: read-only port for future queue/detail adapters
+
+These contracts do not implement Odoo UI, FastAPI routes, persistence, user approval writes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching.
+
+```mermaid
+flowchart TB
+    Workbench[Odoo Import Workbench Adapter]
+    Contracts[Application Workbench Contracts]
+    Hub[ICT IPP Application Layer]
+    FutureReader[Future Review Queue Reader]
+    FutureHandler[Future Decision Handler]
+
+    Workbench --> Contracts
+    Contracts --> Hub
+    Hub --> FutureReader
+    Hub --> FutureHandler
+```
 
 ## Command And Query Convention
 
