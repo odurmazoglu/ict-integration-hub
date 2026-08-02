@@ -37,7 +37,7 @@ Name similarity, fuzzy matching, and AI matching are excluded from automatic mat
 
 ### Rule and Decision Layer
 
-The Rule Engine evaluates deterministic company-scoped rules. The Decision Engine converts rule results and context into a workflow recommendation.
+The Rule Engine evaluates deterministic company-scoped rules. Complete matches select the direct Vendor Bill workflow; safe business mismatches select Manual Review with structured reasons. Repository, provider, authorization, timeout, transport, mapper, and unexpected dependency failures remain safe application exceptions. The Decision Engine converts rule results and context into a workflow recommendation.
 
 ### AI Advisor
 
@@ -45,7 +45,7 @@ Runs only when deterministic rules cannot provide a sufficient decision. It uses
 
 ### Workflow Layer
 
-Executes an approved strategy such as existing-PO matching, RFQ/PO creation, direct Vendor Bill, expense, asset, subscription, manual review, or ignore.
+Executes an approved strategy such as direct Vendor Bill, manual review, existing-PO matching, RFQ/PO creation, expense, asset, subscription, or ignore. The current Manual Review strategy is non-writing and returns review-required results only.
 
 ### ERP Adapter
 

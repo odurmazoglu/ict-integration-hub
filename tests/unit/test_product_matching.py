@@ -9,7 +9,7 @@ import pytest
 
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party
 from app.erp.models import Product
-from app.matching import ProductMatchingEngine, ProductMatchStatus
+from app.matching import ProductMatchingEngine, ProductMatchingError, ProductMatchStatus
 
 
 class FakeProductRepository:
@@ -155,15 +155,15 @@ def test_missing_identifiers_are_invalid_input() -> None:
     assert repository.calls == []
 
 
-def test_repository_failure_is_invalid_input_without_leaking_exception_text() -> None:
+def test_repository_failure_raises_safe_matching_error_without_leaking_exception_text() -> None:
     repository = FakeProductRepository(default_code_records={"SKU-1": [_product(10)]}, fail=True)
 
-    result = _match(_invoice([_line("1", buyer_item_code="SKU-1")]), repository)
+    with pytest.raises(ProductMatchingError) as exc_info:
+        _match(_invoice([_line("1", buyer_item_code="SKU-1")]), repository)
 
-    line_result = result.line_results[0].result
-    assert line_result.status is ProductMatchStatus.INVALID_INPUT
-    assert line_result.reason == "Product repository lookup failed."
-    assert "repository failed" not in line_result.reason
+    assert exc_info.value.safe_message == "Product repository lookup failed."
+    assert "repository failed" not in exc_info.value.safe_message
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
 def test_multiple_invoice_lines_are_matched_independently() -> None:

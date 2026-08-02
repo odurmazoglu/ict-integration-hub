@@ -121,6 +121,33 @@ async def test_duplicate_invoice_is_counted_from_import_invoice_result() -> None
 
 
 @pytest.mark.asyncio
+async def test_review_required_invoice_is_counted_without_failing_session() -> None:
+    importer = FakeImportInvoiceUseCase(
+        results=[
+            ImportInvoiceResult(
+                success=False,
+                invoice_id="ETTN-1",
+                status="review_required",
+                review_required=True,
+                warnings=("Manual review required.",),
+            )
+        ]
+    )
+
+    result = await ImportSession(import_invoice_use_case=importer).execute(
+        ImportSessionCommand(invoices=(_invoice("INV-1", "ETTN-1"),), session_id="session-1")
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.processed == 1
+    assert result.successful == 0
+    assert result.duplicates == 0
+    assert result.review_required == 1
+    assert result.failed == 0
+    assert result.warnings == ("Manual review required.",)
+
+
+@pytest.mark.asyncio
 async def test_failed_invoice_is_collected_without_stopping_session() -> None:
     invoice_1 = _invoice("INV-1", "ETTN-1")
     invoice_2 = _invoice("INV-2", "ETTN-2")
@@ -176,6 +203,7 @@ async def test_mixed_success_duplicate_and_failure_summary() -> None:
     assert result.processed == 3
     assert result.successful == 2
     assert result.duplicates == 1
+    assert result.review_required == 0
     assert result.failed == 1
     assert result.errors == ("Invoice import failed.",)
     assert [item.status for item in result.results] == ["created", "already_exists", "failed"]

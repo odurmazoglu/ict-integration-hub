@@ -2,6 +2,7 @@
 
 from app.application.rules.deterministic import (
     DIRECT_VENDOR_BILL_RULE_ID,
+    MANUAL_REVIEW_RULE_ID,
     DeterministicRuleEngine,
     PartnerRuleEvaluationError,
     ProductRuleEvaluationError,
@@ -12,6 +13,7 @@ from app.application.rules.deterministic import (
 __all__ = [
     "DIRECT_VENDOR_BILL_RULE_ID",
     "DeterministicRuleEngine",
+    "MANUAL_REVIEW_RULE_ID",
     "PartnerRuleEvaluationError",
     "ProductRuleEvaluationError",
     "RuleEvaluationError",

@@ -14,7 +14,7 @@ from app.application.use_cases import (
     ImportInvoiceUseCase,
     ImportInvoiceValidationError,
 )
-from app.application.workflow import WorkflowType
+from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party
 
 
@@ -112,6 +112,39 @@ async def test_decision_failed_result_is_returned_as_safe_failure_result() -> No
     assert result.success is False
     assert result.status == "failed"
     assert result.errors == ("Vendor Bill write failed safely.",)
+
+
+@pytest.mark.asyncio
+async def test_decision_review_required_result_preserves_structured_reasons() -> None:
+    review_reasons = (
+        ManualReviewReason(
+            code=ManualReviewReasonCode.SUPPLIER_NOT_FOUND,
+            message="Supplier was not matched deterministically.",
+            source="partner_matching",
+        ),
+    )
+    use_case = _use_case(
+        decision_engine=FakeDecisionEngine(
+            DecisionResult(
+                success=False,
+                invoice_id="INV-ETTN",
+                workflow=WorkflowType.MANUAL_REVIEW,
+                strategy=WorkflowType.MANUAL_REVIEW.value,
+                status="review_required",
+                review_required=True,
+                review_reasons=review_reasons,
+                warnings=("Manual review required.",),
+            )
+        )
+    )
+
+    result = await use_case.execute(ImportInvoiceCommand(invoice=_invoice(), idempotency_key="ettn:INV-ETTN"))
+
+    assert result.success is False
+    assert result.status == "review_required"
+    assert result.review_required is True
+    assert result.review_reasons == review_reasons
+    assert result.warnings == ("Manual review required.",)
 
 
 @pytest.mark.asyncio

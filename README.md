@@ -57,7 +57,8 @@ Current implemented capabilities:
 - In-memory `ImportSession` orchestration for sequential multi-invoice imports through `ImportInvoiceUseCase`.
 - Decision Engine orchestration with a Rule Engine port and extensible workflow strategy resolver.
 - Deterministic Rule Engine implementation for the direct Vendor Bill workflow rule.
-- Shared Workflow Model with canonical `WorkflowType` and immutable `WorkflowDecision` contracts.
+- Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
+- Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.

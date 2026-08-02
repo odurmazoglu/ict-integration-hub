@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.application.dto.base import ApplicationDTO
-from app.application.workflow import WorkflowDecision, WorkflowType
+from app.application.workflow import ManualReviewReason, WorkflowDecision, WorkflowType
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult
 from app.tax_mapping import InvoiceTaxMappingResult
 
@@ -42,6 +42,8 @@ class DecisionResult(ApplicationDTO):
     strategy: str
     status: str
     vendor_bill_id: int | None = None
+    review_required: bool = False
+    review_reasons: tuple[ManualReviewReason, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     duration: float = 0.0

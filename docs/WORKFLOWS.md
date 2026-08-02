@@ -58,8 +58,9 @@ The current codebase contains the first centralized `DecisionEngine` implementat
 The current Rule Engine implementation contains one concrete workflow rule:
 
 - `RULE-DIRECT-VENDOR-BILL-001`: selects `WorkflowType.VENDOR_BILL` when supplier partner matching, product matching, and tax mapping all succeed deterministically and completely
+- `RULE-MANUAL-REVIEW-001`: selects `WorkflowType.MANUAL_REVIEW` with structured review reasons when matching or mapping completes safely but finds missing, ambiguous, invalid, or incomplete business data
 
-If any prerequisite is missing, ambiguous, invalid, or incomplete, the Rule Engine raises an application-safe rule error. It does not silently choose Manual Review because Manual Review remains future vocabulary only in this implementation.
+Repository, provider, authorization, timeout, mapper, or unexpected dependency failures still raise application-safe rule errors. They are not silently converted into Manual Review results.
 
 ## Use Case Convention
 
@@ -93,12 +94,14 @@ flowchart TB
     ImportInvoiceUseCase[ImportInvoiceUseCase]
     DecisionEngine[DecisionEngine]
     VendorBillWriter[VendorBillWriter]
+    ManualReview[ManualReviewStrategy]
     Odoo[Odoo]
 
     InvoiceList --> ImportSession
     ImportSession --> ImportInvoiceUseCase
     ImportInvoiceUseCase --> DecisionEngine
     DecisionEngine --> VendorBillWriter
+    DecisionEngine --> ManualReview
     VendorBillWriter --> Odoo
 ```
 
@@ -109,12 +112,14 @@ flowchart TB
 Strategies are deterministic execution paths resolved by the Decision Engine from Rule Engine output:
 
 - draft vendor bill strategy
+- manual review strategy
 
 Current implemented strategy:
 
 - `VendorBillStrategy`: delegates to `VendorBillBuilder` and `VendorBillWriter`
+- `ManualReviewStrategy`: returns `review_required` results with structured reasons and performs no ERP writes
 
-Future strategies may include read-only ingestion, document acquisition, mapping preview, exact resolution, manual review, blocked import, RFQ, Purchase Order, expense, asset, and subscription paths. Future strategies should be added by implementing `WorkflowStrategy` and registering it with `WorkflowStrategyResolver`, not by modifying `DecisionEngine`.
+Future strategies may include read-only ingestion, document acquisition, mapping preview, exact resolution, blocked import, RFQ, Purchase Order, expense, asset, and subscription paths. Future strategies should be added by implementing `WorkflowStrategy` and registering it with `WorkflowStrategyResolver`, not by modifying `DecisionEngine`.
 
 Strategy selection must be explainable and based on Rule Engine output.
 
@@ -127,6 +132,7 @@ flowchart TB
     Resolver[WorkflowStrategyResolver]
     Strategy[WorkflowStrategy]
     VendorBillStrategy[VendorBillStrategy]
+    ManualReviewStrategy[ManualReviewStrategy]
     VendorBillBuilder[VendorBillBuilder]
     VendorBillWriter[VendorBillWriter]
     Odoo[Odoo]
@@ -137,6 +143,7 @@ flowchart TB
     DecisionEngine --> Resolver
     Resolver --> Strategy
     Strategy --> VendorBillStrategy
+    Strategy --> ManualReviewStrategy
     VendorBillStrategy --> VendorBillBuilder
     VendorBillStrategy --> VendorBillWriter
     VendorBillWriter --> Odoo

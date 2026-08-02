@@ -27,6 +27,8 @@ class DecisionEngine:
             strategy=result.strategy,
             status=result.status,
             vendor_bill_id=result.vendor_bill_id,
+            review_required=result.review_required,
+            review_reasons=result.review_reasons,
             warnings=rule_result.warnings + result.warnings,
             errors=rule_result.errors + result.errors,
             duration=perf_counter() - started,

@@ -228,17 +228,18 @@ def test_missing_line_identifier_returns_invalid_result() -> None:
     assert result.line_results[0].result.reason == "Line identifier is required for tax mapping."
 
 
-def test_repository_failure_is_sanitized() -> None:
+def test_repository_failure_raises_safe_mapping_error_without_leaking_exception_text() -> None:
     repository = FailingTaxRepository()
 
-    result = TaxMappingEngine(repository).map_invoice(
-        _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20"))])]),
-        company_id=3,
-    )
+    with pytest.raises(TaxMappingError) as exc_info:
+        TaxMappingEngine(repository).map_invoice(
+            _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20"))])]),
+            company_id=3,
+        )
 
-    assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
-    assert result.line_results[0].result.reason == "Tax repository lookup failed."
-    assert "secret" not in str(result).lower()
+    assert exc_info.value.safe_message == "Tax repository lookup failed."
+    assert "secret repository detail" not in exc_info.value.safe_message
+    assert isinstance(exc_info.value.__cause__, TaxMappingError)
 
 
 def test_unexpected_repository_programming_error_is_not_swallowed() -> None:

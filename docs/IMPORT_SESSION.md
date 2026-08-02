@@ -29,7 +29,7 @@ Current responsibilities:
 - execute imports sequentially
 - collect `ImportInvoiceResult` values
 - measure started, finished, and elapsed duration
-- count processed, successful, duplicate, and failed invoices
+- count processed, successful, duplicate, review-required, and failed invoices
 - continue processing remaining invoices after one invoice fails
 - return immutable `ImportSessionResult`
 
@@ -43,7 +43,9 @@ Current boundaries:
 - no Decision Engine
 - no AI Advisor
 - no Company Memory
-- no matching, workflow-selection, Vendor Bill creation, ERP, HTTP, SOAP, or SQL logic
+- no matching, workflow-selection, review-reason creation, Vendor Bill creation, ERP, HTTP, SOAP, or SQL logic
+
+Review-required invoices are collected separately from failed invoices. A Manual Review result means deterministic business data needs human review; a failure means an application or dependency error prevented the invoice workflow from completing normally.
 
 ## Purpose
 

@@ -25,7 +25,7 @@ Odoo may display:
 - Import Session status
 - source invoice metadata
 - matching results
-- rule failures and warnings
+- structured Manual Review reasons, rule failures, and warnings
 - advisory AI explanations
 - links to draft vendor bills
 - required user-review actions
@@ -35,6 +35,7 @@ Odoo must not own:
 - workflow selection
 - strategy selection
 - rule execution
+- Manual Review reason creation
 - deterministic matching logic
 - AI decision making
 - procurement traceability policy

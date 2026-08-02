@@ -10,6 +10,7 @@ from app.application.dto import ImportInvoiceResult, ImportSessionResult, Import
 from app.domain.invoice import InternalInvoice
 
 DUPLICATE_STATUSES = frozenset({"already_imported", "already_exists"})
+REVIEW_REQUIRED_STATUS = "review_required"
 
 
 class InvoiceImportUseCase(Protocol):
@@ -40,7 +41,7 @@ class ImportSession:
 
         finished_at = datetime.now(UTC)
         result_tuple = tuple(results)
-        failed = sum(1 for result in result_tuple if not result.success)
+        failed = sum(1 for result in result_tuple if not result.success and result.status != REVIEW_REQUIRED_STATUS)
         self._status = "FAILED" if failed else "COMPLETED"
         return ImportSessionResult(
             session_id=session_id,
@@ -52,6 +53,7 @@ class ImportSession:
             successful=sum(1 for result in result_tuple if result.success),
             duplicates=sum(1 for result in result_tuple if result.status in DUPLICATE_STATUSES),
             failed=failed,
+            review_required=sum(1 for result in result_tuple if result.status == REVIEW_REQUIRED_STATUS),
             warnings=tuple(warning for result in result_tuple for warning in result.warnings),
             errors=tuple(error for result in result_tuple for error in result.errors),
             results=result_tuple,

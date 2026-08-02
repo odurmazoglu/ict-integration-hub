@@ -11,13 +11,20 @@ import app.application
 from app.application.commands import ImportInvoiceCommand, VendorBillWriteCommand
 from app.application.decision import (
     DecisionEngine,
+    ManualReviewStrategy,
     UnsupportedWorkflowError,
     VendorBillStrategy,
     WorkflowStrategyResolver,
 )
 from app.application.dto import DecisionResult, RuleEvaluationResult, VendorBillWriteResult
 from app.application.ports import RuleEngine
-from app.application.workflow import WorkflowDecision, WorkflowType
+from app.application.workflow import (
+    ManualReviewDecision,
+    ManualReviewReason,
+    ManualReviewReasonCode,
+    WorkflowDecision,
+    WorkflowType,
+)
 from app.billing import VendorBillBuilder
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.matching import (
@@ -202,6 +209,7 @@ def test_decision_engine_exports() -> None:
     assert app.application.DecisionEngine is DecisionEngine
     assert app.application.WorkflowStrategyResolver is WorkflowStrategyResolver
     assert app.application.VendorBillStrategy is VendorBillStrategy
+    assert app.application.ManualReviewStrategy is ManualReviewStrategy
     assert hasattr(RuleEngine, "evaluate")
 
 
@@ -223,6 +231,69 @@ def test_decision_engine_does_not_import_infrastructure_or_future_engines() -> N
         content = path.read_text()
         for forbidden in forbidden_terms:
             assert forbidden not in content, f"{path} depends on {forbidden}"
+
+
+@pytest.mark.asyncio
+async def test_manual_review_strategy_returns_review_required_result() -> None:
+    strategy = ManualReviewStrategy()
+
+    result = await strategy.execute(_command(), _manual_review_rule_result())
+
+    assert result.success is False
+    assert result.invoice_id == "INV-ETTN"
+    assert result.workflow is WorkflowType.MANUAL_REVIEW
+    assert result.strategy == WorkflowType.MANUAL_REVIEW.value
+    assert result.status == "review_required"
+    assert result.vendor_bill_id is None
+    assert result.review_required is True
+    assert result.review_reasons == _manual_review_reasons()
+    assert result.errors == ()
+
+
+@pytest.mark.asyncio
+async def test_decision_engine_resolves_manual_review_strategy() -> None:
+    rule_result = _manual_review_rule_result()
+    engine = DecisionEngine(
+        rule_engine=FakeRuleEngine(rule_result),
+        strategy_resolver=WorkflowStrategyResolver([ManualReviewStrategy()]),
+    )
+
+    result = await engine.decide(_command())
+
+    assert result.status == "review_required"
+    assert result.review_required is True
+    assert result.review_reasons == _manual_review_reasons()
+
+
+@pytest.mark.asyncio
+async def test_manual_review_strategy_requires_structured_reasons() -> None:
+    strategy = ManualReviewStrategy()
+
+    with pytest.raises(UnsupportedWorkflowError) as exc_info:
+        await strategy.execute(
+            _command(),
+            RuleEvaluationResult(workflow_decision=WorkflowDecision(workflow=WorkflowType.MANUAL_REVIEW)),
+        )
+
+    assert exc_info.value.safe_message == "Manual Review workflow requires structured review reasons."
+
+
+def test_manual_review_strategy_has_no_erp_write_dependency() -> None:
+    source = Path("app/application/decision/manual_review_strategy.py").read_text()
+    forbidden_terms = (
+        "VendorBillBuilder",
+        "VendorBillWriter",
+        "write_vendor_bill",
+        "app.connectors",
+        "app.erp",
+        "account.move",
+        "Odoo",
+        "create_draft",
+        "action_post",
+    )
+
+    for forbidden in forbidden_terms:
+        assert forbidden not in source, f"ManualReviewStrategy depends on {forbidden}"
 
 
 class FakeRuleEngine:
@@ -315,6 +386,32 @@ def _rule_result(
         product_match=product_match or _product_match(ProductMatchStatus.MATCHED),
         tax_match=_tax_match(),
         warnings=warnings,
+    )
+
+
+def _manual_review_rule_result() -> RuleEvaluationResult:
+    return RuleEvaluationResult(
+        workflow_decision=WorkflowDecision(
+            workflow=WorkflowType.MANUAL_REVIEW,
+            matched_rule="RULE-MANUAL-REVIEW-001",
+            explanation="Deterministic business mismatch requires Manual Review.",
+            manual_review=ManualReviewDecision(
+                reasons=_manual_review_reasons(),
+                summary="1 deterministic review reason(s) require manual review.",
+            ),
+        ),
+        partner_match=_partner_match(),
+    )
+
+
+def _manual_review_reasons() -> tuple[ManualReviewReason, ...]:
+    return (
+        ManualReviewReason(
+            code=ManualReviewReasonCode.SUPPLIER_NOT_FOUND,
+            message="Supplier was not matched deterministically.",
+            source="partner_matching",
+            candidate_count=0,
+        ),
     )
 
 
