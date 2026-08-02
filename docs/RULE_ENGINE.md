@@ -31,6 +31,7 @@ AI may comment on these results after the Rule Engine runs. AI must not replace 
 | Draft creation validation | `app/services/odoo_draft_invoice.py` | Require confirmation, reviewed IDs, ready preview, ETTN, and non-production gate |
 | Vendor bill build validation | `app/billing/builder.py` | Require matched partner, product, tax, invoice header, and valid quantities/prices |
 | Direct Vendor Bill rule | `app/application/rules/deterministic.py` | Select `WorkflowType.VENDOR_BILL` only when supplier, product, and tax results are deterministic and complete |
+| Manual Review rule | `app/application/rules/deterministic.py` | Select `WorkflowType.MANUAL_REVIEW` with structured review reasons for deterministic business mismatches |
 
 ## Implemented Rule: RULE-DIRECT-VENDOR-BILL-001
 
@@ -64,15 +65,42 @@ Current deterministic dependencies:
 
 The rule engine coordinates these components through injected dependencies. It does not instantiate Odoo adapters, call ERP APIs, persist records, build Vendor Bills, execute strategies, perform duplicate detection, use AI, or perform fuzzy matching.
 
+## Implemented Rule: RULE-MANUAL-REVIEW-001
+
+`RULE-MANUAL-REVIEW-001` selects `WorkflowType.MANUAL_REVIEW` when deterministic matching or mapping completes safely but finds business data that requires human review.
+
+Manual Review reasons are immutable and structured. Current reason codes include:
+
+- `SUPPLIER_TAX_NUMBER_MISSING`
+- `SUPPLIER_NOT_FOUND`
+- `SUPPLIER_AMBIGUOUS`
+- `PRODUCT_IDENTIFIER_MISSING`
+- `PRODUCT_NOT_FOUND`
+- `PRODUCT_AMBIGUOUS`
+- `PRODUCT_MAPPING_INCOMPLETE`
+- `TAX_NOT_FOUND`
+- `TAX_AMBIGUOUS`
+- `TAX_MAPPING_INCOMPLETE`
+- `UNSUPPORTED_INVOICE_CONTENT`
+
+The Manual Review rule may be selected for missing, ambiguous, invalid, or incomplete business prerequisites. It must not be selected for repository, provider, authorization, timeout, transport, mapper, or unexpected dependency failures.
+
 ## Failure Behavior
 
-Rule failures are safe and explicit application exceptions:
+Business mismatches are deterministic workflow outcomes:
 
-- `PartnerRuleEvaluationError`: supplier missing, ambiguous, invalid, or safe matcher failure
-- `ProductRuleEvaluationError`: product missing, ambiguous, invalid, incomplete, or matcher failure
-- `TaxRuleEvaluationError`: tax missing, ambiguous, invalid, incomplete, or mapper failure
+- missing or malformed supplier tax number returns Manual Review
+- no matching ERP partner returns Manual Review
+- multiple matching ERP partners return Manual Review
+- product and tax not-found, ambiguous, invalid, or incomplete results return Manual Review
 
-When any prerequisite fails, `DeterministicRuleEngine` does not return `WorkflowType.VENDOR_BILL` and does not select another workflow. `WorkflowType.MANUAL_REVIEW` is vocabulary only in this implementation slice.
+Technical failures are safe and explicit application exceptions:
+
+- `PartnerRuleEvaluationError`: safe partner matcher failure
+- `ProductRuleEvaluationError`: safe product matcher failure
+- `TaxRuleEvaluationError`: safe tax mapper failure
+
+Technical exceptions preserve exception chaining internally, but safe messages must not expose credentials, raw HTTP responses, tokens, URLs with secrets, or internal exception text.
 
 Component warnings are propagated on `RuleEvaluationResult`. Decision-level explanation remains on `WorkflowDecision`.
 
@@ -88,7 +116,8 @@ flowchart TB
     Product --> Valid
     Tax --> Valid
     Valid -->|yes| Decision[Decision Engine selects workflow and strategy]
-    Valid -->|no| Failure[Application-safe rule error]
+    Valid -->|business mismatch| ManualReview[Manual Review workflow decision]
+    Valid -->|technical failure| Failure[Application-safe rule error]
     Decision --> Advisor[AI Advisor receives rule output]
     Advisor --> Recommendation[Recommendation only]
     Decision --> Execution[ERP adapter executes approved decision]
@@ -104,7 +133,8 @@ flowchart TB
     InvoiceRules --> DirectVendorBill[RULE-DIRECT-VENDOR-BILL-001]
     DirectVendorBill --> MatchState{Supplier, products, taxes exact?}
     MatchState -->|yes| DraftStrategy[Draft vendor bill strategy]
-    MatchState -->|missing, ambiguous, invalid, incomplete| SafeFailure[Application-safe rule error]
+    MatchState -->|missing, ambiguous, invalid, incomplete| ManualReview[RULE-MANUAL-REVIEW-001]
+    MatchState -->|repository/provider failure| SafeFailure[Application-safe rule error]
 ```
 
 ## Required Rule Result Shape
@@ -138,7 +168,7 @@ Current implementation:
 - `DeterministicRuleEngine` implements that port under `app/application/rules`.
 - `DecisionEngine` calls that port and receives a `RuleEvaluationResult`.
 - `DecisionEngine` resolves the workflow from that result through `WorkflowStrategyResolver`.
-- This repository currently implements only `VendorBillStrategy`.
+- This repository currently implements `VendorBillStrategy` and the non-writing `ManualReviewStrategy`.
 
 The Decision Engine does not evaluate rules itself.
 
@@ -171,7 +201,7 @@ When extending rule evaluation:
 - test exact inputs, ambiguous cases, invalid data, and safe error output
 - update ADRs if the extraction changes authority or behavior
 
-Configurable rule storage, rule administration UI, Rule DSLs, Manual Review execution, and AI Advisor integration are future work and are not implemented by the current Rule Engine.
+Configurable rule storage, rule administration UI, Rule DSLs, persistent Manual Review execution, and AI Advisor integration are future work and are not implemented by the current Rule Engine.
 
 ## Related Documents
 

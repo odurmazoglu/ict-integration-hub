@@ -23,6 +23,7 @@ class ImportSessionResult(ApplicationDTO):
     successful: int
     duplicates: int
     failed: int
+    review_required: int = 0
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     results: tuple[ImportInvoiceResult, ...] = field(default_factory=tuple)

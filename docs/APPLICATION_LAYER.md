@@ -47,9 +47,13 @@ Current foundation contracts:
 - `DeterministicRuleEngine`
 - `WorkflowType`
 - `WorkflowDecision`
+- `ManualReviewDecision`
+- `ManualReviewReason`
+- `ManualReviewReasonCode`
 - `WorkflowStrategyResolver`
 - `WorkflowStrategy`
 - `VendorBillStrategy`
+- `ManualReviewStrategy`
 - `VendorBillWriter`
 - `VendorBillWriteCommand`
 - `VendorBillWriteResult`
@@ -158,8 +162,9 @@ It must not:
 Current implemented strategy:
 
 - `VendorBillStrategy`
+- `ManualReviewStrategy`
 
-Future strategies such as RFQ, Purchase Order, expense, asset, subscription, manual review, and ignored-import strategies should be added by registering new `WorkflowStrategy` implementations without modifying `DecisionEngine`.
+Future strategies such as RFQ, Purchase Order, expense, asset, subscription, and ignored-import strategies should be added by registering new `WorkflowStrategy` implementations without modifying `DecisionEngine`.
 
 ## Workflow Model
 
@@ -168,7 +173,10 @@ The shared Workflow Model is the canonical workflow vocabulary for the Decision 
 Current contracts:
 
 - `WorkflowType`: immutable enum values for `VENDOR_BILL`, `RFQ`, `EXPENSE`, `ASSET`, `SUBSCRIPTION`, and `MANUAL_REVIEW`
-- `WorkflowDecision`: immutable Rule Engine workflow selection output containing the selected `WorkflowType`, matched rule reference, explanation, warnings, and errors
+- `ManualReviewReasonCode`: canonical reason codes for deterministic business mismatches that require human review
+- `ManualReviewReason`: immutable structured reason with safe display text, optional line/tax context, candidate count, source, and non-sensitive details
+- `ManualReviewDecision`: immutable Manual Review payload containing one or more structured reasons
+- `WorkflowDecision`: immutable Rule Engine workflow selection output containing the selected `WorkflowType`, matched rule reference, explanation, optional Manual Review payload, warnings, and errors
 
 `RuleEvaluationResult` wraps `WorkflowDecision` and exposes the selected `WorkflowType` to `DecisionEngine`. `DecisionResult` also carries `WorkflowType`, so workflow identity remains stable across orchestration and result DTOs.
 
@@ -205,7 +213,9 @@ It evaluates `RULE-DIRECT-VENDOR-BILL-001` for a single `ImportInvoiceCommand` b
 
 It returns `RuleEvaluationResult` with an immutable `WorkflowDecision` selecting `WorkflowType.VENDOR_BILL` only when all supplier, product, and tax prerequisites are complete and deterministic.
 
-It raises application-safe rule evaluation errors for missing, ambiguous, invalid, or incomplete prerequisites. It does not select Manual Review in this PR because no Manual Review strategy exists yet.
+It returns `WorkflowType.MANUAL_REVIEW` with structured `ManualReviewReason` values for deterministic business mismatches such as missing suppliers, ambiguous suppliers, missing products, ambiguous products, incomplete mappings, or unmapped taxes.
+
+It still raises application-safe rule evaluation errors for technical/provider failures such as repository, mapper, transport, authorization, or unexpected dependency failures. Those failures are not converted into business review outcomes.
 
 It must not:
 
@@ -244,6 +254,7 @@ flowchart TB
     Resolver[WorkflowStrategyResolver]
     Strategy[WorkflowStrategy]
     VendorBillStrategy[VendorBillStrategy]
+    ManualReviewStrategy[ManualReviewStrategy]
     VendorBillBuilder[VendorBillBuilder]
     VendorBillWriter[VendorBillWriter]
 
@@ -252,9 +263,23 @@ flowchart TB
     DecisionEngine --> Resolver
     Resolver --> Strategy
     Strategy --> VendorBillStrategy
+    Strategy --> ManualReviewStrategy
     VendorBillStrategy --> VendorBillBuilder
     VendorBillStrategy --> VendorBillWriter
 ```
+
+## ManualReviewStrategy
+
+`ManualReviewStrategy` is the first non-writing workflow strategy. It returns a `DecisionResult` with `status="review_required"`, `review_required=True`, and the structured review reasons selected by the Rule Engine.
+
+It must not:
+
+- build or write Vendor Bills
+- call ERP/provider clients
+- perform matching, mapping, workflow selection, retries, persistence, or AI
+- transform technical failures into review results
+
+Manual Review is an application outcome for deterministic business mismatches only. It gives future Import Workbench and AI Advisor slices a stable, safe review contract without introducing UI, persistence, or ERP writes.
 
 ## Command And Query Convention
 
@@ -378,7 +403,7 @@ It may:
 - execute `ImportInvoiceUseCase` sequentially
 - collect immutable `ImportInvoiceResult` values
 - measure elapsed time
-- count processed, successful, duplicate, and failed invoices
+- count processed, successful, duplicate, review-required, and failed invoices
 - continue processing when one invoice fails
 - return immutable `ImportSessionResult`
 
@@ -394,11 +419,13 @@ flowchart TB
     ImportSession[ImportSession]
     ImportInvoiceUseCase[ImportInvoiceUseCase]
     VendorBillWriter[VendorBillWriter]
+    ManualReviewStrategy[ManualReviewStrategy]
     Odoo[Odoo]
 
     InvoiceList --> ImportSession
     ImportSession --> ImportInvoiceUseCase
     ImportInvoiceUseCase --> VendorBillWriter
+    ImportInvoiceUseCase --> ManualReviewStrategy
     VendorBillWriter --> Odoo
 ```
 

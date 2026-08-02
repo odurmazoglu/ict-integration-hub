@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from app.application.dto.base import ApplicationDTO
+from app.application.workflow import ManualReviewReason
 
-ImportInvoiceStatus = Literal["dry_run", "created", "already_imported", "already_exists", "failed"]
+ImportInvoiceStatus = Literal["dry_run", "created", "already_imported", "already_exists", "review_required", "failed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +26,8 @@ class ImportInvoiceResult(ApplicationDTO):
     invoice_id: str
     status: ImportInvoiceStatus
     vendor_bill_id: int | None = None
+    review_required: bool = False
+    review_reasons: tuple[ManualReviewReason, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     duration: float = 0.0

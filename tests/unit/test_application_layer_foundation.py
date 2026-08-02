@@ -20,7 +20,13 @@ from app.application.ports import InvoiceImportHistory, RuleEngine, VendorBillWr
 from app.application.queries import Query
 from app.application.services import UnitOfWork
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
-from app.application.workflow import WorkflowDecision, WorkflowType
+from app.application.workflow import (
+    ManualReviewDecision,
+    ManualReviewReason,
+    ManualReviewReasonCode,
+    WorkflowDecision,
+    WorkflowType,
+)
 from app.billing import VendorBill, VendorBillLine
 
 
@@ -35,6 +41,7 @@ def test_application_foundation_exports_core_conventions() -> None:
     assert app.application.DecisionEngine is DecisionEngine
     assert app.application.WorkflowStrategyResolver is WorkflowStrategyResolver
     assert app.application.VendorBillStrategy is VendorBillStrategy
+    assert app.application.ManualReviewReasonCode is ManualReviewReasonCode
 
 
 def test_application_dtos_are_immutable() -> None:
@@ -60,6 +67,15 @@ def test_application_dtos_are_immutable() -> None:
         status="dry_run",
     )
     rules = RuleEvaluationResult(workflow_decision=WorkflowDecision(WorkflowType.VENDOR_BILL))
+    review = ManualReviewDecision(
+        reasons=(
+            ManualReviewReason(
+                code=ManualReviewReasonCode.SUPPLIER_NOT_FOUND,
+                message="Supplier was not matched deterministically.",
+            ),
+        ),
+        summary="1 deterministic review reason(s) require manual review.",
+    )
 
     with pytest.raises(FrozenInstanceError):
         command.dry_run = False
@@ -73,6 +89,8 @@ def test_application_dtos_are_immutable() -> None:
         decision.status = "created"
     with pytest.raises(FrozenInstanceError):
         rules.workflow_decision = WorkflowDecision(WorkflowType.EXPENSE)
+    with pytest.raises(FrozenInstanceError):
+        review.summary = "changed"
 
 
 def test_vendor_bill_writer_port_is_protocol_only() -> None:

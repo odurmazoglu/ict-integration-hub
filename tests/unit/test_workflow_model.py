@@ -7,7 +7,13 @@ import pytest
 
 import app.application
 from app.application.dto import DecisionResult, RuleEvaluationResult
-from app.application.workflow import WorkflowDecision, WorkflowType
+from app.application.workflow import (
+    ManualReviewDecision,
+    ManualReviewReason,
+    ManualReviewReasonCode,
+    WorkflowDecision,
+    WorkflowType,
+)
 
 
 def test_workflow_type_defines_canonical_platform_vocabulary() -> None:
@@ -37,6 +43,24 @@ def test_workflow_decision_is_immutable_and_explainable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         decision.workflow = WorkflowType.EXPENSE
+
+
+def test_manual_review_models_are_immutable_and_structured() -> None:
+    reason = ManualReviewReason(
+        code=ManualReviewReasonCode.PRODUCT_NOT_FOUND,
+        message="Product was not matched deterministically.",
+        line_number="1",
+        candidate_count=0,
+        source="product_matching",
+        details=(("reason", "No active deterministic product candidate found."),),
+    )
+    review = ManualReviewDecision(reasons=(reason,), summary="1 deterministic review reason(s) require manual review.")
+
+    assert reason.code is ManualReviewReasonCode.PRODUCT_NOT_FOUND
+    assert review.reasons == (reason,)
+
+    with pytest.raises(FrozenInstanceError):
+        reason.message = "changed"
 
 
 def test_rule_and_decision_results_use_workflow_type() -> None:

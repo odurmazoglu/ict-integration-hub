@@ -11,12 +11,12 @@ import app.application
 from app.application.commands import ImportInvoiceCommand
 from app.application.rules import (
     DIRECT_VENDOR_BILL_RULE_ID,
+    MANUAL_REVIEW_RULE_ID,
     DeterministicRuleEngine,
     PartnerRuleEvaluationError,
-    ProductRuleEvaluationError,
     TaxRuleEvaluationError,
 )
-from app.application.workflow import WorkflowType
+from app.application.workflow import ManualReviewReasonCode, WorkflowType
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.matching import (
     InvoiceProductLineResult,
@@ -58,18 +58,32 @@ def test_successful_vendor_bill_rule_evaluation() -> None:
     assert engine.tax_mapper.calls == [(command.invoice, 7)]
 
 
-def test_missing_supplier_fails_safely_before_vendor_bill_selection() -> None:
+def test_missing_supplier_selects_manual_review() -> None:
     engine = _engine(partner_match=_partner_match(PartnerMatchStatus.NOT_FOUND, partner_id=None))
 
-    with pytest.raises(PartnerRuleEvaluationError) as exc_info:
-        engine.evaluate(_command())
+    result = engine.evaluate(_command())
 
-    assert exc_info.value.safe_message.startswith("Supplier was not matched deterministically:")
-    assert engine.product_matcher.calls == []
-    assert engine.tax_mapper.calls == []
+    _assert_manual_review(result, (ManualReviewReasonCode.SUPPLIER_NOT_FOUND,))
+    assert engine.product_matcher.calls
+    assert engine.tax_mapper.calls
 
 
-def test_ambiguous_supplier_fails_safely() -> None:
+def test_missing_supplier_tax_number_selects_manual_review() -> None:
+    engine = _engine(
+        partner_match=_partner_match(
+            PartnerMatchStatus.INVALID_INPUT,
+            partner_id=None,
+            reason="Supplier tax number is required for deterministic matching.",
+            candidate_count=0,
+        )
+    )
+
+    result = engine.evaluate(_command(invoice=_invoice(supplier_tax_number=None)))
+
+    _assert_manual_review(result, (ManualReviewReasonCode.SUPPLIER_TAX_NUMBER_MISSING,))
+
+
+def test_ambiguous_supplier_selects_manual_review() -> None:
     engine = _engine(
         partner_match=_partner_match(
             PartnerMatchStatus.MULTIPLE_MATCHES,
@@ -79,24 +93,37 @@ def test_ambiguous_supplier_fails_safely() -> None:
         )
     )
 
-    with pytest.raises(PartnerRuleEvaluationError) as exc_info:
-        engine.evaluate(_command())
+    result = engine.evaluate(_command())
 
-    assert exc_info.value.safe_message == (
-        "Supplier match is ambiguous: Multiple active supplier partner candidates found by tax number."
-    )
+    _assert_manual_review(result, (ManualReviewReasonCode.SUPPLIER_AMBIGUOUS,))
+    assert result.workflow_decision.manual_review is not None
+    assert result.workflow_decision.manual_review.reasons[0].candidate_count == 2
 
 
-def test_missing_product_fails_safely() -> None:
+def test_missing_product_selects_manual_review() -> None:
     engine = _engine(product_match=_product_match(ProductMatchStatus.NOT_FOUND, product_id=None))
 
-    with pytest.raises(ProductRuleEvaluationError) as exc_info:
-        engine.evaluate(_command())
+    result = engine.evaluate(_command())
 
-    assert exc_info.value.safe_message.startswith("Product was not matched deterministically for line 1:")
+    _assert_manual_review(result, (ManualReviewReasonCode.PRODUCT_NOT_FOUND,))
 
 
-def test_ambiguous_product_fails_safely() -> None:
+def test_product_identifier_missing_selects_manual_review() -> None:
+    engine = _engine(
+        product_match=_product_match(
+            ProductMatchStatus.INVALID_INPUT,
+            product_id=None,
+            reason="At least one deterministic product identifier is required.",
+            candidate_count=0,
+        )
+    )
+
+    result = engine.evaluate(_command())
+
+    _assert_manual_review(result, (ManualReviewReasonCode.PRODUCT_IDENTIFIER_MISSING,))
+
+
+def test_ambiguous_product_selects_manual_review() -> None:
     engine = _engine(
         product_match=_product_match(
             ProductMatchStatus.MULTIPLE_MATCHES,
@@ -106,45 +133,93 @@ def test_ambiguous_product_fails_safely() -> None:
         )
     )
 
-    with pytest.raises(ProductRuleEvaluationError) as exc_info:
-        engine.evaluate(_command())
+    result = engine.evaluate(_command())
 
-    assert exc_info.value.safe_message == (
-        "Product match is ambiguous for line 1: Multiple active product candidates found by default_code."
-    )
+    _assert_manual_review(result, (ManualReviewReasonCode.PRODUCT_AMBIGUOUS,))
 
 
-def test_partial_invoice_line_product_matching_fails_as_incomplete_result() -> None:
+def test_partial_invoice_line_product_matching_selects_manual_review() -> None:
     invoice = _invoice(
         lines=(
             _line("1", buyer_item_code="SKU-1"),
             _line("2", buyer_item_code="SKU-2"),
         )
     )
-    engine = _engine(product_match=_product_match(ProductMatchStatus.MATCHED, product_id=20))
+    engine = _engine(
+        product_match=_product_match(ProductMatchStatus.MATCHED, product_id=20),
+        tax_match=_tax_match_for_lines(("1", "2")),
+    )
 
-    with pytest.raises(ProductRuleEvaluationError) as exc_info:
-        engine.evaluate(_command(invoice=invoice))
+    result = engine.evaluate(_command(invoice=invoice))
 
-    assert exc_info.value.safe_message == "Product matching result is incomplete for invoice lines."
+    _assert_manual_review(result, (ManualReviewReasonCode.PRODUCT_MAPPING_INCOMPLETE,))
 
 
-def test_tax_mapping_failure_fails_safely() -> None:
+def test_tax_not_found_selects_manual_review() -> None:
     engine = _engine(tax_match=_tax_match(TaxMatchStatus.NOT_FOUND, tax_id=None))
 
-    with pytest.raises(TaxRuleEvaluationError) as exc_info:
-        engine.evaluate(_command())
+    result = engine.evaluate(_command())
 
-    assert exc_info.value.safe_message.startswith("Tax was not mapped deterministically for line 1:")
+    _assert_manual_review(result, (ManualReviewReasonCode.TAX_NOT_FOUND,))
 
 
-def test_tax_mapping_errors_are_propagated_as_tax_rule_error() -> None:
+def test_tax_ambiguity_selects_manual_review() -> None:
+    engine = _engine(
+        tax_match=_tax_match(
+            TaxMatchStatus.MULTIPLE_MATCHES,
+            tax_id=None,
+            reason="Multiple exact tax candidates found.",
+            candidate_count=2,
+        )
+    )
+
+    result = engine.evaluate(_command())
+
+    _assert_manual_review(result, (ManualReviewReasonCode.TAX_AMBIGUOUS,))
+
+
+def test_tax_mapping_errors_select_manual_review_as_incomplete_result() -> None:
     engine = _engine(tax_match=InvoiceTaxMappingResult(errors=("Invoice has no lines to map.",)))
 
-    with pytest.raises(TaxRuleEvaluationError) as exc_info:
-        engine.evaluate(_command())
+    result = engine.evaluate(_command())
 
-    assert exc_info.value.safe_message == "Tax mapping failed: Invoice has no lines to map."
+    _assert_manual_review(result, (ManualReviewReasonCode.TAX_MAPPING_INCOMPLETE,))
+
+
+def test_incomplete_tax_mapping_selects_manual_review() -> None:
+    invoice = _invoice(
+        lines=(
+            _line("1", buyer_item_code="SKU-1"),
+            _line("2", buyer_item_code="SKU-2"),
+        )
+    )
+    engine = _engine(
+        product_match=_product_match_for_lines(("1", "2")),
+        tax_match=_tax_match(TaxMatchStatus.MATCHED, tax_id=30),
+    )
+
+    result = engine.evaluate(_command(invoice=invoice))
+
+    _assert_manual_review(result, (ManualReviewReasonCode.TAX_MAPPING_INCOMPLETE,))
+
+
+def test_multiple_review_reasons_are_preserved_when_safely_collectable() -> None:
+    engine = _engine(
+        partner_match=_partner_match(PartnerMatchStatus.NOT_FOUND, partner_id=None),
+        product_match=_product_match(ProductMatchStatus.NOT_FOUND, product_id=None),
+        tax_match=_tax_match(TaxMatchStatus.NOT_FOUND, tax_id=None),
+    )
+
+    result = engine.evaluate(_command())
+
+    _assert_manual_review(
+        result,
+        (
+            ManualReviewReasonCode.SUPPLIER_NOT_FOUND,
+            ManualReviewReasonCode.PRODUCT_NOT_FOUND,
+            ManualReviewReasonCode.TAX_NOT_FOUND,
+        ),
+    )
 
 
 def test_warning_propagation_uses_rule_result_for_component_warnings() -> None:
@@ -183,11 +258,29 @@ def test_partner_matching_exception_is_translated_without_sensitive_leakage() ->
     assert engine.tax_mapper.calls == []
 
 
+def test_tax_mapper_exception_still_raises_safe_application_exception() -> None:
+    engine = _engine(tax_mapper=FakeTaxMapper(RuntimeError("raw timeout token=secret")))
+
+    with pytest.raises(TaxRuleEvaluationError) as exc_info:
+        engine.evaluate(_command())
+
+    assert exc_info.value.safe_message == "Tax mapping failed."
+    assert "token=secret" not in exc_info.value.safe_message
+
+
 def test_rule_evaluation_result_is_immutable() -> None:
     result = _engine().evaluate(_command())
 
     with pytest.raises(FrozenInstanceError):
         result.workflow_decision.workflow = WorkflowType.EXPENSE
+
+
+def test_manual_review_dtos_are_immutable() -> None:
+    result = _engine(partner_match=_partner_match(PartnerMatchStatus.NOT_FOUND, partner_id=None)).evaluate(_command())
+    assert result.workflow_decision.manual_review is not None
+
+    with pytest.raises(FrozenInstanceError):
+        result.workflow_decision.manual_review.reasons[0].message = "changed"
 
 
 def test_rule_engine_is_exported_from_application_package() -> None:
@@ -293,7 +386,11 @@ def _command(*, invoice: InternalInvoice | None = None) -> ImportInvoiceCommand:
     return ImportInvoiceCommand(invoice=invoice or _invoice(), idempotency_key="ettn:INV-ETTN", company_id=7)
 
 
-def _invoice(*, lines: tuple[InvoiceLine, ...] | None = None) -> InternalInvoice:
+def _invoice(
+    *,
+    lines: tuple[InvoiceLine, ...] | None = None,
+    supplier_tax_number: str | None = "1234567890",
+) -> InternalInvoice:
     return InternalInvoice(
         header=Header(
             invoice_number="INV-1",
@@ -302,7 +399,7 @@ def _invoice(*, lines: tuple[InvoiceLine, ...] | None = None) -> InternalInvoice
             issue_date=date(2026, 8, 2),
             currency_code="TRY",
         ),
-        supplier=Party(name="Supplier", tax_number="1234567890"),
+        supplier=Party(name="Supplier", tax_number=supplier_tax_number),
         customer=Party(name="Customer"),
         totals=MonetaryTotals(payable_amount=Decimal("120")),
         lines=lines or (_line("1", buyer_item_code="SKU-1"),),
@@ -368,6 +465,29 @@ def _product_match(
     )
 
 
+def _product_match_for_lines(line_numbers: tuple[str, ...]) -> InvoiceProductMatchResult:
+    return InvoiceProductMatchResult(
+        line_results=tuple(
+            InvoiceProductLineResult(
+                line_number=line_number,
+                result=ProductMatchResult(
+                    status=ProductMatchStatus.MATCHED,
+                    line_number=line_number,
+                    product_id=20,
+                    default_code=f"SKU-{line_number}",
+                    barcode=None,
+                    seller_item_code=None,
+                    matched_by="default_code",
+                    reason="Product match result.",
+                    candidate_count=1,
+                    confidence=Decimal("1.00"),
+                ),
+            )
+            for line_number in line_numbers
+        ),
+    )
+
+
 def _tax_match(
     status: TaxMatchStatus,
     *,
@@ -396,3 +516,35 @@ def _tax_match(
         ),
         warnings=warnings,
     )
+
+
+def _tax_match_for_lines(line_numbers: tuple[str, ...]) -> InvoiceTaxMappingResult:
+    return InvoiceTaxMappingResult(
+        line_results=tuple(
+            InvoiceTaxLineResult(
+                line_number=line_number,
+                tax_index=0,
+                result=TaxMatchResult(
+                    status=TaxMatchStatus.MATCHED,
+                    tax_id=30,
+                    company_id=7,
+                    tax_type=TaxType.VAT,
+                    tax_rate=Decimal("20"),
+                    matched_by="company_type_rate",
+                    confidence=Decimal("1.00"),
+                    reason="Tax match result.",
+                    candidate_count=1,
+                ),
+            )
+            for line_number in line_numbers
+        ),
+    )
+
+
+def _assert_manual_review(result: object, codes: tuple[ManualReviewReasonCode, ...]) -> None:
+    assert isinstance(result, object)
+    assert result.workflow is WorkflowType.MANUAL_REVIEW
+    assert result.workflow_decision.workflow is WorkflowType.MANUAL_REVIEW
+    assert result.workflow_decision.matched_rule == MANUAL_REVIEW_RULE_ID
+    assert result.workflow_decision.manual_review is not None
+    assert tuple(reason.code for reason in result.workflow_decision.manual_review.reasons) == codes
