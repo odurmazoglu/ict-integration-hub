@@ -6,6 +6,7 @@ from decimal import Decimal
 from app.domain.invoice import InternalInvoice, InvoiceLine
 from app.erp.models import Product
 from app.erp.provider import RepositoryProvider
+from app.matching.exceptions import ProductMatchingError
 from app.matching.result import (
     InvoiceProductLineResult,
     InvoiceProductMatchResult,
@@ -65,16 +66,8 @@ class ProductMatchingEngine:
                 continue
             try:
                 candidates = lookup(identifier, company_id=company_id)
-            except Exception:
-                return _result(
-                    status=ProductMatchStatus.INVALID_INPUT,
-                    line=line,
-                    product_id=None,
-                    matched_by=None,
-                    reason="Product repository lookup failed.",
-                    candidate_count=0,
-                    confidence=None,
-                )
+            except Exception as exc:
+                raise ProductMatchingError("Product repository lookup failed.") from exc
 
             active_candidates = _active_candidates(candidates)
             if len(active_candidates) == 1:

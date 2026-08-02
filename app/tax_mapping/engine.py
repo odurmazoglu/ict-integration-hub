@@ -75,18 +75,8 @@ class TaxMappingEngine:
 
         try:
             candidates = self._repository.find_candidates(company_id=company_id, rate=rate, tax_type=tax_type)
-        except TaxMappingError:
-            return _result(
-                status=TaxMatchStatus.INVALID_INPUT,
-                tax_id=None,
-                company_id=company_id,
-                tax_type=tax_type,
-                tax_rate=rate,
-                matched_by=None,
-                confidence=None,
-                reason="Tax repository lookup failed.",
-                candidate_count=0,
-            )
+        except TaxMappingError as exc:
+            raise TaxMappingError("Tax repository lookup failed.") from exc
 
         valid_candidates = _valid_candidates(candidates, company_id=company_id, rate=rate, tax_type=tax_type)
         result = _result_from_candidates(valid_candidates, company_id=company_id, rate=rate, tax_type=tax_type)

@@ -14,6 +14,7 @@ from app.application.rules import (
     MANUAL_REVIEW_RULE_ID,
     DeterministicRuleEngine,
     PartnerRuleEvaluationError,
+    ProductRuleEvaluationError,
     TaxRuleEvaluationError,
 )
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
@@ -24,12 +25,14 @@ from app.matching import (
     PartnerMatchingError,
     PartnerMatchResult,
     PartnerMatchStatus,
+    ProductMatchingError,
     ProductMatchResult,
     ProductMatchStatus,
 )
 from app.tax_mapping import (
     InvoiceTaxLineResult,
     InvoiceTaxMappingResult,
+    TaxMappingError,
     TaxMatchResult,
     TaxMatchStatus,
     TaxType,
@@ -258,6 +261,31 @@ def test_partner_matching_exception_is_translated_without_sensitive_leakage() ->
     assert engine.tax_mapper.calls == []
 
 
+def test_product_matching_exception_is_translated_without_manual_review_or_sensitive_leakage() -> None:
+    matching_error = ProductMatchingError("Product repository lookup failed.")
+    engine = _engine(product_matcher=FakeProductMatcher(matching_error))
+
+    with pytest.raises(ProductRuleEvaluationError) as exc_info:
+        engine.evaluate(_command())
+
+    assert exc_info.value.safe_message == "Product repository lookup failed."
+    assert "token=secret" not in exc_info.value.safe_message
+    assert exc_info.value.__cause__ is matching_error
+    assert engine.tax_mapper.calls == []
+
+
+def test_tax_mapping_exception_is_translated_without_manual_review_or_sensitive_leakage() -> None:
+    mapping_error = TaxMappingError("Tax repository lookup failed.")
+    engine = _engine(tax_mapper=FakeTaxMapper(mapping_error))
+
+    with pytest.raises(TaxRuleEvaluationError) as exc_info:
+        engine.evaluate(_command())
+
+    assert exc_info.value.safe_message == "Tax repository lookup failed."
+    assert "password=secret" not in exc_info.value.safe_message
+    assert exc_info.value.__cause__ is mapping_error
+
+
 def test_tax_mapper_exception_still_raises_safe_application_exception() -> None:
     engine = _engine(tax_mapper=FakeTaxMapper(RuntimeError("raw timeout token=secret")))
 
@@ -365,11 +393,14 @@ def _engine(
     partner_match: PartnerMatchResult | None = None,
     partner_matcher: FakePartnerMatcher | None = None,
     product_match: InvoiceProductMatchResult | None = None,
+    product_matcher: FakeProductMatcher | None = None,
     tax_match: InvoiceTaxMappingResult | None = None,
     tax_mapper: FakeTaxMapper | None = None,
 ) -> RuleEngineFixture:
     partner_matcher = partner_matcher or FakePartnerMatcher(partner_match or _partner_match())
-    product_matcher = FakeProductMatcher(product_match or _product_match(ProductMatchStatus.MATCHED, product_id=20))
+    product_matcher = product_matcher or FakeProductMatcher(
+        product_match or _product_match(ProductMatchStatus.MATCHED, product_id=20)
+    )
     mapper = tax_mapper or FakeTaxMapper(tax_match or _tax_match(TaxMatchStatus.MATCHED, tax_id=30))
     engine = RuleEngineFixture(
         partner_matcher=partner_matcher,
