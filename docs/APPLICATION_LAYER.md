@@ -73,6 +73,8 @@ Current foundation contracts:
 - `TaxResolution`
 - `BusinessContextDecision`
 - `ReviewQueueReader`
+- `ListReviewQueueUseCase`
+- `GetReviewItemUseCase`
 
 ## Use Case Convention
 
@@ -99,6 +101,8 @@ Current executable use cases:
 
 - `ImportInvoiceUseCase`
 - `ImportSession`
+- `ListReviewQueueUseCase`
+- `GetReviewItemUseCase`
 
 ## ImportInvoiceUseCase
 
@@ -311,10 +315,14 @@ Current contracts:
 - `ReviewQueueReader`: read-only port for future queue/detail adapters
 - `ReviewItemWriter`: create-only port for idempotent persistence of pending review items
 - `ReviewItemCreationService`: application service that delegates pending review item creation to the writer port
+- `ListReviewQueueUseCase`: application boundary that delegates `ReviewQueueQuery` to `ReviewQueueReader.list_review_items`
+- `GetReviewItemUseCase`: application boundary that delegates `ReviewDetailQuery` to `ReviewQueueReader.get_review_item`
 
 The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation and queue/detail reads. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, and scopes detail reads by `review_id` plus `company_id`.
 
 This slice does not implement Odoo UI, FastAPI routes, user approval writes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching. Review item persistence only supports idempotent creation of pending review records and read-only queue/detail access.
+
+Review query use cases are synchronous because the current `ReviewQueueReader` and SQLAlchemy repository are synchronous. They do not perform in-memory filtering, sorting, pagination, persistence access, transaction management, workflow execution, or decision submission.
 
 Repeated creation with the same company-scoped idempotency key returns the existing item when immutable business content matches. Monetary comparison uses canonical `Decimal` values, so equivalent values such as `259.2000` and `259.20` do not create false conflicts. Reusing the same key for different content raises a safe idempotency conflict and does not overwrite existing data.
 
@@ -326,6 +334,8 @@ flowchart TB
     Contracts[Application Workbench Contracts]
     Hub[ICT IPP Application Layer]
     Reader[ReviewQueueReader Port]
+    ListUseCase[ListReviewQueueUseCase]
+    GetUseCase[GetReviewItemUseCase]
     Writer[ReviewItemWriter Port]
     Repository[SQLAlchemy Review Repository]
     Database[(PostgreSQL workbench_review_items)]
@@ -333,7 +343,10 @@ flowchart TB
 
     Workbench --> Contracts
     Contracts --> Hub
-    Hub --> Reader
+    Hub --> ListUseCase
+    Hub --> GetUseCase
+    ListUseCase --> Reader
+    GetUseCase --> Reader
     Hub --> Writer
     Reader --> Repository
     Writer --> Repository

@@ -31,3 +31,9 @@ class ReviewDataIntegrityError(ReviewPersistenceError):
     """Safe error raised when persisted review data cannot hydrate into contracts."""
 
     error_category = "review_data_integrity_error"
+
+
+class ReviewQueryError(ApplicationError):
+    """Safe error raised when a Workbench review query use case fails unexpectedly."""
+
+    error_category = "review_query_error"
