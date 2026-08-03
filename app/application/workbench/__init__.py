@@ -1,5 +1,11 @@
 """Import Workbench application contracts."""
 
+from app.application.workbench.allocations import (
+    AllocationCompleteness,
+    BusinessContextAllocation,
+    BusinessContextAllocationSet,
+    BusinessContextAllocationType,
+)
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.decision_use_cases import SubmitReviewDecisionUseCase
 from app.application.workbench.dto import (
@@ -30,7 +36,11 @@ from app.application.workbench.query_use_cases import GetReviewItemUseCase, List
 from app.application.workbench.services import ReviewItemCreationService
 
 __all__ = [
+    "AllocationCompleteness",
     "BusinessContextDecision",
+    "BusinessContextAllocation",
+    "BusinessContextAllocationSet",
+    "BusinessContextAllocationType",
     "GetReviewItemUseCase",
     "LineResolution",
     "ListReviewQueueUseCase",

@@ -157,6 +157,34 @@ The user works in an Odoo Import Workbench. The workbench displays source invoic
 
 When relevant, all generated or matched records must retain links sufficient to traverse from sale to procurement and actual cost.
 
+Business Context Allocation contracts extend this traceability from one invoice-level context to multiple allocation lines. They are application contracts only in the current codebase; accepted allocation persistence, Odoo synchronization, customer recharge execution, and profitability posting are future work.
+
+```mermaid
+flowchart TB
+    VendorInvoice[Incoming Vendor Invoice]
+    VendorBill[Vendor Bill Actual Cost]
+    Allocations[Business Context Allocation Lines]
+    SalesA[Sales Order A]
+    SalesB[Sales Order B]
+    Project[Project]
+    Recharge[Customer Recharge Recipient]
+    Internal[Internal Cost]
+    Profitability[Actual Profitability Reporting]
+
+    VendorInvoice --> VendorBill
+    VendorBill --> Allocations
+    Allocations --> SalesA
+    Allocations --> SalesB
+    Allocations --> Project
+    Allocations --> Recharge
+    Allocations --> Internal
+    SalesA --> Profitability
+    SalesB --> Profitability
+    Project --> Profitability
+    Recharge --> Profitability
+    Internal --> Profitability
+```
+
 ## Safety
 
 - read-only by default where possible

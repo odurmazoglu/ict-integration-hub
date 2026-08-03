@@ -53,6 +53,20 @@ x_ipp_import_review
 
 The model name follows Odoo Studio custom-model naming with the `x_` prefix and uses the `ipp` namespace to avoid generic field names.
 
+Future Business Context Allocation child model:
+
+```text
+x_ipp_review_allocation
+```
+
+Display name:
+
+```text
+IPP Review Allocation
+```
+
+Actual Odoo Online Studio technical field names may use generated `x_` or `x_studio_` identifiers. The application contract does not depend on those generated names; a future adapter mapping will translate between Studio fields and `BusinessContextAllocation` values.
+
 ## Source Of Truth
 
 | Data | Authoritative system | Notes |
@@ -60,10 +74,12 @@ The model name follows Odoo Studio custom-model naming with the `x_` prefix and 
 | Review lifecycle | Hub PostgreSQL | Includes pending, submitted, resolved, and dismissed states. |
 | Review version | Hub PostgreSQL | Used for optimistic concurrency. |
 | Accepted decision | Hub PostgreSQL | Odoo submits a candidate; Hub accepts or rejects it. |
+| Accepted allocation lines | Hub PostgreSQL | Future accepted allocations are decision evidence owned by the Hub. |
 | Decision idempotency | Hub PostgreSQL | Uses existing decision idempotency behavior. |
 | Decision acknowledgement | Hub PostgreSQL, projected to Odoo | Odoo display is not the ledger. |
 | Execution state | Hub PostgreSQL and future execution records | Workflow execution is out of scope here. |
 | User-entered candidate decision before Hub acceptance | Odoo projection | Authoritative only as user input evidence before Hub validation. |
+| User-entered candidate allocation lines before Hub acceptance | Odoo child projection | Authoritative only as candidate allocation input before Hub validation. |
 | Odoo user that submitted the candidate | Odoo projection | Audit context only; not sufficient authorization by itself. |
 
 ## Field Contract
@@ -129,6 +145,34 @@ The field list keeps only data justified by current Workbench contracts and sync
 | `x_ipp_hub_ack_message` | Text | Hub | Safe acknowledgement or reconciliation message. |
 | `x_ipp_hub_processed_at` | Datetime | Hub | Time the Hub processed the candidate. |
 
+### Future Allocation Child Model
+
+The future child model represents candidate `BusinessContextAllocation` lines. It must have a parent relationship to `x_ipp_import_review`.
+
+Proposed logical fields:
+
+| Logical field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| parent review | Many2one | Odoo user/System | Parent IPP Import Review projection. |
+| allocation key | Char, required | Odoo user/System | Stable key unique inside the allocation set. |
+| allocation type | Selection | Odoo user | Canonical `BusinessContextAllocationType`. |
+| source line number | Char | Odoo user | Optional source invoice line; multiple allocations may share it. |
+| description | Char/Text | Odoo user | Bounded human-readable purpose. |
+| amount | Numeric | Odoo user | Positive Decimal amount when supplied. |
+| percentage | Numeric | Odoo user | Positive Decimal percentage at most 100 when supplied. |
+| currency | Char/Selection | Odoo user | Optional uppercase currency code. |
+| customer | Many2one or Integer | Odoo user | Commercial customer context. |
+| recharge recipient | Many2one or Integer | Odoo user | Actual invoiced or recharged party. |
+| target company | Many2one or Integer | Odoo user | Affiliate or group-company target. |
+| opportunity | Many2one or Integer | Odoo user | Opportunity traceability. |
+| Sales Order | Many2one or Integer | Odoo user | Sales Order cost traceability. |
+| Purchase Order | Many2one or Integer | Odoo user | Existing PO traceability. |
+| project | Many2one or Integer | Odoo user | Project traceability. |
+| analytic account | Many2one or Integer | Odoo user | Analytic cost traceability. |
+| internal note | Text | Odoo user | Bounded internal note, not an execution instruction. |
+
+The child model is not created in this PR.
+
 ## Ownership Rules
 
 Hub-owned fields:
@@ -188,6 +232,15 @@ Timestamp and result invariants:
 - `WorkbenchProjection.updated_at` is optional. When supplied, it must also be a timezone-aware `datetime` and is preserved without conversion.
 - `ProjectionPublishResult` represents exactly one projection operation: either `created=True, updated=False` or `created=False, updated=True`. It does not use a result status enum in this contract slice.
 
+Business context allocation contracts are defined in the Application layer but are not wired into this projection yet:
+
+- `BusinessContextAllocationType`
+- `AllocationCompleteness`
+- `BusinessContextAllocation`
+- `BusinessContextAllocationSet`
+
+Future projection ingestion should replace legacy `x_ipp_business_context_json` with allocation child lines after a focused API, persistence, and adapter PR. Do not accept both as authoritative sources in the same command.
+
 ## Mapping Rules
 
 `WorkbenchProjection` maps from Hub Workbench review contracts to Studio fields:
@@ -231,6 +284,16 @@ Timestamp and result invariants:
 
 The Hub must reject `WorkflowType.MANUAL_REVIEW` as a selected resolution workflow. Manual Review is the unresolved state.
 
+Future allocation mapping rules:
+
+- child allocation lines map to `BusinessContextAllocation`
+- child line sets map to `BusinessContextAllocationSet`
+- `allocation_key` must be unique inside a review
+- source invoice line numbers are not unique because one source line may be split across multiple allocations
+- `customer_id` records the commercial customer
+- `recharge_partner_id` records the actual recharge or customer-invoice recipient
+- `target_company_id` records affiliate or group-company context and does not grant authorization
+
 ## Idempotency And Concurrency
 
 Projection publishing rules for future implementation:
@@ -250,6 +313,14 @@ Decision ingestion rules for future implementation:
 - User decisions from another company must never be accepted.
 - `decision_ready` must not be cleared before Hub acknowledgement is safely persisted and projected.
 
+Allocation ingestion rules for future implementation:
+
+- candidate allocation lines are untrusted until Hub validation
+- Hub validates company isolation and selected ERP IDs through repositories
+- `COMPLETE` allocation sets must reconcile to invoice total or 100 percent
+- `PARTIAL` allocation sets may be below invoice total or 100 percent, but must not exceed either
+- accepted allocations become immutable decision evidence
+
 ## Security
 
 - Hub authenticates to Odoo JSON-2 with a restricted Odoo API key.
@@ -258,6 +329,8 @@ Decision ingestion rules for future implementation:
 - No Odoo API key is exposed to browser JavaScript.
 - Hub validates `company_id` and `review_id` against its own persistence.
 - Odoo user identity is audit evidence, not sufficient authorization by itself.
+- recharge recipient and target company values are business context only; they do not grant authorization
+- allocation records must not contain browser credentials, API keys, bearer tokens, or client secrets
 - Future ingestion requires a Hub-controlled scheduler or service.
 
 ## Keycloak Boundary
@@ -281,9 +354,28 @@ Future controlled Studio setup should provide:
 - form view for review detail and user decision
 - search filters by status, supplier, date, and workflow
 - read-only Hub information section
-- editable Decision section
+- editable Decision tab with Workflow Decision fields:
+  - Decision
+  - Selected Workflow
+  - Ready for Hub Processing
+  - Decision Comment
+- full-width Business Context Allocations One2many table
 - Hub acknowledgement section
 - optional chatter for user collaboration, with chatter treated as non-authoritative
+
+Recommended visible Business Context Allocations columns:
+
+- Allocation Type
+- Source Line
+- Customer
+- Recharge Recipient
+- Sales Order
+- Purchase Order
+- Project
+- Amount
+- Percentage
+
+Detailed allocation forms may contain target company, opportunity, analytic account, proposal scenario, subscription context, description, and internal note.
 
 No view XML or Odoo UI implementation is included in this PR.
 
@@ -324,10 +416,12 @@ Future controlled Odoo Studio setup should:
 6. Restrict access to the integration user and authorized reviewers.
 7. Verify ordinary users cannot change Hub identity, version, or acknowledgement fields.
 8. Verify no credentials or tokens are stored in Studio fields.
+9. Later, add allocation child lines only through a focused implementation PR with Hub validation and reconciliation tests.
 
 ## Not Implemented
 
 - Odoo Studio model creation
+- Odoo Studio allocation child model creation
 - Odoo views
 - Odoo ACL configuration
 - Odoo JSON-2 adapter implementation
@@ -337,6 +431,7 @@ Future controlled Odoo Studio setup should:
 - webhooks
 - decision ingestion
 - acknowledgement projection
+- allocation persistence or synchronization
 - workflow execution
 - Vendor Bill, RFQ, PO, expense, asset, or subscription execution
 - Keycloak deployment

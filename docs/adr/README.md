@@ -54,6 +54,7 @@ The `ADR-....md` files are the canonical architecture foundation for ICT IPP. Ea
 | [ADR-0009](ADR-0009-procurement-traceability.md) | Procurement Traceability | Accepted | Preserve Sales-to-Profitability traceability whenever possible. |
 | [ADR-0010](ADR-0010-strategy-pattern.md) | Strategy Pattern | Accepted | Use explicit strategies for workflow execution paths selected by the Decision Engine. |
 | [ADR-0011](ADR-0011-odoo-online-import-workbench-projection.md) | Odoo Online Import Workbench Projection | Accepted | Use an Odoo Studio projection model for Odoo Online Workbench review display and candidate decision capture while Hub remains authoritative. |
+| [ADR-0012](ADR-0012-business-context-allocation-and-cost-traceability.md) | Business Context Allocation and Cost Traceability | Accepted | Model supplier-invoice business context as immutable allocation lines for multi-sale, recharge, affiliate, project, and internal cost traceability. |
 
 ## Existing Implementation ADR Index
 

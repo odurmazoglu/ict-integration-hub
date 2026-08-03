@@ -15,12 +15,14 @@
 - API RequestContext foundation with gated development-header authentication and production OIDC/JWT validation for future authenticated routes
 - Authenticated Import Workbench REST API exposing queue, detail, and decision submission adapters
 - Odoo Online Workbench projection architecture, Studio model contract, immutable projection DTOs, and projection ports
+- Business Context Allocation architecture and immutable application contracts
 
 ## Next Milestones
 
 ### 1. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
+- future allocation child-line setup through a focused implementation PR
 - Hub-to-Odoo JSON-2 projection publishing
 - Hub-controlled ready-decision ingestion
 - Hub acknowledgement projection
@@ -75,7 +77,9 @@
 
 - link invoice to existing PO where possible
 - support reconstructing RFQ/PO for out-of-system purchases
-- connect procurement to opportunity, quotation, sales order, project, proposal scenario, and analytical context
+- connect procurement to opportunity, quotation, sales order, project, proposal scenario, customer recharge recipient, target company, and analytical context
+- persist accepted Business Context Allocation sets
+- support future Composite Workflow Strategy for mixed allocation purposes
 - expose actual profitability
 
 ### 8. Scheduler, Retry, and Recovery
