@@ -2,7 +2,7 @@
 
 Import Workbench is the accepted Odoo-side user interface for reviewing import sessions. It lives inside Odoo as UI only and does not contain business logic.
 
-No Odoo Import Workbench UI implementation exists in this repository yet. The repository now provides application-layer contracts that a future Odoo Workbench adapter can consume.
+No Odoo Import Workbench UI implementation exists in this repository yet. The repository now provides application-layer contracts and durable review item persistence that a future Odoo Workbench adapter can consume.
 
 ## Purpose
 
@@ -61,7 +61,7 @@ sequenceDiagram
 
 ## Current Application Contracts
 
-The current implementation adds contracts only under `app/application/workbench`.
+The current implementation defines contracts under `app/application/workbench` and a SQLAlchemy persistence adapter outside the Application layer.
 
 Implemented contract types:
 
@@ -74,13 +74,50 @@ Implemented contract types:
 - `LineResolution` and `TaxResolution`: explicit selected ERP IDs for invoice lines and taxes
 - `BusinessContextDecision`: explicit procurement traceability identifiers selected by the user
 - `ReviewQueueReader`: read-only application port for future queue/detail adapters
+- `ReviewItemWriter`: create-only application port for idempotent pending review item creation
+- `ReviewItemCreationService`: small application service that delegates review item creation through the writer port
+
+## Current Persistence Foundation
+
+The first persistence slice stores Workbench review items in `workbench_review_items`.
+
+Implemented behavior:
+
+- create one `PENDING_REVIEW` item idempotently through `ReviewItemWriter`
+- return an existing item when the same company-scoped idempotency key is reused with identical immutable business content
+- raise a safe idempotency conflict when the same key is reused for different content
+- read one item by `review_id` and `company_id`
+- list a company-scoped queue with exact status, workflow, supplier tax number, created-from, and created-to filters
+- return paginated results with `total_count`
+- persist structured `ManualReviewReason` values as controlled JSON
+- persist `total_amount` as `Numeric(24, 6)` to preserve UBL monetary values up to six fractional digits
+- compare persisted monetary values through canonical `Decimal` values for idempotency, not display formatting
+- store `version` starting at `1` for future optimistic concurrency updates
+
+The persistence adapter does not store raw XML, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.
+
+```mermaid
+flowchart TB
+    ManualReview[Manual Review Result]
+    Service[Review Item Creation Service]
+    Writer[ReviewItemWriter Port]
+    Repository[SQLAlchemy Review Repository]
+    Database[(PostgreSQL workbench_review_items)]
+    Workbench[Odoo Workbench Adapter - future]
+    Reader[ReviewQueueReader Port]
+
+    ManualReview --> Service
+    Service --> Writer
+    Writer --> Repository
+    Repository --> Database
+    Workbench --> Reader
+    Reader --> Repository
+```
 
 Not implemented in this slice:
 
 - Odoo UI
 - FastAPI routes
-- persistence or Alembic migrations
-- review queue storage
 - user decision execution
 - ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows
@@ -96,12 +133,18 @@ flowchart TB
     OdooWorkbench[Odoo Import Workbench UI - future]
     Query[ReviewQueueQuery / ReviewDetailQuery]
     Reader[ReviewQueueReader Port]
+    Writer[ReviewItemWriter Port]
+    Repository[SQLAlchemy Review Repository]
+    Store[(PostgreSQL review item table)]
     Item[ReviewItem]
     Command[ReviewDecisionCommand]
     Ack[ReviewDecisionAcknowledgement]
 
     OdooWorkbench --> Query
     Query --> Reader
+    Writer --> Repository
+    Reader --> Repository
+    Repository --> Store
     Reader --> Item
     OdooWorkbench --> Command
     Command --> Ack
@@ -126,6 +169,8 @@ Future Workbench screens should support:
 - Business decisions must remain API calls into ICT IPP.
 - UI actions must send explicit user intent and confirmation.
 - User decisions must include explicit user identity, idempotency key, and expected version.
+- Pending review item creation must be idempotent by company-scoped key.
+- Detail reads must always include both `review_id` and `company_id`.
 - Current explicit decisions are `SELECT_WORKFLOW` and `DISMISS`.
 - `MANUAL_REVIEW` must not be submitted as a selected resolution workflow.
 - Procurement traceability fields must be explicit user choices, not inferred by Odoo UI logic.

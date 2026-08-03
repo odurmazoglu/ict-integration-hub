@@ -14,3 +14,10 @@ class ReviewQueueReader(Protocol):
 
     def get_review_item(self, query: ReviewDetailQuery) -> ReviewItem:
         pass
+
+
+class ReviewItemWriter(Protocol):
+    """Write port for idempotent creation of pending Workbench review items."""
+
+    def create_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
+        pass

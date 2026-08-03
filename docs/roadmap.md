@@ -11,6 +11,7 @@
 - read-only ERP repository layer with Odoo adapter
 - deterministic partner and product matching
 - pure Vendor Bill builder and account.move payload generation
+- Import Workbench review item persistence for idempotent pending review creation and company-scoped queue/detail reads
 
 ## Next Milestones
 
@@ -43,6 +44,7 @@
 
 - incoming invoice queue
 - matching and warning display
+- persisted pending review queue and company-scoped review detail reads
 - workflow recommendation
 - user override and approval
 - existing PO selection

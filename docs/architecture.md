@@ -47,6 +47,28 @@ Runs only when deterministic rules cannot provide a sufficient decision. It uses
 
 Executes an approved strategy such as direct Vendor Bill, manual review, existing-PO matching, RFQ/PO creation, expense, asset, subscription, or ignore. The current Manual Review strategy is non-writing and returns review-required results only.
 
+### Import Workbench Persistence
+
+Manual Review items can be persisted durably for future Odoo Workbench display. The Application layer owns the immutable `ReviewItem`, `ReviewQueueQuery`, `ReviewDetailQuery`, `ReviewQueueReader`, and `ReviewItemWriter` contracts. The SQLAlchemy repository is an infrastructure adapter that creates pending review records idempotently and serves company-scoped read-only queue/detail queries.
+
+```mermaid
+flowchart TB
+    ManualReview[Manual Review Result]
+    Creation[Review Item Creation Service]
+    Writer[ReviewItemWriter Port]
+    Repository[SQLAlchemy Review Repository]
+    Store[(PostgreSQL workbench_review_items)]
+    Workbench[Odoo Workbench Adapter - future]
+    Reader[ReviewQueueReader Port]
+
+    ManualReview --> Creation
+    Creation --> Writer
+    Writer --> Repository
+    Repository --> Store
+    Workbench --> Reader
+    Reader --> Repository
+```
+
 ### ERP Adapter
 
 Odoo implementations translate approved workflow commands into Odoo records. Odoo is not allowed to own cross-ERP business rules.
