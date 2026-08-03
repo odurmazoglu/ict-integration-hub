@@ -302,12 +302,14 @@ def test_permission_checks_do_not_import_repositories_or_workbench_persistence()
         assert token not in source
 
 
-def test_no_workbench_route_added() -> None:
+def test_only_authenticated_workbench_routes_are_added() -> None:
     router_sources = "\n".join(
         path.read_text(encoding="utf-8").lower() for path in Path("app/api/routers").glob("*.py")
     )
 
-    assert "workbench" not in router_sources
+    assert "/api/workbench" in router_sources
+    assert "requestcontextdep" in router_sources
+    assert "require_permission" in router_sources
 
 
 def test_existing_health_endpoint_remains_unchanged() -> None:

@@ -12,10 +12,18 @@ from app.api.security import (
     RequestContextResolver,
     RequestMetadata,
 )
+from app.application.workbench import (
+    GetReviewItemUseCase,
+    ListReviewQueueUseCase,
+    ReviewDecisionWriter,
+    ReviewQueueReader,
+    SubmitReviewDecisionUseCase,
+)
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
 from app.db.session import SessionLocal
+from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
 from app.services.document_storage import DocumentStorage, LocalDocumentStorage
 
 
@@ -67,3 +75,42 @@ def get_document_storage(settings: SettingsDep) -> DocumentStorage:
 OdooClientDep = Annotated[OdooJson2Client, Depends(get_odoo_client)]
 UyumsoftClientDep = Annotated[UyumsoftSoapClient, Depends(get_uyumsoft_client)]
 DocumentStorageDep = Annotated[DocumentStorage, Depends(get_document_storage)]
+
+
+def get_review_repository(session: DbSessionDep) -> SqlAlchemyReviewRepository:
+    return SqlAlchemyReviewRepository(session)
+
+
+ReviewRepositoryDep = Annotated[SqlAlchemyReviewRepository, Depends(get_review_repository)]
+
+
+def get_review_queue_reader(repository: ReviewRepositoryDep) -> ReviewQueueReader:
+    return repository
+
+
+def get_review_decision_writer(repository: ReviewRepositoryDep) -> ReviewDecisionWriter:
+    return repository
+
+
+ReviewQueueReaderDep = Annotated[ReviewQueueReader, Depends(get_review_queue_reader)]
+ReviewDecisionWriterDep = Annotated[ReviewDecisionWriter, Depends(get_review_decision_writer)]
+
+
+def get_list_review_queue_use_case(reader: ReviewQueueReaderDep) -> ListReviewQueueUseCase:
+    return ListReviewQueueUseCase(review_queue_reader=reader)
+
+
+def get_review_item_use_case(reader: ReviewQueueReaderDep) -> GetReviewItemUseCase:
+    return GetReviewItemUseCase(review_queue_reader=reader)
+
+
+def get_submit_review_decision_use_case(writer: ReviewDecisionWriterDep) -> SubmitReviewDecisionUseCase:
+    return SubmitReviewDecisionUseCase(review_decision_writer=writer)
+
+
+ListReviewQueueUseCaseDep = Annotated[ListReviewQueueUseCase, Depends(get_list_review_queue_use_case)]
+GetReviewItemUseCaseDep = Annotated[GetReviewItemUseCase, Depends(get_review_item_use_case)]
+SubmitReviewDecisionUseCaseDep = Annotated[
+    SubmitReviewDecisionUseCase,
+    Depends(get_submit_review_decision_use_case),
+]

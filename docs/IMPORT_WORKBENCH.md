@@ -2,7 +2,7 @@
 
 Import Workbench is the accepted Odoo-side user interface for reviewing import sessions. It lives inside Odoo as UI only and does not contain business logic.
 
-No Odoo Import Workbench UI implementation exists in this repository yet. The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, and explicit review decision submission persistence that a future Odoo Workbench adapter can consume.
+No Odoo Import Workbench UI implementation exists in this repository yet. The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, explicit review decision submission persistence, and authenticated REST API adapters that a future Odoo Workbench UI can consume.
 
 ## Purpose
 
@@ -137,11 +137,41 @@ flowchart TB
     DecisionWriter --> Repository
 ```
 
+Implemented REST API endpoints:
+
+- `GET /api/workbench/reviews`
+- `GET /api/workbench/reviews/{review_id}`
+- `POST /api/workbench/reviews/{review_id}/decision`
+
+Permissions:
+
+- queue and detail reads require `workbench_review_read`
+- decision submission requires `workbench_review_decide`
+
+Company isolation and user identity:
+
+- `company_id` always comes from `RequestContext.company_id`
+- `decided_by` always comes from `RequestContext.user_id`
+- neither field is accepted from query parameters, path parameters, request bodies, or custom Workbench headers
+- detail reads always use both `review_id` and trusted `company_id`, so reviews from another company are returned as not found
+
+Response shape:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "warnings": [],
+  "errors": [],
+  "trace_id": "trace-123"
+}
+```
+
+Errors use the same envelope with `success=false`, `data=null`, and safe error codes/messages. `X-Trace-ID` is also returned in the response header. Workbench API responses do not expose ORM objects, tokens, SQL, connection strings, provider responses, or stack traces. Monetary values are serialized as strings.
+
 Not implemented in this slice:
 
 - Odoo UI
-- FastAPI routes
-- API authentication
 - user decision execution
 - ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows

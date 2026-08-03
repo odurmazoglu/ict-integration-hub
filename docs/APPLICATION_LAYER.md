@@ -332,7 +332,21 @@ Optimistic concurrency uses `ReviewDecisionCommand.expected_version`. The persis
 
 Decision idempotency is scoped by `(company_id, idempotency_key)`. An identical replay returns the original acknowledgement without incrementing `version` or inserting another decision row. Reusing the same key for different canonical command content raises `ReviewDecisionIdempotencyConflictError`. Fingerprints use structured enum values, tuples, explicit scalar fields, and canonical DTO content rather than raw JSON or display strings.
 
-This slice does not implement Odoo UI, FastAPI routes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching. Review persistence supports idempotent creation of pending review records, read-only queue/detail access, and persisted explicit decision submission only.
+The current API adapter exposes authenticated FastAPI routes for listing review items, retrieving one review item, and submitting explicit user decisions. These routes only construct existing application queries and commands from trusted `RequestContext` identity and HTTP boundary schemas. They do not execute workflows, write ERP records, create Vendor Bills, create rules, call AI, or perform fuzzy matching.
+
+The API response envelope is consistent across Workbench routes:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "warnings": [],
+  "errors": [],
+  "trace_id": "trace-123"
+}
+```
+
+Error responses use the same envelope with `success=false`, `data=null`, and structured safe error items. `trace_id` is returned both in the response body and the `X-Trace-ID` header.
 
 Review query use cases are synchronous because the current `ReviewQueueReader` and SQLAlchemy repository are synchronous. They do not perform in-memory filtering, sorting, pagination, persistence access, transaction management, workflow execution, or decision submission.
 
