@@ -12,16 +12,16 @@
 - deterministic partner and product matching
 - pure Vendor Bill builder and account.move payload generation
 - Import Workbench review item persistence for idempotent pending review creation, company-scoped queue/detail reads, and explicit review decision submission
-- API RequestContext foundation with gated development-header authentication for future authenticated routes
+- API RequestContext foundation with gated development-header authentication and production OIDC/JWT validation for future authenticated routes
 
 ## Next Milestones
 
-### 1. Real Authentication Adapter
+### 1. Authenticated Workbench Routes
 
-- JWT, OAuth2, Azure AD, Odoo session, or service-account adapter selected by an approved integration task
+- route adapters that consume the existing OIDC-backed `RequestContext`
 - no anonymous access
 - company identity and user identity resolved before API adapters construct application commands or queries
-- permission claims mapped into the existing `RequestContext` vocabulary
+- permission guards applied to review query and decision endpoints
 
 ### 2. Odoo Vendor Bill Write Service
 

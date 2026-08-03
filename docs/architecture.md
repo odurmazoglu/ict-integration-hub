@@ -51,21 +51,32 @@ Executes an approved strategy such as direct Vendor Bill, manual review, existin
 
 FastAPI adapters resolve a trusted `RequestContext` before future authenticated routes construct application commands or queries. The Application layer remains unaware of HTTP headers, cookies, sessions, JWTs, OAuth providers, or FastAPI request objects.
 
-The current implementation provides only a development-header authentication adapter. It is disabled by default and cannot be enabled in production. Future real authentication adapters should implement the same resolver boundary.
+The current implementation provides two explicit resolver modes:
+
+- `development_headers`: temporary local/test authentication through IPP headers, disabled by default and forbidden in production.
+- `oidc_jwt`: production authentication through standard OIDC discovery, JWKS, and signed bearer JWT validation.
+
+`IPP_AUTH_MODE` selects exactly one resolver. Production runtime validation requires `IPP_AUTH_MODE=oidc_jwt`, valid issuer/audience settings, and HTTPS OIDC endpoints. There is no anonymous fallback.
 
 ```mermaid
 flowchart TB
-    FutureAuth[Future Authentication Adapter]
+    Client[API Client]
+    Keycloak[OIDC Provider / Keycloak]
+    JWKS[JWKS]
     Resolver[RequestContextResolver]
+    OIDC[OidcJwtRequestContextResolver]
     Context[RequestContext]
     Dependency[FastAPI Dependency]
     Routes[Future Workbench Routes]
     UseCases[Application Use Cases]
 
-    FutureAuth --> Resolver
+    Client -->|Authorization Bearer JWT| Dependency
+    OIDC -->|OIDC discovery| Keycloak
+    OIDC -->|cached signing keys| JWKS
+    Resolver --> OIDC
+    Dependency --> Resolver
     Resolver --> Context
-    Context --> Dependency
-    Dependency --> Routes
+    Context --> Routes
     Routes --> UseCases
 ```
 
