@@ -63,6 +63,8 @@ sequenceDiagram
 
 The current implementation defines contracts under `app/application/workbench` and a SQLAlchemy persistence adapter outside the Application layer.
 
+Future API or Odoo adapter routes must resolve `RequestContext` before constructing these contracts. `company_id` must come from `RequestContext.company_id`, and future decision submission routes must derive `decided_by` from `RequestContext.user_id`.
+
 Implemented contract types:
 
 - `ReviewItem`: safe invoice summary for a review-required item
@@ -235,6 +237,9 @@ Future Workbench screens should support:
 - Business decisions must remain API calls into ICT IPP.
 - UI actions must send explicit user intent and confirmation.
 - User decisions must include explicit user identity, idempotency key, and expected version.
+- API adapters must derive trusted user identity and company identity from `RequestContext`.
+- `company_id` must not be trusted from request bodies, query strings, or path parameters.
+- Future decision adapters must derive `decided_by` from `RequestContext.user_id`.
 - Pending review item creation must be idempotent by company-scoped key.
 - Detail reads must always include both `review_id` and `company_id`.
 - Current explicit decisions are `SELECT_WORKFLOW` and `DISMISS`.
@@ -248,4 +253,5 @@ Future Workbench screens should support:
 
 - [Import Session](IMPORT_SESSION.md)
 - [Workflows](WORKFLOWS.md)
+- [Security](SECURITY.md)
 - [ERP Boundary ADR](adr/ADR-0003-erp-boundary.md)

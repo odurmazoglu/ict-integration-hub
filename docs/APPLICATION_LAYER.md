@@ -4,6 +4,8 @@ The Application layer is the orchestration boundary for future ICT IPP use cases
 
 This foundation does not implement business behavior. It establishes the project convention future workflows will use.
 
+API authentication and request metadata are outside the Application layer. Future route adapters must resolve `RequestContext` at the API boundary and use it to populate company and user identity fields before constructing application commands or queries.
+
 ## Responsibility
 
 Application layer coordinates.
@@ -526,6 +528,7 @@ flowchart TB
 The Application layer must not import:
 
 - `app.connectors`
+- `app.api.security`
 - `app.models`
 - `app.db`
 - FastAPI

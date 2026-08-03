@@ -15,6 +15,7 @@ ENV_KEYS = (
     "LIVE_CONNECTOR_READONLY",
     "PRODUCTION_OPERATIONS_ENABLED",
     "PRODUCTION_APPROVAL_ACK",
+    "IPP_ENABLE_DEVELOPMENT_HEADER_AUTH",
     "ODOO_BASE_URL",
     "ODOO_DATABASE",
     "ODOO_API_KEY",
@@ -80,6 +81,15 @@ def test_process_environment_overrides_selected_file(monkeypatch, tmp_path: Path
 
     assert settings.odoo_database == "process-value"
     assert settings.uyumsoft_username == "file-user"
+
+
+def test_development_header_auth_is_disabled_by_default(monkeypatch, tmp_path: Path) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    settings = Settings()
+
+    assert settings.ipp_enable_development_header_auth is False
 
 
 def test_only_selected_env_profile_is_loaded(monkeypatch, tmp_path: Path) -> None:

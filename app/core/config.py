@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     live_connector_readonly: bool = False
     production_operations_enabled: bool = False
     production_approval_ack: str = ""
+    ipp_enable_development_header_auth: bool = False
 
     odoo_base_url: AnyHttpUrl = Field(default="https://example.odoo.com")
     odoo_database: str = "example"
