@@ -57,6 +57,12 @@ IPP validates signatures through JWKS, rejects unsigned tokens, rejects unsuppor
 
 Errors returned by the resolver use safe text. Tokens, raw provider responses, credentials, URLs with secrets, and stack traces must not be exposed.
 
+## Odoo Online Workbench Projection Boundary
+
+Keycloak protects direct clients of the Hub REST API. The Odoo Online Workbench projection architecture does not install Odoo-side Python code that logs into Keycloak or calls the Hub with user bearer tokens.
+
+Future projection synchronization is Hub-to-Odoo through Odoo JSON-2 using a restricted Odoo API key. Odoo Studio fields must not store Keycloak tokens, Keycloak client secrets, Hub bearer tokens, or Hub service credentials. A future Odoo SSO or login-federation decision is separate from Workbench projection synchronization.
+
 ## Out Of Scope
 
-This adapter does not implement browser login, OAuth authorization-code flow, refresh tokens, user provisioning, role administration, Workbench API routes, workflow execution, ERP writes, or provider-specific Keycloak APIs.
+This adapter does not implement browser login, OAuth authorization-code flow, refresh tokens, user provisioning, role administration, Odoo SSO, Workbench projection synchronization, workflow execution, ERP writes, or provider-specific Keycloak APIs.

@@ -4,6 +4,11 @@ from typing import Protocol
 
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewItem, ReviewQueueResult
+from app.application.workbench.projection import (
+    OdooWorkbenchDecisionCandidate,
+    ProjectionPublishResult,
+    WorkbenchProjection,
+)
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 
 
@@ -28,4 +33,30 @@ class ReviewDecisionWriter(Protocol):
     """Write port for explicit user decision submission against a pending review item."""
 
     def submit_review_decision(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
+        pass
+
+
+class WorkbenchProjectionPublisher(Protocol):
+    """Port for publishing Hub-owned review projections to an ERP UI surface."""
+
+    def publish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult:
+        pass
+
+    def acknowledge_decision(
+        self,
+        acknowledgement: ReviewDecisionAcknowledgement,
+        *,
+        odoo_record_id: int,
+        trace_id: str | None = None,
+    ) -> ProjectionPublishResult:
+        pass
+
+
+class WorkbenchDecisionCandidateReader(Protocol):
+    """Port for reading user-submitted decision candidates from an ERP UI surface."""
+
+    def list_ready_decisions(self, *, company_id: int, limit: int) -> tuple[OdooWorkbenchDecisionCandidate, ...]:
+        pass
+
+    def get_ready_decision(self, *, review_id: str, company_id: int) -> OdooWorkbenchDecisionCandidate:
         pass

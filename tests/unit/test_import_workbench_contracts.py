@@ -230,7 +230,7 @@ def test_review_queue_reader_port_shape_is_read_only() -> None:
 
 def test_workbench_contracts_do_not_import_odoo_or_provider_layers() -> None:
     source = _workbench_source()
-    forbidden = ("app.connectors", "app.models", "app.db", "odoo", "uyumsoft")
+    forbidden = ("app.connectors", "app.connectors.odoo", "odoojson2client", "app.models", "app.db", "uyumsoft")
 
     for token in forbidden:
         assert token not in source.lower()

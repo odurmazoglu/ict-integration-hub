@@ -65,6 +65,7 @@ Current implemented capabilities:
 - Import Workbench review query use cases for listing the review queue and retrieving one review item through `ReviewQueueReader`.
 - Import Workbench review decision submission use case for optimistic, idempotent `SELECT_WORKFLOW` and `DISMISS` decisions without workflow execution.
 - Authenticated Import Workbench REST API for queue, detail, and decision submission through `RequestContext` permissions.
+- Odoo Online Workbench projection contract for future Odoo Studio review display and explicit decision capture.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
@@ -76,6 +77,8 @@ Not implemented or not allowed by default:
 - Uyumsoft status mutation such as `SetInvoicesTaken`, `SendInvoice`, `Cancel*`, `RetrySendInvoices`, or `MoveToDraftStatus`.
 - Odoo `action_post`, unlink, payment registration, reconciliation, or automatic master-data creation.
 - Business decision logic inside Odoo.
+- Custom Odoo Python addons for Odoo Online.
+- Odoo Studio projection synchronization or decision ingestion.
 - AI-driven automatic decisions.
 - Database schema changes without Alembic migrations and tests.
 
@@ -145,6 +148,7 @@ Core documentation:
 - [AI Advisor](docs/AI_ADVISOR.md)
 - [Matching](docs/MATCHING.md)
 - [Import Workbench](docs/IMPORT_WORKBENCH.md)
+- [Odoo Workbench Projection](docs/ODOO_WORKBENCH_PROJECTION.md)
 - [Import Session](docs/IMPORT_SESSION.md)
 - [Company Memory](docs/COMPANY_MEMORY.md)
 - [Roadmap](docs/ROADMAP.md)
@@ -181,7 +185,7 @@ Accepted principles:
 - Hub owns business decisions
 - AI is advisory only
 
-Canonical ADRs live in [docs/adr](docs/adr/README.md), including IPP, ERP boundary, Decision Engine, Rule Engine, AI Advisor, Company Memory, Import Session, Procurement Traceability, and Strategy Pattern decisions.
+Canonical ADRs live in [docs/adr](docs/adr/README.md), including IPP, ERP boundary, Decision Engine, Rule Engine, AI Advisor, Company Memory, Import Session, Procurement Traceability, Strategy Pattern, and Odoo Online Workbench Projection decisions.
 
 ## Contributing
 

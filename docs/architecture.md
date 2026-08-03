@@ -113,6 +113,38 @@ flowchart TB
     DecisionWriter --> Repository
 ```
 
+### Odoo Online Workbench Projection
+
+Odoo 19 Online cannot install custom Python modules. The accepted Workbench UI architecture therefore uses a future Odoo Studio custom model, `x_ipp_import_review`, as a projection of Hub-owned review items. The Application layer defines ERP-neutral `WorkbenchProjection`, `OdooWorkbenchDecisionCandidate`, `ProjectionPublishResult`, `WorkbenchProjectionPublisher`, and `WorkbenchDecisionCandidateReader` contracts. No Odoo JSON-2 projection adapter is implemented yet.
+
+The projection does not move decision authority to Odoo. Odoo displays Hub-owned review data and captures explicit candidate decisions. The Hub later reads candidates, validates existing version and idempotency rules, persists accepted decisions in PostgreSQL, and projects acknowledgement status back to Odoo.
+
+```mermaid
+flowchart TB
+    Store[(Hub PostgreSQL Workbench Tables)]
+    Projection[WorkbenchProjection]
+    Publisher[WorkbenchProjectionPublisher Port]
+    OdooAdapter[Future Odoo Projection Adapter]
+    Studio[(Odoo Studio x_ipp_import_review)]
+    User[Odoo User]
+    Candidate[OdooWorkbenchDecisionCandidate]
+    Reader[WorkbenchDecisionCandidateReader Port]
+    Submit[SubmitReviewDecisionUseCase]
+    Ack[ReviewDecisionAcknowledgement]
+
+    Store --> Projection
+    Projection --> Publisher
+    Publisher --> OdooAdapter
+    OdooAdapter --> Studio
+    User --> Studio
+    Studio --> Candidate
+    Candidate --> Reader
+    Reader --> Submit
+    Submit --> Store
+    Submit --> Ack
+    Ack --> Publisher
+```
+
 ### ERP Adapter
 
 Odoo implementations translate approved workflow commands into Odoo records. Odoo is not allowed to own cross-ERP business rules.

@@ -85,7 +85,7 @@ See [Application Layer](APPLICATION_LAYER.md) for the package and port conventio
 
 ## Import Workbench Contract Flow
 
-The current repository defines application contracts and persistence boundaries that a future Odoo Import Workbench adapter can consume. It does not implement UI, API routes, user decision execution, ERP writes, or AI recommendations.
+The current repository defines application contracts and persistence boundaries for direct Hub API clients and future Odoo Online Studio projection synchronization. It does not implement Odoo Studio setup, projection JSON-2 synchronization, decision ingestion, user decision execution, ERP writes, or AI recommendations.
 
 ```mermaid
 flowchart TB
@@ -94,14 +94,18 @@ flowchart TB
     Queue[ReviewQueueQuery / ReviewQueueResult]
     Detail[ReviewDetailQuery]
     Decision[ReviewDecisionCommand]
+    Projection[WorkbenchProjection]
+    Candidate[OdooWorkbenchDecisionCandidate]
     Submit[SubmitReviewDecisionUseCase]
     Writer[ReviewDecisionWriter Port]
     Store[(PostgreSQL workbench_review_decisions)]
     Ack[ReviewDecisionAcknowledgement]
 
     ReviewRequired --> ReviewItem
+    ReviewItem --> Projection
     Queue --> ReviewItem
     Detail --> ReviewItem
+    Candidate --> Decision
     ReviewItem --> Decision
     Decision --> Submit
     Submit --> Writer

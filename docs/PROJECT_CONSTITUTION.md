@@ -89,6 +89,7 @@ Odoo is an execution platform.
 Odoo owns:
 
 - Import Workbench user interface
+- Import Workbench projection store when implemented through Odoo Studio
 - ERP master data
 - Purchase Orders
 - RFQs
@@ -134,6 +135,8 @@ Forbidden operations include (unless a future ADR explicitly changes this):
 Current write scope is intentionally limited.
 
 The Hub may create **Draft Vendor Bills** only after successful validation and explicit approval.
+
+ADR-0011 also permits a future Odoo write category for the dedicated Odoo Studio Workbench projection model only. That projection exception is for review display, candidate decision capture, and Hub acknowledgement fields. It does not authorize accounting, procurement, master-data, deletion, or workflow execution writes.
 
 The Hub must **not**:
 
@@ -247,10 +250,12 @@ The current implementation includes:
 - Deterministic account.move payload generation
 - Import Workbench application contracts for future review queue and explicit user decision adapters
 - Import Workbench review item persistence for idempotent pending review creation and company-scoped read-only queue/detail access
+- Authenticated Import Workbench REST API for direct Hub clients
+- Odoo Online Workbench projection contracts for future Studio-based review display and decision candidate capture
 
 The next implementation milestone is:
 
-- Durable Import Session persistence and Workbench UI when explicitly scoped
+- Odoo Studio projection synchronization and controlled Workbench UI setup when explicitly scoped
 
 Future milestones include:
 
