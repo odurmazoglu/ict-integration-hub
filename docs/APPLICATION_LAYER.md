@@ -74,6 +74,10 @@ Current foundation contracts:
 - `LineResolution`
 - `TaxResolution`
 - `BusinessContextDecision`
+- `BusinessContextAllocationType`
+- `AllocationCompleteness`
+- `BusinessContextAllocation`
+- `BusinessContextAllocationSet`
 - `ReviewQueueReader`
 - `ReviewDecisionWriter`
 - `ListReviewQueueUseCase`
@@ -315,6 +319,11 @@ Current contracts:
 - `ReviewQueueResult`: immutable paginated result
 - `ReviewDecisionType`: canonical explicit user decisions: `SELECT_WORKFLOW` and `DISMISS`
 - `ReviewDecisionCommand`: explicit user decision command with canonical decision type, expected version, user identity, idempotency key, optional selected workflow, explicit line/tax resolutions, and optional procurement traceability context
+- `BusinessContextDecision`: legacy single-context procurement traceability contract currently used by `ReviewDecisionCommand`, Workbench API schemas, decision persistence, and Odoo projection candidates
+- `BusinessContextAllocationType`: canonical allocation purpose vocabulary for future multi-allocation decisions
+- `AllocationCompleteness`: explicit `COMPLETE` or `PARTIAL` allocation-set intent
+- `BusinessContextAllocation`: immutable ERP-neutral allocation line with amount and/or percentage, commercial customer, recharge recipient, target company, Sales Order, Purchase Order, project, analytic account, and cost-purpose context
+- `BusinessContextAllocationSet`: immutable aggregate that validates unique allocation keys, currency consistency, and complete or partial amount/percentage reconciliation
 - `ReviewDecisionAcknowledgement`: immutable acknowledgement contract for a future command handler
 - `ReviewQueueReader`: read-only port for future queue/detail adapters
 - `ReviewItemWriter`: create-only port for idempotent persistence of pending review items
@@ -330,6 +339,20 @@ Current contracts:
 - `WorkbenchDecisionCandidateReader`: port for future ready-decision reads from an ERP UI projection surface
 
 The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation, queue/detail reads, and explicit review decision submission. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, scopes detail reads by `review_id` plus `company_id`, and records submitted decisions in append-only audit rows.
+
+Business context allocation contracts are not wired into the current command, API, persistence, projection, or Odoo adapter. `BusinessContextDecision` remains the runtime single-context contract for this slice. A later implementation PR should replace the current `business_context` command field with `business_context_allocations: BusinessContextAllocationSet | None` rather than adding both fields and creating ambiguous precedence.
+
+Allocation validation is structural and deterministic only:
+
+- allocation keys are required and unique inside a set
+- source invoice lines may appear in multiple allocations
+- amount and percentage values use finite `Decimal` values without float conversion
+- values preserve the current Workbench monetary precision boundary of 24 total digits and 6 fractional digits
+- `COMPLETE` allocation sets must reconcile fully by amount or percentage
+- `PARTIAL` allocation sets may be below the invoice total or 100 percent, but must not exceed either
+- `CUSTOMER_RECHARGE` distinguishes commercial `customer_id` from actual `recharge_partner_id`
+
+Negative and zero allocations are intentionally not supported in the initial contract. Credit-note allocation semantics are future work and require a focused ADR or implementation scope before they can affect accepted allocation evidence.
 
 Projection candidate timestamps are audit values. `OdooWorkbenchDecisionCandidate.decided_at` must be timezone-aware, and `WorkbenchProjection.updated_at` must be timezone-aware when supplied. The contracts reject naive values instead of assuming UTC or converting timezones. `ProjectionPublishResult` represents exactly one publish operation: create or update.
 

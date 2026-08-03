@@ -66,6 +66,7 @@ Current implemented capabilities:
 - Import Workbench review decision submission use case for optimistic, idempotent `SELECT_WORKFLOW` and `DISMISS` decisions without workflow execution.
 - Authenticated Import Workbench REST API for queue, detail, and decision submission through `RequestContext` permissions.
 - Odoo Online Workbench projection contract for future Odoo Studio review display and explicit decision capture.
+- Business Context Allocation contracts for future multi-Sales-Order, customer recharge, affiliate, project, and internal cost traceability.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
@@ -79,6 +80,7 @@ Not implemented or not allowed by default:
 - Business decision logic inside Odoo.
 - Custom Odoo Python addons for Odoo Online.
 - Odoo Studio projection synchronization or decision ingestion.
+- Business context allocation persistence, API submission, Odoo child model synchronization, or workflow execution.
 - AI-driven automatic decisions.
 - Database schema changes without Alembic migrations and tests.
 
@@ -185,7 +187,7 @@ Accepted principles:
 - Hub owns business decisions
 - AI is advisory only
 
-Canonical ADRs live in [docs/adr](docs/adr/README.md), including IPP, ERP boundary, Decision Engine, Rule Engine, AI Advisor, Company Memory, Import Session, Procurement Traceability, Strategy Pattern, and Odoo Online Workbench Projection decisions.
+Canonical ADRs live in [docs/adr](docs/adr/README.md), including IPP, ERP boundary, Decision Engine, Rule Engine, AI Advisor, Company Memory, Import Session, Procurement Traceability, Strategy Pattern, Odoo Online Workbench Projection, and Business Context Allocation decisions.
 
 ## Contributing
 

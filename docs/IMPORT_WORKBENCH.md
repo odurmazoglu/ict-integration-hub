@@ -76,7 +76,8 @@ Implemented contract types:
 - `ReviewDecisionCommand`: explicit user decision command for `SELECT_WORKFLOW` or `DISMISS`
 - `ReviewDecisionAcknowledgement`: safe acknowledgement contract
 - `LineResolution` and `TaxResolution`: explicit selected ERP IDs for invoice lines and taxes
-- `BusinessContextDecision`: explicit procurement traceability identifiers selected by the user
+- `BusinessContextDecision`: legacy single-context procurement traceability identifiers selected by the user
+- `BusinessContextAllocationType`, `AllocationCompleteness`, `BusinessContextAllocation`, and `BusinessContextAllocationSet`: future multi-allocation business context contracts
 - `ReviewQueueReader`: read-only application port for future queue/detail adapters
 - `ReviewItemWriter`: create-only application port for idempotent pending review item creation
 - `ReviewDecisionWriter`: decision submission application port for explicit user decisions
@@ -89,6 +90,8 @@ Implemented contract types:
 - `ProjectionPublishResult`: safe result for future projection publish or acknowledgement writes
 - `WorkbenchProjectionPublisher`: application port for future projection publishing and acknowledgement
 - `WorkbenchDecisionCandidateReader`: application port for future candidate decision reads
+
+`BusinessContextDecision` remains the current runtime contract used by `ReviewDecisionCommand`, decision persistence, Workbench API schemas, and Odoo projection candidates. A later implementation PR should replace `business_context` with `business_context_allocations: BusinessContextAllocationSet | None` after API, persistence, Odoo projection, and idempotency behavior are explicitly scoped. This PR does not add both fields to avoid dual-source ambiguity.
 
 ## Current Persistence Foundation
 
@@ -188,6 +191,7 @@ Not implemented in this slice:
 - workflow execution
 - ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows
+- business context allocation persistence, API submission, Odoo synchronization, or acknowledgement
 - AI recommendations
 - attachments or raw XML display
 
@@ -241,6 +245,8 @@ Field ownership is explicit:
 
 Odoo users must not edit Hub-owned identity or version fields. The Hub must not silently overwrite submitted user-decision fields. A decision candidate is processed only when `x_ipp_decision_ready` is explicitly true.
 
+Future Business Context Allocation child lines will allow one supplier invoice to be split across multiple Sales Orders, commercial customers, recharge recipients, target companies, projects, and internal costs. Candidate allocation lines from Odoo are untrusted until Hub validation. The Hub must verify company isolation, selected ERP IDs, allocation totals, expected version, and idempotency before accepting allocations.
+
 See [Odoo Workbench Projection](ODOO_WORKBENCH_PROJECTION.md) and [ADR-0011](adr/ADR-0011-odoo-online-import-workbench-projection.md).
 
 ## Decision Submission
@@ -273,6 +279,8 @@ sequenceDiagram
 
 `SELECT_WORKFLOW` stores the selected canonical workflow and any explicit partner, line, tax, or traceability choices. It moves the review item to `DECISION_SUBMITTED` and leaves execution to a future approved workflow slice.
 
+Future `SELECT_WORKFLOW` decisions may carry `BusinessContextAllocationSet` evidence. Future `DISMISS` decisions must reject allocations. Allocation requirements will depend on selected workflow and future execution strategy.
+
 `DISMISS` stores the dismissal decision, moves the review item to `DISMISSED`, and stores no workflow-specific selections.
 
 ## UI Responsibilities
@@ -286,6 +294,7 @@ Future Workbench screens should support:
 - ambiguous match review
 - AI recommendation display marked as advisory
 - traceability chain display
+- business context allocation line review
 - action confirmation
 - links to created draft ERP documents
 

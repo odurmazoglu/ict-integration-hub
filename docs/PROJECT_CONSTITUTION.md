@@ -229,6 +229,8 @@ Sales Profitability
 
 If one relationship cannot be reconstructed, the platform should explicitly record the missing link instead of silently breaking traceability.
 
+ADR-0012 clarifies that one supplier invoice may require multiple business context allocation lines. Accepted allocations are Hub-owned traceability evidence. Odoo may capture candidate allocation lines in the future, but allocation semantics and validation belong to ICT IPP.
+
 ---
 
 # Current Baseline
@@ -252,10 +254,11 @@ The current implementation includes:
 - Import Workbench review item persistence for idempotent pending review creation and company-scoped read-only queue/detail access
 - Authenticated Import Workbench REST API for direct Hub clients
 - Odoo Online Workbench projection contracts for future Studio-based review display and decision candidate capture
+- Business Context Allocation contracts for future multi-line cost traceability
 
 The next implementation milestone is:
 
-- Odoo Studio projection synchronization and controlled Workbench UI setup when explicitly scoped
+- Odoo Studio projection synchronization, allocation child-line setup, and controlled Workbench UI setup when explicitly scoped
 
 Future milestones include:
 

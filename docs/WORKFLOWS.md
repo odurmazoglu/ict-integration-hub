@@ -113,7 +113,9 @@ flowchart TB
     Submit --> Ack
 ```
 
-Traceability choices in `ReviewDecisionCommand` are explicit user-provided identifiers through `BusinessContextDecision`. The contract supports future choices such as direct Vendor Bill, RFQ/Purchase Order, existing Purchase Order matching, expense, asset, subscription, or dismissal without executing those workflows in this slice. Manual Review is the unresolved state; it cannot be selected as a resolution workflow.
+Traceability choices in the current `ReviewDecisionCommand` are explicit user-provided identifiers through legacy `BusinessContextDecision`. The new `BusinessContextAllocationSet` contract defines the future multi-allocation shape, but it is not wired into the command, API, persistence, or Odoo adapter yet. The contract supports future choices such as direct Vendor Bill, RFQ/Purchase Order, existing Purchase Order matching, expense, asset, subscription, customer recharge, affiliate targeting, project cost, internal cost, or dismissal without executing those workflows in this slice. Manual Review is the unresolved state; it cannot be selected as a resolution workflow.
+
+A single invoice-level selected workflow may not describe every allocation purpose in mixed cases. Future workflow handling must distinguish the review decision, the overall processing strategy, and allocation-line purposes. Mixed allocations will require a future Composite Workflow Strategy. This PR does not add `WorkflowType.MIXED`, change the existing workflow vocabulary, or implement composite execution.
 
 Submitted decisions are persisted append-only and update the review item status/version atomically. `SELECT_WORKFLOW` moves `PENDING_REVIEW` to `DECISION_SUBMITTED`; `DISMISS` moves `PENDING_REVIEW` to `DISMISSED`. Optimistic concurrency uses `expected_version`, and decision-command idempotency uses `(company_id, idempotency_key)` so identical replays return the original acknowledgement without incrementing the review version again.
 
@@ -156,6 +158,8 @@ Current implemented strategy:
 - `ManualReviewStrategy`: returns `review_required` results with structured reasons and performs no ERP writes
 
 Future strategies may include read-only ingestion, document acquisition, mapping preview, exact resolution, blocked import, RFQ, Purchase Order, expense, asset, and subscription paths. Future strategies should be added by implementing `WorkflowStrategy` and registering it with `WorkflowStrategyResolver`, not by modifying `DecisionEngine`.
+
+Mixed Business Context Allocation sets may require a future Composite Workflow Strategy that coordinates multiple allocation-line purposes while preserving one accepted review decision. That strategy is not implemented here.
 
 Strategy selection must be explainable and based on Rule Engine output.
 
