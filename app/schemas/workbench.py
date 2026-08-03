@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
+from app.application.workflow import ManualReviewReasonCode, WorkflowType
+
+
+class ApiErrorItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str
+    message: str
+
+
+class ApiEnvelope[DataT](BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    success: bool
+    data: DataT | None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[ApiErrorItem] = Field(default_factory=list)
+    trace_id: str
+
+
+class ManualReviewReasonResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    code: ManualReviewReasonCode
+    message: str
+    line_number: str | None = None
+    tax_index: int | None = None
+    candidate_count: int | None = None
+    source: str | None = None
+    details: list[list[str]]
+
+
+class ReviewItemResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    invoice_id: str
+    invoice_number: str | None
+    supplier_tax_number: str | None
+    supplier_name: str | None
+    invoice_date: date | None
+    currency: str | None
+    total_amount: str | None
+    workflow: WorkflowType
+    status: ReviewStatus
+    review_reasons: list[ManualReviewReasonResponse]
+    warnings: list[str]
+    created_at: datetime | None
+    updated_at: datetime | None
+    version: int
+
+
+class ReviewQueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[ReviewItemResponse]
+    total_count: int
+    limit: int
+    offset: int
+
+
+class LineResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_number: str
+    selected_product_id: int
+
+
+class TaxResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_number: str
+    tax_index: int
+    selected_tax_id: int
+
+
+class BusinessContextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    opportunity_id: int | None = None
+    sales_order_id: int | None = None
+    proposal_scenario_id: int | None = None
+    purchase_order_id: int | None = None
+    project_id: int | None = None
+    analytic_account_id: int | None = None
+
+
+class ReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True, use_enum_values=False)
+
+    expected_version: int
+    decision: ReviewDecisionType
+    selected_workflow: WorkflowType | None = None
+    selected_partner_id: int | None = None
+    line_resolutions: list[LineResolutionRequest] = Field(default_factory=list)
+    tax_resolutions: list[TaxResolutionRequest] = Field(default_factory=list)
+    business_context: BusinessContextRequest | None = None
+    comment: str | None = None
+    idempotency_key: str
+
+
+class ReviewDecisionAcknowledgementResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    accepted: bool
+    review_id: str
+    status: ReviewStatus
+    version: int
+    decision: ReviewDecisionType
+    selected_workflow: WorkflowType | None = None
+
+
+ReviewItemEnvelope = ApiEnvelope[ReviewItemResponse]
+ReviewQueueEnvelope = ApiEnvelope[ReviewQueueResponse]
+ReviewDecisionAcknowledgementEnvelope = ApiEnvelope[ReviewDecisionAcknowledgementResponse]
+ErrorEnvelope = ApiEnvelope[Any]
+
+
+def decimal_to_api(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value, "f")

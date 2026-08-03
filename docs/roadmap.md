@@ -13,15 +13,16 @@
 - pure Vendor Bill builder and account.move payload generation
 - Import Workbench review item persistence for idempotent pending review creation, company-scoped queue/detail reads, and explicit review decision submission
 - API RequestContext foundation with gated development-header authentication and production OIDC/JWT validation for future authenticated routes
+- Authenticated Import Workbench REST API exposing queue, detail, and decision submission adapters
 
 ## Next Milestones
 
-### 1. Authenticated Workbench Routes
+### 1. Odoo Import Workbench UI
 
-- route adapters that consume the existing OIDC-backed `RequestContext`
-- no anonymous access
-- company identity and user identity resolved before API adapters construct application commands or queries
-- permission guards applied to review query and decision endpoints
+- Odoo-side UI that consumes the authenticated Workbench REST API
+- queue and detail screens for pending review items
+- explicit `SELECT_WORKFLOW` and `DISMISS` decision submission
+- no Odoo-owned business logic
 
 ### 2. Odoo Vendor Bill Write Service
 

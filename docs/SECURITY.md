@@ -116,6 +116,23 @@ They must not accept trusted `company_id` from:
 
 Future Workbench decision routes must derive `decided_by` from `RequestContext.user_id`, not blindly trust client-provided user identity.
 
+## Authenticated Workbench API
+
+Implemented Workbench endpoints:
+
+- `GET /api/workbench/reviews`
+- `GET /api/workbench/reviews/{review_id}`
+- `POST /api/workbench/reviews/{review_id}/decision`
+
+Required permissions:
+
+- queue and detail reads: `workbench_review_read`
+- decision submission: `workbench_review_decide`
+
+The route adapters construct `ReviewQueueQuery`, `ReviewDetailQuery`, and `ReviewDecisionCommand` with trusted identity from `RequestContext`. They do not accept `company_id`, `decided_by`, or body-level `review_id` from the client.
+
+Successful and failed Workbench responses include the same `trace_id` in the JSON body and `X-Trace-ID` response header. Authentication failures before `RequestContext` resolution use the validated inbound trace id when available, otherwise a safe generated id.
+
 ## Out Of Scope
 
 Not implemented:

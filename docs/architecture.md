@@ -96,7 +96,8 @@ flowchart TB
     Repository[SQLAlchemy Review Repository]
     ReviewItems[(PostgreSQL workbench_review_items)]
     Decisions[(PostgreSQL workbench_review_decisions)]
-    Workbench[Odoo Workbench Adapter - future]
+    API[Authenticated Workbench REST API]
+    Workbench[Odoo Workbench UI - future]
     Reader[ReviewQueueReader Port]
 
     ManualReview --> Creation
@@ -104,9 +105,10 @@ flowchart TB
     Writer --> Repository
     Repository --> ReviewItems
     Repository --> Decisions
-    Workbench --> Reader
+    Workbench --> API
+    API --> Reader
+    API --> Submit
     Reader --> Repository
-    Workbench --> Submit
     Submit --> DecisionWriter
     DecisionWriter --> Repository
 ```

@@ -64,6 +64,7 @@ Current implemented capabilities:
 - Durable Import Workbench review persistence for idempotent pending review creation, company-scoped queue/detail reads, and explicit decision submission.
 - Import Workbench review query use cases for listing the review queue and retrieving one review item through `ReviewQueueReader`.
 - Import Workbench review decision submission use case for optimistic, idempotent `SELECT_WORKFLOW` and `DISMISS` decisions without workflow execution.
+- Authenticated Import Workbench REST API for queue, detail, and decision submission through `RequestContext` permissions.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
