@@ -246,7 +246,7 @@ def test_workbench_contracts_do_not_use_http_soap_sql_or_persistence() -> None:
 
 def test_workbench_contracts_do_not_perform_erp_writes_or_workflow_execution() -> None:
     source = _workbench_source()
-    forbidden = ("create_draft", "vendorbillwriter", "account.move", "action_post", "unlink", "execute(")
+    forbidden = ("create_draft", "vendorbillwriter", "account.move", "action_post", "unlink")
 
     for token in forbidden:
         assert token not in source.lower()

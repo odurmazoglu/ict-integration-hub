@@ -76,6 +76,8 @@ Implemented contract types:
 - `ReviewQueueReader`: read-only application port for future queue/detail adapters
 - `ReviewItemWriter`: create-only application port for idempotent pending review item creation
 - `ReviewItemCreationService`: small application service that delegates review item creation through the writer port
+- `ListReviewQueueUseCase`: application query boundary for listing review items through `ReviewQueueReader`
+- `GetReviewItemUseCase`: application query boundary for retrieving one company-scoped review item through `ReviewQueueReader`
 
 ## Current Persistence Foundation
 
@@ -84,6 +86,8 @@ The first persistence slice stores Workbench review items in `workbench_review_i
 Implemented behavior:
 
 - create one `PENDING_REVIEW` item idempotently through `ReviewItemWriter`
+- list the review queue through `ListReviewQueueUseCase` and `ReviewQueueReader`
+- retrieve one review item through `GetReviewItemUseCase` and `ReviewQueueReader`
 - return an existing item when the same company-scoped idempotency key is reused with identical immutable business content
 - raise a safe idempotency conflict when the same key is reused for different content
 - read one item by `review_id` and `company_id`
@@ -118,7 +122,9 @@ Not implemented in this slice:
 
 - Odoo UI
 - FastAPI routes
+- API authentication
 - user decision execution
+- review status transitions
 - ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows
 - AI recommendations
@@ -132,6 +138,8 @@ Recommendation acceptance is intentionally not part of the current contract. A f
 flowchart TB
     OdooWorkbench[Odoo Import Workbench UI - future]
     Query[ReviewQueueQuery / ReviewDetailQuery]
+    ListUseCase[ListReviewQueueUseCase]
+    GetUseCase[GetReviewItemUseCase]
     Reader[ReviewQueueReader Port]
     Writer[ReviewItemWriter Port]
     Repository[SQLAlchemy Review Repository]
@@ -141,7 +149,10 @@ flowchart TB
     Ack[ReviewDecisionAcknowledgement]
 
     OdooWorkbench --> Query
-    Query --> Reader
+    Query --> ListUseCase
+    Query --> GetUseCase
+    ListUseCase --> Reader
+    GetUseCase --> Reader
     Writer --> Repository
     Reader --> Repository
     Repository --> Store
