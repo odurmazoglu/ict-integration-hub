@@ -187,7 +187,11 @@ def test_development_authentication_is_disabled_by_default() -> None:
 
 
 def test_development_authentication_is_rejected_in_production() -> None:
-    settings = Settings(app_env="production", ipp_enable_development_header_auth=True)
+    settings = Settings(
+        app_env="production",
+        ipp_auth_mode="development_headers",
+        ipp_enable_development_header_auth=True,
+    )
 
     assert "IPP_ENABLE_DEVELOPMENT_HEADER_AUTH must be disabled in production." in runtime_configuration_errors(
         settings
@@ -197,7 +201,11 @@ def test_development_authentication_is_rejected_in_production() -> None:
 
 
 def test_explicit_development_environment_allows_development_headers() -> None:
-    settings = Settings(app_env="development", ipp_enable_development_header_auth=True)
+    settings = Settings(
+        app_env="development",
+        ipp_auth_mode="development_headers",
+        ipp_enable_development_header_auth=True,
+    )
     resolver = get_request_context_resolver(settings)
 
     assert isinstance(resolver, DevelopmentHeaderRequestContextResolver)
@@ -227,7 +235,11 @@ def test_permission_guard_rejects_missing_permission() -> None:
 def test_fastapi_dependency_uses_request_headers_only() -> None:
     request = FakeRequest(headers=Headers(_valid_headers()))
     resolver = DevelopmentHeaderRequestContextResolver(
-        Settings(app_env="development", ipp_enable_development_header_auth=True)
+        Settings(
+            app_env="development",
+            ipp_auth_mode="development_headers",
+            ipp_enable_development_header_auth=True,
+        )
     )
 
     context = get_request_context(request, resolver)
@@ -262,7 +274,6 @@ def test_security_contracts_do_not_import_sqlalchemy_or_provider_boundaries() ->
         "action_post",
         "workflowstrategy",
         "decisionengine",
-        "jwt.decode",
         "authlib",
         "azure.identity",
         "msal",
@@ -314,7 +325,11 @@ class FakeRequest:
 
 def _resolve(headers: dict[str, str]) -> RequestContext:
     resolver = DevelopmentHeaderRequestContextResolver(
-        Settings(app_env="development", ipp_enable_development_header_auth=True)
+        Settings(
+            app_env="development",
+            ipp_auth_mode="development_headers",
+            ipp_enable_development_header_auth=True,
+        )
     )
     return resolver.resolve(RequestMetadata(headers=Headers(headers)))
 

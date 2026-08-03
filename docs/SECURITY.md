@@ -1,8 +1,8 @@
 # Security
 
-ICT Integration Hub now has an API-layer RequestContext foundation for future authenticated routes.
+ICT Integration Hub has an API-layer `RequestContext` foundation for future authenticated routes.
 
-This foundation does not implement real authentication. It defines the stable boundary future authentication adapters will use to provide trusted user, company, permission, and trace identity to FastAPI route adapters.
+The current production adapter validates standard OIDC/JWT bearer tokens through discovery and JWKS. It is compatible with Keycloak when Keycloak emits the IPP claim contract documented below.
 
 ## RequestContext
 
@@ -30,7 +30,41 @@ Canonical vocabulary:
 - `ODOO_SESSION`
 - `SERVICE_ACCOUNT`
 
-Only `DEVELOPMENT_HEADERS` is operational in this foundation PR. The other values are vocabulary for future focused authentication adapters and do not decode tokens, call identity providers, or establish sessions.
+Operational resolver modes:
+
+- `disabled`: default for local development until an authentication mode is explicitly selected. Protected routes must fail closed.
+- `development_headers`: temporary local/test authentication through explicit IPP headers.
+- `oidc_jwt`: production authentication through standard OIDC discovery, JWKS, and signed bearer JWT validation.
+
+`IPP_AUTH_MODE` selects exactly one resolver. Production requires `IPP_AUTH_MODE=oidc_jwt`.
+
+## OIDC JWT
+
+`OidcJwtRequestContextResolver` validates `Authorization: Bearer <token>` and never stores the raw token in `RequestContext`.
+
+Validation includes:
+
+- OIDC discovery issuer matching `IPP_OIDC_ISSUER`
+- JWKS retrieval from discovery, or `IPP_OIDC_JWKS_URL` override
+- bounded JWKS cache controlled by `IPP_OIDC_JWKS_CACHE_SECONDS`
+- one JWKS refresh when a token references an unknown `kid`
+- signature verification
+- allowed algorithms from `IPP_OIDC_ALLOWED_ALGORITHMS`; `none` is rejected
+- issuer and audience verification
+- `exp`, `nbf`, `iat`, and `sub` validation with bounded clock skew
+- safe exceptions for invalid token, expired token, issuer, audience, signature, provider unavailable, and OIDC configuration failures
+
+Claim mapping:
+
+- `sub` -> `RequestContext.user_id`
+- `preferred_username` by default -> `RequestContext.user_name`
+- `ipp_company_id` by default -> `RequestContext.company_id`
+- `ipp_permissions` by default -> `RequestContext.permissions`
+- `X-Trace-ID`, when safe, -> `RequestContext.trace_id`; otherwise a UUID is generated
+
+The company claim must be exactly one positive integer. Permission claims must be a JSON array of canonical permission strings. Unknown permissions are rejected and duplicates are deduplicated.
+
+Production runtime validation requires HTTPS OIDC issuer, discovery, and JWKS URLs. Provider errors and token validation failures are reported through sanitized exception text and preserve exception chaining internally.
 
 ## Development Headers
 
@@ -55,7 +89,8 @@ Development-header authentication is gated by:
 
 ```text
 APP_ENV=development
-IPP_ENABLE_DEVELOPMENT_HEADER_AUTH=1
+IPP_AUTH_MODE=development_headers
+IPP_ENABLE_DEVELOPMENT_HEADER_AUTH=true
 ```
 
 The gate defaults to disabled. Production rejects development-header authentication during runtime validation and the resolver also refuses it.
@@ -86,11 +121,9 @@ Future Workbench decision routes must derive `decided_by` from `RequestContext.u
 Not implemented:
 
 - login
-- JWT verification
 - OAuth2
 - Azure AD
 - SSO
-- Keycloak
 - Auth0
 - Odoo session authentication
 - API keys

@@ -7,6 +7,7 @@ from pydantic import AnyHttpUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 UyumsoftEnvironment = Literal["test", "production"]
+AuthenticationMode = Literal["disabled", "development_headers", "oidc_jwt"]
 
 
 class Settings(BaseSettings):
@@ -22,7 +23,18 @@ class Settings(BaseSettings):
     live_connector_readonly: bool = False
     production_operations_enabled: bool = False
     production_approval_ack: str = ""
+    ipp_auth_mode: AuthenticationMode = "disabled"
     ipp_enable_development_header_auth: bool = False
+    ipp_oidc_issuer: str = ""
+    ipp_oidc_audience: str = ""
+    ipp_oidc_jwks_url: str = ""
+    ipp_oidc_discovery_url: str = ""
+    ipp_oidc_clock_skew_seconds: int = Field(default=60, ge=0, le=300)
+    ipp_oidc_jwks_cache_seconds: int = Field(default=300, ge=1, le=86400)
+    ipp_oidc_company_id_claim: str = "ipp_company_id"
+    ipp_oidc_permissions_claim: str = "ipp_permissions"
+    ipp_oidc_username_claim: str = "preferred_username"
+    ipp_oidc_allowed_algorithms: tuple[str, ...] = ("RS256",)
 
     odoo_base_url: AnyHttpUrl = Field(default="https://example.odoo.com")
     odoo_database: str = "example"

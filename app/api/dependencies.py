@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.security import (
     DevelopmentHeaderRequestContextResolver,
     DisabledRequestContextResolver,
+    OidcJwtRequestContextResolver,
     RequestContext,
     RequestContextResolver,
     RequestMetadata,
@@ -31,7 +32,9 @@ DbSessionDep = Annotated[Session, Depends(get_db_session)]
 
 
 def get_request_context_resolver(settings: SettingsDep) -> RequestContextResolver:
-    if settings.ipp_enable_development_header_auth:
+    if settings.ipp_auth_mode == "oidc_jwt":
+        return OidcJwtRequestContextResolver(settings)
+    if settings.ipp_auth_mode == "development_headers":
         return DevelopmentHeaderRequestContextResolver(settings)
     return DisabledRequestContextResolver()
 

@@ -15,7 +15,18 @@ ENV_KEYS = (
     "LIVE_CONNECTOR_READONLY",
     "PRODUCTION_OPERATIONS_ENABLED",
     "PRODUCTION_APPROVAL_ACK",
+    "IPP_AUTH_MODE",
     "IPP_ENABLE_DEVELOPMENT_HEADER_AUTH",
+    "IPP_OIDC_ISSUER",
+    "IPP_OIDC_AUDIENCE",
+    "IPP_OIDC_JWKS_URL",
+    "IPP_OIDC_DISCOVERY_URL",
+    "IPP_OIDC_CLOCK_SKEW_SECONDS",
+    "IPP_OIDC_JWKS_CACHE_SECONDS",
+    "IPP_OIDC_COMPANY_ID_CLAIM",
+    "IPP_OIDC_PERMISSIONS_CLAIM",
+    "IPP_OIDC_USERNAME_CLAIM",
+    "IPP_OIDC_ALLOWED_ALGORITHMS",
     "ODOO_BASE_URL",
     "ODOO_DATABASE",
     "ODOO_API_KEY",
@@ -90,6 +101,7 @@ def test_development_header_auth_is_disabled_by_default(monkeypatch, tmp_path: P
     settings = Settings()
 
     assert settings.ipp_enable_development_header_auth is False
+    assert settings.ipp_auth_mode == "disabled"
 
 
 def test_only_selected_env_profile_is_loaded(monkeypatch, tmp_path: Path) -> None:
@@ -205,6 +217,31 @@ def test_non_live_readonly_example_profiles_disable_live_smoke() -> None:
         values = _profile_values(path)
 
         assert values["ICT_UYUMSOFT_ENABLE_LIVE_SMOKE"] == "0"
+
+
+def test_example_profiles_define_authentication_mode() -> None:
+    for path in [
+        Path(".env.example"),
+        Path(".env.local.example"),
+        Path(".env.test.example"),
+        Path(".env.live-readonly.example"),
+    ]:
+        values = _profile_values(path)
+
+        assert values["IPP_AUTH_MODE"] == "disabled"
+        assert values["IPP_ENABLE_DEVELOPMENT_HEADER_AUTH"] == "false"
+        assert values["IPP_OIDC_COMPANY_ID_CLAIM"] == "ipp_company_id"
+        assert values["IPP_OIDC_PERMISSIONS_CLAIM"] == "ipp_permissions"
+        assert values["IPP_OIDC_USERNAME_CLAIM"] == "preferred_username"
+
+
+def test_production_example_profile_requires_oidc_jwt() -> None:
+    values = _profile_values(Path(".env.production.example"))
+
+    assert values["IPP_AUTH_MODE"] == "oidc_jwt"
+    assert values["IPP_ENABLE_DEVELOPMENT_HEADER_AUTH"] == "false"
+    assert values["IPP_OIDC_ISSUER"].startswith("https://")
+    assert values["IPP_OIDC_AUDIENCE"] == "<oidc-audience>"
 
 
 def test_smoke_flag_does_not_bypass_live_readonly_requirement() -> None:

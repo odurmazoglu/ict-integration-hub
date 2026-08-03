@@ -97,11 +97,14 @@ def _validate_common_settings(settings: Settings, errors: list[str]) -> None:
         errors.append("UYUMSOFT_USERNAME must be configured.")
     if not settings.uyumsoft_password.get_secret_value().strip():
         errors.append("UYUMSOFT_PASSWORD must be configured.")
+    _validate_authentication_settings(settings, errors)
 
 
 def _validate_production_settings(settings: Settings, errors: list[str]) -> None:
     if settings.ipp_enable_development_header_auth:
         errors.append("IPP_ENABLE_DEVELOPMENT_HEADER_AUTH must be disabled in production.")
+    if settings.ipp_auth_mode != "oidc_jwt":
+        errors.append("IPP_AUTH_MODE must be oidc_jwt in production.")
     if not settings.production_operations_enabled:
         errors.append("PRODUCTION_OPERATIONS_ENABLED must be true in production.")
     if settings.production_approval_ack != PRODUCTION_APPROVAL_ACK:
@@ -135,6 +138,51 @@ def _validate_non_production_settings(settings: Settings, errors: list[str]) -> 
         if not settings.live_connector_readonly:
             errors.append("UYUMSOFT_ENVIRONMENT=production outside production requires LIVE_CONNECTOR_READONLY=true.")
         _validate_live_readonly_connector_settings(settings, errors)
+
+
+def _validate_authentication_settings(settings: Settings, errors: list[str]) -> None:
+    if settings.ipp_enable_development_header_auth and settings.ipp_auth_mode != "development_headers":
+        errors.append("IPP_ENABLE_DEVELOPMENT_HEADER_AUTH requires IPP_AUTH_MODE=development_headers.")
+    if settings.ipp_auth_mode == "development_headers":
+        if not settings.ipp_enable_development_header_auth:
+            errors.append("IPP_AUTH_MODE=development_headers requires IPP_ENABLE_DEVELOPMENT_HEADER_AUTH=true.")
+        if settings.app_env == "production":
+            errors.append("IPP_AUTH_MODE=development_headers is forbidden in production.")
+    if settings.ipp_auth_mode == "oidc_jwt":
+        _validate_oidc_settings(settings, errors)
+
+
+def _validate_oidc_settings(settings: Settings, errors: list[str]) -> None:
+    if not settings.ipp_oidc_issuer.strip():
+        errors.append("IPP_OIDC_ISSUER is required when IPP_AUTH_MODE=oidc_jwt.")
+    if not settings.ipp_oidc_audience.strip():
+        errors.append("IPP_OIDC_AUDIENCE is required when IPP_AUTH_MODE=oidc_jwt.")
+    if not settings.ipp_oidc_company_id_claim.strip():
+        errors.append("IPP_OIDC_COMPANY_ID_CLAIM is required when IPP_AUTH_MODE=oidc_jwt.")
+    if not settings.ipp_oidc_permissions_claim.strip():
+        errors.append("IPP_OIDC_PERMISSIONS_CLAIM is required when IPP_AUTH_MODE=oidc_jwt.")
+    if not settings.ipp_oidc_username_claim.strip():
+        errors.append("IPP_OIDC_USERNAME_CLAIM is required when IPP_AUTH_MODE=oidc_jwt.")
+    if not settings.ipp_oidc_allowed_algorithms:
+        errors.append("IPP_OIDC_ALLOWED_ALGORITHMS must not be empty when IPP_AUTH_MODE=oidc_jwt.")
+    has_unsupported_algorithm = any(
+        algorithm.strip().lower() == "none" or not algorithm.strip()
+        for algorithm in settings.ipp_oidc_allowed_algorithms
+    )
+    if has_unsupported_algorithm:
+        errors.append("IPP_OIDC_ALLOWED_ALGORITHMS contains an unsupported algorithm.")
+    if settings.app_env == "production":
+        _validate_production_oidc_url(settings.ipp_oidc_issuer, "IPP_OIDC_ISSUER", errors)
+        if settings.ipp_oidc_discovery_url:
+            _validate_production_oidc_url(settings.ipp_oidc_discovery_url, "IPP_OIDC_DISCOVERY_URL", errors)
+        if settings.ipp_oidc_jwks_url:
+            _validate_production_oidc_url(settings.ipp_oidc_jwks_url, "IPP_OIDC_JWKS_URL", errors)
+
+
+def _validate_production_oidc_url(value: str, name: str, errors: list[str]) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme.lower() != "https":
+        errors.append(f"{name} must use HTTPS in production.")
 
 
 def _validate_live_readonly_connector_settings(settings: Settings, errors: list[str]) -> None:

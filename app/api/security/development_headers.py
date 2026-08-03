@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-import re
-from uuid import uuid4
-
 from app.api.security.context import AuthenticationMethod, Permission, RequestContext, RequestMetadata
 from app.api.security.exceptions import (
     DevelopmentAuthenticationDisabledError,
     InvalidAuthenticationContextError,
 )
+from app.api.security.trace import HEADER_TRACE_ID, parse_trace_id
 from app.core.config import Settings
 
 HEADER_USER_ID = "x-ipp-user-id"
 HEADER_USER_NAME = "x-ipp-user-name"
 HEADER_COMPANY_ID = "x-ipp-company-id"
 HEADER_PERMISSIONS = "x-ipp-permissions"
-HEADER_TRACE_ID = "x-trace-id"
-MAX_TRACE_ID_LENGTH = 128
-TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]+$")
 
 
 class DevelopmentHeaderRequestContextResolver:
@@ -26,6 +21,8 @@ class DevelopmentHeaderRequestContextResolver:
         self._settings = settings
 
     def resolve(self, metadata: RequestMetadata) -> RequestContext:
+        if self._settings.ipp_auth_mode != "development_headers":
+            raise DevelopmentAuthenticationDisabledError("Development header authentication is disabled.")
         if not self._settings.ipp_enable_development_header_auth:
             raise DevelopmentAuthenticationDisabledError("Development header authentication is disabled.")
         if self._settings.app_env == "production":
@@ -35,7 +32,7 @@ class DevelopmentHeaderRequestContextResolver:
         user_id = _required_header(headers, HEADER_USER_ID)
         company_id = _parse_company_id(_required_header(headers, HEADER_COMPANY_ID))
         permissions = _parse_permissions(headers.get(HEADER_PERMISSIONS, ""))
-        trace_id = _parse_trace_id(headers.get(HEADER_TRACE_ID))
+        trace_id = parse_trace_id(headers.get(HEADER_TRACE_ID))
         user_name = _optional_header(headers, HEADER_USER_NAME)
         return RequestContext(
             user_id=user_id,
@@ -91,12 +88,3 @@ def _parse_permissions(value: str) -> tuple[Permission, ...]:
             seen.add(permission)
             permissions.append(permission)
     return tuple(permissions)
-
-
-def _parse_trace_id(value: str | None) -> str:
-    if value is None or not value.strip():
-        return str(uuid4())
-    trace_id = value.strip()
-    if len(trace_id) > MAX_TRACE_ID_LENGTH or TRACE_ID_PATTERN.fullmatch(trace_id) is None:
-        raise InvalidAuthenticationContextError("Trace authentication context is invalid.")
-    return trace_id
