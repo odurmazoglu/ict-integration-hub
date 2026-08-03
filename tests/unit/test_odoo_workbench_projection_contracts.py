@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -52,6 +52,31 @@ def test_workbench_projection_requires_canonical_workflow_and_status_values() ->
         _projection(status="pending_review")  # type: ignore[arg-type]
 
 
+def test_workbench_projection_accepts_updated_at_none() -> None:
+    projection = _projection(updated_at=None)
+
+    assert projection.updated_at is None
+
+
+def test_workbench_projection_accepts_timezone_aware_updated_at_without_conversion() -> None:
+    supplied = datetime(2026, 7, 17, 12, 35, tzinfo=timezone(timedelta(hours=3)))
+
+    projection = _projection(updated_at=supplied)
+
+    assert projection.updated_at is supplied
+    assert projection.updated_at.utcoffset() == timedelta(hours=3)
+
+
+def test_workbench_projection_rejects_naive_updated_at() -> None:
+    with pytest.raises(WorkbenchContractError, match="updated_at must be a timezone-aware datetime"):
+        _projection(updated_at=datetime(2026, 7, 17, 9, 35))
+
+
+def test_workbench_projection_rejects_non_datetime_updated_at() -> None:
+    with pytest.raises(WorkbenchContractError, match="updated_at must be a timezone-aware datetime"):
+        _projection(updated_at="2026-07-17T09:35:00Z")  # type: ignore[arg-type]
+
+
 def test_workbench_projection_retains_decimal_without_float_conversion() -> None:
     amount = Decimal("259.2000")
     projection = _projection(total_amount=amount)
@@ -82,6 +107,25 @@ def test_odoo_workbench_decision_candidate_is_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         candidate.review_id = "changed"  # type: ignore[misc]
+
+
+def test_decision_candidate_accepts_timezone_aware_decided_at_without_conversion() -> None:
+    supplied = datetime(2026, 7, 17, 13, 0, tzinfo=timezone(timedelta(hours=3)))
+
+    candidate = _candidate(decided_at=supplied)
+
+    assert candidate.decided_at is supplied
+    assert candidate.decided_at.utcoffset() == timedelta(hours=3)
+
+
+def test_decision_candidate_rejects_naive_decided_at() -> None:
+    with pytest.raises(WorkbenchContractError, match="decided_at must be a timezone-aware datetime"):
+        _candidate(decided_at=datetime(2026, 7, 17, 10, 0))
+
+
+def test_decision_candidate_rejects_non_datetime_decided_at() -> None:
+    with pytest.raises(WorkbenchContractError, match="decided_at must be a timezone-aware datetime"):
+        _candidate(decided_at="2026-07-17T10:00:00Z")  # type: ignore[arg-type]
 
 
 def test_decision_candidate_requires_positive_odoo_record_id() -> None:
@@ -160,6 +204,37 @@ def test_projection_publish_result_is_immutable() -> None:
     with pytest.raises(FrozenInstanceError):
         result.version = 2  # type: ignore[misc]
     assert result.warnings == ("Created projection.",)
+
+
+def test_projection_publish_result_accepts_created_operation() -> None:
+    result = _publish_result(created=True, updated=False)
+
+    assert result.created is True
+    assert result.updated is False
+
+
+def test_projection_publish_result_accepts_updated_operation() -> None:
+    result = _publish_result(created=False, updated=True)
+
+    assert result.created is False
+    assert result.updated is True
+
+
+def test_projection_publish_result_rejects_both_created_and_updated() -> None:
+    with pytest.raises(WorkbenchContractError, match="exactly one create or update"):
+        _publish_result(created=True, updated=True)
+
+
+def test_projection_publish_result_rejects_neither_created_nor_updated() -> None:
+    with pytest.raises(WorkbenchContractError, match="exactly one create or update"):
+        _publish_result(created=False, updated=False)
+
+
+def test_projection_publish_result_rejects_non_boolean_created_or_updated() -> None:
+    with pytest.raises(WorkbenchContractError, match="created must be a boolean"):
+        _publish_result(created=1, updated=False)  # type: ignore[arg-type]
+    with pytest.raises(WorkbenchContractError, match="updated must be a boolean"):
+        _publish_result(created=True, updated=0)  # type: ignore[arg-type]
 
 
 def test_projection_ports_are_application_protocols_without_odoo_dependency() -> None:
@@ -266,3 +341,16 @@ def _candidate(**overrides) -> OdooWorkbenchDecisionCandidate:
     }
     values.update(overrides)
     return OdooWorkbenchDecisionCandidate(**values)
+
+
+def _publish_result(**overrides) -> ProjectionPublishResult:
+    values = {
+        "review_id": "review-1",
+        "odoo_record_id": 42,
+        "created": True,
+        "updated": False,
+        "version": 1,
+        "warnings": (),
+    }
+    values.update(overrides)
+    return ProjectionPublishResult(**values)

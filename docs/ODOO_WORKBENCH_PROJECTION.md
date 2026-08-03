@@ -117,7 +117,7 @@ The field list keeps only data justified by current Workbench contracts and sync
 | `x_ipp_comment` | Text | Odoo user | Optional comment, bounded by Hub contract. |
 | `x_ipp_decision_idempotency_key` | Char, required before submit | Odoo user/System | Stable key for Hub idempotent decision submission. |
 | `x_ipp_decided_by_odoo_user_id` | Integer | System-derived Odoo field | Odoo user id that submitted the candidate. |
-| `x_ipp_decided_at` | Datetime | System-derived Odoo field | Candidate submission timestamp when safely available. |
+| `x_ipp_decided_at` | Timezone-aware Datetime | System-derived Odoo field | Candidate submission timestamp audit evidence. |
 | `x_ipp_decision_ready` | Boolean | Odoo user/System | Hub reads a candidate only when explicitly true. |
 
 ### Hub Processing Result
@@ -181,6 +181,12 @@ It also introduces narrow application ports:
 - `WorkbenchDecisionCandidateReader`
 
 The ports do not expose Odoo client objects, Odoo model objects, SQLAlchemy sessions, HTTP objects, or provider exceptions. Future Odoo JSON-2 code must live in an adapter behind these ports.
+
+Timestamp and result invariants:
+
+- `OdooWorkbenchDecisionCandidate.decided_at` is timezone-aware audit evidence. It must be a `datetime` with a non-null `utcoffset`; the Hub does not silently assume UTC or convert the supplied timezone.
+- `WorkbenchProjection.updated_at` is optional. When supplied, it must also be a timezone-aware `datetime` and is preserved without conversion.
+- `ProjectionPublishResult` represents exactly one projection operation: either `created=True, updated=False` or `created=False, updated=True`. It does not use a result status enum in this contract slice.
 
 ## Mapping Rules
 

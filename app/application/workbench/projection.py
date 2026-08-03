@@ -48,6 +48,10 @@ class WorkbenchProjection(ApplicationDTO):
         _require_enum(self.status, ReviewStatus, "status must be a canonical ReviewStatus.")
         _require_enum(self.workflow, WorkflowType, "workflow must be a canonical WorkflowType.")
         _validate_decimal(self.total_amount, "total_amount must be a finite Decimal value.")
+        _require_optional_aware_datetime(
+            self.updated_at,
+            "updated_at must be a timezone-aware datetime when supplied.",
+        )
         object.__setattr__(self, "review_reasons", tuple(self.review_reasons))
         object.__setattr__(self, "warnings", tuple(str(warning) for warning in self.warnings))
 
@@ -83,6 +87,7 @@ class OdooWorkbenchDecisionCandidate(ApplicationDTO):
         _require_text(self.review_id, "review_id is required.")
         _require_text(self.idempotency_key, "idempotency_key is required.")
         _require_enum(self.decision, ReviewDecisionType, "decision must be a canonical ReviewDecisionType.")
+        _require_aware_datetime(self.decided_at, "decided_at must be a timezone-aware datetime.")
         if self.selected_workflow is not None:
             _require_enum(
                 self.selected_workflow,
@@ -126,6 +131,7 @@ class ProjectionPublishResult(ApplicationDTO):
         _require_text(self.review_id, "review_id is required.")
         _require_positive_int(self.odoo_record_id, "odoo_record_id must be a positive ERP id.")
         _require_positive_int(self.version, "version must be positive.")
+        _require_exactly_one_operation(created=self.created, updated=self.updated)
         object.__setattr__(self, "warnings", tuple(str(warning) for warning in self.warnings))
 
 
@@ -142,6 +148,26 @@ def _require_positive_int(value: int, message: str) -> None:
 def _require_enum(value: Enum, expected_type: type[Enum], message: str) -> None:
     if not isinstance(value, expected_type):
         raise WorkbenchContractError(message)
+
+
+def _require_optional_aware_datetime(value: datetime | None, message: str) -> None:
+    if value is None:
+        return
+    _require_aware_datetime(value, message)
+
+
+def _require_aware_datetime(value: datetime, message: str) -> None:
+    if not isinstance(value, datetime) or value.utcoffset() is None:
+        raise WorkbenchContractError(message)
+
+
+def _require_exactly_one_operation(*, created: bool, updated: bool) -> None:
+    if type(created) is not bool:
+        raise WorkbenchContractError("created must be a boolean value.")
+    if type(updated) is not bool:
+        raise WorkbenchContractError("updated must be a boolean value.")
+    if created == updated:
+        raise WorkbenchContractError("Projection publish result must represent exactly one create or update.")
 
 
 def _validate_decimal(value: Decimal | None, message: str) -> None:
