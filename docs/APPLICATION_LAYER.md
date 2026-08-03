@@ -304,7 +304,7 @@ Manual Review is an application outcome for deterministic business mismatches on
 
 ## Import Workbench Contracts
 
-`app/application/workbench` defines the application-layer contract surface for a future Odoo Import Workbench adapter. This package contains immutable DTOs, queries, commands, safe validation errors, a read-only review queue port, a create-only review item writer port, a focused decision submission writer port, and small use-case/service boundaries.
+`app/application/workbench` defines the application-layer contract surface for direct Hub Workbench API adapters and the future Odoo Online Studio projection synchronization. This package contains immutable DTOs, queries, commands, safe validation errors, a read-only review queue port, a create-only review item writer port, a focused decision submission writer port, projection DTOs, projection ports, and small use-case/service boundaries.
 
 Current contracts:
 
@@ -323,8 +323,15 @@ Current contracts:
 - `ListReviewQueueUseCase`: application boundary that delegates `ReviewQueueQuery` to `ReviewQueueReader.list_review_items`
 - `GetReviewItemUseCase`: application boundary that delegates `ReviewDetailQuery` to `ReviewQueueReader.get_review_item`
 - `SubmitReviewDecisionUseCase`: application boundary that delegates `ReviewDecisionCommand` to `ReviewDecisionWriter.submit_review_decision`
+- `WorkbenchProjection`: ERP-neutral projection of one Hub-owned review item for future Odoo Studio display
+- `OdooWorkbenchDecisionCandidate`: candidate decision read from the future Odoo Studio projection before Hub acceptance
+- `ProjectionPublishResult`: immutable result for future projection publish and acknowledgement operations
+- `WorkbenchProjectionPublisher`: port for future projection publishing and acknowledgement writes
+- `WorkbenchDecisionCandidateReader`: port for future ready-decision reads from an ERP UI projection surface
 
 The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation, queue/detail reads, and explicit review decision submission. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, scopes detail reads by `review_id` plus `company_id`, and records submitted decisions in append-only audit rows.
+
+Projection candidate timestamps are audit values. `OdooWorkbenchDecisionCandidate.decided_at` must be timezone-aware, and `WorkbenchProjection.updated_at` must be timezone-aware when supplied. The contracts reject naive values instead of assuming UTC or converting timezones. `ProjectionPublishResult` represents exactly one publish operation: create or update.
 
 Decision submission supports only explicit `SELECT_WORKFLOW` and `DISMISS` commands. `SELECT_WORKFLOW` transitions a matching pending review from `PENDING_REVIEW` to `DECISION_SUBMITTED`; `DISMISS` transitions it to `DISMISSED`. Both paths increment `version` exactly once, persist the submitted command content, and return `ReviewDecisionAcknowledgement`. They do not execute the selected workflow, write ERP records, create Vendor Bills, create rules, or call AI.
 
@@ -333,6 +340,8 @@ Optimistic concurrency uses `ReviewDecisionCommand.expected_version`. The persis
 Decision idempotency is scoped by `(company_id, idempotency_key)`. An identical replay returns the original acknowledgement without incrementing `version` or inserting another decision row. Reusing the same key for different canonical command content raises `ReviewDecisionIdempotencyConflictError`. Fingerprints use structured enum values, tuples, explicit scalar fields, and canonical DTO content rather than raw JSON or display strings.
 
 The current API adapter exposes authenticated FastAPI routes for listing review items, retrieving one review item, and submitting explicit user decisions. These routes only construct existing application queries and commands from trusted `RequestContext` identity and HTTP boundary schemas. They do not execute workflows, write ERP records, create Vendor Bills, create rules, call AI, or perform fuzzy matching.
+
+The Odoo Online projection contracts exist because Odoo 19 Online cannot install custom Python modules. A future adapter may publish `WorkbenchProjection` values to the dedicated Odoo Studio model `x_ipp_import_review`, read `OdooWorkbenchDecisionCandidate` values where the user explicitly set `decision_ready`, and acknowledge Hub processing results. That future adapter must live outside the Application layer and behind `WorkbenchProjectionPublisher` and `WorkbenchDecisionCandidateReader`. This slice does not implement JSON-2 calls, Odoo writes, Odoo views, scheduler, polling, decision ingestion, acknowledgement projection, or workflow execution.
 
 The API response envelope is consistent across Workbench routes:
 
@@ -356,7 +365,10 @@ Recommendation acceptance is future work. A future recommendation contract must 
 
 ```mermaid
 flowchart TB
-    Workbench[Odoo Import Workbench Adapter]
+    WorkbenchAPI[Authenticated Workbench REST API]
+    ProjectionAdapter[Future Odoo Projection Adapter]
+    Projection[WorkbenchProjection]
+    Candidate[OdooWorkbenchDecisionCandidate]
     Contracts[Application Workbench Contracts]
     Hub[ICT IPP Application Layer]
     Reader[ReviewQueueReader Port]
@@ -370,7 +382,11 @@ flowchart TB
     Decisions[(PostgreSQL workbench_review_decisions)]
     Ack[ReviewDecisionAcknowledgement]
 
-    Workbench --> Contracts
+    WorkbenchAPI --> Contracts
+    ProjectionAdapter --> Projection
+    ProjectionAdapter --> Candidate
+    Projection --> Contracts
+    Candidate --> Contracts
     Contracts --> Hub
     Hub --> ListUseCase
     Hub --> GetUseCase

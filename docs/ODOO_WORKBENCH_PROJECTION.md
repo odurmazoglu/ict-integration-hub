@@ -1,0 +1,343 @@
+# Odoo Online Workbench Projection
+
+This document defines the architecture and contract for presenting Hub-owned Import Workbench reviews inside Odoo 19 Online through an Odoo Studio projection model.
+
+It is a contract foundation only. The Studio model, Studio views, JSON-2 synchronization adapter, scheduler, decision ingestion, acknowledgement projection, and workflow execution are not implemented in this slice.
+
+## Architecture
+
+Odoo Online cannot install custom Python modules. The selected architecture uses an Odoo Studio model as a projection store and keeps all decision authority in ICT IPP.
+
+```mermaid
+flowchart TB
+    Hub[ICT IPP Hub]
+    Publisher[WorkbenchProjectionPublisher Port]
+    OdooAdapter[Future Odoo Projection Adapter]
+    Studio[(Odoo Studio Model x_ipp_import_review)]
+    User[Odoo User]
+    Reader[WorkbenchDecisionCandidateReader Port]
+    Submit[SubmitReviewDecisionUseCase]
+    Store[(Hub PostgreSQL Workbench Tables)]
+    FutureExecution[Future Workflow Execution]
+
+    Hub --> Publisher
+    Publisher --> OdooAdapter
+    OdooAdapter -->|future JSON-2 publish| Studio
+    User -->|reviews and submits explicit decision| Studio
+    Studio -->|future JSON-2 read| OdooAdapter
+    OdooAdapter --> Reader
+    Reader --> Submit
+    Submit --> Store
+    Submit -->|future acknowledgement projection| Publisher
+    Store --> FutureExecution
+```
+
+The future synchronization flow is Hub-controlled:
+
+1. Hub creates or updates a review item in PostgreSQL.
+2. Hub publishes an immutable `WorkbenchProjection` to Odoo.
+3. Odoo users review Hub-owned fields and enter explicit decision fields.
+4. Hub reads only records where `x_ipp_decision_ready` is true.
+5. Hub validates the candidate through existing Workbench command rules.
+6. Hub persists an accepted decision with optimistic concurrency and idempotency.
+7. Hub writes acknowledgement fields back to the projection.
+8. Later focused workflow PRs may execute accepted decisions.
+
+## Proposed Studio Model
+
+Proposed technical model name:
+
+```text
+x_ipp_import_review
+```
+
+The model name follows Odoo Studio custom-model naming with the `x_` prefix and uses the `ipp` namespace to avoid generic field names.
+
+## Source Of Truth
+
+| Data | Authoritative system | Notes |
+| --- | --- | --- |
+| Review lifecycle | Hub PostgreSQL | Includes pending, submitted, resolved, and dismissed states. |
+| Review version | Hub PostgreSQL | Used for optimistic concurrency. |
+| Accepted decision | Hub PostgreSQL | Odoo submits a candidate; Hub accepts or rejects it. |
+| Decision idempotency | Hub PostgreSQL | Uses existing decision idempotency behavior. |
+| Decision acknowledgement | Hub PostgreSQL, projected to Odoo | Odoo display is not the ledger. |
+| Execution state | Hub PostgreSQL and future execution records | Workflow execution is out of scope here. |
+| User-entered candidate decision before Hub acceptance | Odoo projection | Authoritative only as user input evidence before Hub validation. |
+| Odoo user that submitted the candidate | Odoo projection | Audit context only; not sufficient authorization by itself. |
+
+## Field Contract
+
+The field list keeps only data justified by current Workbench contracts and synchronization requirements.
+
+### Identity And Synchronization
+
+| Field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| `x_name` | Char | Hub | Human-readable display name, usually invoice number plus supplier. |
+| `x_ipp_review_id` | Char, required, unique | Hub | Natural projection identity mapped to Hub `review_id`. |
+| `x_ipp_company_id` | Integer, required | Hub | Hub company identity for isolation checks. |
+| `x_ipp_invoice_id` | Char, required | Hub | Hub invoice identity. |
+| `x_ipp_version` | Integer, required | Hub | Displayed Hub review version for optimistic concurrency. |
+| `x_ipp_status` | Selection | Hub | Hub review status. |
+| `x_ipp_sync_state` | Selection | Hub | Future projection state such as `pending`, `synced`, `ack_failed`, or `conflict`. |
+| `x_ipp_last_sync_at` | Datetime | Hub | Last successful Hub projection update. |
+| `x_ipp_trace_id` | Char | Hub | Safe correlation id; not a token or credential. |
+
+### Invoice Display
+
+| Field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| `x_ipp_invoice_number` | Char | Hub | Invoice number display. |
+| `x_ipp_supplier_name` | Char | Hub | Supplier display text only; not used for matching decisions. |
+| `x_ipp_supplier_tax_number` | Char | Hub | Supplier VKN/TCKN display and filtering. |
+| `x_ipp_invoice_date` | Date | Hub | Invoice date display and filtering. |
+| `x_ipp_currency` | Char or Selection | Hub | Currency code display. |
+| `x_ipp_total_amount` | Monetary/Numeric | Hub | Invoice total display. Hub persists review money as `Numeric(24, 6)`. |
+
+### Review Information
+
+| Field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| `x_ipp_workflow` | Selection | Hub | Current Hub workflow state, often `manual_review` for unresolved items. |
+| `x_ipp_review_summary` | Text | Hub | Short human-readable review summary. |
+| `x_ipp_review_reasons_json` | Text | Hub | JSON array of structured `ManualReviewReason` values. |
+| `x_ipp_warnings_json` | Text | Hub | JSON array of safe warning strings. |
+
+### User Decision
+
+| Field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| `x_ipp_decision` | Selection | Odoo user | Explicit decision: `select_workflow` or `dismiss`. |
+| `x_ipp_selected_workflow` | Selection | Odoo user | Resolution workflow. `manual_review` is not allowed as a resolution. |
+| `x_ipp_selected_partner_id` | Many2one or Integer | Odoo user | Explicit selected partner id when needed. |
+| `x_ipp_line_resolutions_json` | Text | Odoo user | JSON array of line product resolutions matching `LineResolution`. |
+| `x_ipp_tax_resolutions_json` | Text | Odoo user | JSON array of tax resolutions matching `TaxResolution`. |
+| `x_ipp_business_context_json` | Text | Odoo user | JSON object matching `BusinessContextDecision`. |
+| `x_ipp_comment` | Text | Odoo user | Optional comment, bounded by Hub contract. |
+| `x_ipp_decision_idempotency_key` | Char, required before submit | Odoo user/System | Stable key for Hub idempotent decision submission. |
+| `x_ipp_decided_by_odoo_user_id` | Integer | System-derived Odoo field | Odoo user id that submitted the candidate. |
+| `x_ipp_decided_at` | Timezone-aware Datetime | System-derived Odoo field | Candidate submission timestamp audit evidence. |
+| `x_ipp_decision_ready` | Boolean | Odoo user/System | Hub reads a candidate only when explicitly true. |
+
+### Hub Processing Result
+
+| Field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| `x_ipp_hub_ack_status` | Selection | Hub | Future acknowledgement such as `accepted`, `rejected`, `conflict`, or `error`. |
+| `x_ipp_hub_ack_version` | Integer | Hub | Hub review version after accepted decision. |
+| `x_ipp_hub_ack_message` | Text | Hub | Safe acknowledgement or reconciliation message. |
+| `x_ipp_hub_processed_at` | Datetime | Hub | Time the Hub processed the candidate. |
+
+## Ownership Rules
+
+Hub-owned fields:
+
+- review identity
+- company identity
+- invoice display data
+- review reasons
+- warnings
+- Hub status and version
+- synchronization metadata
+- acknowledgement result
+
+Odoo-user-owned fields:
+
+- explicit decision
+- selected workflow
+- selected partner
+- line resolutions
+- tax resolutions
+- business context
+- comment
+- decision-ready flag
+
+System-derived Odoo fields:
+
+- current Odoo user id
+- decision timestamp where safely available
+
+Rules:
+
+- Odoo users must not edit Hub-owned identity, status, or version fields.
+- Hub must not silently overwrite submitted user-decision fields.
+- Hub must process a decision only when `x_ipp_decision_ready` is explicitly true.
+- Hub acknowledgement must be written separately from user input.
+- Hub remains authoritative for accepted decision version and status.
+- `x_ipp_decision_ready` must not be cleared until Hub acknowledgement is safely persisted and, when implemented, projected back to Odoo.
+
+## Application Contracts
+
+This PR introduces immutable ERP-neutral application DTOs:
+
+- `WorkbenchProjection`
+- `OdooWorkbenchDecisionCandidate`
+- `ProjectionPublishResult`
+
+It also introduces narrow application ports:
+
+- `WorkbenchProjectionPublisher`
+- `WorkbenchDecisionCandidateReader`
+
+The ports do not expose Odoo client objects, Odoo model objects, SQLAlchemy sessions, HTTP objects, or provider exceptions. Future Odoo JSON-2 code must live in an adapter behind these ports.
+
+Timestamp and result invariants:
+
+- `OdooWorkbenchDecisionCandidate.decided_at` is timezone-aware audit evidence. It must be a `datetime` with a non-null `utcoffset`; the Hub does not silently assume UTC or convert the supplied timezone.
+- `WorkbenchProjection.updated_at` is optional. When supplied, it must also be a timezone-aware `datetime` and is preserved without conversion.
+- `ProjectionPublishResult` represents exactly one projection operation: either `created=True, updated=False` or `created=False, updated=True`. It does not use a result status enum in this contract slice.
+
+## Mapping Rules
+
+`WorkbenchProjection` maps from Hub Workbench review contracts to Studio fields:
+
+| Hub contract | Studio field |
+| --- | --- |
+| `review_id` | `x_ipp_review_id` |
+| `company_id` | `x_ipp_company_id` |
+| `invoice_id` | `x_ipp_invoice_id` |
+| `version` | `x_ipp_version` |
+| `status` | `x_ipp_status` |
+| `invoice_number` | `x_ipp_invoice_number` |
+| `supplier_name` | `x_ipp_supplier_name` |
+| `supplier_tax_number` | `x_ipp_supplier_tax_number` |
+| `invoice_date` | `x_ipp_invoice_date` |
+| `currency` | `x_ipp_currency` |
+| `total_amount` | `x_ipp_total_amount` |
+| `workflow` | `x_ipp_workflow` |
+| `review_summary` | `x_ipp_review_summary` |
+| `review_reasons` | `x_ipp_review_reasons_json` |
+| `warnings` | `x_ipp_warnings_json` |
+| `trace_id` | `x_ipp_trace_id` |
+| `updated_at` | `x_ipp_last_sync_at` |
+
+`OdooWorkbenchDecisionCandidate` maps from Studio user input to the current `ReviewDecisionCommand`:
+
+| Studio field | Hub command field |
+| --- | --- |
+| `x_ipp_review_id` | `review_id` |
+| `x_ipp_company_id` | `company_id` |
+| `x_ipp_version` | `expected_version` |
+| `x_ipp_decision` | `decision` |
+| `x_ipp_selected_workflow` | `selected_workflow` |
+| `x_ipp_selected_partner_id` | `selected_partner_id` |
+| `x_ipp_line_resolutions_json` | `line_resolutions` |
+| `x_ipp_tax_resolutions_json` | `tax_resolutions` |
+| `x_ipp_business_context_json` | `business_context` |
+| `x_ipp_comment` | `comment` |
+| `x_ipp_decision_idempotency_key` | `idempotency_key` |
+| `x_ipp_decided_by_odoo_user_id` | `decided_by` evidence as `odoo:<id>` |
+
+The Hub must reject `WorkflowType.MANUAL_REVIEW` as a selected resolution workflow. Manual Review is the unresolved state.
+
+## Idempotency And Concurrency
+
+Projection publishing rules for future implementation:
+
+- `review_id` is the natural projection identity.
+- Repeated identical projection publish is idempotent.
+- Stale Hub projections must not overwrite a newer Hub projection version.
+- Duplicate Odoo projection records for the same `review_id` are an error requiring safe handling.
+
+Decision ingestion rules for future implementation:
+
+- Hub uses existing `ReviewDecisionCommand.expected_version`.
+- Odoo candidate expected version must match the Hub review version displayed to the user.
+- Decision idempotency key is mandatory.
+- Repeated identical decision submission is safe.
+- Conflicting idempotency-key reuse is rejected.
+- User decisions from another company must never be accepted.
+- `decision_ready` must not be cleared before Hub acknowledgement is safely persisted and projected.
+
+## Security
+
+- Hub authenticates to Odoo JSON-2 with a restricted Odoo API key.
+- The Odoo integration user receives access only to the dedicated Workbench projection model and explicitly required future ERP models.
+- No Keycloak token, Keycloak client secret, Hub bearer token, or Odoo API key is stored in Odoo Studio fields.
+- No Odoo API key is exposed to browser JavaScript.
+- Hub validates `company_id` and `review_id` against its own persistence.
+- Odoo user identity is audit evidence, not sufficient authorization by itself.
+- Future ingestion requires a Hub-controlled scheduler or service.
+
+## Keycloak Boundary
+
+Keycloak protects direct clients of the Hub REST API. Odoo Online Workbench projection synchronization uses Hub-to-Odoo service authentication through Odoo JSON-2.
+
+This design does not implement:
+
+- Odoo-to-Keycloak login federation
+- Odoo SSO
+- Keycloak service credentials in Odoo
+- Odoo-side bearer-token propagation to the Hub
+
+A future Odoo SSO decision is separate from Workbench synchronization.
+
+## Expected Studio Views
+
+Future controlled Studio setup should provide:
+
+- list view for pending reviews
+- form view for review detail and user decision
+- search filters by status, supplier, date, and workflow
+- read-only Hub information section
+- editable Decision section
+- Hub acknowledgement section
+- optional chatter for user collaboration, with chatter treated as non-authoritative
+
+No view XML or Odoo UI implementation is included in this PR.
+
+## Access-Control Expectations
+
+- Hub-owned fields should be read-only for ordinary Odoo users.
+- User decision fields should be editable only while the Hub status is pending review and decision acknowledgement is absent.
+- Only authorized Odoo users should be able to set `x_ipp_decision_ready`.
+- The integration user should be restricted to the projection model for this slice.
+- Future access to ERP execution models must be separately scoped.
+
+## Failure And Reconciliation Scenarios
+
+Future implementations must safely handle:
+
+- Odoo unavailable during projection publish
+- duplicate Odoo projection record
+- stale projection version
+- stale user decision
+- malformed user-entered JSON
+- Odoo user changes decision after submission
+- Hub accepts decision but acknowledgement projection fails
+- company mismatch
+- deleted or archived Odoo projection
+- revoked API key
+
+No retry, scheduler, polling, or reconciliation implementation is included in this PR.
+
+## Manual Setup Checklist
+
+Future controlled Odoo Studio setup should:
+
+1. Create model `x_ipp_import_review`.
+2. Add fields listed in this document with stable technical names.
+3. Configure read-only behavior for Hub-owned fields.
+4. Configure user-editable Decision section fields.
+5. Add list, form, and search views.
+6. Restrict access to the integration user and authorized reviewers.
+7. Verify ordinary users cannot change Hub identity, version, or acknowledgement fields.
+8. Verify no credentials or tokens are stored in Studio fields.
+
+## Not Implemented
+
+- Odoo Studio model creation
+- Odoo views
+- Odoo ACL configuration
+- Odoo JSON-2 adapter implementation
+- live Odoo calls
+- projection persistence in Odoo
+- scheduler or polling
+- webhooks
+- decision ingestion
+- acknowledgement projection
+- workflow execution
+- Vendor Bill, RFQ, PO, expense, asset, or subscription execution
+- Keycloak deployment
+- Odoo SSO

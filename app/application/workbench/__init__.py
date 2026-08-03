@@ -13,7 +13,18 @@ from app.application.workbench.dto import (
     TaxResolution,
 )
 from app.application.workbench.exceptions import WorkbenchContractError
-from app.application.workbench.ports import ReviewDecisionWriter, ReviewItemWriter, ReviewQueueReader
+from app.application.workbench.ports import (
+    ReviewDecisionWriter,
+    ReviewItemWriter,
+    ReviewQueueReader,
+    WorkbenchDecisionCandidateReader,
+    WorkbenchProjectionPublisher,
+)
+from app.application.workbench.projection import (
+    OdooWorkbenchDecisionCandidate,
+    ProjectionPublishResult,
+    WorkbenchProjection,
+)
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workbench.query_use_cases import GetReviewItemUseCase, ListReviewQueueUseCase
 from app.application.workbench.services import ReviewItemCreationService
@@ -23,6 +34,8 @@ __all__ = [
     "GetReviewItemUseCase",
     "LineResolution",
     "ListReviewQueueUseCase",
+    "OdooWorkbenchDecisionCandidate",
+    "ProjectionPublishResult",
     "ReviewDecisionAcknowledgement",
     "ReviewDecisionCommand",
     "ReviewDecisionType",
@@ -37,5 +50,8 @@ __all__ = [
     "ReviewStatus",
     "SubmitReviewDecisionUseCase",
     "TaxResolution",
+    "WorkbenchDecisionCandidateReader",
     "WorkbenchContractError",
+    "WorkbenchProjection",
+    "WorkbenchProjectionPublisher",
 ]

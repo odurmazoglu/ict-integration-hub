@@ -133,6 +133,16 @@ The route adapters construct `ReviewQueueQuery`, `ReviewDetailQuery`, and `Revie
 
 Successful and failed Workbench responses include the same `trace_id` in the JSON body and `X-Trace-ID` response header. Authentication failures before `RequestContext` resolution use the validated inbound trace id when available, otherwise a safe generated id.
 
+## Odoo Online Workbench Projection Security
+
+Odoo 19 Online Workbench synchronization uses Hub-to-Odoo service authentication through Odoo JSON-2 and a future restricted Odoo API key. It does not use an installed Odoo Python addon and does not store Hub bearer tokens, Keycloak tokens, Keycloak client secrets, or Odoo API keys in Odoo Studio fields.
+
+The future Odoo integration user must receive access only to the dedicated Workbench projection model, `x_ipp_import_review`, and explicitly required future ERP models. This projection scope does not authorize accounting posting, payment creation, reconciliation, master-data mutation, deletion, procurement execution, or workflow execution.
+
+Odoo user identity captured in the projection is audit evidence only. The Hub must validate `review_id`, `company_id`, expected version, idempotency key, selected workflow, and resolution details against Hub persistence before accepting a decision.
+
+Future decision ingestion must run as a Hub-controlled scheduler or service. Browser-side JavaScript must never receive Odoo API keys, Hub service tokens, or Keycloak client secrets.
+
 ## Out Of Scope
 
 Not implemented:
@@ -146,7 +156,9 @@ Not implemented:
 - API keys
 - service account issuance
 - user, role, or permission persistence
-- Workbench API routes
+- Odoo Studio projection synchronization
+- Odoo decision ingestion
+- Odoo SSO
 - ERP writes
 - workflow execution
 - AI authentication or authorization behavior

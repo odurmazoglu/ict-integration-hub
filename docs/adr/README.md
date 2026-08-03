@@ -53,6 +53,7 @@ The `ADR-....md` files are the canonical architecture foundation for ICT IPP. Ea
 | [ADR-0008](ADR-0008-import-session.md) | Import Session | Accepted | Import Session is the future audit unit for imports, rules, recommendations, review, and execution. |
 | [ADR-0009](ADR-0009-procurement-traceability.md) | Procurement Traceability | Accepted | Preserve Sales-to-Profitability traceability whenever possible. |
 | [ADR-0010](ADR-0010-strategy-pattern.md) | Strategy Pattern | Accepted | Use explicit strategies for workflow execution paths selected by the Decision Engine. |
+| [ADR-0011](ADR-0011-odoo-online-import-workbench-projection.md) | Odoo Online Import Workbench Projection | Accepted | Use an Odoo Studio projection model for Odoo Online Workbench review display and candidate decision capture while Hub remains authoritative. |
 
 ## Existing Implementation ADR Index
 

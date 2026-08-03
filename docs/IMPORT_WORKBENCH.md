@@ -2,7 +2,9 @@
 
 Import Workbench is the accepted Odoo-side user interface for reviewing import sessions. It lives inside Odoo as UI only and does not contain business logic.
 
-No Odoo Import Workbench UI implementation exists in this repository yet. The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, explicit review decision submission persistence, and authenticated REST API adapters that a future Odoo Workbench UI can consume.
+Odoo 19 Online cannot install custom Python modules. The accepted Odoo Online architecture is a future Odoo Studio projection model, `x_ipp_import_review`, synchronized by the Hub through JSON-2. No Odoo Studio model, views, ACLs, JSON-2 projection adapter, scheduler, decision ingestion, or Odoo UI implementation exists in this repository yet.
+
+The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, explicit review decision submission persistence, authenticated REST API adapters for direct Hub clients, and ERP-neutral projection contracts for the future Odoo Studio Workbench projection.
 
 ## Purpose
 
@@ -29,6 +31,7 @@ Odoo may display:
 - advisory AI explanations
 - links to draft vendor bills
 - required user-review actions
+- Hub acknowledgement status projected after future decision processing
 
 Odoo must not own:
 
@@ -40,23 +43,22 @@ Odoo must not own:
 - AI decision making
 - procurement traceability policy
 - idempotency decisions
+- accepted decision ledger
 
 ## Expected Interaction
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Workbench as Odoo Import Workbench
+    participant Projection as Odoo Studio Projection
     participant Hub as ICT IPP
-    participant ERP as Odoo ERP Records
 
-    User->>Workbench: Open import session
-    Workbench->>Hub: Fetch session, rule results, recommendations
-    Hub-->>Workbench: Review state and allowed actions
-    User->>Workbench: Approve reviewed draft action
-    Workbench->>Hub: Request approved execution
-    Hub->>ERP: Execute through adapter
-    Hub-->>Workbench: Execution result
+    Hub->>Projection: Publish WorkbenchProjection through future JSON-2 adapter
+    User->>Projection: Review Hub-owned fields
+    User->>Projection: Enter explicit decision and set decision_ready
+    Hub->>Projection: Read ready OdooWorkbenchDecisionCandidate
+    Hub->>Hub: Validate version, idempotency, company, and workflow contract
+    Hub->>Projection: Project safe acknowledgement result
 ```
 
 ## Current Application Contracts
@@ -82,6 +84,11 @@ Implemented contract types:
 - `ListReviewQueueUseCase`: application query boundary for listing review items through `ReviewQueueReader`
 - `GetReviewItemUseCase`: application query boundary for retrieving one company-scoped review item through `ReviewQueueReader`
 - `SubmitReviewDecisionUseCase`: application command boundary for submitting `ReviewDecisionCommand` through `ReviewDecisionWriter`
+- `WorkbenchProjection`: ERP-neutral projection of one Hub-owned review item for a future UI projection store
+- `OdooWorkbenchDecisionCandidate`: candidate decision read from the future Odoo Studio projection before Hub acceptance
+- `ProjectionPublishResult`: safe result for future projection publish or acknowledgement writes
+- `WorkbenchProjectionPublisher`: application port for future projection publishing and acknowledgement
+- `WorkbenchDecisionCandidateReader`: application port for future candidate decision reads
 
 ## Current Persistence Foundation
 
@@ -120,7 +127,7 @@ flowchart TB
     Repository[SQLAlchemy Review Repository]
     ReviewItems[(PostgreSQL workbench_review_items)]
     Decisions[(PostgreSQL workbench_review_decisions)]
-    Workbench[Odoo Workbench Adapter - future]
+    ProjectionAdapter[Future Projection Adapter]
     Reader[ReviewQueueReader Port]
     Submit[SubmitReviewDecisionUseCase]
     DecisionWriter[ReviewDecisionWriter Port]
@@ -130,9 +137,9 @@ flowchart TB
     Writer --> Repository
     Repository --> ReviewItems
     Repository --> Decisions
-    Workbench --> Reader
+    ProjectionAdapter --> Reader
     Reader --> Repository
-    Workbench --> Submit
+    ProjectionAdapter --> Submit
     Submit --> DecisionWriter
     DecisionWriter --> Repository
 ```
@@ -172,7 +179,13 @@ Errors use the same envelope with `success=false`, `data=null`, and safe error c
 Not implemented in this slice:
 
 - Odoo UI
+- Odoo Studio model creation
+- Odoo Studio views and ACLs
+- Odoo JSON-2 projection synchronization
+- decision ingestion from Odoo
+- Hub acknowledgement projection to Odoo
 - user decision execution
+- workflow execution
 - ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows
 - AI recommendations
@@ -216,20 +229,34 @@ flowchart TB
     Submit --> Ack
 ```
 
+## Odoo Online Projection
+
+The future Odoo Workbench UI uses the proposed Studio model `x_ipp_import_review` as a projection store. Hub PostgreSQL remains authoritative for review lifecycle, review version, accepted decisions, decision idempotency, acknowledgement, and execution state. The Odoo projection is authoritative only for the user-entered candidate decision before Hub acceptance and for the Odoo user identity captured as audit evidence.
+
+Field ownership is explicit:
+
+- Hub-owned fields: review identity, company identity, invoice display data, review reasons, warnings, Hub status/version, synchronization metadata, and acknowledgement result.
+- Odoo-user-owned fields: explicit decision, selected workflow, selected partner, line resolutions, tax resolutions, business context, comment, and decision-ready flag.
+- System-derived Odoo fields: Odoo user id and decision timestamp when safely available.
+
+Odoo users must not edit Hub-owned identity or version fields. The Hub must not silently overwrite submitted user-decision fields. A decision candidate is processed only when `x_ipp_decision_ready` is explicitly true.
+
+See [Odoo Workbench Projection](ODOO_WORKBENCH_PROJECTION.md) and [ADR-0011](adr/ADR-0011-odoo-online-import-workbench-projection.md).
+
 ## Decision Submission
 
 Decision submission persists explicit user intent only. It does not execute the selected workflow.
 
 ```mermaid
 sequenceDiagram
-    participant Workbench as Odoo Workbench Adapter
+    participant Adapter as Decision Adapter
     participant UseCase as SubmitReviewDecisionUseCase
     participant Port as ReviewDecisionWriter
     participant Repo as SQLAlchemy Review Repository
     participant Items as workbench_review_items
     participant Decisions as workbench_review_decisions
 
-    Workbench->>UseCase: ReviewDecisionCommand(expected_version, idempotency_key)
+    Adapter->>UseCase: ReviewDecisionCommand(expected_version, idempotency_key)
     UseCase->>Port: submit_review_decision(command)
     Port->>Repo: submit_review_decision(command)
     Repo->>Decisions: find by company_id + idempotency_key
