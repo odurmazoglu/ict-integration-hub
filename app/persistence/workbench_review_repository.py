@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import func, select
@@ -17,9 +18,10 @@ from app.application.workbench.exceptions import (
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
-from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
 
 SAFE_PERSISTENCE_ERROR = "Review persistence operation failed."
+REVIEW_AMOUNT_INTEGER_DIGITS = REVIEW_AMOUNT_PRECISION - REVIEW_AMOUNT_SCALE
 
 
 class SqlAlchemyReviewRepository:
@@ -159,6 +161,7 @@ def _validate_create_request(item: ReviewItem, *, company_id: int, idempotency_k
         raise WorkbenchContractError("Only PENDING_REVIEW review items can be created.")
     if item.version != 1:
         raise WorkbenchContractError("New review items must start at version 1.")
+    _validate_supported_amount(item.total_amount)
 
 
 def _query_filters(query: ReviewQueueQuery) -> list[Any]:
@@ -192,7 +195,7 @@ def _model_from_review_item(
         supplier_name=item.supplier_name,
         invoice_date=item.invoice_date,
         currency=item.currency,
-        total_amount=item.total_amount,
+        total_amount=_canonical_decimal(item.total_amount),
         workflow=item.workflow.value,
         status=item.status.value,
         review_reasons=[_serialize_reason(reason) for reason in item.review_reasons],
@@ -304,7 +307,7 @@ def _business_fingerprint(item: ReviewItem, *, company_id: int) -> tuple[Any, ..
         item.supplier_name,
         item.invoice_date,
         item.currency,
-        str(item.total_amount) if item.total_amount is not None else None,
+        _canonical_decimal(item.total_amount),
         item.workflow,
         item.status,
         tuple(_reason_fingerprint(reason) for reason in item.review_reasons),
@@ -324,3 +327,37 @@ def _reason_fingerprint(reason: ManualReviewReason) -> tuple[Any, ...]:
         serialized["source"],
         tuple(tuple(pair) for pair in serialized["details"]),
     )
+
+
+def _canonical_decimal(value: Decimal | None) -> Decimal | None:
+    if value is None:
+        return None
+    if not value.is_finite():
+        raise WorkbenchContractError("total_amount must be a finite Decimal value.")
+    try:
+        normalized = value.normalize()
+    except InvalidOperation as exc:
+        raise WorkbenchContractError("total_amount must be a valid Decimal value.") from exc
+    if normalized == Decimal("0"):
+        return Decimal("0")
+    return normalized
+
+
+def _validate_supported_amount(value: Decimal | None) -> None:
+    canonical = _canonical_decimal(value)
+    if canonical is None:
+        return
+    if _decimal_scale(canonical) > REVIEW_AMOUNT_SCALE:
+        raise WorkbenchContractError(f"total_amount supports at most {REVIEW_AMOUNT_SCALE} fractional digits.")
+    if _decimal_integer_digits(canonical) > REVIEW_AMOUNT_INTEGER_DIGITS:
+        raise WorkbenchContractError(f"total_amount supports at most {REVIEW_AMOUNT_PRECISION} total digits.")
+
+
+def _decimal_scale(value: Decimal) -> int:
+    exponent = value.as_tuple().exponent
+    return abs(exponent) if exponent < 0 else 0
+
+
+def _decimal_integer_digits(value: Decimal) -> int:
+    adjusted = abs(value).adjusted()
+    return adjusted + 1 if adjusted >= 0 else 0

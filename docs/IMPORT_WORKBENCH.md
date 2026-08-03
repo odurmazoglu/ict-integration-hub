@@ -90,6 +90,8 @@ Implemented behavior:
 - list a company-scoped queue with exact status, workflow, supplier tax number, created-from, and created-to filters
 - return paginated results with `total_count`
 - persist structured `ManualReviewReason` values as controlled JSON
+- persist `total_amount` as `Numeric(24, 6)` to preserve UBL monetary values up to six fractional digits
+- compare persisted monetary values through canonical `Decimal` values for idempotency, not display formatting
 - store `version` starting at `1` for future optimistic concurrency updates
 
 The persistence adapter does not store raw XML, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.

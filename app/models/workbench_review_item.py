@@ -8,6 +8,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 from app.db.types import AwareDateTime
 
+REVIEW_AMOUNT_PRECISION = 24
+REVIEW_AMOUNT_SCALE = 6
+
 
 class WorkbenchReviewItem(Base):
     __tablename__ = "workbench_review_items"
@@ -39,7 +42,10 @@ class WorkbenchReviewItem(Base):
     supplier_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
     invoice_date: Mapped[date | None] = mapped_column(Date(), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    total_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    total_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE),
+        nullable=True,
+    )
     workflow: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     review_reasons: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)

@@ -312,11 +312,11 @@ Current contracts:
 - `ReviewItemWriter`: create-only port for idempotent persistence of pending review items
 - `ReviewItemCreationService`: application service that delegates pending review item creation to the writer port
 
-The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation and queue/detail reads. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, and scopes detail reads by `review_id` plus `company_id`.
+The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation and queue/detail reads. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, and scopes detail reads by `review_id` plus `company_id`.
 
 This slice does not implement Odoo UI, FastAPI routes, user approval writes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching. Review item persistence only supports idempotent creation of pending review records and read-only queue/detail access.
 
-Repeated creation with the same company-scoped idempotency key returns the existing item when immutable business content matches. Reusing the same key for different content raises a safe idempotency conflict and does not overwrite existing data.
+Repeated creation with the same company-scoped idempotency key returns the existing item when immutable business content matches. Monetary comparison uses canonical `Decimal` values, so equivalent values such as `259.2000` and `259.20` do not create false conflicts. Reusing the same key for different content raises a safe idempotency conflict and does not overwrite existing data.
 
 Recommendation acceptance is future work. A future recommendation contract must include recommendation identity, version metadata, source, and rationale before a user can accept it safely. Current decision commands support only explicit workflow selection or dismissal. `WorkflowType.MANUAL_REVIEW` represents the unresolved review state and cannot be selected as a resolution.
 

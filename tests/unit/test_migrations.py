@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, inspect
 
 from alembic import command
 from app.core.config import get_settings
+from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
 
 
 def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
@@ -56,7 +57,8 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "safe_error_message",
         "attempt_count",
     }.issubset(draft_columns)
-    review_columns = {column["name"] for column in inspector.get_columns("workbench_review_items")}
+    review_column_definitions = inspector.get_columns("workbench_review_items")
+    review_columns = {column["name"] for column in review_column_definitions}
     assert {
         "review_id",
         "company_id",
@@ -91,6 +93,12 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_items_review_id",
         "uq_workbench_review_items_company_idempotency_key",
     }.issubset(review_unique_constraints)
+    review_total_amount_type = next(
+        column["type"] for column in review_column_definitions if column["name"] == "total_amount"
+    )
+    model_total_amount_type = WorkbenchReviewItem.__table__.c.total_amount.type
+    assert review_total_amount_type.precision == model_total_amount_type.precision == REVIEW_AMOUNT_PRECISION
+    assert review_total_amount_type.scale == model_total_amount_type.scale == REVIEW_AMOUNT_SCALE
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))

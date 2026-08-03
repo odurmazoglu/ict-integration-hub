@@ -29,7 +29,7 @@ def upgrade() -> None:
         sa.Column("supplier_name", sa.String(length=512), nullable=True),
         sa.Column("invoice_date", sa.Date(), nullable=True),
         sa.Column("currency", sa.String(length=8), nullable=True),
-        sa.Column("total_amount", sa.Numeric(18, 2), nullable=True),
+        sa.Column("total_amount", sa.Numeric(24, 6), nullable=True),
         sa.Column("workflow", sa.String(length=64), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
         sa.Column("review_reasons", sa.JSON(), nullable=False),

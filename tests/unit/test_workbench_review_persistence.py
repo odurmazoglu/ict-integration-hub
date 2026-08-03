@@ -80,6 +80,94 @@ def test_repository_round_trips_decimal_date_warnings_and_structured_reasons(ses
     assert loaded.review_reasons[0].details == (("tax_rate", "20"),)
 
 
+def test_repository_round_trips_four_fractional_digit_amount_without_business_value_loss(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+
+    created = repository.create_review_item(
+        _review_item("review-1", total_amount=Decimal("259.2000")),
+        company_id=7,
+        idempotency_key="invoice-ettn:1",
+    )
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id=created.review_id, company_id=7))
+
+    assert loaded.total_amount == Decimal("259.2000")
+
+
+def test_repository_treats_hydrated_two_decimal_amount_as_idempotently_identical(session: Session) -> None:
+    _insert_record(
+        session,
+        review_id="review-1",
+        company_id=7,
+        idempotency_key="same-key",
+        invoice_number="INV-1",
+        total_amount=Decimal("259.20"),
+    )
+    repository = SqlAlchemyReviewRepository(session)
+
+    created = repository.create_review_item(
+        _review_item("review-1", total_amount=Decimal("259.2000")),
+        company_id=7,
+        idempotency_key="same-key",
+    )
+
+    assert created.total_amount == Decimal("259.20")
+    assert session.query(WorkbenchReviewItem).count() == 1
+
+
+def test_repository_rejects_genuinely_different_amount_for_same_idempotency_key(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", total_amount=Decimal("259.2000")),
+        company_id=7,
+        idempotency_key="same-key",
+    )
+
+    with pytest.raises(ReviewIdempotencyConflictError):
+        repository.create_review_item(
+            _review_item("review-1", total_amount=Decimal("259.200001")),
+            company_id=7,
+            idempotency_key="same-key",
+        )
+
+
+def test_repository_round_trips_amount_with_maximum_supported_scale(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+
+    created = repository.create_review_item(
+        _review_item("review-1", total_amount=Decimal("123.123456")),
+        company_id=7,
+        idempotency_key="invoice-ettn:1",
+    )
+
+    assert created.total_amount == Decimal("123.123456")
+
+
+def test_repository_rejects_amount_exceeding_supported_scale(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+
+    with pytest.raises(WorkbenchContractError) as error:
+        repository.create_review_item(
+            _review_item("review-1", total_amount=Decimal("1.1234567")),
+            company_id=7,
+            idempotency_key="invoice-ettn:1",
+        )
+
+    assert str(error.value) == "total_amount supports at most 6 fractional digits."
+
+
+def test_repository_rejects_amount_exceeding_supported_precision(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+
+    with pytest.raises(WorkbenchContractError) as error:
+        repository.create_review_item(
+            _review_item("review-1", total_amount=Decimal("1000000000000000000")),
+            company_id=7,
+            idempotency_key="invoice-ettn:1",
+        )
+
+    assert str(error.value) == "total_amount supports at most 24 total digits."
+
+
 def test_repository_returns_existing_item_for_identical_idempotency_key(session: Session) -> None:
     repository = SqlAlchemyReviewRepository(session)
     item = _review_item("review-1")
@@ -332,6 +420,12 @@ def test_review_persistence_adapter_does_not_import_provider_or_erp_boundaries()
         assert token not in source
 
 
+def test_review_persistence_adapter_does_not_convert_money_through_float() -> None:
+    source = Path("app/persistence/workbench_review_repository.py").read_text(encoding="utf-8").lower()
+
+    assert "float(" not in source
+
+
 def test_application_workbench_contracts_do_not_import_sqlalchemy_or_models() -> None:
     source = "\n".join(path.read_text(encoding="utf-8") for path in Path("app/application/workbench").rglob("*.py"))
 
@@ -397,9 +491,11 @@ def _insert_record(
     review_id: str,
     company_id: int,
     idempotency_key: str,
+    invoice_number: str | None = None,
     workflow: WorkflowType | str = WorkflowType.MANUAL_REVIEW,
     status: ReviewStatus | str = ReviewStatus.PENDING_REVIEW,
     created_at: datetime | None = None,
+    total_amount: Decimal = Decimal("120.00"),
     review_reasons: list[object] | None = None,
     warnings: list[object] | None = None,
 ) -> None:
@@ -407,12 +503,12 @@ def _insert_record(
         review_id=review_id,
         company_id=company_id,
         invoice_id=f"invoice-{review_id}",
-        invoice_number=f"INV-{review_id}",
+        invoice_number=invoice_number if invoice_number is not None else f"INV-{review_id}",
         supplier_tax_number="1234567890",
         supplier_name="Supplier Display",
         invoice_date=date(2026, 8, 2),
         currency="TRY",
-        total_amount=Decimal("120.00"),
+        total_amount=total_amount,
         workflow=workflow.value if isinstance(workflow, WorkflowType) else workflow,
         status=status.value if isinstance(status, ReviewStatus) else status,
         review_reasons=review_reasons
