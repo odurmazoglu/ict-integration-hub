@@ -2,7 +2,7 @@
 
 Import Workbench is the accepted Odoo-side user interface for reviewing import sessions. It lives inside Odoo as UI only and does not contain business logic.
 
-No Odoo Import Workbench UI implementation exists in this repository yet. The repository now provides application-layer contracts and durable review item persistence that a future Odoo Workbench adapter can consume.
+No Odoo Import Workbench UI implementation exists in this repository yet. The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, and explicit review decision submission persistence that a future Odoo Workbench adapter can consume.
 
 ## Purpose
 
@@ -75,19 +75,27 @@ Implemented contract types:
 - `BusinessContextDecision`: explicit procurement traceability identifiers selected by the user
 - `ReviewQueueReader`: read-only application port for future queue/detail adapters
 - `ReviewItemWriter`: create-only application port for idempotent pending review item creation
+- `ReviewDecisionWriter`: decision submission application port for explicit user decisions
 - `ReviewItemCreationService`: small application service that delegates review item creation through the writer port
 - `ListReviewQueueUseCase`: application query boundary for listing review items through `ReviewQueueReader`
 - `GetReviewItemUseCase`: application query boundary for retrieving one company-scoped review item through `ReviewQueueReader`
+- `SubmitReviewDecisionUseCase`: application command boundary for submitting `ReviewDecisionCommand` through `ReviewDecisionWriter`
 
 ## Current Persistence Foundation
 
-The first persistence slice stores Workbench review items in `workbench_review_items`.
+The persistence foundation stores Workbench review items in `workbench_review_items` and append-only user decisions in `workbench_review_decisions`.
 
 Implemented behavior:
 
 - create one `PENDING_REVIEW` item idempotently through `ReviewItemWriter`
 - list the review queue through `ListReviewQueueUseCase` and `ReviewQueueReader`
 - retrieve one review item through `GetReviewItemUseCase` and `ReviewQueueReader`
+- submit an explicit `SELECT_WORKFLOW` or `DISMISS` decision through `SubmitReviewDecisionUseCase` and `ReviewDecisionWriter`
+- transition `PENDING_REVIEW` to `DECISION_SUBMITTED` or `DISMISSED`
+- increment `version` exactly once on first accepted decision submission
+- enforce optimistic concurrency with `expected_version`
+- replay identical decision commands idempotently by company-scoped idempotency key
+- reject conflicting decision idempotency-key reuse without mutating the review item
 - return an existing item when the same company-scoped idempotency key is reused with identical immutable business content
 - raise a safe idempotency conflict when the same key is reused for different content
 - read one item by `review_id` and `company_id`
@@ -97,6 +105,8 @@ Implemented behavior:
 - persist `total_amount` as `Numeric(24, 6)` to preserve UBL monetary values up to six fractional digits
 - compare persisted monetary values through canonical `Decimal` values for idempotency, not display formatting
 - store `version` starting at `1` for future optimistic concurrency updates
+- preserve original review reasons when a decision is submitted
+- persist selected workflow, partner, line resolutions, tax resolutions, business context, comment, user identity, idempotency key, and version-before/version-after as controlled audit data
 
 The persistence adapter does not store raw XML, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.
 
@@ -106,16 +116,23 @@ flowchart TB
     Service[Review Item Creation Service]
     Writer[ReviewItemWriter Port]
     Repository[SQLAlchemy Review Repository]
-    Database[(PostgreSQL workbench_review_items)]
+    ReviewItems[(PostgreSQL workbench_review_items)]
+    Decisions[(PostgreSQL workbench_review_decisions)]
     Workbench[Odoo Workbench Adapter - future]
     Reader[ReviewQueueReader Port]
+    Submit[SubmitReviewDecisionUseCase]
+    DecisionWriter[ReviewDecisionWriter Port]
 
     ManualReview --> Service
     Service --> Writer
     Writer --> Repository
-    Repository --> Database
+    Repository --> ReviewItems
+    Repository --> Decisions
     Workbench --> Reader
     Reader --> Repository
+    Workbench --> Submit
+    Submit --> DecisionWriter
+    DecisionWriter --> Repository
 ```
 
 Not implemented in this slice:
@@ -124,7 +141,6 @@ Not implemented in this slice:
 - FastAPI routes
 - API authentication
 - user decision execution
-- review status transitions
 - ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows
 - AI recommendations
@@ -142,8 +158,11 @@ flowchart TB
     GetUseCase[GetReviewItemUseCase]
     Reader[ReviewQueueReader Port]
     Writer[ReviewItemWriter Port]
+    Submit[SubmitReviewDecisionUseCase]
+    DecisionWriter[ReviewDecisionWriter Port]
     Repository[SQLAlchemy Review Repository]
-    Store[(PostgreSQL review item table)]
+    ReviewItems[(PostgreSQL workbench_review_items)]
+    Decisions[(PostgreSQL workbench_review_decisions)]
     Item[ReviewItem]
     Command[ReviewDecisionCommand]
     Ack[ReviewDecisionAcknowledgement]
@@ -155,11 +174,47 @@ flowchart TB
     GetUseCase --> Reader
     Writer --> Repository
     Reader --> Repository
-    Repository --> Store
+    Submit --> DecisionWriter
+    DecisionWriter --> Repository
+    Repository --> ReviewItems
+    Repository --> Decisions
     Reader --> Item
     OdooWorkbench --> Command
-    Command --> Ack
+    Command --> Submit
+    Submit --> Ack
 ```
+
+## Decision Submission
+
+Decision submission persists explicit user intent only. It does not execute the selected workflow.
+
+```mermaid
+sequenceDiagram
+    participant Workbench as Odoo Workbench Adapter
+    participant UseCase as SubmitReviewDecisionUseCase
+    participant Port as ReviewDecisionWriter
+    participant Repo as SQLAlchemy Review Repository
+    participant Items as workbench_review_items
+    participant Decisions as workbench_review_decisions
+
+    Workbench->>UseCase: ReviewDecisionCommand(expected_version, idempotency_key)
+    UseCase->>Port: submit_review_decision(command)
+    Port->>Repo: submit_review_decision(command)
+    Repo->>Decisions: find by company_id + idempotency_key
+    alt identical replay
+        Repo-->>UseCase: original ReviewDecisionAcknowledgement
+    else first submission
+        Repo->>Items: atomic status/version update for pending expected_version
+        Repo->>Decisions: append decision audit row
+        Repo-->>UseCase: ReviewDecisionAcknowledgement
+    else stale or invalid state
+        Repo-->>UseCase: safe conflict exception
+    end
+```
+
+`SELECT_WORKFLOW` stores the selected canonical workflow and any explicit partner, line, tax, or traceability choices. It moves the review item to `DECISION_SUBMITTED` and leaves execution to a future approved workflow slice.
+
+`DISMISS` stores the dismissal decision, moves the review item to `DISMISSED`, and stores no workflow-specific selections.
 
 ## UI Responsibilities
 

@@ -85,7 +85,7 @@ See [Application Layer](APPLICATION_LAYER.md) for the package and port conventio
 
 ## Import Workbench Contract Flow
 
-The current repository defines application contracts that a future Odoo Import Workbench adapter can consume. It does not implement UI, API routes, persistence, user decision execution, ERP writes, or AI recommendations.
+The current repository defines application contracts and persistence boundaries that a future Odoo Import Workbench adapter can consume. It does not implement UI, API routes, user decision execution, ERP writes, or AI recommendations.
 
 ```mermaid
 flowchart TB
@@ -94,18 +94,24 @@ flowchart TB
     Queue[ReviewQueueQuery / ReviewQueueResult]
     Detail[ReviewDetailQuery]
     Decision[ReviewDecisionCommand]
+    Submit[SubmitReviewDecisionUseCase]
+    Writer[ReviewDecisionWriter Port]
+    Store[(PostgreSQL workbench_review_decisions)]
     Ack[ReviewDecisionAcknowledgement]
-    FutureHandler[Future review decision handler]
 
     ReviewRequired --> ReviewItem
     Queue --> ReviewItem
     Detail --> ReviewItem
     ReviewItem --> Decision
-    Decision --> FutureHandler
-    FutureHandler --> Ack
+    Decision --> Submit
+    Submit --> Writer
+    Writer --> Store
+    Submit --> Ack
 ```
 
 Traceability choices in `ReviewDecisionCommand` are explicit user-provided identifiers through `BusinessContextDecision`. The contract supports future choices such as direct Vendor Bill, RFQ/Purchase Order, existing Purchase Order matching, expense, asset, subscription, or dismissal without executing those workflows in this slice. Manual Review is the unresolved state; it cannot be selected as a resolution workflow.
+
+Submitted decisions are persisted append-only and update the review item status/version atomically. `SELECT_WORKFLOW` moves `PENDING_REVIEW` to `DECISION_SUBMITTED`; `DISMISS` moves `PENDING_REVIEW` to `DISMISSED`. Optimistic concurrency uses `expected_version`, and decision-command idempotency uses `(company_id, idempotency_key)` so identical replays return the original acknowledgement without incrementing the review version again.
 
 Recommendation acceptance is future work. It must be introduced together with a versioned recommendation contract that carries identity, source, and rationale metadata so stale recommendations cannot be accepted silently.
 

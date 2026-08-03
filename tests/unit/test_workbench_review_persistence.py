@@ -5,27 +5,39 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.application.workbench import (
+    BusinessContextDecision,
+    LineResolution,
+    ReviewDecisionCommand,
+    ReviewDecisionType,
+    ReviewDecisionWriter,
     ReviewDetailQuery,
     ReviewItem,
     ReviewItemCreationService,
     ReviewItemWriter,
     ReviewQueueQuery,
     ReviewStatus,
+    TaxResolution,
     WorkbenchContractError,
 )
 from app.application.workbench.exceptions import (
     ReviewDataIntegrityError,
+    ReviewDecisionDataIntegrityError,
+    ReviewDecisionError,
+    ReviewDecisionIdempotencyConflictError,
     ReviewIdempotencyConflictError,
     ReviewNotFoundError,
     ReviewPersistenceError,
+    ReviewStateConflictError,
+    ReviewVersionConflictError,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.db.base import Base
+from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.persistence import SqlAlchemyReviewRepository
 
@@ -33,7 +45,7 @@ from app.persistence import SqlAlchemyReviewRepository
 @pytest.fixture()
 def session() -> Session:
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[WorkbenchReviewItem.__table__])
+    Base.metadata.create_all(engine, tables=[WorkbenchReviewItem.__table__, WorkbenchReviewDecision.__table__])
     factory = sessionmaker(bind=engine)
     with factory() as db_session:
         yield db_session
@@ -348,6 +360,242 @@ def test_repository_paginates_with_offset(session: Session) -> None:
     assert result.total_count == 2
 
 
+def test_repository_submits_select_workflow_decision_and_persists_explicit_content(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    command = _select_workflow_command(
+        line_resolutions=(LineResolution(line_number="1", selected_product_id=10),),
+        tax_resolutions=(TaxResolution(line_number="1", tax_index=0, selected_tax_id=20),),
+        business_context=BusinessContextDecision(sales_order_id=30, analytic_account_id=40),
+        comment="Reviewed by finance.",
+        selected_partner_id=50,
+        decided_by="finance.user",
+    )
+
+    acknowledgement = repository.submit_review_decision(command)
+
+    assert acknowledgement.accepted is True
+    assert acknowledgement.review_id == "review-1"
+    assert acknowledgement.status is ReviewStatus.DECISION_SUBMITTED
+    assert acknowledgement.version == 2
+    assert acknowledgement.decision is ReviewDecisionType.SELECT_WORKFLOW
+    assert acknowledgement.selected_workflow is WorkflowType.VENDOR_BILL
+
+    record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert record is not None
+    assert record.company_id == 7
+    assert record.review_version_before == 1
+    assert record.review_version_after == 2
+    assert record.decision_type == ReviewDecisionType.SELECT_WORKFLOW.value
+    assert record.selected_workflow == WorkflowType.VENDOR_BILL.value
+    assert record.selected_partner_id == 50
+    assert record.line_resolutions == [{"line_number": "1", "selected_product_id": 10}]
+    assert record.tax_resolutions == [{"line_number": "1", "tax_index": 0, "selected_tax_id": 20}]
+    assert record.business_context == {"sales_order_id": 30, "analytic_account_id": 40}
+    assert record.comment == "Reviewed by finance."
+    assert record.decided_by == "finance.user"
+    assert record.idempotency_key == "decision-key-1"
+    assert record.submitted_at is not None
+
+
+def test_repository_submits_dismiss_decision(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+
+    acknowledgement = repository.submit_review_decision(_dismiss_command())
+
+    assert acknowledgement.status is ReviewStatus.DISMISSED
+    assert acknowledgement.version == 2
+    assert acknowledgement.decision is ReviewDecisionType.DISMISS
+    assert acknowledgement.selected_workflow is None
+    record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert record is not None
+    assert record.selected_workflow is None
+
+
+def test_repository_updates_review_status_and_version_once(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+
+    repository.submit_review_decision(_select_workflow_command())
+
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert loaded.status is ReviewStatus.DECISION_SUBMITTED
+    assert loaded.version == 2
+
+
+def test_repository_wrong_expected_version_raises_conflict_without_mutation(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", version=1), company_id=7, idempotency_key="review-key-1")
+
+    with pytest.raises(ReviewVersionConflictError) as error:
+        repository.submit_review_decision(_select_workflow_command(expected_version=2))
+
+    assert str(error.value) == "Review item version does not match expected_version."
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert loaded.status is ReviewStatus.PENDING_REVIEW
+    assert loaded.version == 1
+    assert session.query(WorkbenchReviewDecision).count() == 0
+
+
+def test_repository_non_pending_review_raises_state_conflict_without_mutation(session: Session) -> None:
+    _insert_record(
+        session,
+        review_id="review-1",
+        company_id=7,
+        idempotency_key="review-key-1",
+        status=ReviewStatus.RESOLVED,
+    )
+    repository = SqlAlchemyReviewRepository(session)
+
+    with pytest.raises(ReviewStateConflictError):
+        repository.submit_review_decision(_select_workflow_command())
+
+    assert session.query(WorkbenchReviewDecision).count() == 0
+
+
+def test_repository_decision_submission_is_company_scoped(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=8, idempotency_key="review-key-1")
+
+    with pytest.raises(ReviewNotFoundError):
+        repository.submit_review_decision(_select_workflow_command(company_id=7))
+
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=8))
+    assert loaded.status is ReviewStatus.PENDING_REVIEW
+    assert loaded.version == 1
+
+
+def test_repository_decision_submission_not_found_is_safe(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+
+    with pytest.raises(ReviewNotFoundError) as error:
+        repository.submit_review_decision(_select_workflow_command())
+
+    assert str(error.value) == "Review item was not found."
+
+
+def test_repository_returns_existing_acknowledgement_for_identical_decision_idempotency_key(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    command = _select_workflow_command()
+
+    first = repository.submit_review_decision(command)
+    second = repository.submit_review_decision(command)
+
+    assert second == first
+    assert session.query(WorkbenchReviewDecision).count() == 1
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert loaded.version == 2
+
+
+def test_repository_rejects_conflicting_decision_idempotency_reuse_without_mutation(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    repository.submit_review_decision(_select_workflow_command())
+
+    with pytest.raises(ReviewDecisionIdempotencyConflictError) as error:
+        repository.submit_review_decision(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
+
+    assert "vendor_bill" not in str(error.value)
+    assert "rfq" not in str(error.value)
+    assert session.query(WorkbenchReviewDecision).count() == 1
+
+
+def test_repository_rejects_malformed_persisted_decision_data_safely(session: Session) -> None:
+    _insert_record(session, review_id="review-1", company_id=7, idempotency_key="review-key-1")
+    _insert_decision_record(session, decision_type="not-real")
+    repository = SqlAlchemyReviewRepository(session)
+
+    with pytest.raises(ReviewDecisionDataIntegrityError):
+        repository.submit_review_decision(_select_workflow_command())
+
+
+def test_repository_rolls_back_review_update_when_decision_insert_fails(session: Session, monkeypatch) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    original_add = session.add
+    sensitive = SQLAlchemyError("driver insert failure password=secret")
+
+    def fail_on_decision_add(record: object) -> None:
+        if isinstance(record, WorkbenchReviewDecision):
+            raise sensitive
+        original_add(record)
+
+    monkeypatch.setattr(session, "add", fail_on_decision_add)
+
+    with pytest.raises(ReviewDecisionError) as error:
+        repository.submit_review_decision(_select_workflow_command())
+
+    assert str(error.value) == "Review decision persistence operation failed."
+    assert "secret" not in str(error.value)
+    assert error.value.__cause__ is sensitive
+    monkeypatch.undo()
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert loaded.status is ReviewStatus.PENDING_REVIEW
+    assert loaded.version == 1
+    assert session.query(WorkbenchReviewDecision).count() == 0
+
+
+def test_repository_rolls_back_when_review_update_fails(session: Session, monkeypatch) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    sensitive = SQLAlchemyError("driver update failure token=secret")
+
+    def fail_execute(*_args: object, **_kwargs: object) -> object:
+        raise sensitive
+
+    monkeypatch.setattr(session, "execute", fail_execute)
+
+    with pytest.raises(ReviewDecisionError) as error:
+        repository.submit_review_decision(_select_workflow_command())
+
+    assert str(error.value) == "Review decision persistence operation failed."
+    assert "secret" not in str(error.value)
+    assert error.value.__cause__ is sensitive
+    monkeypatch.undo()
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert loaded.status is ReviewStatus.PENDING_REVIEW
+    assert loaded.version == 1
+    assert session.query(WorkbenchReviewDecision).count() == 0
+
+
+def test_repository_preserves_original_review_reasons_after_decision(session: Session) -> None:
+    reason = ManualReviewReason(
+        code=ManualReviewReasonCode.TAX_AMBIGUOUS,
+        message="Tax mapping returned more than one candidate.",
+        line_number="1",
+        tax_index=0,
+        source="tax_mapping",
+    )
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", review_reasons=(reason,)),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+
+    repository.submit_review_decision(_select_workflow_command())
+
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert loaded.review_reasons == (reason,)
+
+
+def test_repository_queue_and_detail_reflect_decision_status(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+
+    repository.submit_review_decision(_select_workflow_command())
+
+    pending = repository.list_review_items(ReviewQueueQuery(company_id=7))
+    submitted = repository.list_review_items(ReviewQueueQuery(company_id=7, status=ReviewStatus.DECISION_SUBMITTED))
+    detail = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert pending.items == ()
+    assert [item.review_id for item in submitted.items] == ["review-1"]
+    assert detail.status is ReviewStatus.DECISION_SUBMITTED
+    assert detail.version == 2
+
+
 def test_repository_hydration_rejects_invalid_workflow_value(session: Session) -> None:
     _insert_record(session, review_id="bad", company_id=7, idempotency_key="key-1", workflow="not-real")
     repository = SqlAlchemyReviewRepository(session)
@@ -439,6 +687,13 @@ def test_review_item_writer_port_is_create_only() -> None:
     assert "update" not in ReviewItemWriter.__dict__
     assert "delete" not in ReviewItemWriter.__dict__
     assert "save" not in ReviewItemWriter.__dict__
+
+
+def test_review_decision_writer_port_is_submit_only() -> None:
+    assert "submit_review_decision" in ReviewDecisionWriter.__dict__
+    assert "create_review_item" not in ReviewDecisionWriter.__dict__
+    assert "list_review_items" not in ReviewDecisionWriter.__dict__
+    assert "delete" not in ReviewDecisionWriter.__dict__
 
 
 class RecordingWriter:
@@ -534,6 +789,83 @@ def _insert_record(
         record.created_at = created_at
         record.updated_at = created_at
     session.commit()
+
+
+def _insert_decision_record(
+    session: Session,
+    *,
+    decision_type: str = ReviewDecisionType.SELECT_WORKFLOW.value,
+    review_id: str = "review-1",
+    company_id: int = 7,
+    idempotency_key: str = "decision-key-1",
+) -> None:
+    session.add(
+        WorkbenchReviewDecision(
+            decision_id=f"decision-{review_id}",
+            review_id=review_id,
+            company_id=company_id,
+            review_version_before=1,
+            review_version_after=2,
+            decision_type=decision_type,
+            selected_workflow=WorkflowType.VENDOR_BILL.value,
+            selected_partner_id=None,
+            line_resolutions=[],
+            tax_resolutions=[],
+            business_context=None,
+            comment=None,
+            decided_by="finance.user",
+            idempotency_key=idempotency_key,
+        )
+    )
+    session.commit()
+
+
+def _select_workflow_command(
+    *,
+    review_id: str = "review-1",
+    company_id: int = 7,
+    expected_version: int = 1,
+    selected_workflow: WorkflowType = WorkflowType.VENDOR_BILL,
+    selected_partner_id: int | None = None,
+    line_resolutions: tuple[LineResolution, ...] = (),
+    tax_resolutions: tuple[TaxResolution, ...] = (),
+    business_context: BusinessContextDecision | None = None,
+    comment: str | None = None,
+    decided_by: str = "finance.user",
+    idempotency_key: str = "decision-key-1",
+) -> ReviewDecisionCommand:
+    return ReviewDecisionCommand(
+        review_id=review_id,
+        company_id=company_id,
+        expected_version=expected_version,
+        decision=ReviewDecisionType.SELECT_WORKFLOW,
+        selected_workflow=selected_workflow,
+        selected_partner_id=selected_partner_id,
+        line_resolutions=line_resolutions,
+        tax_resolutions=tax_resolutions,
+        business_context=business_context,
+        comment=comment,
+        decided_by=decided_by,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _dismiss_command(
+    *,
+    review_id: str = "review-1",
+    company_id: int = 7,
+    expected_version: int = 1,
+    decided_by: str = "finance.user",
+    idempotency_key: str = "decision-key-1",
+) -> ReviewDecisionCommand:
+    return ReviewDecisionCommand(
+        review_id=review_id,
+        company_id=company_id,
+        expected_version=expected_version,
+        decision=ReviewDecisionType.DISMISS,
+        decided_by=decided_by,
+        idempotency_key=idempotency_key,
+    )
 
 
 def _time(days: int) -> datetime:

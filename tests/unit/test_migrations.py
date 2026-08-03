@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, inspect
 
 from alembic import command
 from app.core.config import get_settings
+from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
 
 
@@ -24,6 +25,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "invoice_documents" in inspector.get_table_names()
     assert "odoo_draft_invoices" in inspector.get_table_names()
     assert "workbench_review_items" in inspector.get_table_names()
+    assert "workbench_review_decisions" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -99,6 +101,45 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     model_total_amount_type = WorkbenchReviewItem.__table__.c.total_amount.type
     assert review_total_amount_type.precision == model_total_amount_type.precision == REVIEW_AMOUNT_PRECISION
     assert review_total_amount_type.scale == model_total_amount_type.scale == REVIEW_AMOUNT_SCALE
+    decision_columns = {column["name"] for column in inspector.get_columns("workbench_review_decisions")}
+    assert {
+        "decision_id",
+        "review_id",
+        "company_id",
+        "review_version_before",
+        "review_version_after",
+        "decision_type",
+        "selected_workflow",
+        "selected_partner_id",
+        "line_resolutions",
+        "tax_resolutions",
+        "business_context",
+        "comment",
+        "decided_by",
+        "idempotency_key",
+        "submitted_at",
+    }.issubset(decision_columns)
+    decision_indexes = {index["name"] for index in inspector.get_indexes("workbench_review_decisions")}
+    assert {
+        "ix_workbench_review_decisions_company_id",
+        "ix_workbench_review_decisions_review_id",
+        "ix_workbench_review_decisions_decision_type",
+        "ix_workbench_review_decisions_submitted_at",
+        "ix_workbench_review_decisions_company_review",
+    }.issubset(decision_indexes)
+    decision_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("workbench_review_decisions")
+    }
+    assert {
+        "uq_workbench_review_decisions_decision_id",
+        "uq_workbench_review_decisions_company_idempotency_key",
+    }.issubset(decision_unique_constraints)
+    assert WorkbenchReviewDecision.__table__.c.review_version_before.nullable is False
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_decisions" not in inspector.get_table_names()
+    assert "workbench_review_items" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -115,4 +156,5 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "invoice_documents" in inspector.get_table_names()
     assert "odoo_draft_invoices" in inspector.get_table_names()
     assert "workbench_review_items" in inspector.get_table_names()
+    assert "workbench_review_decisions" in inspector.get_table_names()
     get_settings.cache_clear()
