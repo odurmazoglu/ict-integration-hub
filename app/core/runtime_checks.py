@@ -100,6 +100,8 @@ def _validate_common_settings(settings: Settings, errors: list[str]) -> None:
 
 
 def _validate_production_settings(settings: Settings, errors: list[str]) -> None:
+    if settings.ipp_enable_development_header_auth:
+        errors.append("IPP_ENABLE_DEVELOPMENT_HEADER_AUTH must be disabled in production.")
     if not settings.production_operations_enabled:
         errors.append("PRODUCTION_OPERATIONS_ENABLED must be true in production.")
     if settings.production_approval_ack != PRODUCTION_APPROVAL_ACK:

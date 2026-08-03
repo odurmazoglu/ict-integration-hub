@@ -46,6 +46,7 @@ Current implemented capabilities:
 
 - FastAPI service with health, liveness, and readiness endpoints.
 - Environment-profile based runtime configuration with production safety gates.
+- API-layer RequestContext foundation with gated development-header authentication for future authenticated routes.
 - Uyumsoft test SOAP/WSDL connectivity for read-only probes, inbox/outbox listing, and UBL XML retrieval.
 - Idempotent Uyumsoft invoice metadata persistence using ETTN or deterministic fallback identity.
 - Incremental sync run tracking with bounded windows, pages, summaries, and safe failure records.
@@ -147,6 +148,7 @@ Core documentation:
 - [Company Memory](docs/COMPANY_MEMORY.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Production Readiness](docs/PRODUCTION_READINESS.md)
+- [Security](docs/SECURITY.md)
 - [Testing Documentation](docs/testing/README.md)
 - [Architecture Decision Records](docs/adr/README.md)
 

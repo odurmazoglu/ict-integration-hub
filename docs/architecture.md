@@ -47,6 +47,28 @@ Runs only when deterministic rules cannot provide a sufficient decision. It uses
 
 Executes an approved strategy such as direct Vendor Bill, manual review, existing-PO matching, RFQ/PO creation, expense, asset, subscription, or ignore. The current Manual Review strategy is non-writing and returns review-required results only.
 
+### API Security Context
+
+FastAPI adapters resolve a trusted `RequestContext` before future authenticated routes construct application commands or queries. The Application layer remains unaware of HTTP headers, cookies, sessions, JWTs, OAuth providers, or FastAPI request objects.
+
+The current implementation provides only a development-header authentication adapter. It is disabled by default and cannot be enabled in production. Future real authentication adapters should implement the same resolver boundary.
+
+```mermaid
+flowchart TB
+    FutureAuth[Future Authentication Adapter]
+    Resolver[RequestContextResolver]
+    Context[RequestContext]
+    Dependency[FastAPI Dependency]
+    Routes[Future Workbench Routes]
+    UseCases[Application Use Cases]
+
+    FutureAuth --> Resolver
+    Resolver --> Context
+    Context --> Dependency
+    Dependency --> Routes
+    Routes --> UseCases
+```
+
 ### Import Workbench Persistence
 
 Manual Review items can be persisted durably for future Odoo Workbench display. The Application layer owns the immutable `ReviewItem`, `ReviewQueueQuery`, `ReviewDetailQuery`, `ReviewDecisionCommand`, `ReviewDecisionAcknowledgement`, `ReviewQueueReader`, `ReviewItemWriter`, and `ReviewDecisionWriter` contracts. The SQLAlchemy repository is an infrastructure adapter that creates pending review records idempotently, serves company-scoped read-only queue/detail queries, and submits explicit user decisions with optimistic concurrency and idempotency.

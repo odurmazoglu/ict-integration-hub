@@ -12,10 +12,18 @@
 - deterministic partner and product matching
 - pure Vendor Bill builder and account.move payload generation
 - Import Workbench review item persistence for idempotent pending review creation, company-scoped queue/detail reads, and explicit review decision submission
+- API RequestContext foundation with gated development-header authentication for future authenticated routes
 
 ## Next Milestones
 
-### 1. Odoo Vendor Bill Write Service
+### 1. Real Authentication Adapter
+
+- JWT, OAuth2, Azure AD, Odoo session, or service-account adapter selected by an approved integration task
+- no anonymous access
+- company identity and user identity resolved before API adapters construct application commands or queries
+- permission claims mapped into the existing `RequestContext` vocabulary
+
+### 2. Odoo Vendor Bill Write Service
 
 - dry-run by default
 - explicit production approval
@@ -23,7 +31,7 @@
 - draft Vendor Bill only
 - no automatic posting
 
-### 2. Import Session and Pipeline
+### 3. Import Session and Pipeline
 
 - download
 - parse
@@ -33,14 +41,14 @@
 - write
 - per-item and session summaries
 
-### 3. Rule Engine and Decision Engine
+### 4. Rule Engine and Decision Engine
 
 - company-scoped deterministic rules
 - workflow recommendation
 - priority and conflict handling
 - full audit trail
 
-### 4. Odoo Import Workbench
+### 5. Odoo Import Workbench
 
 - incoming invoice queue
 - matching and warning display
@@ -52,21 +60,21 @@
 - RFQ/PO creation option
 - direct Vendor Bill, expense, asset, manual review, and ignore actions
 
-### 5. Procurement Traceability
+### 6. Procurement Traceability
 
 - link invoice to existing PO where possible
 - support reconstructing RFQ/PO for out-of-system purchases
 - connect procurement to opportunity, quotation, sales order, project, proposal scenario, and analytical context
 - expose actual profitability
 
-### 6. Scheduler, Retry, and Recovery
+### 7. Scheduler, Retry, and Recovery
 
 - scheduled collection
 - retry policies
 - recoverable import states
 - idempotent replay
 
-### 7. Monitoring and Operations
+### 8. Monitoring and Operations
 
 - metrics
 - structured logs
@@ -74,7 +82,7 @@
 - alerts
 - operational reconciliation
 
-### 8. AI Advisor and Company Memory
+### 9. AI Advisor and Company Memory
 
 - pgvector retrieval of similar historical decisions
 - local Ollama-compatible model
