@@ -22,11 +22,13 @@ from app.application.services import UnitOfWork
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
 from app.application.workbench import (
     ReviewDecisionCommand,
+    ReviewDecisionWriter,
     ReviewItem,
     ReviewItemCreationService,
     ReviewItemWriter,
     ReviewQueueReader,
     ReviewStatus,
+    SubmitReviewDecisionUseCase,
 )
 from app.application.workflow import (
     ManualReviewDecision,
@@ -53,9 +55,11 @@ def test_application_foundation_exports_core_conventions() -> None:
     assert app.application.ReviewDecisionCommand is ReviewDecisionCommand
     assert app.application.ReviewItem is ReviewItem
     assert app.application.ReviewItemCreationService is ReviewItemCreationService
+    assert app.application.ReviewDecisionWriter is ReviewDecisionWriter
     assert app.application.ReviewItemWriter is ReviewItemWriter
     assert app.application.ReviewQueueReader is ReviewQueueReader
     assert app.application.ReviewStatus is ReviewStatus
+    assert app.application.SubmitReviewDecisionUseCase is SubmitReviewDecisionUseCase
 
 
 def test_application_dtos_are_immutable() -> None:

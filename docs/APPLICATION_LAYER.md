@@ -73,8 +73,10 @@ Current foundation contracts:
 - `TaxResolution`
 - `BusinessContextDecision`
 - `ReviewQueueReader`
+- `ReviewDecisionWriter`
 - `ListReviewQueueUseCase`
 - `GetReviewItemUseCase`
+- `SubmitReviewDecisionUseCase`
 
 ## Use Case Convention
 
@@ -300,7 +302,7 @@ Manual Review is an application outcome for deterministic business mismatches on
 
 ## Import Workbench Contracts
 
-`app/application/workbench` defines the application-layer contract surface for a future Odoo Import Workbench adapter. This package contains immutable DTOs, queries, commands, safe validation errors, a read-only review queue port, a create-only review item writer port, and a small creation service.
+`app/application/workbench` defines the application-layer contract surface for a future Odoo Import Workbench adapter. This package contains immutable DTOs, queries, commands, safe validation errors, a read-only review queue port, a create-only review item writer port, a focused decision submission writer port, and small use-case/service boundaries.
 
 Current contracts:
 
@@ -314,13 +316,21 @@ Current contracts:
 - `ReviewDecisionAcknowledgement`: immutable acknowledgement contract for a future command handler
 - `ReviewQueueReader`: read-only port for future queue/detail adapters
 - `ReviewItemWriter`: create-only port for idempotent persistence of pending review items
+- `ReviewDecisionWriter`: decision submission port for optimistic, idempotent user decisions
 - `ReviewItemCreationService`: application service that delegates pending review item creation to the writer port
 - `ListReviewQueueUseCase`: application boundary that delegates `ReviewQueueQuery` to `ReviewQueueReader.list_review_items`
 - `GetReviewItemUseCase`: application boundary that delegates `ReviewDetailQuery` to `ReviewQueueReader.get_review_item`
+- `SubmitReviewDecisionUseCase`: application boundary that delegates `ReviewDecisionCommand` to `ReviewDecisionWriter.submit_review_decision`
 
-The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation and queue/detail reads. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, and scopes detail reads by `review_id` plus `company_id`.
+The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation, queue/detail reads, and explicit review decision submission. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, scopes detail reads by `review_id` plus `company_id`, and records submitted decisions in append-only audit rows.
 
-This slice does not implement Odoo UI, FastAPI routes, user approval writes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching. Review item persistence only supports idempotent creation of pending review records and read-only queue/detail access.
+Decision submission supports only explicit `SELECT_WORKFLOW` and `DISMISS` commands. `SELECT_WORKFLOW` transitions a matching pending review from `PENDING_REVIEW` to `DECISION_SUBMITTED`; `DISMISS` transitions it to `DISMISSED`. Both paths increment `version` exactly once, persist the submitted command content, and return `ReviewDecisionAcknowledgement`. They do not execute the selected workflow, write ERP records, create Vendor Bills, create rules, or call AI.
+
+Optimistic concurrency uses `ReviewDecisionCommand.expected_version`. The persistence adapter updates a review row only when `review_id`, `company_id`, `status=PENDING_REVIEW`, and `version=expected_version` all match. A stale version raises `ReviewVersionConflictError`; a non-pending review raises `ReviewStateConflictError`; a missing company-scoped review raises `ReviewNotFoundError`.
+
+Decision idempotency is scoped by `(company_id, idempotency_key)`. An identical replay returns the original acknowledgement without incrementing `version` or inserting another decision row. Reusing the same key for different canonical command content raises `ReviewDecisionIdempotencyConflictError`. Fingerprints use structured enum values, tuples, explicit scalar fields, and canonical DTO content rather than raw JSON or display strings.
+
+This slice does not implement Odoo UI, FastAPI routes, workflow execution, ERP writes, rule creation, AI recommendations, or fuzzy matching. Review persistence supports idempotent creation of pending review records, read-only queue/detail access, and persisted explicit decision submission only.
 
 Review query use cases are synchronous because the current `ReviewQueueReader` and SQLAlchemy repository are synchronous. They do not perform in-memory filtering, sorting, pagination, persistence access, transaction management, workflow execution, or decision submission.
 
@@ -337,21 +347,28 @@ flowchart TB
     ListUseCase[ListReviewQueueUseCase]
     GetUseCase[GetReviewItemUseCase]
     Writer[ReviewItemWriter Port]
+    DecisionUseCase[SubmitReviewDecisionUseCase]
+    DecisionWriter[ReviewDecisionWriter Port]
     Repository[SQLAlchemy Review Repository]
-    Database[(PostgreSQL workbench_review_items)]
-    FutureHandler[Future Decision Handler]
+    ReviewItems[(PostgreSQL workbench_review_items)]
+    Decisions[(PostgreSQL workbench_review_decisions)]
+    Ack[ReviewDecisionAcknowledgement]
 
     Workbench --> Contracts
     Contracts --> Hub
     Hub --> ListUseCase
     Hub --> GetUseCase
+    Hub --> DecisionUseCase
     ListUseCase --> Reader
     GetUseCase --> Reader
     Hub --> Writer
+    DecisionUseCase --> DecisionWriter
     Reader --> Repository
     Writer --> Repository
-    Repository --> Database
-    Hub --> FutureHandler
+    DecisionWriter --> Repository
+    Repository --> ReviewItems
+    Repository --> Decisions
+    DecisionUseCase --> Ack
 ```
 
 ## Command And Query Convention
