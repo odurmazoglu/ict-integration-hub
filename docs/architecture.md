@@ -115,7 +115,7 @@ flowchart TB
 
 ### Odoo Online Workbench Projection
 
-Odoo 19 Online cannot install custom Python modules. The accepted Workbench UI architecture therefore uses a future Odoo Studio custom model, `x_ipp_import_review`, as a projection of Hub-owned review items. The Application layer defines ERP-neutral `WorkbenchProjection`, `OdooWorkbenchDecisionCandidate`, `ProjectionPublishResult`, `WorkbenchProjectionPublisher`, and `WorkbenchDecisionCandidateReader` contracts. No Odoo JSON-2 projection adapter is implemented yet.
+Odoo 19 Online cannot install custom Python modules. The accepted Workbench UI architecture therefore uses configured Odoo Studio custom models as projections of Hub-owned review items and allocation child rows. ADR-0011 proposed `x_ipp_import_review`; actual Odoo Online deployments may use configured Studio-generated model names. The Application layer defines ERP-neutral `WorkbenchProjection`, `OdooWorkbenchDecisionCandidate`, `ProjectionPublishResult`, `WorkbenchProjectionPublisher`, and `WorkbenchDecisionCandidateReader` contracts. The current Odoo adapter implements read-only candidate ingestion behind `WorkbenchDecisionCandidateReader`; projection publishing and acknowledgement writes remain future work.
 
 The projection does not move decision authority to Odoo. Odoo displays Hub-owned review data and captures explicit candidate decisions. The Hub later reads candidates, validates existing version and idempotency rules, persists accepted decisions in PostgreSQL, and projects acknowledgement status back to Odoo.
 
@@ -129,6 +129,7 @@ flowchart TB
     User[Odoo User]
     Candidate[OdooWorkbenchDecisionCandidate]
     Reader[WorkbenchDecisionCandidateReader Port]
+    AllocationRows[Business Context Allocation Child Rows]
     Submit[SubmitReviewDecisionUseCase]
     Ack[ReviewDecisionAcknowledgement]
 
@@ -138,7 +139,9 @@ flowchart TB
     OdooAdapter --> Studio
     User --> Studio
     Studio --> Candidate
+    Studio --> AllocationRows
     Candidate --> Reader
+    AllocationRows --> Reader
     Reader --> Submit
     Submit --> Store
     Submit --> Ack

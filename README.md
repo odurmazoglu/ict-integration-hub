@@ -67,6 +67,7 @@ Current implemented capabilities:
 - Authenticated Import Workbench REST API for queue, detail, and decision submission through `RequestContext` permissions.
 - Odoo Online Workbench projection contract for future Odoo Studio review display and explicit decision capture.
 - Business Context Allocation contracts and Workbench decision submission evidence for multi-Sales-Order, customer recharge, affiliate, project, and internal cost traceability.
+- Production-safe read-only Odoo Workbench decision candidate reader for configured Studio parent projection and allocation child models.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
@@ -79,8 +80,8 @@ Not implemented or not allowed by default:
 - Odoo `action_post`, unlink, payment registration, reconciliation, or automatic master-data creation.
 - Business decision logic inside Odoo.
 - Custom Odoo Python addons for Odoo Online.
-- Odoo Studio projection synchronization or decision ingestion.
-- Odoo child allocation model synchronization, allocation execution, customer invoice creation, recharge execution, or profitability posting.
+- Odoo Studio projection publishing, acknowledgement writes, model/view setup, or workflow execution.
+- Allocation execution, customer invoice creation, recharge execution, or profitability posting.
 - AI-driven automatic decisions.
 - Database schema changes without Alembic migrations and tests.
 

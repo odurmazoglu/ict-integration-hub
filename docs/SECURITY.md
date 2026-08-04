@@ -137,9 +137,11 @@ Successful and failed Workbench responses include the same `trace_id` in the JSO
 
 ## Odoo Online Workbench Projection Security
 
-Odoo 19 Online Workbench synchronization uses Hub-to-Odoo service authentication through Odoo JSON-2 and a future restricted Odoo API key. It does not use an installed Odoo Python addon and does not store Hub bearer tokens, Keycloak tokens, Keycloak client secrets, or Odoo API keys in Odoo Studio fields.
+Odoo 19 Online Workbench synchronization uses Hub-to-Odoo service authentication through Odoo JSON-2 and a restricted Odoo API key. It does not use an installed Odoo Python addon and does not store Hub bearer tokens, Keycloak tokens, Keycloak client secrets, or Odoo API keys in Odoo Studio fields.
 
-The future Odoo integration user must receive access only to the dedicated Workbench projection model, `x_ipp_import_review`, and explicitly required future ERP models. This projection scope does not authorize accounting posting, payment creation, reconciliation, master-data mutation, deletion, procurement execution, or workflow execution.
+The Odoo integration user must receive access only to the dedicated Workbench projection models and explicitly required future ERP models. This projection scope does not authorize accounting posting, payment creation, reconciliation, master-data mutation, deletion, procurement execution, or workflow execution.
+
+The Odoo Workbench candidate reader is read-only. It uses JSON-2 `search_read` against configured Studio projection models, detects duplicate parent candidates, and translates provider failures into safe Workbench exceptions. It must not expose raw Odoo responses, URLs with secrets, credentials, bearer tokens, API keys, or stack traces.
 
 Odoo user identity captured in the projection is audit evidence only. The Hub must validate `review_id`, `company_id`, expected version, idempotency key, selected workflow, and resolution details against Hub persistence before accepting a decision.
 

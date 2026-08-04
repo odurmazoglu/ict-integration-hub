@@ -16,15 +16,14 @@
 - Authenticated Import Workbench REST API exposing queue, detail, and decision submission adapters
 - Odoo Online Workbench projection architecture, Studio model contract, immutable projection DTOs, and projection ports
 - Business Context Allocation architecture, immutable application contracts, Workbench API submission, append-only decision persistence, and idempotency canonicalization
+- Production-safe read-only Odoo Workbench decision candidate reader for configured Studio parent projection and allocation child models
 
 ## Next Milestones
 
 ### 1. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
-- future Odoo allocation child-line setup through a focused implementation PR
 - Hub-to-Odoo JSON-2 projection publishing
-- Hub-controlled ready-decision ingestion
 - Hub acknowledgement projection
 - no custom Odoo Python addon
 - no workflow execution

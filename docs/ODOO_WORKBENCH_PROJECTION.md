@@ -1,8 +1,8 @@
 # Odoo Online Workbench Projection
 
-This document defines the architecture and contract for presenting Hub-owned Import Workbench reviews inside Odoo 19 Online through an Odoo Studio projection model.
+This document defines the architecture and contract for presenting Hub-owned Import Workbench reviews inside Odoo 19 Online through Odoo Studio projection models.
 
-It is a contract foundation only. The Studio model, Studio views, JSON-2 synchronization adapter, scheduler, decision ingestion, acknowledgement projection, and workflow execution are not implemented in this slice.
+This slice includes the read-only Odoo JSON-2 candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. The Studio models, Studio views, ACLs, projection publishing, scheduler, decision persistence trigger, acknowledgement projection, and workflow execution are not implemented in this slice.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ Odoo Online cannot install custom Python modules. The selected architecture uses
 flowchart TB
     Hub[ICT IPP Hub]
     Publisher[WorkbenchProjectionPublisher Port]
-    OdooAdapter[Future Odoo Projection Adapter]
+    OdooAdapter[Odoo Projection Adapter]
     Studio[(Odoo Studio Model x_ipp_import_review)]
     User[Odoo User]
     Reader[WorkbenchDecisionCandidateReader Port]
@@ -24,7 +24,7 @@ flowchart TB
     Publisher --> OdooAdapter
     OdooAdapter -->|future JSON-2 publish| Studio
     User -->|reviews and submits explicit decision| Studio
-    Studio -->|future JSON-2 read| OdooAdapter
+    Studio -->|read-only JSON-2 search_read| OdooAdapter
     OdooAdapter --> Reader
     Reader --> Submit
     Submit --> Store
@@ -37,7 +37,7 @@ The future synchronization flow is Hub-controlled:
 1. Hub creates or updates a review item in PostgreSQL.
 2. Hub publishes an immutable `WorkbenchProjection` to Odoo.
 3. Odoo users review Hub-owned fields and enter explicit decision fields.
-4. Hub reads only records where `x_ipp_decision_ready` is true.
+4. Hub reads only records where the configured decision-ready field is explicitly true.
 5. Hub validates the candidate through existing Workbench command rules.
 6. Hub persists an accepted decision with optimistic concurrency and idempotency.
 7. Hub writes acknowledgement fields back to the projection.
@@ -45,7 +45,7 @@ The future synchronization flow is Hub-controlled:
 
 ## Proposed Studio Model
 
-Proposed technical model name:
+ADR-0011 proposed technical model name:
 
 ```text
 x_ipp_import_review
@@ -53,7 +53,7 @@ x_ipp_import_review
 
 The model name follows Odoo Studio custom-model naming with the `x_` prefix and uses the `ipp` namespace to avoid generic field names.
 
-Future Business Context Allocation child model:
+ADR-0012 proposed Business Context Allocation child model:
 
 ```text
 x_ipp_review_allocation
@@ -65,7 +65,16 @@ Display name:
 IPP Review Allocation
 ```
 
-Actual Odoo Online Studio technical field names may use generated `x_` or `x_studio_` identifiers. The application contract does not depend on those generated names; a future adapter mapping will translate between Studio fields and `BusinessContextAllocation` values.
+Actual Odoo Online Studio technical field names may use generated `x_` or `x_studio_` identifiers. The application contract does not depend on those generated names; adapter mapping translates between Studio fields and `BusinessContextAllocation` values.
+
+Current deployments may use configured Studio model names such as:
+
+```text
+x_ipp_import_workbench
+x_ipp_review_allocatio
+```
+
+Those deployment names are adapter configuration, not application vocabulary. The Hub reads them through `OdooWorkbenchFieldMapping`.
 
 ## Source Of Truth
 
@@ -145,9 +154,9 @@ The field list keeps only data justified by current Workbench contracts and sync
 | `x_ipp_hub_ack_message` | Text | Hub | Safe acknowledgement or reconciliation message. |
 | `x_ipp_hub_processed_at` | Datetime | Hub | Time the Hub processed the candidate. |
 
-### Future Allocation Child Model
+### Allocation Child Model
 
-The future child model represents candidate `BusinessContextAllocation` lines. It must have a parent relationship to `x_ipp_import_review`.
+The child model represents candidate `BusinessContextAllocation` lines. It must have a parent relationship to the configured parent Workbench projection model.
 
 Proposed logical fields:
 
@@ -172,7 +181,7 @@ Proposed logical fields:
 | analytic account | Many2one or Integer | Odoo user | Analytic cost traceability. |
 | internal note | Text | Odoo user | Bounded internal note, not an execution instruction. |
 
-The child model is not created in this PR.
+The child model is not created by this PR.
 
 ## Ownership Rules
 
@@ -214,7 +223,7 @@ Rules:
 
 ## Application Contracts
 
-This PR introduces immutable ERP-neutral application DTOs:
+The application layer defines immutable ERP-neutral application DTOs:
 
 - `WorkbenchProjection`
 - `OdooWorkbenchDecisionCandidate`
@@ -225,7 +234,7 @@ It also introduces narrow application ports:
 - `WorkbenchProjectionPublisher`
 - `WorkbenchDecisionCandidateReader`
 
-The ports do not expose Odoo client objects, Odoo model objects, SQLAlchemy sessions, HTTP objects, or provider exceptions. Future Odoo JSON-2 code must live in an adapter behind these ports.
+The ports do not expose Odoo client objects, Odoo model objects, SQLAlchemy sessions, HTTP objects, or provider exceptions. Odoo JSON-2 code lives in infrastructure adapters behind these ports.
 
 Timestamp and result invariants:
 
@@ -240,7 +249,93 @@ Business context allocation contracts are defined in the Application layer and a
 - `BusinessContextAllocation`
 - `BusinessContextAllocationSet`
 
-The application contract has replaced legacy `business_context` with `business_context_allocations`. Future projection ingestion should map the `IPP Review Allocation` One2many child lines into that allocation set. Do not accept both legacy `x_ipp_business_context_json` and child allocation lines as authoritative sources in the same command.
+The application contract has replaced legacy `business_context` with `business_context_allocations`. Projection ingestion maps `IPP Review Allocation` child lines into that allocation set. Do not accept both legacy `x_ipp_business_context_json` and child allocation lines as authoritative sources in the same command.
+
+## Read-Only Candidate Reader
+
+`OdooWorkbenchDecisionCandidateReader` implements `WorkbenchDecisionCandidateReader` for Odoo Online Studio projections. It is production-safe and read-only.
+
+It may:
+
+- look up one parent projection record by exact `review_id` and `company_id`
+- reject duplicate parent records as ambiguity
+- require the configured decision-ready field to be explicit `true`
+- read child allocation rows by parent Odoo record id
+- map Odoo Many2one values to integer ERP identifiers while ignoring display names
+- parse Decimal values without float arithmetic
+- return immutable `OdooWorkbenchDecisionCandidate` and `BusinessContextAllocationSet` DTOs
+
+It must not:
+
+- submit the decision to the Hub API
+- persist an accepted Hub decision
+- publish or acknowledge projection fields
+- execute workflow strategies
+- create Vendor Bills, customer invoices, RFQs, Purchase Orders, payments, or accounting entries
+- infer allocation completeness from amounts or percentages
+- expose raw Odoo provider responses, URLs, credentials, tokens, or internal exception text
+
+Configured lookup domains:
+
+```text
+parent: [[review_id_field, "=", review_id], [company_id_field, "=", company_id]]
+child:  [[parent_many2one_field, "=", parent_odoo_record_id]]
+```
+
+The parent lookup uses `limit=2` so ambiguity is explicit. A missing parent or a parent with decision-ready `false` is reported as no ready candidate. Missing, malformed, or non-boolean decision-ready values are data errors.
+
+### Reader Mapping Configuration
+
+Studio technical field names are deployment-specific. The reader uses `OdooWorkbenchFieldMapping` rather than hard-coded field names.
+
+| Logical value | Configuration key |
+| --- | --- |
+| Parent model | `ODOO_WORKBENCH_PARENT_MODEL` |
+| Allocation child model | `ODOO_WORKBENCH_ALLOCATION_MODEL` |
+| Review id | `ODOO_WORKBENCH_PARENT_REVIEW_ID_FIELD` |
+| Company id | `ODOO_WORKBENCH_PARENT_COMPANY_ID_FIELD` |
+| Version | `ODOO_WORKBENCH_PARENT_EXPECTED_VERSION_FIELD` |
+| Decision ready | `ODOO_WORKBENCH_PARENT_DECISION_READY_FIELD` |
+| Decision | `ODOO_WORKBENCH_PARENT_DECISION_FIELD` |
+| Selected workflow | `ODOO_WORKBENCH_PARENT_SELECTED_WORKFLOW_FIELD` |
+| Selected partner | `ODOO_WORKBENCH_PARENT_SELECTED_PARTNER_FIELD` |
+| Line resolutions JSON | optional `ODOO_WORKBENCH_PARENT_LINE_RESOLUTIONS_FIELD` |
+| Tax resolutions JSON | optional `ODOO_WORKBENCH_PARENT_TAX_RESOLUTIONS_FIELD` |
+| Comment | optional `ODOO_WORKBENCH_PARENT_COMMENT_FIELD` |
+| Decision idempotency key | `ODOO_WORKBENCH_PARENT_IDEMPOTENCY_KEY_FIELD` |
+| Decided by Odoo user | `ODOO_WORKBENCH_PARENT_DECIDED_BY_FIELD` |
+| Decided at | `ODOO_WORKBENCH_PARENT_DECIDED_AT_FIELD` |
+| Invoice total | `ODOO_WORKBENCH_PARENT_INVOICE_TOTAL_FIELD` |
+| Currency | `ODOO_WORKBENCH_PARENT_CURRENCY_FIELD` |
+| Allocation completeness | optional `ODOO_WORKBENCH_PARENT_ALLOCATION_COMPLETENESS_FIELD` |
+| Fixed allocation completeness | optional `ODOO_WORKBENCH_FIXED_ALLOCATION_COMPLETENESS` |
+| Allocation parent link | `ODOO_WORKBENCH_ALLOCATION_PARENT_MANY2ONE_FIELD` |
+| Allocation key | `ODOO_WORKBENCH_ALLOCATION_KEY_FIELD` |
+| Allocation type | `ODOO_WORKBENCH_ALLOCATION_TYPE_FIELD` |
+| Allocation amount | `ODOO_WORKBENCH_ALLOCATION_AMOUNT_FIELD` |
+| Allocation percentage | `ODOO_WORKBENCH_ALLOCATION_PERCENTAGE_FIELD` |
+| Allocation currency | `ODOO_WORKBENCH_ALLOCATION_CURRENCY_FIELD` |
+| Customer | optional `ODOO_WORKBENCH_ALLOCATION_CUSTOMER_FIELD` |
+| Recharge recipient | optional `ODOO_WORKBENCH_ALLOCATION_RECHARGE_PARTNER_FIELD` |
+| Existing customer invoice | optional `ODOO_WORKBENCH_ALLOCATION_CUSTOMER_INVOICE_FIELD` |
+| Target company | optional `ODOO_WORKBENCH_ALLOCATION_TARGET_COMPANY_FIELD` |
+| Opportunity | optional `ODOO_WORKBENCH_ALLOCATION_OPPORTUNITY_FIELD` |
+| Sales Order | optional `ODOO_WORKBENCH_ALLOCATION_SALES_ORDER_FIELD` |
+| Purchase Order | optional `ODOO_WORKBENCH_ALLOCATION_PURCHASE_ORDER_FIELD` |
+| Project | optional `ODOO_WORKBENCH_ALLOCATION_PROJECT_FIELD` |
+| Analytic account | optional `ODOO_WORKBENCH_ALLOCATION_ANALYTIC_ACCOUNT_FIELD` |
+| Description | optional `ODOO_WORKBENCH_ALLOCATION_DESCRIPTION_FIELD` |
+| Internal note | optional `ODOO_WORKBENCH_ALLOCATION_INTERNAL_NOTE_FIELD` |
+
+### Decimal And Completeness Policy
+
+Odoo transport values may arrive as strings, integers, floats, or falsey empty values. The reader converts supported values to `Decimal` through their textual representation and never performs float arithmetic. It rejects booleans, invalid numbers, NaN, infinity, and values that fail the immutable allocation contract.
+
+Allocation completeness is explicit. The reader uses either the mapped parent completeness field or a configured fixed completeness value. It does not infer `COMPLETE` or `PARTIAL` from totals because that would move business logic into the adapter.
+
+`customer_invoice_id` is optional evidence for an existing outgoing customer invoice or refund. When the mapping is absent, it is `None`. When present, the value must be an integer or Many2one identifier. The reader does not create customer invoices and does not validate outgoing-invoice move type in this slice.
+
+Department fields are ignored. Department is not part of the accepted allocation contract.
 
 ## Mapping Rules
 
