@@ -18,7 +18,13 @@ from app.application.workbench.dto import (
     ReviewStatus,
     TaxResolution,
 )
-from app.application.workbench.exceptions import WorkbenchContractError
+from app.application.workbench.exceptions import (
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchCandidateDataError,
+    WorkbenchCandidateNotFoundError,
+    WorkbenchCandidateReadError,
+    WorkbenchContractError,
+)
 from app.application.workbench.ports import (
     ReviewDecisionWriter,
     ReviewItemWriter,
@@ -60,6 +66,10 @@ __all__ = [
     "ReviewStatus",
     "SubmitReviewDecisionUseCase",
     "TaxResolution",
+    "WorkbenchCandidateAmbiguityError",
+    "WorkbenchCandidateDataError",
+    "WorkbenchCandidateNotFoundError",
+    "WorkbenchCandidateReadError",
     "WorkbenchDecisionCandidateReader",
     "WorkbenchContractError",
     "WorkbenchProjection",
