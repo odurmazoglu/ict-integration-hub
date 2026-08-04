@@ -49,6 +49,7 @@ class BusinessContextAllocation(ApplicationDTO):
     currency: str | None = None
     customer_id: int | None = None
     recharge_partner_id: int | None = None
+    customer_invoice_id: int | None = None
     target_company_id: int | None = None
     opportunity_id: int | None = None
     sales_order_id: int | None = None
@@ -159,6 +160,7 @@ def _validate_positive_ids(allocation: BusinessContextAllocation) -> None:
     for field_name, value in (
         ("customer_id", allocation.customer_id),
         ("recharge_partner_id", allocation.recharge_partner_id),
+        ("customer_invoice_id", allocation.customer_invoice_id),
         ("target_company_id", allocation.target_company_id),
         ("opportunity_id", allocation.opportunity_id),
         ("sales_order_id", allocation.sales_order_id),

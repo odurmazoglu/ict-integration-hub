@@ -161,7 +161,7 @@ async def test_post_select_workflow_success_maps_path_context_and_body(api_clien
             "selected_partner_id": 700,
             "line_resolutions": [{"line_number": "1", "selected_product_id": 800}],
             "tax_resolutions": [{"line_number": "1", "tax_index": 0, "selected_tax_id": 900}],
-            "business_context": {"sales_order_id": 1000, "project_id": 1001},
+            "business_context_allocations": _allocation_payload(),
             "comment": "approved by finance",
             "idempotency_key": "decision-key-1",
         },
@@ -179,8 +179,10 @@ async def test_post_select_workflow_success_maps_path_context_and_body(api_clien
     assert command.selected_partner_id == 700
     assert command.line_resolutions[0].selected_product_id == 800
     assert command.tax_resolutions[0].selected_tax_id == 900
-    assert command.business_context.sales_order_id == 1000
-    assert command.business_context.project_id == 1001
+    assert command.business_context_allocations is not None
+    assert command.business_context_allocations.allocations[0].sales_order_id == 301
+    assert command.business_context_allocations.allocations[0].customer_invoice_id == 9001
+    assert command.business_context_allocations.allocations[0].amount == Decimal("40000.000000")
     assert use_case.calls == 1
 
 
@@ -214,6 +216,130 @@ async def test_decision_body_cannot_set_identity_or_path_fields(api_client: Asyn
 
         assert response.status_code == 400
         assert response.json()["errors"][0]["message"] == "Unsupported Workbench decision field."
+
+
+async def test_legacy_business_context_field_is_rejected(api_client: AsyncClient) -> None:
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json={
+            "expected_version": 1,
+            "decision": "select_workflow",
+            "selected_workflow": "vendor_bill",
+            "business_context": {"sales_order_id": 1000},
+            "idempotency_key": "key-1",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["message"] == "Unsupported Workbench decision field."
+
+
+async def test_float_allocation_amount_is_rejected_safely(api_client: AsyncClient) -> None:
+    payload = _select_workflow_payload()
+    payload["business_context_allocations"] = _allocation_payload(amount=40000.0)
+
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0] == {"code": "request_validation_error", "message": "Request validation failed."}
+
+
+async def test_malformed_allocation_enum_is_rejected_safely(api_client: AsyncClient) -> None:
+    payload = _select_workflow_payload()
+    payload["business_context_allocations"] = _allocation_payload(allocation_type="not-real")
+
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["message"] == "Request validation failed."
+
+
+async def test_invalid_allocation_id_is_rejected_safely(api_client: AsyncClient) -> None:
+    payload = _select_workflow_payload()
+    payload["business_context_allocations"] = _allocation_payload(customer_invoice_id=0)
+
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "workbench_contract_error"
+    assert response.json()["errors"][0]["message"] == "customer_invoice_id must be a positive ERP id."
+
+
+async def test_duplicate_allocation_key_is_rejected_safely(api_client: AsyncClient) -> None:
+    payload = _select_workflow_payload()
+    allocations = _allocation_payload()["allocations"]
+    payload["business_context_allocations"] = {
+        "completeness": "complete",
+        "invoice_total": "80000.000000",
+        "currency": "TRY",
+        "allocations": [allocations[0], allocations[0]],
+    }
+
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["message"] == "allocation_key values must be unique."
+
+
+async def test_complete_allocation_amount_mismatch_is_rejected_safely(api_client: AsyncClient) -> None:
+    payload = _select_workflow_payload()
+    payload["business_context_allocations"] = _allocation_payload(invoice_total="100.000000")
+
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["message"] == "COMPLETE amount allocations must equal invoice_total."
+
+
+async def test_complete_allocation_percentage_mismatch_is_rejected_safely(api_client: AsyncClient) -> None:
+    payload = _select_workflow_payload()
+    allocation_payload = _allocation_payload()
+    allocation_payload["allocations"][0]["percentage"] = "30"
+    payload["business_context_allocations"] = allocation_payload
+
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json=payload,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["message"] == "COMPLETE percentage allocations must total 100."
 
 
 async def test_authenticated_user_overrides_client_identity_attempt(api_client: AsyncClient) -> None:
@@ -375,6 +501,10 @@ async def test_openapi_contains_exactly_three_workbench_routes_and_no_identity_i
     assert "company_id" not in schema_text
     assert "decided_by" not in schema_text
     assert "review_id" not in schema_text
+    assert "business_context_allocations" in decision_schema["properties"]
+    assert "business_context" not in decision_schema["properties"]
+    assert "BusinessContextAllocationRequest" in response.json()["components"]["schemas"]
+    assert "BusinessContextAllocationSetRequest" in response.json()["components"]["schemas"]
     queue_params = workbench_paths["/api/workbench/reviews"]["get"]["parameters"]
     assert "company_id" not in {param["name"] for param in queue_params}
     assert workbench_paths["/api/workbench/reviews"]["get"]["security"] == [{"HTTPBearer": []}]
@@ -541,3 +671,51 @@ def _acknowledgement(decision: ReviewDecisionType) -> ReviewDecisionAcknowledgem
         selected_workflow=WorkflowType.VENDOR_BILL if decision is ReviewDecisionType.SELECT_WORKFLOW else None,
         warnings=("Persisted only.",),
     )
+
+
+def _select_workflow_payload() -> dict[str, Any]:
+    return {
+        "expected_version": 1,
+        "decision": "select_workflow",
+        "selected_workflow": "vendor_bill",
+        "business_context_allocations": _allocation_payload(),
+        "idempotency_key": "key-1",
+    }
+
+
+def _allocation_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "completeness": "complete",
+        "invoice_total": "100000.000000",
+        "currency": "TRY",
+        "allocations": [
+            {
+                "allocation_key": "ALLOC-001",
+                "allocation_type": "sales_order_cost",
+                "source_line_number": "1",
+                "description": "Customer A share",
+                "amount": "40000.000000",
+                "percentage": "40",
+                "currency": "TRY",
+                "customer_id": 101,
+                "recharge_partner_id": 105,
+                "customer_invoice_id": 9001,
+                "sales_order_id": 301,
+            },
+            {
+                "allocation_key": "ALLOC-002",
+                "allocation_type": "internal_cost",
+                "amount": "60000.000000",
+                "percentage": "60",
+                "currency": "TRY",
+            },
+        ],
+    }
+    if "amount" in overrides:
+        payload["allocations"][0]["amount"] = overrides.pop("amount")
+    if "allocation_type" in overrides:
+        payload["allocations"][0]["allocation_type"] = overrides.pop("allocation_type")
+    if "customer_invoice_id" in overrides:
+        payload["allocations"][0]["customer_invoice_id"] = overrides.pop("customer_invoice_id")
+    payload.update(overrides)
+    return payload

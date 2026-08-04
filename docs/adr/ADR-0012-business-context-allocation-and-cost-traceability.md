@@ -25,7 +25,7 @@ The canonical allocation purpose vocabulary is `BusinessContextAllocationType`. 
 
 The Hub validates the allocation set. Odoo only captures candidate allocation lines for future Hub validation.
 
-The existing `BusinessContextDecision` remains the legacy single-context runtime contract until a later focused implementation PR replaces it with:
+The existing `BusinessContextDecision` was the legacy single-context runtime contract until the Workbench decision-submission path replaced it with:
 
 ```text
 business_context_allocations: BusinessContextAllocationSet | None
@@ -72,23 +72,49 @@ Odoo Studio is authoritative only for user-entered candidate allocation lines be
 
 Future ingestion must validate allocation company isolation, selected ERP IDs, allocation totals, idempotency, and expected review version before accepting allocation evidence.
 
-## Future Command Shape
+## Command Shape
 
-The intended future `ReviewDecisionCommand` shape is:
+The current `ReviewDecisionCommand` shape is:
 
 ```text
 business_context_allocations: BusinessContextAllocationSet | None
 ```
 
-Future rules:
+Current rules:
 
 - `SELECT_WORKFLOW` may carry allocations
 - `DISMISS` must reject allocations
-- allocation requirements depend on selected workflow and future strategy
+- allocation requirements are structural in this slice; workflow-specific allocation requirements belong to future strategy work
 - Hub validates allocation totals before accepting a decision
 - accepted allocations become immutable decision evidence
 
-This ADR does not implement that command change, API schema change, persistence change, Odoo mapping, or workflow execution.
+This ADR amendment implements the command, API schema, persistence, and idempotency contract change. It does not implement Odoo JSON-2 mapping or workflow execution.
+
+## Accepted Amendment: Workbench Decision Submission
+
+The Workbench decision submission path now uses:
+
+```text
+business_context_allocations: BusinessContextAllocationSet | None
+```
+
+This replaces the active writable `business_context` command/API field. `BusinessContextDecision` remains only as legacy historical evidence for old persisted rows. New decision submissions write allocation evidence only to `business_context_allocations`.
+
+`BusinessContextAllocation` includes optional `customer_invoice_id`, the ERP identifier of an existing outgoing customer invoice or refund when that invoice already exists. The source supplier invoice is the Workbench review item and is not duplicated on allocation rows. `customer_invoice_id` is optional because customer invoicing or recharge may occur later. It is evidence only: it does not create a customer invoice, prove recharge completion, authorize access, or execute profitability posting.
+
+The relationship fields have distinct meanings:
+
+- `customer_id`: commercial customer context
+- `recharge_partner_id`: actual party expected to be invoiced or recharged
+- `customer_invoice_id`: existing outgoing customer invoice or refund evidence link
+
+These values may differ. Multiple allocations under one vendor review may reference different `customer_invoice_id` values, and multiple vendor reviews may allocate cost to the same customer invoice. There is no uniqueness constraint on `customer_invoice_id`.
+
+Decision evidence is persisted append-only as deterministic JSON. Enum values are serialized as strings, Decimal values as canonical strings, and allocation rows are sorted by `allocation_key` for idempotency. Equivalent Decimal forms such as `259.2000` and `259.20` compare as identical business content. Changed amounts, percentages, allocation types, target ERP identifiers, customer invoice links, completeness, invoice totals, currency, allocation keys, added rows, or removed rows conflict under the same company-scoped idempotency key.
+
+Legacy persisted rows are not rewritten. Rows with no allocation data remain readable. Rows with legacy `business_context` preserve that object as legacy evidence; the Hub does not fabricate allocation amounts or silently convert it into allocation lines.
+
+This amendment does not implement Odoo JSON-2 allocation readers or writers, allocation execution, customer invoice creation, recharge execution, ERP record existence validation, company-scope repository validation, outgoing-invoice move type validation, Sales Order/customer consistency validation, Composite Workflow Strategy, profitability posting, or analytic distribution posting.
 
 ## Related Documentation
 

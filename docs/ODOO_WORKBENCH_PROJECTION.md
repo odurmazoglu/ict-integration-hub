@@ -129,7 +129,7 @@ The field list keeps only data justified by current Workbench contracts and sync
 | `x_ipp_selected_partner_id` | Many2one or Integer | Odoo user | Explicit selected partner id when needed. |
 | `x_ipp_line_resolutions_json` | Text | Odoo user | JSON array of line product resolutions matching `LineResolution`. |
 | `x_ipp_tax_resolutions_json` | Text | Odoo user | JSON array of tax resolutions matching `TaxResolution`. |
-| `x_ipp_business_context_json` | Text | Odoo user | JSON object matching `BusinessContextDecision`. |
+| `x_ipp_business_context_json` | Text | Legacy only | Historical `BusinessContextDecision` shape; not an active authoritative input when allocation child lines exist. |
 | `x_ipp_comment` | Text | Odoo user | Optional comment, bounded by Hub contract. |
 | `x_ipp_decision_idempotency_key` | Char, required before submit | Odoo user/System | Stable key for Hub idempotent decision submission. |
 | `x_ipp_decided_by_odoo_user_id` | Integer | System-derived Odoo field | Odoo user id that submitted the candidate. |
@@ -163,6 +163,7 @@ Proposed logical fields:
 | currency | Char/Selection | Odoo user | Optional uppercase currency code. |
 | customer | Many2one or Integer | Odoo user | Commercial customer context. |
 | recharge recipient | Many2one or Integer | Odoo user | Actual invoiced or recharged party. |
+| customer invoice | Many2one or Integer | Odoo user | Optional existing outgoing customer invoice or refund evidence link. |
 | target company | Many2one or Integer | Odoo user | Affiliate or group-company target. |
 | opportunity | Many2one or Integer | Odoo user | Opportunity traceability. |
 | Sales Order | Many2one or Integer | Odoo user | Sales Order cost traceability. |
@@ -232,14 +233,14 @@ Timestamp and result invariants:
 - `WorkbenchProjection.updated_at` is optional. When supplied, it must also be a timezone-aware `datetime` and is preserved without conversion.
 - `ProjectionPublishResult` represents exactly one projection operation: either `created=True, updated=False` or `created=False, updated=True`. It does not use a result status enum in this contract slice.
 
-Business context allocation contracts are defined in the Application layer but are not wired into this projection yet:
+Business context allocation contracts are defined in the Application layer and are part of `OdooWorkbenchDecisionCandidate`:
 
 - `BusinessContextAllocationType`
 - `AllocationCompleteness`
 - `BusinessContextAllocation`
 - `BusinessContextAllocationSet`
 
-Future projection ingestion should replace legacy `x_ipp_business_context_json` with allocation child lines after a focused API, persistence, and adapter PR. Do not accept both as authoritative sources in the same command.
+The application contract has replaced legacy `business_context` with `business_context_allocations`. Future projection ingestion should map the `IPP Review Allocation` One2many child lines into that allocation set. Do not accept both legacy `x_ipp_business_context_json` and child allocation lines as authoritative sources in the same command.
 
 ## Mapping Rules
 
@@ -277,14 +278,14 @@ Future projection ingestion should replace legacy `x_ipp_business_context_json` 
 | `x_ipp_selected_partner_id` | `selected_partner_id` |
 | `x_ipp_line_resolutions_json` | `line_resolutions` |
 | `x_ipp_tax_resolutions_json` | `tax_resolutions` |
-| `x_ipp_business_context_json` | `business_context` |
+| `IPP Review Allocation` child lines | `business_context_allocations` |
 | `x_ipp_comment` | `comment` |
 | `x_ipp_decision_idempotency_key` | `idempotency_key` |
 | `x_ipp_decided_by_odoo_user_id` | `decided_by` evidence as `odoo:<id>` |
 
 The Hub must reject `WorkflowType.MANUAL_REVIEW` as a selected resolution workflow. Manual Review is the unresolved state.
 
-Future allocation mapping rules:
+Allocation mapping rules for the application contract:
 
 - child allocation lines map to `BusinessContextAllocation`
 - child line sets map to `BusinessContextAllocationSet`
@@ -292,6 +293,7 @@ Future allocation mapping rules:
 - source invoice line numbers are not unique because one source line may be split across multiple allocations
 - `customer_id` records the commercial customer
 - `recharge_partner_id` records the actual recharge or customer-invoice recipient
+- `customer_invoice_id` records an optional existing outgoing customer invoice or refund and does not create an invoice or prove recharge completion
 - `target_company_id` records affiliate or group-company context and does not grant authorization
 
 ## Idempotency And Concurrency
@@ -313,13 +315,14 @@ Decision ingestion rules for future implementation:
 - User decisions from another company must never be accepted.
 - `decision_ready` must not be cleared before Hub acknowledgement is safely persisted and projected.
 
-Allocation ingestion rules for future implementation:
+Allocation ingestion rules for future Odoo adapter implementation:
 
 - candidate allocation lines are untrusted until Hub validation
 - Hub validates company isolation and selected ERP IDs through repositories
 - `COMPLETE` allocation sets must reconcile to invoice total or 100 percent
 - `PARTIAL` allocation sets may be below invoice total or 100 percent, but must not exceed either
 - accepted allocations become immutable decision evidence
+- a Studio-only Department field is ignored by the Hub until explicitly accepted in a future ADR or focused PR
 
 ## Security
 
@@ -416,7 +419,7 @@ Future controlled Odoo Studio setup should:
 6. Restrict access to the integration user and authorized reviewers.
 7. Verify ordinary users cannot change Hub identity, version, or acknowledgement fields.
 8. Verify no credentials or tokens are stored in Studio fields.
-9. Later, add allocation child lines only through a focused implementation PR with Hub validation and reconciliation tests.
+9. Later, add allocation child lines in Odoo Studio only through a focused implementation PR with Hub validation and reconciliation tests.
 
 ## Not Implemented
 
@@ -431,7 +434,7 @@ Future controlled Odoo Studio setup should:
 - webhooks
 - decision ingestion
 - acknowledgement projection
-- allocation persistence or synchronization
+- Odoo allocation synchronization
 - workflow execution
 - Vendor Bill, RFQ, PO, expense, asset, or subscription execution
 - Keycloak deployment

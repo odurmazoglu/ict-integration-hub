@@ -114,6 +114,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "line_resolutions",
         "tax_resolutions",
         "business_context",
+        "business_context_allocations",
         "comment",
         "decided_by",
         "idempotency_key",
@@ -135,6 +136,15 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_decisions_company_idempotency_key",
     }.issubset(decision_unique_constraints)
     assert WorkbenchReviewDecision.__table__.c.review_version_before.nullable is False
+    assert WorkbenchReviewDecision.__table__.c.business_context_allocations.nullable is True
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_decisions" in inspector.get_table_names()
+    decision_columns_after_allocation_downgrade = {
+        column["name"] for column in inspector.get_columns("workbench_review_decisions")
+    }
+    assert "business_context_allocations" not in decision_columns_after_allocation_downgrade
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))

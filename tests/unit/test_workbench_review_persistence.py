@@ -10,7 +10,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.application.workbench import (
-    BusinessContextDecision,
+    AllocationCompleteness,
+    BusinessContextAllocation,
+    BusinessContextAllocationSet,
+    BusinessContextAllocationType,
     LineResolution,
     ReviewDecisionCommand,
     ReviewDecisionType,
@@ -366,7 +369,7 @@ def test_repository_submits_select_workflow_decision_and_persists_explicit_conte
     command = _select_workflow_command(
         line_resolutions=(LineResolution(line_number="1", selected_product_id=10),),
         tax_resolutions=(TaxResolution(line_number="1", tax_index=0, selected_tax_id=20),),
-        business_context=BusinessContextDecision(sales_order_id=30, analytic_account_id=40),
+        business_context_allocations=_allocation_set(),
         comment="Reviewed by finance.",
         selected_partner_id=50,
         decided_by="finance.user",
@@ -391,7 +394,32 @@ def test_repository_submits_select_workflow_decision_and_persists_explicit_conte
     assert record.selected_partner_id == 50
     assert record.line_resolutions == [{"line_number": "1", "selected_product_id": 10}]
     assert record.tax_resolutions == [{"line_number": "1", "tax_index": 0, "selected_tax_id": 20}]
-    assert record.business_context == {"sales_order_id": 30, "analytic_account_id": 40}
+    assert record.business_context is None
+    assert record.business_context_allocations == {
+        "completeness": "complete",
+        "invoice_total": "100",
+        "currency": "TRY",
+        "allocations": [
+            {
+                "allocation_key": "ALLOC-001",
+                "allocation_type": "sales_order_cost",
+                "amount": "40",
+                "percentage": "40",
+                "currency": "TRY",
+                "customer_id": 101,
+                "recharge_partner_id": 105,
+                "customer_invoice_id": 9001,
+                "sales_order_id": 301,
+            },
+            {
+                "allocation_key": "ALLOC-002",
+                "allocation_type": "internal_cost",
+                "amount": "60",
+                "percentage": "60",
+                "currency": "TRY",
+            },
+        ],
+    }
     assert record.comment == "Reviewed by finance."
     assert record.decided_by == "finance.user"
     assert record.idempotency_key == "decision-key-1"
@@ -489,6 +517,81 @@ def test_repository_returns_existing_acknowledgement_for_identical_decision_idem
     assert loaded.version == 2
 
 
+def test_repository_decision_allocation_decimal_forms_are_idempotently_identical(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    repository.submit_review_decision(
+        _select_workflow_command(business_context_allocations=_allocation_set(amount=Decimal("259.2000")))
+    )
+
+    acknowledgement = repository.submit_review_decision(
+        _select_workflow_command(business_context_allocations=_allocation_set(amount=Decimal("259.20")))
+    )
+
+    assert acknowledgement.accepted is True
+    assert session.query(WorkbenchReviewDecision).count() == 1
+
+
+def test_repository_decision_allocation_list_reordering_is_idempotently_identical(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    repository.submit_review_decision(_select_workflow_command(business_context_allocations=_allocation_set()))
+
+    acknowledgement = repository.submit_review_decision(
+        _select_workflow_command(business_context_allocations=_allocation_set(reverse=True))
+    )
+
+    assert acknowledgement.accepted is True
+    assert session.query(WorkbenchReviewDecision).count() == 1
+
+
+def test_repository_rejects_changed_allocation_content_for_same_decision_idempotency_key(
+    session: Session,
+) -> None:
+    for index, allocation_set in enumerate(
+        (
+            _allocation_set(amount=Decimal("41.00")),
+            _allocation_set(percentage=Decimal("41"), second_percentage=Decimal("59")),
+            _allocation_set(customer_invoice_id=9002),
+            _allocation_set(remove_second=True),
+        ),
+        start=1,
+    ):
+        repository = SqlAlchemyReviewRepository(session)
+        review_id = f"review-conflict-{index}"
+        key = f"decision-conflict-{index}"
+        repository.create_review_item(_review_item(review_id), company_id=7, idempotency_key=f"review-key-{index}")
+        repository.submit_review_decision(
+            _select_workflow_command(
+                review_id=review_id,
+                idempotency_key=key,
+                business_context_allocations=_allocation_set(),
+            )
+        )
+
+        with pytest.raises(ReviewDecisionIdempotencyConflictError):
+            repository.submit_review_decision(
+                _select_workflow_command(
+                    review_id=review_id,
+                    idempotency_key=key,
+                    business_context_allocations=allocation_set,
+                )
+            )
+
+
+def test_repository_rejects_changed_allocation_currency_for_same_decision_idempotency_key(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    repository.submit_review_decision(
+        _select_workflow_command(business_context_allocations=_allocation_set(currency="TRY"))
+    )
+
+    with pytest.raises(ReviewDecisionIdempotencyConflictError):
+        repository.submit_review_decision(
+            _select_workflow_command(business_context_allocations=_allocation_set(currency="USD"))
+        )
+
+
 def test_repository_rejects_conflicting_decision_idempotency_reuse_without_mutation(session: Session) -> None:
     repository = SqlAlchemyReviewRepository(session)
     repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
@@ -509,6 +612,45 @@ def test_repository_rejects_malformed_persisted_decision_data_safely(session: Se
 
     with pytest.raises(ReviewDecisionDataIntegrityError):
         repository.submit_review_decision(_select_workflow_command())
+
+
+def test_repository_rejects_malformed_persisted_allocation_data_safely(session: Session) -> None:
+    _insert_record(session, review_id="review-1", company_id=7, idempotency_key="review-key-1")
+    _insert_decision_record(
+        session,
+        business_context_allocations={"allocations": [{"allocation_key": "ALLOC-1", "amount": "secret"}]},
+    )
+    repository = SqlAlchemyReviewRepository(session)
+
+    with pytest.raises(ReviewDecisionDataIntegrityError) as error:
+        repository.submit_review_decision(_select_workflow_command(business_context_allocations=_allocation_set()))
+
+    assert "secret" not in str(error.value)
+
+
+def test_repository_old_decision_without_allocation_data_remains_readable(session: Session) -> None:
+    _insert_record(session, review_id="review-1", company_id=7, idempotency_key="review-key-1")
+    _insert_decision_record(session)
+    repository = SqlAlchemyReviewRepository(session)
+
+    acknowledgement = repository.submit_review_decision(_select_workflow_command())
+
+    assert acknowledgement.accepted is True
+    assert acknowledgement.version == 2
+
+
+def test_repository_legacy_business_context_decision_remains_legacy_evidence(session: Session) -> None:
+    _insert_record(session, review_id="review-1", company_id=7, idempotency_key="review-key-1")
+    _insert_decision_record(session, business_context={"sales_order_id": 30})
+    repository = SqlAlchemyReviewRepository(session)
+
+    with pytest.raises(ReviewDecisionIdempotencyConflictError):
+        repository.submit_review_decision(_select_workflow_command())
+
+    record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert record is not None
+    assert record.business_context == {"sales_order_id": 30}
+    assert record.business_context_allocations is None
 
 
 def test_repository_rolls_back_review_update_when_decision_insert_fails(session: Session, monkeypatch) -> None:
@@ -798,6 +940,8 @@ def _insert_decision_record(
     review_id: str = "review-1",
     company_id: int = 7,
     idempotency_key: str = "decision-key-1",
+    business_context: dict[str, int] | None = None,
+    business_context_allocations: dict[str, object] | None = None,
 ) -> None:
     session.add(
         WorkbenchReviewDecision(
@@ -811,7 +955,8 @@ def _insert_decision_record(
             selected_partner_id=None,
             line_resolutions=[],
             tax_resolutions=[],
-            business_context=None,
+            business_context=business_context,
+            business_context_allocations=business_context_allocations,
             comment=None,
             decided_by="finance.user",
             idempotency_key=idempotency_key,
@@ -829,7 +974,7 @@ def _select_workflow_command(
     selected_partner_id: int | None = None,
     line_resolutions: tuple[LineResolution, ...] = (),
     tax_resolutions: tuple[TaxResolution, ...] = (),
-    business_context: BusinessContextDecision | None = None,
+    business_context_allocations: BusinessContextAllocationSet | None = None,
     comment: str | None = None,
     decided_by: str = "finance.user",
     idempotency_key: str = "decision-key-1",
@@ -843,7 +988,7 @@ def _select_workflow_command(
         selected_partner_id=selected_partner_id,
         line_resolutions=line_resolutions,
         tax_resolutions=tax_resolutions,
-        business_context=business_context,
+        business_context_allocations=business_context_allocations,
         comment=comment,
         decided_by=decided_by,
         idempotency_key=idempotency_key,
@@ -870,3 +1015,49 @@ def _dismiss_command(
 
 def _time(days: int) -> datetime:
     return datetime(2026, 8, 2, tzinfo=UTC) + timedelta(days=days)
+
+
+def _allocation_set(
+    *,
+    amount: Decimal = Decimal("40.00"),
+    percentage: Decimal = Decimal("40"),
+    second_percentage: Decimal = Decimal("60"),
+    customer_invoice_id: int = 9001,
+    currency: str = "TRY",
+    reverse: bool = False,
+    remove_second: bool = False,
+) -> BusinessContextAllocationSet:
+    first_percentage = Decimal("100") if remove_second and percentage == Decimal("40") else percentage
+    allocations = (
+        BusinessContextAllocation(
+            allocation_key="ALLOC-001",
+            allocation_type=BusinessContextAllocationType.SALES_ORDER_COST,
+            amount=amount,
+            percentage=first_percentage,
+            currency=currency,
+            customer_id=101,
+            recharge_partner_id=105,
+            customer_invoice_id=customer_invoice_id,
+            sales_order_id=301,
+        ),
+        BusinessContextAllocation(
+            allocation_key="ALLOC-002",
+            allocation_type=BusinessContextAllocationType.INTERNAL_COST,
+            amount=Decimal("60.00"),
+            percentage=second_percentage,
+            currency=currency,
+        ),
+    )
+    if remove_second:
+        allocations = allocations[:1]
+    if reverse:
+        allocations = tuple(reversed(allocations))
+    return BusinessContextAllocationSet(
+        allocations=allocations,
+        completeness=AllocationCompleteness.COMPLETE,
+        invoice_total=sum(
+            (allocation.amount for allocation in allocations if allocation.amount is not None),
+            Decimal("0"),
+        ),
+        currency=currency,
+    )

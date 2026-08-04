@@ -66,7 +66,7 @@ Current implemented capabilities:
 - Import Workbench review decision submission use case for optimistic, idempotent `SELECT_WORKFLOW` and `DISMISS` decisions without workflow execution.
 - Authenticated Import Workbench REST API for queue, detail, and decision submission through `RequestContext` permissions.
 - Odoo Online Workbench projection contract for future Odoo Studio review display and explicit decision capture.
-- Business Context Allocation contracts for future multi-Sales-Order, customer recharge, affiliate, project, and internal cost traceability.
+- Business Context Allocation contracts and Workbench decision submission evidence for multi-Sales-Order, customer recharge, affiliate, project, and internal cost traceability.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
@@ -80,7 +80,7 @@ Not implemented or not allowed by default:
 - Business decision logic inside Odoo.
 - Custom Odoo Python addons for Odoo Online.
 - Odoo Studio projection synchronization or decision ingestion.
-- Business context allocation persistence, API submission, Odoo child model synchronization, or workflow execution.
+- Odoo child allocation model synchronization, allocation execution, customer invoice creation, recharge execution, or profitability posting.
 - AI-driven automatic decisions.
 - Database schema changes without Alembic migrations and tests.
 
@@ -150,6 +150,7 @@ Core documentation:
 - [AI Advisor](docs/AI_ADVISOR.md)
 - [Matching](docs/MATCHING.md)
 - [Import Workbench](docs/IMPORT_WORKBENCH.md)
+- [Import Workbench API](docs/WORKBENCH_API.md)
 - [Odoo Workbench Projection](docs/ODOO_WORKBENCH_PROJECTION.md)
 - [Import Session](docs/IMPORT_SESSION.md)
 - [Company Memory](docs/COMPANY_MEMORY.md)
