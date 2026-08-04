@@ -113,6 +113,7 @@ def test_business_context_allocation_requires_amount_or_percentage() -> None:
     [
         "customer_id",
         "recharge_partner_id",
+        "customer_invoice_id",
         "target_company_id",
         "opportunity_id",
         "sales_order_id",
@@ -127,6 +128,18 @@ def test_business_context_allocation_requires_amount_or_percentage() -> None:
 def test_business_context_allocation_requires_positive_erp_ids(field_name: str) -> None:
     with pytest.raises(WorkbenchContractError, match=f"{field_name} must be a positive ERP id"):
         _allocation(**{field_name: 0})
+
+
+def test_business_context_allocation_accepts_customer_invoice_id() -> None:
+    allocation = _allocation(customer_invoice_id=9001)
+
+    assert allocation.customer_invoice_id == 9001
+
+
+@pytest.mark.parametrize("customer_invoice_id", [0, -1, True])
+def test_business_context_allocation_rejects_invalid_customer_invoice_id(customer_invoice_id: object) -> None:
+    with pytest.raises(WorkbenchContractError):
+        _allocation(customer_invoice_id=customer_invoice_id)
 
 
 def test_business_context_allocation_normalizes_and_validates_currency() -> None:
@@ -304,14 +317,14 @@ def test_allocation_contracts_import_no_odoo_or_sqlalchemy() -> None:
         assert forbidden not in source
 
 
-def test_allocation_pr_does_not_change_persistence_or_api_contracts() -> None:
+def test_allocation_contract_is_now_active_submission_evidence() -> None:
     schema_source = Path("app/schemas/workbench.py").read_text(encoding="utf-8")
     command_source = Path("app/application/workbench/commands.py").read_text(encoding="utf-8")
     persistence_source = Path("app/persistence/workbench_review_repository.py").read_text(encoding="utf-8")
 
-    assert "business_context_allocations" not in schema_source
-    assert "business_context_allocations" not in command_source
-    assert "BusinessContextAllocation" not in persistence_source
+    assert "business_context_allocations" in schema_source
+    assert "business_context_allocations" in command_source
+    assert "BusinessContextAllocation" in persistence_source
 
 
 def test_allocation_contracts_do_not_execute_workflows() -> None:
@@ -321,8 +334,29 @@ def test_allocation_contracts_do_not_execute_workflows() -> None:
         assert forbidden not in source
 
 
-def test_legacy_business_context_decision_remains_runtime_compatible() -> None:
+def test_legacy_business_context_decision_remains_exported_but_not_active_command_input() -> None:
     context = BusinessContextDecision(sales_order_id=10, project_id=20)
+
+    assert context.sales_order_id == 10
+    with pytest.raises(TypeError):
+        ReviewDecisionCommand(
+            review_id="review-1",
+            company_id=7,
+            expected_version=1,
+            decision=ReviewDecisionType.SELECT_WORKFLOW,
+            decided_by="user-1",
+            idempotency_key="decision-key-1",
+            selected_workflow=WorkflowType.VENDOR_BILL,
+            business_context=context,
+        )
+
+
+def test_review_decision_command_accepts_allocation_set() -> None:
+    allocation_set = BusinessContextAllocationSet(
+        allocations=(_allocation(),),
+        invoice_total=Decimal("100.00"),
+        currency="TRY",
+    )
     command = ReviewDecisionCommand(
         review_id="review-1",
         company_id=7,
@@ -331,11 +365,11 @@ def test_legacy_business_context_decision_remains_runtime_compatible() -> None:
         decided_by="user-1",
         idempotency_key="decision-key-1",
         selected_workflow=WorkflowType.VENDOR_BILL,
-        business_context=context,
+        business_context_allocations=allocation_set,
     )
 
-    assert command.business_context is context
-    assert not hasattr(command, "business_context_allocations")
+    assert command.business_context_allocations is allocation_set
+    assert not hasattr(command, "business_context")
 
 
 def _allocation(**overrides) -> BusinessContextAllocation:

@@ -47,6 +47,7 @@ class WorkbenchReviewDecision(Base):
     line_resolutions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     tax_resolutions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     business_context: Mapped[dict[str, int] | None] = mapped_column(JSON, nullable=True)
+    business_context_allocations: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     comment: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     decided_by: Mapped[str] = mapped_column(String(255), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)

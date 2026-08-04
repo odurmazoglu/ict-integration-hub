@@ -318,11 +318,11 @@ Current contracts:
 - `ReviewDetailQuery`: one-item query scoped by review id and company id
 - `ReviewQueueResult`: immutable paginated result
 - `ReviewDecisionType`: canonical explicit user decisions: `SELECT_WORKFLOW` and `DISMISS`
-- `ReviewDecisionCommand`: explicit user decision command with canonical decision type, expected version, user identity, idempotency key, optional selected workflow, explicit line/tax resolutions, and optional procurement traceability context
-- `BusinessContextDecision`: legacy single-context procurement traceability contract currently used by `ReviewDecisionCommand`, Workbench API schemas, decision persistence, and Odoo projection candidates
-- `BusinessContextAllocationType`: canonical allocation purpose vocabulary for future multi-allocation decisions
+- `ReviewDecisionCommand`: explicit user decision command with canonical decision type, expected version, user identity, idempotency key, optional selected workflow, explicit line/tax resolutions, and optional `BusinessContextAllocationSet`
+- `BusinessContextDecision`: legacy single-context procurement traceability evidence type retained only for historical compatibility
+- `BusinessContextAllocationType`: canonical allocation purpose vocabulary for multi-allocation decisions
 - `AllocationCompleteness`: explicit `COMPLETE` or `PARTIAL` allocation-set intent
-- `BusinessContextAllocation`: immutable ERP-neutral allocation line with amount and/or percentage, commercial customer, recharge recipient, target company, Sales Order, Purchase Order, project, analytic account, and cost-purpose context
+- `BusinessContextAllocation`: immutable ERP-neutral allocation line with amount and/or percentage, commercial customer, recharge recipient, optional existing customer invoice, target company, Sales Order, Purchase Order, project, analytic account, and cost-purpose context
 - `BusinessContextAllocationSet`: immutable aggregate that validates unique allocation keys, currency consistency, and complete or partial amount/percentage reconciliation
 - `ReviewDecisionAcknowledgement`: immutable acknowledgement contract for a future command handler
 - `ReviewQueueReader`: read-only port for future queue/detail adapters
@@ -340,7 +340,7 @@ Current contracts:
 
 The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation, queue/detail reads, and explicit review decision submission. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, scopes detail reads by `review_id` plus `company_id`, and records submitted decisions in append-only audit rows.
 
-Business context allocation contracts are not wired into the current command, API, persistence, projection, or Odoo adapter. `BusinessContextDecision` remains the runtime single-context contract for this slice. A later implementation PR should replace the current `business_context` command field with `business_context_allocations: BusinessContextAllocationSet | None` rather than adding both fields and creating ambiguous precedence.
+`ReviewDecisionCommand` now accepts `business_context_allocations: BusinessContextAllocationSet | None` and no longer accepts the legacy `business_context` field. New decision rows write allocation evidence to `business_context_allocations` JSON and leave legacy `business_context` empty. Existing historical rows with no allocation payload remain readable; historical rows with legacy `business_context` preserve that legacy object as evidence and are not rewritten or converted into fabricated allocation amounts.
 
 Allocation validation is structural and deterministic only:
 
@@ -351,6 +351,7 @@ Allocation validation is structural and deterministic only:
 - `COMPLETE` allocation sets must reconcile fully by amount or percentage
 - `PARTIAL` allocation sets may be below the invoice total or 100 percent, but must not exceed either
 - `CUSTOMER_RECHARGE` distinguishes commercial `customer_id` from actual `recharge_partner_id`
+- `customer_invoice_id` is an optional existing outgoing customer invoice evidence link; it does not create an invoice, prove recharge completion, or grant authorization
 
 Negative and zero allocations are intentionally not supported in the initial contract. Credit-note allocation semantics are future work and require a focused ADR or implementation scope before they can affect accepted allocation evidence.
 
@@ -360,7 +361,7 @@ Decision submission supports only explicit `SELECT_WORKFLOW` and `DISMISS` comma
 
 Optimistic concurrency uses `ReviewDecisionCommand.expected_version`. The persistence adapter updates a review row only when `review_id`, `company_id`, `status=PENDING_REVIEW`, and `version=expected_version` all match. A stale version raises `ReviewVersionConflictError`; a non-pending review raises `ReviewStateConflictError`; a missing company-scoped review raises `ReviewNotFoundError`.
 
-Decision idempotency is scoped by `(company_id, idempotency_key)`. An identical replay returns the original acknowledgement without incrementing `version` or inserting another decision row. Reusing the same key for different canonical command content raises `ReviewDecisionIdempotencyConflictError`. Fingerprints use structured enum values, tuples, explicit scalar fields, and canonical DTO content rather than raw JSON or display strings.
+Decision idempotency is scoped by `(company_id, idempotency_key)`. An identical replay returns the original acknowledgement without incrementing `version` or inserting another decision row. Reusing the same key for different canonical command content raises `ReviewDecisionIdempotencyConflictError`. Fingerprints use structured enum values, tuples, explicit scalar fields, and canonical DTO content rather than raw JSON or display strings. Allocation fingerprints serialize enum values as strings, Decimals as canonical strings, currencies in canonical case, and allocation rows sorted by `allocation_key`, so list reordering alone is idempotent while changed amounts, percentages, allocation types, target records, completeness, totals, currency, or allocation keys conflict.
 
 The current API adapter exposes authenticated FastAPI routes for listing review items, retrieving one review item, and submitting explicit user decisions. These routes only construct existing application queries and commands from trusted `RequestContext` identity and HTTP boundary schemas. They do not execute workflows, write ERP records, create Vendor Bills, create rules, call AI, or perform fuzzy matching.
 

@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from app.application.workbench import (
+    AllocationCompleteness,
+    BusinessContextAllocation,
+    BusinessContextAllocationSet,
+    BusinessContextAllocationType,
     LineResolution,
     OdooWorkbenchDecisionCandidate,
     ProjectionPublishResult,
@@ -19,7 +23,6 @@ from app.application.workbench import (
     WorkbenchProjection,
     WorkbenchProjectionPublisher,
 )
-from app.application.workbench.dto import BusinessContextDecision
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 
 
@@ -179,15 +182,16 @@ def test_decision_candidate_rejects_duplicate_tax_resolutions_through_current_co
 
 
 def test_decision_candidate_uses_safe_structured_resolution_contracts() -> None:
+    allocation_set = _allocation_set()
     candidate = _candidate(
         line_resolutions=(LineResolution(line_number="1", selected_product_id=10),),
         tax_resolutions=(TaxResolution(line_number="1", tax_index=0, selected_tax_id=20),),
-        business_context=BusinessContextDecision(sales_order_id=30, project_id=31),
+        business_context_allocations=allocation_set,
     )
 
     assert candidate.line_resolutions[0].selected_product_id == 10
     assert candidate.tax_resolutions[0].selected_tax_id == 20
-    assert candidate.business_context.sales_order_id == 30
+    assert candidate.business_context_allocations is allocation_set
     assert candidate.comment == "Reviewed in Odoo."
 
 
@@ -332,7 +336,7 @@ def _candidate(**overrides) -> OdooWorkbenchDecisionCandidate:
         "selected_partner_id": 700,
         "line_resolutions": (),
         "tax_resolutions": (),
-        "business_context": None,
+        "business_context_allocations": None,
         "comment": "Reviewed in Odoo.",
         "idempotency_key": "odoo-decision-key-1",
         "decided_by_odoo_user_id": 11,
@@ -341,6 +345,25 @@ def _candidate(**overrides) -> OdooWorkbenchDecisionCandidate:
     }
     values.update(overrides)
     return OdooWorkbenchDecisionCandidate(**values)
+
+
+def _allocation_set() -> BusinessContextAllocationSet:
+    return BusinessContextAllocationSet(
+        allocations=(
+            BusinessContextAllocation(
+                allocation_key="alloc-1",
+                allocation_type=BusinessContextAllocationType.SALES_ORDER_COST,
+                amount=Decimal("100.00"),
+                percentage=Decimal("100"),
+                currency="TRY",
+                customer_invoice_id=9001,
+                sales_order_id=30,
+            ),
+        ),
+        completeness=AllocationCompleteness.COMPLETE,
+        invoice_total=Decimal("100.00"),
+        currency="TRY",
+    )
 
 
 def _publish_result(**overrides) -> ProjectionPublishResult:

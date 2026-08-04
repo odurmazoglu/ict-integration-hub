@@ -254,7 +254,7 @@ The current implementation includes:
 - Import Workbench review item persistence for idempotent pending review creation and company-scoped read-only queue/detail access
 - Authenticated Import Workbench REST API for direct Hub clients
 - Odoo Online Workbench projection contracts for future Studio-based review display and decision candidate capture
-- Business Context Allocation contracts for future multi-line cost traceability
+- Business Context Allocation contracts and Workbench decision submission evidence for multi-line cost traceability
 
 The next implementation milestone is:
 

@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.application.commands import Command
-from app.application.workbench.dto import BusinessContextDecision, LineResolution, ReviewDecisionType, TaxResolution
+from app.application.workbench.allocations import BusinessContextAllocationSet
+from app.application.workbench.dto import LineResolution, ReviewDecisionType, TaxResolution
 from app.application.workbench.exceptions import WorkbenchContractError
 from app.application.workflow import WorkflowType
 
@@ -24,7 +25,7 @@ class ReviewDecisionCommand(Command):
     selected_partner_id: int | None = None
     line_resolutions: tuple[LineResolution, ...] = field(default_factory=tuple)
     tax_resolutions: tuple[TaxResolution, ...] = field(default_factory=tuple)
-    business_context: BusinessContextDecision | None = None
+    business_context_allocations: BusinessContextAllocationSet | None = None
     comment: str | None = None
 
     def __post_init__(self) -> None:
@@ -61,7 +62,7 @@ def _validate_decision_combination(command: ReviewDecisionCommand) -> None:
             or command.selected_partner_id is not None
             or command.line_resolutions
             or command.tax_resolutions
-            or command.business_context is not None
+            or command.business_context_allocations is not None
         ):
             raise WorkbenchContractError("DISMISS cannot include workflow-specific selections.")
         return

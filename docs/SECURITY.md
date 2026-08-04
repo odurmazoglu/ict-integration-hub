@@ -106,7 +106,7 @@ Permissions are claims in `RequestContext`. This is not an RBAC system, role dat
 
 ## Company Isolation
 
-Future API adapters must derive company identity from `RequestContext.company_id`.
+API adapters must derive company identity from `RequestContext.company_id`.
 
 They must not accept trusted `company_id` from:
 
@@ -114,7 +114,7 @@ They must not accept trusted `company_id` from:
 - query strings
 - path parameters
 
-Future Workbench decision routes must derive `decided_by` from `RequestContext.user_id`, not blindly trust client-provided user identity.
+Workbench decision routes must derive `decided_by` from `RequestContext.user_id`, not blindly trust client-provided user identity.
 
 ## Authenticated Workbench API
 
@@ -130,6 +130,8 @@ Required permissions:
 - decision submission: `workbench_review_decide`
 
 The route adapters construct `ReviewQueueQuery`, `ReviewDetailQuery`, and `ReviewDecisionCommand` with trusted identity from `RequestContext`. They do not accept `company_id`, `decided_by`, or body-level `review_id` from the client.
+
+Workbench business context allocations are user-submitted evidence, not authorization. Allocation identifiers received from API clients or future Odoo projection child rows are untrusted until the Hub validates them. `target_company_id`, `customer_id`, `recharge_partner_id`, and `customer_invoice_id` do not grant cross-company access, do not prove ownership, and do not authorize customer invoice creation or recharge execution. The current contract performs structural positive-integer validation only; future repository validators must verify record existence, company access, outgoing customer-invoice/refund semantics, and partner/company relationships before execution.
 
 Successful and failed Workbench responses include the same `trace_id` in the JSON body and `X-Trace-ID` response header. Authentication failures before `RequestContext` resolution use the validated inbound trace id when available, otherwise a safe generated id.
 

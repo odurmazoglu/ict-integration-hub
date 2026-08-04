@@ -10,6 +10,12 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.application.exceptions import ApplicationError
+from app.application.workbench.allocations import (
+    AllocationCompleteness,
+    BusinessContextAllocation,
+    BusinessContextAllocationSet,
+    BusinessContextAllocationType,
+)
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import (
     BusinessContextDecision,
@@ -345,7 +351,8 @@ def _decision_model_from_command(
         selected_partner_id=command.selected_partner_id,
         line_resolutions=[_serialize_line_resolution(resolution) for resolution in command.line_resolutions],
         tax_resolutions=[_serialize_tax_resolution(resolution) for resolution in command.tax_resolutions],
-        business_context=_serialize_business_context(command.business_context),
+        business_context=None,
+        business_context_allocations=_serialize_business_context_allocations(command.business_context_allocations),
         comment=command.comment,
         decided_by=command.decided_by,
         idempotency_key=command.idempotency_key,
@@ -464,12 +471,106 @@ def _deserialize_business_context(value: Any) -> BusinessContextDecision | None:
     if not isinstance(value, dict):
         raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
     return BusinessContextDecision(
-        opportunity_id=_optional_int(value.get("opportunity_id")),
-        sales_order_id=_optional_int(value.get("sales_order_id")),
-        proposal_scenario_id=_optional_int(value.get("proposal_scenario_id")),
-        purchase_order_id=_optional_int(value.get("purchase_order_id")),
-        project_id=_optional_int(value.get("project_id")),
-        analytic_account_id=_optional_int(value.get("analytic_account_id")),
+        opportunity_id=_optional_decision_int(value.get("opportunity_id")),
+        sales_order_id=_optional_decision_int(value.get("sales_order_id")),
+        proposal_scenario_id=_optional_decision_int(value.get("proposal_scenario_id")),
+        purchase_order_id=_optional_decision_int(value.get("purchase_order_id")),
+        project_id=_optional_decision_int(value.get("project_id")),
+        analytic_account_id=_optional_decision_int(value.get("analytic_account_id")),
+    )
+
+
+def _serialize_business_context_allocations(context: BusinessContextAllocationSet | None) -> dict[str, Any] | None:
+    if context is None:
+        return None
+    payload: dict[str, Any] = {
+        "completeness": context.completeness.value,
+        "allocations": [
+            _serialize_business_context_allocation(allocation)
+            for allocation in sorted(context.allocations, key=lambda allocation: allocation.allocation_key)
+        ],
+    }
+    if context.invoice_total is not None:
+        payload["invoice_total"] = _canonical_decimal_text(context.invoice_total)
+    if context.currency is not None:
+        payload["currency"] = context.currency
+    return payload
+
+
+def _serialize_business_context_allocation(allocation: BusinessContextAllocation) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "allocation_key": allocation.allocation_key,
+        "allocation_type": allocation.allocation_type.value,
+    }
+    optional_values: dict[str, Any] = {
+        "source_line_number": allocation.source_line_number,
+        "description": allocation.description,
+        "amount": _canonical_decimal_text(allocation.amount),
+        "percentage": _canonical_decimal_text(allocation.percentage),
+        "currency": allocation.currency,
+        "customer_id": allocation.customer_id,
+        "recharge_partner_id": allocation.recharge_partner_id,
+        "customer_invoice_id": allocation.customer_invoice_id,
+        "target_company_id": allocation.target_company_id,
+        "opportunity_id": allocation.opportunity_id,
+        "sales_order_id": allocation.sales_order_id,
+        "sales_order_line_id": allocation.sales_order_line_id,
+        "proposal_scenario_id": allocation.proposal_scenario_id,
+        "purchase_order_id": allocation.purchase_order_id,
+        "project_id": allocation.project_id,
+        "analytic_account_id": allocation.analytic_account_id,
+        "subscription_id": allocation.subscription_id,
+        "internal_note": allocation.internal_note,
+    }
+    payload.update({key: value for key, value in optional_values.items() if value is not None})
+    return payload
+
+
+def _deserialize_business_context_allocations(value: Any) -> BusinessContextAllocationSet | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    try:
+        allocations = value["allocations"]
+        if not isinstance(allocations, list):
+            raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+        return BusinessContextAllocationSet(
+            allocations=tuple(_deserialize_business_context_allocation(allocation) for allocation in allocations),
+            completeness=AllocationCompleteness(str(value.get("completeness", AllocationCompleteness.COMPLETE.value))),
+            invoice_total=_optional_decimal_text(value.get("invoice_total")),
+            currency=_optional_decision_text(value.get("currency")),
+        )
+    except ReviewDecisionDataIntegrityError:
+        raise
+    except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.") from exc
+
+
+def _deserialize_business_context_allocation(value: Any) -> BusinessContextAllocation:
+    if not isinstance(value, dict):
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    return BusinessContextAllocation(
+        allocation_key=_required_text(value.get("allocation_key")),
+        allocation_type=BusinessContextAllocationType(str(value.get("allocation_type"))),
+        source_line_number=_optional_decision_text(value.get("source_line_number")),
+        description=_optional_decision_text(value.get("description")),
+        amount=_optional_decimal_text(value.get("amount")),
+        percentage=_optional_decimal_text(value.get("percentage")),
+        currency=_optional_decision_text(value.get("currency")),
+        customer_id=_optional_decision_int(value.get("customer_id")),
+        recharge_partner_id=_optional_decision_int(value.get("recharge_partner_id")),
+        customer_invoice_id=_optional_decision_int(value.get("customer_invoice_id")),
+        target_company_id=_optional_decision_int(value.get("target_company_id")),
+        opportunity_id=_optional_decision_int(value.get("opportunity_id")),
+        sales_order_id=_optional_decision_int(value.get("sales_order_id")),
+        sales_order_line_id=_optional_decision_int(value.get("sales_order_line_id")),
+        proposal_scenario_id=_optional_decision_int(value.get("proposal_scenario_id")),
+        purchase_order_id=_optional_decision_int(value.get("purchase_order_id")),
+        project_id=_optional_decision_int(value.get("project_id")),
+        analytic_account_id=_optional_decision_int(value.get("analytic_account_id")),
+        subscription_id=_optional_decision_int(value.get("subscription_id")),
+        internal_note=_optional_decision_text(value.get("internal_note")),
     )
 
 
@@ -511,12 +612,48 @@ def _optional_text(value: Any) -> str | None:
     return value
 
 
+def _required_text(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    return value
+
+
+def _optional_decision_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    return value
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None
     if type(value) is not int:
         raise ReviewDataIntegrityError("Persisted review item data is invalid.")
     return value
+
+
+def _optional_decision_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    return value
+
+
+def _optional_decimal_text(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    try:
+        decimal = Decimal(value)
+    except InvalidOperation as exc:
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.") from exc
+    if not decimal.is_finite():
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    return decimal
 
 
 def _required_int(value: Any) -> int:
@@ -563,7 +700,7 @@ def _decision_fingerprint(command: ReviewDecisionCommand) -> tuple[Any, ...]:
         command.selected_partner_id,
         tuple(_line_resolution_fingerprint(resolution) for resolution in command.line_resolutions),
         tuple(_tax_resolution_fingerprint(resolution) for resolution in command.tax_resolutions),
-        _business_context_fingerprint(command.business_context),
+        _business_context_allocations_fingerprint(command.business_context_allocations),
         command.comment,
         command.decided_by,
     )
@@ -584,7 +721,7 @@ def _decision_fingerprint_from_model(record: WorkbenchReviewDecision) -> tuple[A
             tax_resolutions=tuple(
                 _deserialize_tax_resolution(resolution) for resolution in _require_list(record.tax_resolutions)
             ),
-            business_context=_deserialize_business_context(record.business_context),
+            business_context_allocations=_deserialize_business_context_allocations(record.business_context_allocations),
             comment=record.comment,
             decided_by=record.decided_by,
             idempotency_key=record.idempotency_key,
@@ -593,6 +730,13 @@ def _decision_fingerprint_from_model(record: WorkbenchReviewDecision) -> tuple[A
         raise
     except (TypeError, ValueError) as exc:
         raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.") from exc
+    if record.business_context is not None:
+        legacy_context = _deserialize_business_context(record.business_context)
+        if command_like.business_context_allocations is None:
+            return (
+                *_decision_fingerprint(command_like),
+                ("legacy_business_context", _business_context_fingerprint(legacy_context)),
+            )
     return _decision_fingerprint(command_like)
 
 
@@ -609,6 +753,18 @@ def _business_context_fingerprint(context: BusinessContextDecision | None) -> tu
     if serialized is None:
         return None
     return tuple((key, serialized[key]) for key in sorted(serialized))
+
+
+def _business_context_allocations_fingerprint(context: BusinessContextAllocationSet | None) -> tuple[Any, ...] | None:
+    serialized = _serialize_business_context_allocations(context)
+    if serialized is None:
+        return None
+    return (
+        serialized["completeness"],
+        serialized.get("invoice_total"),
+        serialized.get("currency"),
+        tuple(tuple((key, allocation[key]) for key in sorted(allocation)) for allocation in serialized["allocations"]),
+    )
 
 
 def _target_status_for_decision(decision: ReviewDecisionType) -> ReviewStatus:
@@ -644,6 +800,13 @@ def _canonical_decimal(value: Decimal | None) -> Decimal | None:
     if normalized == Decimal("0"):
         return Decimal("0")
     return normalized
+
+
+def _canonical_decimal_text(value: Decimal | None) -> str | None:
+    canonical = _canonical_decimal(value)
+    if canonical is None:
+        return None
+    return format(canonical, "f")
 
 
 def _validate_supported_amount(value: Decimal | None) -> None:

@@ -6,9 +6,9 @@ from decimal import Decimal
 from enum import Enum
 
 from app.application.dto import ApplicationDTO
+from app.application.workbench.allocations import BusinessContextAllocationSet
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import (
-    BusinessContextDecision,
     LineResolution,
     ReviewDecisionType,
     ReviewStatus,
@@ -73,7 +73,7 @@ class OdooWorkbenchDecisionCandidate(ApplicationDTO):
     selected_partner_id: int | None = None
     line_resolutions: tuple[LineResolution, ...] = field(default_factory=tuple)
     tax_resolutions: tuple[TaxResolution, ...] = field(default_factory=tuple)
-    business_context: BusinessContextDecision | None = None
+    business_context_allocations: BusinessContextAllocationSet | None = None
     comment: str | None = None
 
     def __post_init__(self) -> None:
@@ -111,7 +111,7 @@ class OdooWorkbenchDecisionCandidate(ApplicationDTO):
             selected_partner_id=self.selected_partner_id,
             line_resolutions=line_resolutions,
             tax_resolutions=tax_resolutions,
-            business_context=self.business_context,
+            business_context_allocations=self.business_context_allocations,
             comment=self.comment,
         )
 

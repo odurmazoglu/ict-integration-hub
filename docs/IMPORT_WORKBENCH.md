@@ -76,8 +76,8 @@ Implemented contract types:
 - `ReviewDecisionCommand`: explicit user decision command for `SELECT_WORKFLOW` or `DISMISS`
 - `ReviewDecisionAcknowledgement`: safe acknowledgement contract
 - `LineResolution` and `TaxResolution`: explicit selected ERP IDs for invoice lines and taxes
-- `BusinessContextDecision`: legacy single-context procurement traceability identifiers selected by the user
-- `BusinessContextAllocationType`, `AllocationCompleteness`, `BusinessContextAllocation`, and `BusinessContextAllocationSet`: future multi-allocation business context contracts
+- `BusinessContextDecision`: legacy single-context procurement traceability evidence retained for historical rows
+- `BusinessContextAllocationType`, `AllocationCompleteness`, `BusinessContextAllocation`, and `BusinessContextAllocationSet`: canonical multi-allocation business context contracts
 - `ReviewQueueReader`: read-only application port for future queue/detail adapters
 - `ReviewItemWriter`: create-only application port for idempotent pending review item creation
 - `ReviewDecisionWriter`: decision submission application port for explicit user decisions
@@ -91,7 +91,7 @@ Implemented contract types:
 - `WorkbenchProjectionPublisher`: application port for future projection publishing and acknowledgement
 - `WorkbenchDecisionCandidateReader`: application port for future candidate decision reads
 
-`BusinessContextDecision` remains the current runtime contract used by `ReviewDecisionCommand`, decision persistence, Workbench API schemas, and Odoo projection candidates. A later implementation PR should replace `business_context` with `business_context_allocations: BusinessContextAllocationSet | None` after API, persistence, Odoo projection, and idempotency behavior are explicitly scoped. This PR does not add both fields to avoid dual-source ambiguity.
+`ReviewDecisionCommand`, the authenticated Workbench decision API, decision persistence, idempotency comparison, and `OdooWorkbenchDecisionCandidate` use `business_context_allocations: BusinessContextAllocationSet | None`. The active write path no longer accepts legacy `business_context`, and it does not accept both fields. Existing historical decision rows with legacy `business_context` are not rewritten; the legacy object remains legacy evidence because lossless allocation conversion would require amounts that were never captured.
 
 ## Current Persistence Foundation
 
@@ -118,7 +118,9 @@ Implemented behavior:
 - compare persisted monetary values through canonical `Decimal` values for idempotency, not display formatting
 - store `version` starting at `1` for future optimistic concurrency updates
 - preserve original review reasons when a decision is submitted
-- persist selected workflow, partner, line resolutions, tax resolutions, business context, comment, user identity, idempotency key, and version-before/version-after as controlled audit data
+- persist selected workflow, partner, line resolutions, tax resolutions, business context allocation evidence, comment, user identity, idempotency key, and version-before/version-after as controlled audit data
+- serialize allocation evidence as deterministic JSON with enum values as strings, Decimal values as canonical strings, and allocation rows sorted by `allocation_key`
+- include complete allocation payloads in decision idempotency while treating equivalent Decimal forms and list/tuple hydration differences as identical
 
 The persistence adapter does not store raw XML, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.
 
@@ -179,6 +181,46 @@ Response shape:
 
 Errors use the same envelope with `success=false`, `data=null`, and safe error codes/messages. `X-Trace-ID` is also returned in the response header. Workbench API responses do not expose ORM objects, tokens, SQL, connection strings, provider responses, or stack traces. Monetary values are serialized as strings.
 
+Decision submission may include `business_context_allocations` for `SELECT_WORKFLOW` decisions:
+
+```json
+{
+  "decision": "select_workflow",
+  "selected_workflow": "vendor_bill",
+  "expected_version": 4,
+  "idempotency_key": "example-key",
+  "comment": "Reviewed",
+  "business_context_allocations": {
+    "completeness": "complete",
+    "invoice_total": "100000.000000",
+    "currency": "TRY",
+    "allocations": [
+      {
+        "allocation_key": "ALLOC-001",
+        "allocation_type": "sales_order_cost",
+        "source_line_number": "1",
+        "amount": "40000.000000",
+        "percentage": "40",
+        "currency": "TRY",
+        "customer_id": 101,
+        "recharge_partner_id": 105,
+        "customer_invoice_id": 9001,
+        "sales_order_id": 301
+      },
+      {
+        "allocation_key": "ALLOC-002",
+        "allocation_type": "internal_cost",
+        "amount": "60000.000000",
+        "percentage": "60",
+        "currency": "TRY"
+      }
+    ]
+  }
+}
+```
+
+JSON floating-point values are rejected for allocation Decimal fields. Clients should send monetary and percentage values as strings. `company_id` and `decided_by` are never accepted from the client payload.
+
 Not implemented in this slice:
 
 - Odoo UI
@@ -191,7 +233,7 @@ Not implemented in this slice:
 - workflow execution
 - ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows
-- business context allocation persistence, API submission, Odoo synchronization, or acknowledgement
+- business context allocation execution, Odoo synchronization, or acknowledgement
 - AI recommendations
 - attachments or raw XML display
 
@@ -240,12 +282,12 @@ The future Odoo Workbench UI uses the proposed Studio model `x_ipp_import_review
 Field ownership is explicit:
 
 - Hub-owned fields: review identity, company identity, invoice display data, review reasons, warnings, Hub status/version, synchronization metadata, and acknowledgement result.
-- Odoo-user-owned fields: explicit decision, selected workflow, selected partner, line resolutions, tax resolutions, business context, comment, and decision-ready flag.
+- Odoo-user-owned fields: explicit decision, selected workflow, selected partner, line resolutions, tax resolutions, business context allocation candidates, comment, and decision-ready flag.
 - System-derived Odoo fields: Odoo user id and decision timestamp when safely available.
 
 Odoo users must not edit Hub-owned identity or version fields. The Hub must not silently overwrite submitted user-decision fields. A decision candidate is processed only when `x_ipp_decision_ready` is explicitly true.
 
-Future Business Context Allocation child lines will allow one supplier invoice to be split across multiple Sales Orders, commercial customers, recharge recipients, target companies, projects, and internal costs. Candidate allocation lines from Odoo are untrusted until Hub validation. The Hub must verify company isolation, selected ERP IDs, allocation totals, expected version, and idempotency before accepting allocations.
+Future Business Context Allocation child lines will allow one supplier invoice to be split across multiple Sales Orders, commercial customers, recharge recipients, target companies, projects, and internal costs. Candidate allocation lines from Odoo are untrusted until Hub validation. The current application contract accepts `business_context_allocations` in `OdooWorkbenchDecisionCandidate`, but no Odoo JSON-2 reader or writer is implemented in this PR. A Studio-only Department field remains ignored until explicitly accepted by a future ADR or PR.
 
 See [Odoo Workbench Projection](ODOO_WORKBENCH_PROJECTION.md) and [ADR-0011](adr/ADR-0011-odoo-online-import-workbench-projection.md).
 

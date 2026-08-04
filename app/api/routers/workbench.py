@@ -17,7 +17,8 @@ from app.api.dependencies import (
 from app.api.error_handling import error_response_factory
 from app.api.security import Permission, PermissionDeniedError, require_permission
 from app.application.workbench import (
-    BusinessContextDecision,
+    BusinessContextAllocation,
+    BusinessContextAllocationSet,
     LineResolution,
     ReviewDecisionAcknowledgement,
     ReviewDecisionCommand,
@@ -43,7 +44,8 @@ from app.application.workbench.exceptions import (
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.schemas.workbench import (
     ApiEnvelope,
-    BusinessContextRequest,
+    BusinessContextAllocationRequest,
+    BusinessContextAllocationSetRequest,
     LineResolutionRequest,
     ManualReviewReasonResponse,
     ReviewDecisionAcknowledgementEnvelope,
@@ -193,7 +195,7 @@ def _decision_command(
         selected_partner_id=request.selected_partner_id,
         line_resolutions=tuple(_line_resolution(value) for value in request.line_resolutions),
         tax_resolutions=tuple(_tax_resolution(value) for value in request.tax_resolutions),
-        business_context=_business_context(request.business_context),
+        business_context_allocations=_business_context_allocations(request.business_context_allocations),
         comment=request.comment,
     )
 
@@ -210,16 +212,41 @@ def _tax_resolution(value: TaxResolutionRequest) -> TaxResolution:
     )
 
 
-def _business_context(value: BusinessContextRequest | None) -> BusinessContextDecision | None:
+def _business_context_allocations(
+    value: BusinessContextAllocationSetRequest | None,
+) -> BusinessContextAllocationSet | None:
     if value is None:
         return None
-    return BusinessContextDecision(
+    return BusinessContextAllocationSet(
+        allocations=tuple(_business_context_allocation(allocation) for allocation in value.allocations),
+        completeness=value.completeness,
+        invoice_total=value.invoice_total,
+        currency=value.currency,
+    )
+
+
+def _business_context_allocation(value: BusinessContextAllocationRequest) -> BusinessContextAllocation:
+    return BusinessContextAllocation(
+        allocation_key=value.allocation_key,
+        allocation_type=value.allocation_type,
+        source_line_number=value.source_line_number,
+        description=value.description,
+        amount=value.amount,
+        percentage=value.percentage,
+        currency=value.currency,
+        customer_id=value.customer_id,
+        recharge_partner_id=value.recharge_partner_id,
+        customer_invoice_id=value.customer_invoice_id,
+        target_company_id=value.target_company_id,
         opportunity_id=value.opportunity_id,
         sales_order_id=value.sales_order_id,
+        sales_order_line_id=value.sales_order_line_id,
         proposal_scenario_id=value.proposal_scenario_id,
         purchase_order_id=value.purchase_order_id,
         project_id=value.project_id,
         analytic_account_id=value.analytic_account_id,
+        subscription_id=value.subscription_id,
+        internal_note=value.internal_note,
     )
 
 

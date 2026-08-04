@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from app.application.workbench import (
+    AllocationCompleteness,
+    BusinessContextAllocation,
+    BusinessContextAllocationSet,
+    BusinessContextAllocationType,
     BusinessContextDecision,
     LineResolution,
     ReviewDecisionAcknowledgement,
@@ -139,6 +143,8 @@ def test_dismiss_rejects_incompatible_workflow_specific_fields() -> None:
         _command(decision=ReviewDecisionType.DISMISS, selected_workflow=WorkflowType.VENDOR_BILL)
     with pytest.raises(WorkbenchContractError):
         _command(decision=ReviewDecisionType.DISMISS, selected_partner_id=10)
+    with pytest.raises(WorkbenchContractError):
+        _command(decision=ReviewDecisionType.DISMISS, business_context_allocations=_allocation_set())
 
 
 def test_duplicate_line_resolutions_are_rejected() -> None:
@@ -301,7 +307,7 @@ def _command(
     selected_partner_id: int | None = None,
     line_resolutions: tuple[LineResolution, ...] = (),
     tax_resolutions: tuple[TaxResolution, ...] = (),
-    business_context: BusinessContextDecision | None = None,
+    business_context_allocations: BusinessContextAllocationSet | None = None,
     comment: str | None = None,
     decided_by: str = "user-1",
     idempotency_key: str = "review-1:v1:user-1",
@@ -315,10 +321,27 @@ def _command(
         selected_partner_id=selected_partner_id,
         line_resolutions=line_resolutions,
         tax_resolutions=tax_resolutions,
-        business_context=business_context,
+        business_context_allocations=business_context_allocations,
         comment=comment,
         decided_by=decided_by,
         idempotency_key=idempotency_key,
+    )
+
+
+def _allocation_set() -> BusinessContextAllocationSet:
+    return BusinessContextAllocationSet(
+        allocations=(
+            BusinessContextAllocation(
+                allocation_key="ALLOC-001",
+                allocation_type=BusinessContextAllocationType.INTERNAL_COST,
+                amount=Decimal("100.00"),
+                percentage=Decimal("100"),
+                currency="TRY",
+            ),
+        ),
+        completeness=AllocationCompleteness.COMPLETE,
+        invoice_total=Decimal("100.00"),
+        currency="TRY",
     )
 
 
