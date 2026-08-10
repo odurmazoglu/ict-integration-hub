@@ -6,6 +6,7 @@ from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 
 __all__ = [
     "ConnectorEvent",
@@ -16,4 +17,7 @@ __all__ = [
     "UyumsoftSyncRun",
     "WorkbenchReviewDecision",
     "WorkbenchReviewItem",
+    "WorkflowExecution",
+    "WorkflowExecutionEvent",
+    "WorkflowExecutionStep",
 ]

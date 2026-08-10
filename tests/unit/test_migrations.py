@@ -7,6 +7,7 @@ from alembic import command
 from app.core.config import get_settings
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
+from app.models.workflow_execution import WorkflowExecution
 
 
 def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
@@ -26,6 +27,9 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "odoo_draft_invoices" in inspector.get_table_names()
     assert "workbench_review_items" in inspector.get_table_names()
     assert "workbench_review_decisions" in inspector.get_table_names()
+    assert "workflow_executions" in inspector.get_table_names()
+    assert "workflow_execution_steps" in inspector.get_table_names()
+    assert "workflow_execution_events" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -137,6 +141,73 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     }.issubset(decision_unique_constraints)
     assert WorkbenchReviewDecision.__table__.c.review_version_before.nullable is False
     assert WorkbenchReviewDecision.__table__.c.business_context_allocations.nullable is True
+    execution_columns = {column["name"] for column in inspector.get_columns("workflow_executions")}
+    assert {
+        "execution_id",
+        "review_id",
+        "decision_version",
+        "company_id",
+        "state",
+        "mode",
+        "idempotency_key",
+        "plan_signature",
+        "plan",
+        "checkpoint",
+        "retry_policy",
+        "failure",
+        "current_step_key",
+        "created_at",
+        "updated_at",
+    }.issubset(execution_columns)
+    execution_indexes = {index["name"] for index in inspector.get_indexes("workflow_executions")}
+    assert {
+        "ix_workflow_executions_review_id",
+        "ix_workflow_executions_company_id",
+        "ix_workflow_executions_state",
+        "ix_workflow_executions_company_review",
+    }.issubset(execution_indexes)
+    execution_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("workflow_executions")
+    }
+    assert {
+        "uq_workflow_executions_execution_id",
+        "uq_workflow_executions_company_idempotency_key",
+    }.issubset(execution_unique_constraints)
+    assert WorkflowExecution.__table__.c.checkpoint.nullable is False
+    step_columns = {column["name"] for column in inspector.get_columns("workflow_execution_steps")}
+    assert {
+        "execution_id",
+        "step_key",
+        "step_type",
+        "sequence",
+        "state",
+        "allocation_keys",
+        "retry_count",
+        "last_result",
+    }.issubset(step_columns)
+    event_columns = {column["name"] for column in inspector.get_columns("workflow_execution_events")}
+    assert {
+        "event_id",
+        "execution_id",
+        "sequence",
+        "event_type",
+        "state",
+        "step_key",
+        "step_type",
+        "data",
+        "occurred_at",
+    }.issubset(event_columns)
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workflow_executions" not in inspector.get_table_names()
+    assert "workflow_execution_steps" not in inspector.get_table_names()
+    assert "workflow_execution_events" not in inspector.get_table_names()
+    assert "workbench_review_decisions" in inspector.get_table_names()
+    decision_columns_after_runtime_downgrade = {
+        column["name"] for column in inspector.get_columns("workbench_review_decisions")
+    }
+    assert "business_context_allocations" in decision_columns_after_runtime_downgrade
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -167,4 +238,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "odoo_draft_invoices" in inspector.get_table_names()
     assert "workbench_review_items" in inspector.get_table_names()
     assert "workbench_review_decisions" in inspector.get_table_names()
+    assert "workflow_executions" in inspector.get_table_names()
+    assert "workflow_execution_steps" in inspector.get_table_names()
+    assert "workflow_execution_events" in inspector.get_table_names()
     get_settings.cache_clear()
