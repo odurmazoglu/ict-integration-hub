@@ -415,6 +415,7 @@ def _plan_to_data(plan: ExecutionPlan) -> dict[str, Any]:
                 "sequence": step.sequence,
                 "dry_run_supported": step.dry_run_supported,
                 "execute_supported": step.execute_supported,
+                "writer_required": step.writer_required,
                 "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
             }
             for step in plan.steps
@@ -437,6 +438,7 @@ def _plan_from_data(data: dict[str, Any]) -> ExecutionPlan:
                 sequence=int(step["sequence"]),
                 dry_run_supported=bool(step["dry_run_supported"]),
                 execute_supported=bool(step["execute_supported"]),
+                writer_required=bool(step.get("writer_required", False)),
                 allocations=tuple(_allocation_from_data(allocation) for allocation in step.get("allocations", ())),
             )
             for step in data["steps"]
@@ -661,6 +663,7 @@ def _plan_signature(plan: ExecutionPlan) -> str:
                 "allocation_keys": list(step.allocation_keys),
                 "sequence": step.sequence,
                 "execute_supported": step.execute_supported,
+                "writer_required": step.writer_required,
                 "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
             }
             for step in plan.steps

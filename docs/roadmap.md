@@ -30,6 +30,7 @@
 - Execution Source Evidence Capture for atomically persisting immutable Vendor Bill execution evidence with accepted Workbench decisions
 - Vendor Bill Production Wiring and Recovery Verification for opt-in Draft Vendor Bill execution through the durable runtime, writer gates, deterministic idempotency, and Odoo duplicate lookup
 - Customer Recharge Existing Invoice Strategy for no-write association of recharge allocations to validated existing outgoing customer invoice artifacts
+- Customer Invoice Creation Strategy for opt-in Draft Customer Invoice creation from `CUSTOMER_RECHARGE` allocations without `customer_invoice_id`
 
 ## Next Milestones
 
@@ -122,6 +123,7 @@
 
 - scheduled collection
 - retry execution workers
+- customer invoice posting, payment registration, reconciliation, and settlement
 - recoverable import states
 - idempotent replay
 

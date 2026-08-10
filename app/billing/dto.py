@@ -25,3 +25,25 @@ class VendorBill:
     reference: str | None
     invoice_lines: tuple[VendorBillLine, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerInvoiceLine:
+    product_id: int
+    quantity: Decimal
+    unit_price: Decimal
+    tax_ids: tuple[int, ...] = field(default_factory=tuple)
+    description: str | None = None
+    source_allocation_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerInvoice:
+    company_id: int
+    customer_id: int
+    invoice_date: date
+    currency: str
+    external_uuid: str | None
+    reference: str
+    invoice_lines: tuple[CustomerInvoiceLine, ...] = field(default_factory=tuple)
+    notes: tuple[str, ...] = field(default_factory=tuple)

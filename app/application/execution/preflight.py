@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -24,6 +25,7 @@ class ExecutionPreflightPolicy:
 
     production_execution_enabled: bool = False
     real_write_gate: RealWriteGate | None = None
+    real_write_gates: Mapping[ExecutionStepType, RealWriteGate] | None = None
     writer_step_types: tuple[ExecutionStepType, ...] = (ExecutionStepType.VENDOR_BILL,)
 
     def ensure_execute_allowed(self, *, plan: ExecutionPlan, approval: ExecutionApproval | None) -> None:
@@ -36,5 +38,17 @@ class ExecutionPreflightPolicy:
         for step in plan.steps:
             if not step.execute_supported:
                 raise ExecutionUnsupportedStepError("Execution plan contains a step that is not execute-capable.")
-        if self.real_write_gate is not None and any(step.step_type in self.writer_step_types for step in plan.steps):
-            self.real_write_gate.ensure_real_write_allowed(approved_by=approval.approved_by)
+        called_gate_ids: set[int] = set()
+        for step in plan.steps:
+            if not step.writer_required and step.step_type not in self.writer_step_types:
+                continue
+            gate = self._gate_for(step.step_type)
+            if gate is None or id(gate) in called_gate_ids:
+                continue
+            gate.ensure_real_write_allowed(approved_by=approval.approved_by)
+            called_gate_ids.add(id(gate))
+
+    def _gate_for(self, step_type: ExecutionStepType) -> RealWriteGate | None:
+        if self.real_write_gates is not None:
+            return self.real_write_gates.get(step_type)
+        return self.real_write_gate

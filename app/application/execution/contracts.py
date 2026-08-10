@@ -105,6 +105,7 @@ class ExecutionStep(ApplicationDTO):
     sequence: int
     dry_run_supported: bool = True
     execute_supported: bool = False
+    writer_required: bool = False
     allocations: tuple[BusinessContextAllocation, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
@@ -120,6 +121,7 @@ class ExecutionStep(ApplicationDTO):
         object.__setattr__(self, "allocation_keys", allocation_keys)
         _require_bool(self.dry_run_supported, "dry_run_supported must be boolean.")
         _require_bool(self.execute_supported, "execute_supported must be boolean.")
+        _require_bool(self.writer_required, "writer_required must be boolean.")
         allocations = tuple(self.allocations)
         for allocation in allocations:
             if not isinstance(allocation, BusinessContextAllocation):

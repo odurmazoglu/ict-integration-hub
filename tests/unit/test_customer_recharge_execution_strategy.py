@@ -140,15 +140,33 @@ def test_execute_without_customer_invoice_id_requires_future_creation_strategy()
         )
 
 
-def test_planner_marks_customer_recharge_execute_capable_only_for_existing_invoice_mode() -> None:
+def test_planner_marks_customer_recharge_creation_as_writer_backed_execute_step() -> None:
     planner = ExecutionPlanner()
 
     valid = planner.plan(_request(allocations=_allocation_set(_allocation("A", customer_invoice_id=7001))))
     missing = planner.plan(_request(allocations=_allocation_set(_allocation("A", customer_invoice_id=None))))
 
     assert _step(valid, ExecutionStepType.CUSTOMER_RECHARGE).execute_supported is True
-    assert _step(missing, ExecutionStepType.CUSTOMER_RECHARGE).execute_supported is False
+    assert _step(valid, ExecutionStepType.CUSTOMER_RECHARGE).writer_required is False
+    assert _step(missing, ExecutionStepType.CUSTOMER_RECHARGE).execute_supported is True
+    assert _step(missing, ExecutionStepType.CUSTOMER_RECHARGE).writer_required is True
     assert _step(valid, ExecutionStepType.CUSTOMER_RECHARGE).allocations[0].customer_invoice_id == 7001
+
+
+def test_planner_keeps_multiple_customer_invoice_creation_allocations_as_separate_steps() -> None:
+    plan = ExecutionPlanner().plan(
+        _request(
+            allocations=_allocation_set(
+                _allocation("A", customer_invoice_id=None),
+                _allocation("B", customer_invoice_id=None),
+            )
+        )
+    )
+
+    recharge_steps = tuple(step for step in plan.steps if step.step_type is ExecutionStepType.CUSTOMER_RECHARGE)
+
+    assert [step.allocation_keys for step in recharge_steps] == [("A",), ("B",)]
+    assert [step.writer_required for step in recharge_steps] == [True, True]
 
 
 def test_no_write_customer_recharge_execute_does_not_require_writer_gate() -> None:

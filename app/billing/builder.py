@@ -3,8 +3,9 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from app.billing.dto import VendorBill, VendorBillLine
-from app.billing.exceptions import VendorBillBuildError
+from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationType
+from app.billing.dto import CustomerInvoice, CustomerInvoiceLine, VendorBill, VendorBillLine
+from app.billing.exceptions import CustomerInvoiceBuildError, VendorBillBuildError
 from app.billing.validation import VendorBillValidationResult, validation_result
 from app.domain.invoice import InternalInvoice, InvoiceLine
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus, ProductMatchStatus
@@ -38,6 +39,119 @@ class VendorBillBuilder:
             ),
             notes=tuple(note.strip() for note in invoice.header.notes if note and note.strip()),
         )
+
+
+class CustomerInvoiceBuilder:
+    def build(
+        self,
+        *,
+        company_id: int,
+        source_invoice_id: str,
+        invoice: InternalInvoice,
+        product_match: InvoiceProductMatchResult,
+        tax_match: InvoiceTaxMappingResult,
+        allocations: tuple[BusinessContextAllocation, ...],
+    ) -> CustomerInvoice:
+        validation = validate_customer_invoice_inputs(
+            company_id=company_id,
+            source_invoice_id=source_invoice_id,
+            invoice=invoice,
+            product_match=product_match,
+            tax_match=tax_match,
+            allocations=allocations,
+        )
+        if not validation.is_valid:
+            raise CustomerInvoiceBuildError(validation.errors)
+
+        assert invoice.header.issue_date is not None
+        assert invoice.header.currency_code is not None
+        customer_id = allocations[0].recharge_partner_id
+        assert customer_id is not None
+        product_by_line = _product_results_by_line(product_match)
+        tax_ids_by_line = _tax_ids_by_line(tax_match)
+        invoice_lines = tuple(
+            _customer_invoice_line(
+                allocation=allocation,
+                source_line=_source_line_for_allocation(invoice=invoice, allocation=allocation),
+                product_by_line=product_by_line,
+                tax_ids_by_line=tax_ids_by_line,
+            )
+            for allocation in allocations
+        )
+        return CustomerInvoice(
+            company_id=company_id,
+            customer_id=customer_id,
+            invoice_date=invoice.header.issue_date,
+            currency=(allocations[0].currency or invoice.header.currency_code).strip(),
+            external_uuid=invoice.header.invoice_uuid.strip() or invoice.header.ettn,
+            reference=_customer_invoice_reference(source_invoice_id=source_invoice_id, allocations=allocations),
+            invoice_lines=invoice_lines,
+            notes=(f"Source invoice: {source_invoice_id}",),
+        )
+
+
+def validate_customer_invoice_inputs(
+    *,
+    company_id: object,
+    source_invoice_id: object,
+    invoice: object,
+    product_match: object,
+    tax_match: object,
+    allocations: object,
+) -> VendorBillValidationResult:
+    errors: list[str] = []
+    if type(company_id) is not int or company_id <= 0:
+        errors.append("company_id must be a positive integer.")
+    if not isinstance(source_invoice_id, str) or not source_invoice_id.strip():
+        errors.append("source_invoice_id is required.")
+    if not isinstance(invoice, InternalInvoice):
+        return validation_result(errors + ["InternalInvoice DTO is required."])
+    if not isinstance(product_match, InvoiceProductMatchResult):
+        return validation_result(errors + ["InvoiceProductMatchResult DTO is required."])
+    if not isinstance(tax_match, InvoiceTaxMappingResult):
+        return validation_result(errors + ["InvoiceTaxMappingResult DTO is required."])
+    if not isinstance(allocations, tuple) or not allocations:
+        return validation_result(errors + ["Customer invoice creation requires allocation evidence."])
+
+    typed_allocations: tuple[BusinessContextAllocation, ...] = allocations
+    if not all(isinstance(allocation, BusinessContextAllocation) for allocation in typed_allocations):
+        return validation_result(errors + ["allocations must contain canonical BusinessContextAllocation values."])
+    if any(
+        allocation.allocation_type is not BusinessContextAllocationType.CUSTOMER_RECHARGE
+        for allocation in typed_allocations
+    ):
+        errors.append("Customer Invoice creation only supports CUSTOMER_RECHARGE allocations.")
+    if any(allocation.customer_invoice_id is not None for allocation in typed_allocations):
+        errors.append("Customer Invoice creation requires allocations without an existing customer_invoice_id.")
+    customer_ids = {
+        allocation.recharge_partner_id for allocation in typed_allocations if allocation.recharge_partner_id is not None
+    }
+    if len(customer_ids) != 1:
+        errors.append("Customer Invoice creation requires exactly one recharge_partner_id.")
+    if invoice.header.issue_date is None:
+        errors.append("Invoice date is required.")
+    if invoice.header.currency_code is None or not invoice.header.currency_code.strip():
+        errors.append("Invoice currency is required.")
+    if not invoice.lines:
+        errors.append("At least one source invoice line is required.")
+
+    product_by_line, product_errors = _validated_product_results(product_match)
+    errors.extend(product_errors)
+    tax_by_line, tax_errors = _validated_tax_results(tax_match)
+    errors.extend(tax_errors)
+    for allocation in typed_allocations:
+        source_line = _source_line_for_allocation(invoice=invoice, allocation=allocation)
+        if source_line is None:
+            errors.append(f"Allocation {allocation.allocation_key} cannot be mapped to an authoritative source line.")
+            continue
+        if source_line.line_number not in product_by_line:
+            errors.append(f"Allocation {allocation.allocation_key} product must be matched.")
+        for tax_index, _tax in enumerate(source_line.taxes):
+            if (source_line.line_number, tax_index) not in tax_by_line:
+                errors.append(f"Allocation {allocation.allocation_key} taxes must be matched.")
+        if allocation.amount is None and allocation.percentage is None:
+            errors.append(f"Allocation {allocation.allocation_key} requires amount or percentage.")
+    return validation_result(errors)
 
 
 def validate_vendor_bill_inputs(
@@ -108,6 +222,27 @@ def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int | 
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def to_odoo_customer_invoice_payload(
+    customer_invoice: CustomerInvoice,
+    *,
+    currency_id: int | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "move_type": "out_invoice",
+        "company_id": customer_invoice.company_id,
+        "partner_id": customer_invoice.customer_id,
+        "invoice_date": customer_invoice.invoice_date.isoformat(),
+        "ref": customer_invoice.reference,
+        "currency": customer_invoice.currency,
+        "invoice_line_ids": tuple((0, 0, _customer_line_payload(line)) for line in customer_invoice.invoice_lines),
+    }
+    if currency_id is not None:
+        payload["currency_id"] = currency_id
+    if customer_invoice.notes:
+        payload["narration"] = "\n".join(customer_invoice.notes)
+    return {key: value for key, value in payload.items() if value is not None}
+
+
 def _line_payload(line: VendorBillLine) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "product_id": line.product_id,
@@ -119,6 +254,46 @@ def _line_payload(line: VendorBillLine) -> dict[str, Any]:
     if line.uom is not None:
         payload["product_uom_id"] = line.uom
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _customer_line_payload(line: CustomerInvoiceLine) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "product_id": line.product_id,
+            "quantity": _decimal_text(line.quantity),
+            "price_unit": _decimal_text(line.unit_price),
+            "tax_ids": ((6, 0, line.tax_ids),),
+            "name": line.description,
+        }.items()
+        if value is not None
+    }
+
+
+def _customer_invoice_line(
+    *,
+    allocation: BusinessContextAllocation,
+    source_line: InvoiceLine | None,
+    product_by_line: dict[str | None, Any],
+    tax_ids_by_line: dict[tuple[str | None, int], int],
+) -> CustomerInvoiceLine:
+    assert source_line is not None
+    product_result = product_by_line[source_line.line_number]
+    assert product_result.product_id is not None
+    tax_ids = tuple(
+        tax_ids_by_line[(source_line.line_number, tax_index)] for tax_index, _tax in enumerate(source_line.taxes)
+    )
+    description = (
+        allocation.description or source_line.description or f"Recharge allocation {allocation.allocation_key}"
+    )
+    return CustomerInvoiceLine(
+        product_id=product_result.product_id,
+        quantity=Decimal("1"),
+        unit_price=_allocation_amount(allocation=allocation, source_line=source_line),
+        tax_ids=tax_ids,
+        description=description,
+        source_allocation_key=allocation.allocation_key,
+    )
 
 
 def _vendor_bill_line(
@@ -138,6 +313,43 @@ def _vendor_bill_line(
         tax_ids=tax_ids,
         description=line.description,
     )
+
+
+def _source_line_for_allocation(
+    *,
+    invoice: InternalInvoice,
+    allocation: BusinessContextAllocation,
+) -> InvoiceLine | None:
+    if allocation.source_line_number is not None:
+        for line in invoice.lines:
+            if line.line_number == allocation.source_line_number:
+                return line
+        return None
+    if len(invoice.lines) == 1:
+        return invoice.lines[0]
+    return None
+
+
+def _allocation_amount(*, allocation: BusinessContextAllocation, source_line: InvoiceLine) -> Decimal:
+    if allocation.amount is not None:
+        return allocation.amount
+    assert allocation.percentage is not None
+    if source_line.line_extension_amount is not None:
+        return source_line.line_extension_amount * allocation.percentage / Decimal("100")
+    if source_line.quantity is not None and source_line.unit_price is not None:
+        return source_line.quantity * source_line.unit_price * allocation.percentage / Decimal("100")
+    raise CustomerInvoiceBuildError(
+        (f"Allocation {allocation.allocation_key} percentage cannot be priced losslessly.",)
+    )
+
+
+def _customer_invoice_reference(
+    *,
+    source_invoice_id: str,
+    allocations: tuple[BusinessContextAllocation, ...],
+) -> str:
+    allocation_part = "+".join(allocation.allocation_key for allocation in allocations)
+    return f"Recharge {source_invoice_id}:{allocation_part}"
 
 
 def _validated_product_results(

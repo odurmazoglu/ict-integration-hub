@@ -33,3 +33,35 @@ class VendorBillWriteDuplicateError(VendorBillWriteError):
 
 class VendorBillWriteUnexpectedErpError(VendorBillWriteError):
     error_category = "unexpected_erp_error"
+
+
+class CustomerInvoiceWriteError(ApplicationError):
+    error_category = "customer_invoice_write_error"
+
+
+class CustomerInvoiceWriteAuthenticationError(CustomerInvoiceWriteError):
+    error_category = "authentication_failure"
+
+
+class CustomerInvoiceWriteAuthorizationError(CustomerInvoiceWriteError):
+    error_category = "authorization_failure"
+
+
+class CustomerInvoiceWriteValidationError(CustomerInvoiceWriteError):
+    error_category = "validation_failure"
+
+
+class CustomerInvoiceWriteSafetyGateError(CustomerInvoiceWriteValidationError):
+    error_category = "production_safety_gate_failure"
+
+
+class CustomerInvoiceWriteTransportError(CustomerInvoiceWriteError):
+    error_category = "transport_failure"
+
+
+class CustomerInvoiceWriteDuplicateError(CustomerInvoiceWriteError):
+    error_category = "duplicate_detection_failure"
+
+
+class CustomerInvoiceWriteUnexpectedErpError(CustomerInvoiceWriteError):
+    error_category = "unexpected_erp_error"
