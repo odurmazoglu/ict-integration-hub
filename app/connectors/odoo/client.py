@@ -87,7 +87,7 @@ class OdooJson2Client:
         limit: int = 20,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        if model not in READ_ONLY_MODELS:
+        if not _is_read_only_model_allowed(model):
             raise ConnectorError("Odoo read-only model is not allowed.")
         result = await self._post_json(
             f"/json/2/{model}/search_read",
@@ -137,3 +137,7 @@ class OdooJson2Client:
             raise ConnectorError("Odoo request failed.") from exc
 
         return response.json()
+
+
+def _is_read_only_model_allowed(model: str) -> bool:
+    return model in READ_ONLY_MODELS or model.startswith(("x_", "x_studio_"))

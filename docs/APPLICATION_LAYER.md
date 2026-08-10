@@ -336,7 +336,8 @@ Current contracts:
 - `OdooWorkbenchDecisionCandidate`: candidate decision read from the future Odoo Studio projection before Hub acceptance
 - `ProjectionPublishResult`: immutable result for future projection publish and acknowledgement operations
 - `WorkbenchProjectionPublisher`: port for future projection publishing and acknowledgement writes
-- `WorkbenchDecisionCandidateReader`: port for future ready-decision reads from an ERP UI projection surface
+- `WorkbenchDecisionCandidateReader`: port for ready-decision reads from an ERP UI projection surface
+- `OdooWorkbenchDecisionCandidateReader`: read-only Odoo JSON-2 adapter for configured Studio projection candidate and allocation child models
 
 The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation, queue/detail reads, and explicit review decision submission. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, scopes detail reads by `review_id` plus `company_id`, and records submitted decisions in append-only audit rows.
 
@@ -365,7 +366,7 @@ Decision idempotency is scoped by `(company_id, idempotency_key)`. An identical 
 
 The current API adapter exposes authenticated FastAPI routes for listing review items, retrieving one review item, and submitting explicit user decisions. These routes only construct existing application queries and commands from trusted `RequestContext` identity and HTTP boundary schemas. They do not execute workflows, write ERP records, create Vendor Bills, create rules, call AI, or perform fuzzy matching.
 
-The Odoo Online projection contracts exist because Odoo 19 Online cannot install custom Python modules. A future adapter may publish `WorkbenchProjection` values to the dedicated Odoo Studio model `x_ipp_import_review`, read `OdooWorkbenchDecisionCandidate` values where the user explicitly set `decision_ready`, and acknowledge Hub processing results. That future adapter must live outside the Application layer and behind `WorkbenchProjectionPublisher` and `WorkbenchDecisionCandidateReader`. This slice does not implement JSON-2 calls, Odoo writes, Odoo views, scheduler, polling, decision ingestion, acknowledgement projection, or workflow execution.
+The Odoo Online projection contracts exist because Odoo 19 Online cannot install custom Python modules. The current Odoo adapter implements read-only candidate ingestion behind `WorkbenchDecisionCandidateReader`: it reads a configured parent Studio projection model by exact `review_id` and `company_id`, reads allocation child rows by parent Odoo record id, and maps them into immutable `OdooWorkbenchDecisionCandidate` and `BusinessContextAllocationSet` values. It treats decision-ready `false` as no ready candidate, rejects malformed readiness as data error, detects duplicate parent records with `limit=2`, parses Decimal values without float arithmetic, and requires allocation completeness from an explicit mapped field or configured fixed value. It does not publish projections, acknowledge Hub processing results, persist accepted decisions, execute workflows, or write Odoo records. Future projection publishing and acknowledgement writes must remain behind `WorkbenchProjectionPublisher`.
 
 The API response envelope is consistent across Workbench routes:
 

@@ -67,3 +67,27 @@ class ReviewDecisionDataIntegrityError(ReviewDecisionError):
     """Safe error raised when persisted decision data cannot hydrate into contracts."""
 
     error_category = "review_decision_data_integrity_error"
+
+
+class WorkbenchCandidateReadError(ApplicationError):
+    """Safe base error for reading Workbench decision candidates from an ERP UI projection."""
+
+    error_category = "workbench_candidate_read_error"
+
+
+class WorkbenchCandidateNotFoundError(WorkbenchCandidateReadError):
+    """Safe error raised when a ready Workbench decision candidate cannot be found."""
+
+    error_category = "workbench_candidate_not_found"
+
+
+class WorkbenchCandidateDataError(WorkbenchCandidateReadError):
+    """Safe error raised when candidate projection data cannot hydrate into contracts."""
+
+    error_category = "workbench_candidate_data_error"
+
+
+class WorkbenchCandidateAmbiguityError(WorkbenchCandidateReadError):
+    """Safe error raised when more than one matching candidate projection exists."""
+
+    error_category = "workbench_candidate_ambiguity"
