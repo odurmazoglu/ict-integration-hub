@@ -83,6 +83,14 @@ Current foundation contracts:
 - `OdooWorkbenchSubmissionStatus`
 - `WorkbenchErpReferenceValidator`
 - focused Workbench ERP reference DTOs and read-only repository ports
+- `ExecutionRequest`
+- `ExecutionPlan`
+- `ExecutionStep`
+- `ExecutionResult`
+- `ExecutionPlanner`
+- `ExecutionCoordinator`
+- `ExecutionStrategyResolver`
+- `ExecutionStateRepository`
 - `ReviewQueueReader`
 - `ReviewDecisionWriter`
 - `ListReviewQueueUseCase`
@@ -159,6 +167,18 @@ Policy:
 - Opportunities must exist, match requested company when company is set, and match `customer_id` when both carry partner IDs.
 - Analytic Accounts may be shared when `company_id` is empty; explicit different companies are rejected.
 - Non-null Project and Subscription references fail safely as unsupported until exact model/repository support is introduced.
+
+## Workflow Execution Foundation
+
+Workflow execution starts from an accepted Hub Workbench decision, never from a raw Odoo candidate. The foundation introduces immutable execution identity, execution plans, execution-step results, strategy contracts, deterministic idempotency, and a future persistence port.
+
+The execution foundation is separate from import-time `DecisionEngine` strategy selection. `WorkflowType` remains the review-level decision vocabulary; `BusinessContextAllocationType` maps to per-allocation execution purposes.
+
+The planner performs no repository calls, provider calls, persistence, or writes. It creates stable ordered `ExecutionStep` values and adds a separate `VENDOR_BILL` step when `selected_workflow == WorkflowType.VENDOR_BILL`. Real `VendorBillWriter` invocation is deferred.
+
+`ExecutionCoordinator` runs steps sequentially through execution-specific strategies. `DRY_RUN` mode collects all step results. `EXECUTE` mode is fail-fast, but foundation strategies currently return safe unsupported results instead of performing writes.
+
+Execution persistence is represented by `ExecutionStateRepository`; SQLAlchemy persistence and migrations are deferred to a focused later PR.
 
 ## ImportInvoiceUseCase
 

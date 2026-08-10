@@ -391,6 +391,8 @@ ERP reference validation runs before Hub decision evidence is accepted. It prove
 
 This slice does not write acknowledgement fields to Odoo, clear readiness, update projection version, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, perform profitability posting, infer allocations, or use AI/fuzzy matching. Hub-to-Odoo acknowledgement projection remains a future focused slice.
 
+Accepted decisions may now be planned for workflow execution through the no-write execution foundation. Planning starts only after Hub decision acceptance and ERP reference validation. It produces deterministic dry-run execution plans and does not invoke writer ports or acknowledge Odoo projections.
+
 ## ERP Reference Validation Policy
 
 Validation is read-only and deterministic:

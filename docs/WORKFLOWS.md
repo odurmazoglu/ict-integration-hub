@@ -195,6 +195,28 @@ flowchart TB
     VendorBillWriter --> Odoo
 ```
 
+## Workflow Execution Foundation
+
+Accepted Workbench decisions can now be transformed into immutable execution plans without ERP writes:
+
+```text
+Accepted Workbench Decision
+  -> ExecutionRequest
+  -> ExecutionPlanner
+  -> ExecutionPlan
+  -> ExecutionStrategyResolver
+  -> ExecutionCoordinator
+  -> ExecutionResult
+```
+
+This foundation is distinct from Rule Engine workflow selection and from `DecisionEngine`. It supports composite plans for heterogeneous `BusinessContextAllocationSet` rows. Each allocation purpose maps to an explicit `ExecutionStepType`, and `WorkflowType.VENDOR_BILL` creates a separate `VENDOR_BILL` planning step.
+
+Execution steps run sequentially. `DRY_RUN` mode uses collect-all failure behavior. `EXECUTE` mode is fail-fast, but current foundation strategies return safe unsupported results and do not call writer ports.
+
+No Vendor Bill, Customer Invoice, RFQ, Purchase Order, expense, asset, subscription, analytic distribution, profitability, or projection acknowledgement is created in this slice.
+
+See [Workflow Execution](WORKFLOW_EXECUTION.md).
+
 ## Review States
 
 Workflow outputs should distinguish:
