@@ -75,6 +75,7 @@ Current implemented capabilities:
 - End-to-end no-write accepted decision execution integration that reads canonical Hub decision evidence, creates or loads the durable runtime, executes all dry-run steps, and records a completed runtime without ERP/provider mutation.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Production-capable `VENDOR_BILL` execution strategy that builds through `VendorBillBuilder`, writes only through `VendorBillWriter`, requires explicit execution approval for `EXECUTE`, and rejects heterogeneous executable plans before runtime creation.
+- SQLAlchemy execution source invoice reader that loads version-pinned persisted Hub evidence for Vendor Bill execution without Odoo/Uyumsoft rereads or rematching.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.
@@ -89,6 +90,7 @@ Not implemented or not allowed by default:
 - Odoo Studio projection publishing, acknowledgement writes, model/view setup, or workflow execution.
 - Allocation execution, customer invoice creation, recharge execution, or profitability posting.
 - `EXECUTE` mode for non-`VENDOR_BILL` execution steps, heterogeneous executable plans, background execution workers, retry scheduling, and ERP posting/payment/reconciliation.
+- Live execution source reconstruction from current ERP/provider state or regenerated matching results.
 - AI-driven automatic decisions.
 - Database schema changes without Alembic migrations and tests.
 
