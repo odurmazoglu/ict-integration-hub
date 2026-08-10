@@ -26,6 +26,7 @@ from app.application.workbench import (
     WorkbenchCandidateNotFoundError,
     WorkbenchCandidateReadError,
     WorkbenchContractError,
+    WorkbenchErpReferenceNotFoundError,
     WorkbenchSubmissionCompanyMismatchError,
     WorkbenchSubmissionOrchestrationError,
 )
@@ -54,9 +55,11 @@ def test_reader_receives_exact_review_and_company_once() -> None:
     reader = RecordingCandidateReader(candidate=_candidate())
     submitter = RecordingDecisionSubmitter()
 
-    SubmitOdooWorkbenchCandidateUseCase(candidate_reader=reader, decision_submitter=submitter).execute(
-        SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7)
-    )
+    SubmitOdooWorkbenchCandidateUseCase(
+        candidate_reader=reader,
+        erp_reference_validator=RecordingValidator(),
+        decision_submitter=submitter,
+    ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
     assert reader.calls == ({"review_id": "review-1", "company_id": 7},)
     assert len(submitter.commands) == 1
@@ -66,9 +69,11 @@ def test_not_ready_or_not_found_returns_result_without_submission() -> None:
     reader = RecordingCandidateReader(error=WorkbenchCandidateNotFoundError("not found"))
     submitter = RecordingDecisionSubmitter()
 
-    result = SubmitOdooWorkbenchCandidateUseCase(candidate_reader=reader, decision_submitter=submitter).execute(
-        SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7)
-    )
+    result = SubmitOdooWorkbenchCandidateUseCase(
+        candidate_reader=reader,
+        erp_reference_validator=RecordingValidator(),
+        decision_submitter=submitter,
+    ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
     assert result.submitted is False
     assert result.review_id == "review-1"
@@ -82,6 +87,7 @@ def test_none_candidate_return_is_treated_as_not_ready_without_submission() -> N
 
     result = SubmitOdooWorkbenchCandidateUseCase(
         candidate_reader=RecordingCandidateReader(candidate=None),
+        erp_reference_validator=RecordingValidator(),
         decision_submitter=submitter,
     ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -96,6 +102,7 @@ def test_reader_safe_failures_propagate_and_never_submit() -> None:
     with pytest.raises(WorkbenchCandidateReadError) as raised:
         SubmitOdooWorkbenchCandidateUseCase(
             candidate_reader=RecordingCandidateReader(error=error),
+            erp_reference_validator=RecordingValidator(),
             decision_submitter=submitter,
         ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -109,6 +116,7 @@ def test_ambiguous_candidate_failure_never_submits() -> None:
     with pytest.raises(WorkbenchCandidateAmbiguityError):
         SubmitOdooWorkbenchCandidateUseCase(
             candidate_reader=RecordingCandidateReader(error=WorkbenchCandidateAmbiguityError("ambiguous")),
+            erp_reference_validator=RecordingValidator(),
             decision_submitter=submitter,
         ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -121,6 +129,7 @@ def test_unexpected_reader_failure_is_wrapped_safely_without_secret_leak() -> No
     with pytest.raises(WorkbenchSubmissionOrchestrationError) as raised:
         SubmitOdooWorkbenchCandidateUseCase(
             candidate_reader=RecordingCandidateReader(error=sensitive),
+            erp_reference_validator=RecordingValidator(),
             decision_submitter=RecordingDecisionSubmitter(),
         ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -140,6 +149,7 @@ def test_candidate_fields_are_mapped_to_review_decision_command_without_rehydrat
 
     SubmitOdooWorkbenchCandidateUseCase(
         candidate_reader=RecordingCandidateReader(candidate=candidate),
+        erp_reference_validator=RecordingValidator(),
         decision_submitter=submitter,
     ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -164,6 +174,7 @@ def test_candidate_company_mismatch_is_rejected_without_override_or_submission()
     with pytest.raises(WorkbenchSubmissionCompanyMismatchError):
         SubmitOdooWorkbenchCandidateUseCase(
             candidate_reader=RecordingCandidateReader(candidate=_candidate(company_id=8)),
+            erp_reference_validator=RecordingValidator(),
             decision_submitter=submitter,
         ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -173,9 +184,11 @@ def test_candidate_company_mismatch_is_rejected_without_override_or_submission()
 def test_valid_candidate_submits_once_and_returns_acknowledgement_unchanged() -> None:
     ack = _acknowledgement()
     submitter = RecordingDecisionSubmitter(result=ack)
+    validator = RecordingValidator()
 
     result = SubmitOdooWorkbenchCandidateUseCase(
         candidate_reader=RecordingCandidateReader(candidate=_candidate()),
+        erp_reference_validator=validator,
         decision_submitter=submitter,
     ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -183,6 +196,34 @@ def test_valid_candidate_submits_once_and_returns_acknowledgement_unchanged() ->
     assert result.status is OdooWorkbenchSubmissionStatus.SUBMITTED
     assert result.acknowledgement is ack
     assert submitter.commands == (submitter.commands[0],)
+    assert validator.calls[0]["requested_company_id"] == 7
+
+
+def test_validation_failure_prevents_submission() -> None:
+    submitter = RecordingDecisionSubmitter()
+    validator = RecordingValidator(error=WorkbenchErpReferenceNotFoundError("Sales Order reference is invalid."))
+
+    with pytest.raises(WorkbenchErpReferenceNotFoundError):
+        SubmitOdooWorkbenchCandidateUseCase(
+            candidate_reader=RecordingCandidateReader(candidate=_candidate()),
+            erp_reference_validator=validator,
+            decision_submitter=submitter,
+        ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
+
+    assert len(validator.calls) == 1
+    assert submitter.commands == ()
+
+
+def test_validation_runs_after_candidate_read_and_before_decision_submission() -> None:
+    events: list[str] = []
+
+    SubmitOdooWorkbenchCandidateUseCase(
+        candidate_reader=RecordingCandidateReader(candidate=_candidate(), events=events),
+        erp_reference_validator=RecordingValidator(events=events),
+        decision_submitter=RecordingDecisionSubmitter(events=events),
+    ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
+
+    assert events == ["read", "validate", "submit"]
 
 
 def test_duplicate_candidate_replay_uses_existing_decision_idempotency_once_per_call() -> None:
@@ -190,6 +231,7 @@ def test_duplicate_candidate_replay_uses_existing_decision_idempotency_once_per_
     submitter = RecordingDecisionSubmitter(result=ack)
     use_case = SubmitOdooWorkbenchCandidateUseCase(
         candidate_reader=RecordingCandidateReader(candidate=_candidate()),
+        erp_reference_validator=RecordingValidator(),
         decision_submitter=submitter,
     )
 
@@ -212,6 +254,7 @@ def test_stale_version_and_idempotency_conflicts_are_not_retried() -> None:
         with pytest.raises(type(error)):
             SubmitOdooWorkbenchCandidateUseCase(
                 candidate_reader=RecordingCandidateReader(candidate=_candidate()),
+                erp_reference_validator=RecordingValidator(),
                 decision_submitter=submitter,
             ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
         assert len(submitter.commands) == 1
@@ -225,6 +268,7 @@ def test_decision_contract_errors_are_not_bypassed_or_retried() -> None:
             candidate_reader=RecordingCandidateReader(
                 candidate=_candidate(decision=ReviewDecisionType.SELECT_WORKFLOW, selected_workflow=None)
             ),
+            erp_reference_validator=RecordingValidator(),
             decision_submitter=submitter,
         ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -242,6 +286,7 @@ def test_valid_dismiss_submits_and_invalid_dismiss_with_allocations_is_rejected_
                 business_context_allocations=None,
             )
         ),
+        erp_reference_validator=RecordingValidator(),
         decision_submitter=submitter,
     ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -257,6 +302,7 @@ def test_valid_dismiss_submits_and_invalid_dismiss_with_allocations_is_rejected_
                     business_context_allocations=_allocation_set(),
                 )
             ),
+            erp_reference_validator=RecordingValidator(),
             decision_submitter=RecordingDecisionSubmitter(),
         ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -284,7 +330,6 @@ def test_orchestrator_source_has_no_infrastructure_writes_workflows_reference_va
         "account.move",
         "action_post",
         "customer_invoice",
-        "reference validation",
         "repository",
         "fuzzy",
         "embedding",
@@ -299,6 +344,7 @@ def test_orchestrator_source_has_no_infrastructure_writes_workflows_reference_va
 def test_submission_result_is_immutable_and_validates_status_consistency() -> None:
     result = SubmitOdooWorkbenchCandidateUseCase(
         candidate_reader=RecordingCandidateReader(error=WorkbenchCandidateNotFoundError("not found")),
+        erp_reference_validator=RecordingValidator(),
         decision_submitter=RecordingDecisionSubmitter(),
     ).execute(SubmitOdooWorkbenchCandidateCommand(review_id="review-1", company_id=7))
 
@@ -318,13 +364,17 @@ class RecordingCandidateReader:
         *,
         candidate: OdooWorkbenchDecisionCandidate | None = None,
         error: Exception | None = None,
+        events: list[str] | None = None,
     ) -> None:
         self.candidate = candidate
         self.error = error
+        self.events = events
         self.calls: tuple[dict[str, object], ...] = ()
 
     def get_ready_decision(self, *, review_id: str, company_id: int) -> OdooWorkbenchDecisionCandidate | None:
         self.calls = (*self.calls, {"review_id": review_id, "company_id": company_id})
+        if self.events is not None:
+            self.events.append("read")
         if self.error is not None:
             raise self.error
         return self.candidate
@@ -339,13 +389,17 @@ class RecordingDecisionSubmitter:
         *,
         result: ReviewDecisionAcknowledgement | None = None,
         error: Exception | None = None,
+        events: list[str] | None = None,
     ) -> None:
         self.result = result
         self.error = error
+        self.events = events
         self.commands: tuple[ReviewDecisionCommand, ...] = ()
 
     def execute(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         self.commands = (*self.commands, command)
+        if self.events is not None:
+            self.events.append("submit")
         if self.error is not None:
             raise self.error
         if self.result is not None:
@@ -356,6 +410,26 @@ class RecordingDecisionSubmitter:
             decision=command.decision,
             selected_workflow=command.selected_workflow,
         )
+
+
+class RecordingValidator:
+    def __init__(self, *, error: Exception | None = None, events: list[str] | None = None) -> None:
+        self.error = error
+        self.events = events
+        self.calls: tuple[dict[str, object], ...] = ()
+
+    def validate(
+        self,
+        candidate: OdooWorkbenchDecisionCandidate,
+        *,
+        requested_company_id: int,
+    ) -> OdooWorkbenchDecisionCandidate:
+        self.calls = (*self.calls, {"candidate": candidate, "requested_company_id": requested_company_id})
+        if self.events is not None:
+            self.events.append("validate")
+        if self.error is not None:
+            raise self.error
+        return candidate
 
 
 def _candidate(**overrides) -> OdooWorkbenchDecisionCandidate:

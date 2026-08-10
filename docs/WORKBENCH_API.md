@@ -67,7 +67,7 @@ The source vendor invoice is already identified by the Workbench review item and
 - `recharge_partner_id`: actual party expected to be invoiced or recharged
 - `customer_invoice_id`: optional existing outgoing customer invoice or refund evidence link
 
-`customer_invoice_id` does not create an invoice, prove recharge completion, grant authorization, or execute profitability posting. Future repository validators must verify record existence, company access, move type, and partner/company relationships before execution.
+`customer_invoice_id` does not create an invoice, prove recharge completion, grant authorization, or execute profitability posting. Odoo Workbench candidate ingestion validates it read-only before Hub decision persistence: the referenced `account.move` must exist, belong to the requested company, use `move_type` `out_invoice` or `out_refund`, and match `recharge_partner_id` when supplied, otherwise `customer_id`.
 
 ## Persistence And Idempotency
 
@@ -77,4 +77,4 @@ Idempotency is scoped by `(company_id, idempotency_key)`. Allocation comparison 
 
 ## Non-Goals
 
-This API does not execute workflows, create Vendor Bills, create customer invoices, perform recharge, validate ERP record existence, synchronize Odoo Studio child lines, call AI, or post profitability.
+This API does not execute workflows, create Vendor Bills, create customer invoices, perform recharge, synchronize Odoo Studio child lines, call AI, or post profitability.

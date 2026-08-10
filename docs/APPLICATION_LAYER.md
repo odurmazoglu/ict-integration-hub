@@ -81,6 +81,8 @@ Current foundation contracts:
 - `SubmitOdooWorkbenchCandidateCommand`
 - `OdooWorkbenchSubmissionResult`
 - `OdooWorkbenchSubmissionStatus`
+- `WorkbenchErpReferenceValidator`
+- focused Workbench ERP reference DTOs and read-only repository ports
 - `ReviewQueueReader`
 - `ReviewDecisionWriter`
 - `ListReviewQueueUseCase`
@@ -127,18 +129,36 @@ Odoo candidate
   -> WorkbenchDecisionCandidateReader
   -> OdooWorkbenchDecisionCandidate
   -> SubmitOdooWorkbenchCandidateUseCase
+  -> WorkbenchErpReferenceValidator
   -> ReviewDecisionCommand
   -> SubmitReviewDecisionUseCase
   -> append-only Hub decision evidence
 ```
 
-The use case depends only on `WorkbenchDecisionCandidateReader` and `SubmitReviewDecisionUseCase`. It does not know Odoo JSON-2 details, Studio field names, SQLAlchemy, HTTP, provider credentials, or Odoo model names.
+The use case depends only on `WorkbenchDecisionCandidateReader`, `WorkbenchErpReferenceValidator`, and `SubmitReviewDecisionUseCase`. It does not know Odoo JSON-2 details, Studio field names, SQLAlchemy, HTTP, provider credentials, or Odoo model names.
 
 The requested `company_id` is the authoritative execution scope. A candidate whose company differs from the requested company is rejected with a safe application error and is never submitted. The candidate's `expected_version`, `idempotency_key`, selected workflow, selected partner, line resolutions, tax resolutions, business context allocation set, comment, and Odoo user audit identity are copied into the canonical `ReviewDecisionCommand`. The allocation set object is passed through as immutable evidence; it is not serialized and parsed again.
 
 `WorkbenchCandidateNotFoundError` and not-ready candidates produce `OdooWorkbenchSubmissionStatus.NOT_READY_OR_NOT_FOUND` without submission. Stale versions, idempotency conflicts, malformed decisions, ambiguity, provider read failures, and submission failures are not retried by the orchestrator.
 
-This application service remains Odoo read -> Hub submit only. It does not acknowledge the projection, modify Odoo, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, validate ERP references, post profitability, infer decisions, infer allocations, or use AI/fuzzy matching.
+This application service remains Odoo read -> ERP reference read validation -> Hub submit only. It does not acknowledge the projection, modify Odoo, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, post profitability, infer decisions, infer allocations, cache validation results, persist validation snapshots, or use AI/fuzzy matching.
+
+## Workbench ERP Reference Validation
+
+`WorkbenchErpReferenceValidator` validates supplied allocation references before authoritative Hub decision persistence. It is an application-layer service backed by focused read-only repository ports for Partners, Companies, Sales Orders, Sales Order Lines, Purchase Orders, Customer Invoices, Opportunities, and Analytic Accounts.
+
+Validation is exact-ID and deterministic. It does not use names, display labels, fuzzy matching, AI, automatic correction, or fallback inference. Repositories may batch unique IDs per reference type; the current validator deduplicates IDs before calling each port.
+
+Policy:
+
+- `res.partner` references may be shared; `company_id=None` is accepted, while an explicit different company is rejected.
+- `target_company_id` must exist but never changes requested company scope or authorizes intercompany execution.
+- Sales Orders and Purchase Orders must exist and belong to requested `company_id`.
+- Sales Order customer consistency is exact partner ID only in this PR.
+- Customer Invoice references must be `account.move` records with `move_type` `out_invoice` or `out_refund`, requested company scope, and partner consistency with `recharge_partner_id` when supplied, otherwise `customer_id`.
+- Opportunities must exist, match requested company when company is set, and match `customer_id` when both carry partner IDs.
+- Analytic Accounts may be shared when `company_id` is empty; explicit different companies are rejected.
+- Non-null Project and Subscription references fail safely as unsupported until exact model/repository support is introduced.
 
 ## ImportInvoiceUseCase
 

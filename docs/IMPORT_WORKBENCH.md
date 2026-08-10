@@ -376,6 +376,7 @@ The Odoo Workbench decision submission orchestrator is an application-layer brid
 Odoo Studio
   -> OdooWorkbenchDecisionCandidateReader
   -> OdooWorkbenchDecisionCandidate
+  -> WorkbenchErpReferenceValidator
   -> SubmitOdooWorkbenchCandidateUseCase
   -> ReviewDecisionCommand
   -> SubmitReviewDecisionUseCase
@@ -386,7 +387,23 @@ It reads one decision-ready candidate for an exact `review_id` and requested `co
 
 The orchestrator preserves `expected_version` and `idempotency_key` from the Odoo candidate. The Odoo user id is retained only as audit evidence in `decided_by`; it is not authorization. Stale-version and idempotency conflicts from Hub decision submission are not reread or retried.
 
-This slice does not write acknowledgement fields to Odoo, clear readiness, update projection version, validate ERP references, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, perform profitability posting, infer allocations, or use AI/fuzzy matching. ERP reference validation belongs to PR #77, and Hub-to-Odoo acknowledgement projection remains a future focused slice.
+ERP reference validation runs before Hub decision evidence is accepted. It proves supported references exist, match requested company scope where applicable, have expected types, and satisfy focused exact-ID relationships. It does not persist validation results, cache decisions, infer missing references, or auto-correct invalid choices.
+
+This slice does not write acknowledgement fields to Odoo, clear readiness, update projection version, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, perform profitability posting, infer allocations, or use AI/fuzzy matching. Hub-to-Odoo acknowledgement projection remains a future focused slice.
+
+## ERP Reference Validation Policy
+
+Validation is read-only and deterministic:
+
+- Partners: `customer_id` and `recharge_partner_id` must exist. Shared partners with no `company_id` are accepted; explicit wrong-company partners are rejected. Display names are never identity.
+- Target Company: `target_company_id` must exist when supplied, but it is business context only and does not authorize intercompany execution or override requested `company_id`.
+- Sales Order: `sales_order_id` must exist in requested company. If `customer_id` is supplied, the Sales Order partner must match exactly. Commercial-partner normalization is deferred until a deterministic resolver exists.
+- Sales Order Line: supported `sale.order.line` references must exist. If `sales_order_id` is also supplied, the line must belong to that order.
+- Purchase Order: `purchase_order_id` must exist in requested company.
+- Customer Invoice: `customer_invoice_id` must be an `account.move` with `move_type` `out_invoice` or `out_refund`, in requested company. Its partner must match `recharge_partner_id` when supplied, otherwise `customer_id` when supplied.
+- Opportunity: `opportunity_id` must exist, match requested company when its company field is set, and match `customer_id` when both have partner IDs.
+- Analytic Account: `analytic_account_id` must exist. Shared accounts with empty company are accepted; wrong-company accounts are rejected.
+- Project and Subscription: non-null references fail safely as unsupported until exact model/repository support is introduced.
 
 `DISMISS` stores the dismissal decision, moves the review item to `DISMISSED`, and stores no workflow-specific selections.
 

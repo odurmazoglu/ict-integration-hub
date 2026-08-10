@@ -11,14 +11,32 @@ from app.erp.odoo.workbench_candidate_reader import (
     OdooWorkbenchFieldMapping,
     OdooWorkbenchParentFieldMapping,
 )
+from app.erp.odoo.workbench_reference_repositories import (
+    OdooAnalyticAccountReferenceRepository,
+    OdooCompanyReferenceRepository,
+    OdooCustomerInvoiceReferenceRepository,
+    OdooOpportunityReferenceRepository,
+    OdooPartnerReferenceRepository,
+    OdooPurchaseOrderReferenceRepository,
+    OdooSalesOrderLineReferenceRepository,
+    OdooSalesOrderReferenceRepository,
+)
 
 __all__ = [
+    "OdooAnalyticAccountReferenceRepository",
     "OdooCompanyRepository",
+    "OdooCompanyReferenceRepository",
     "OdooCurrencyRepository",
+    "OdooCustomerInvoiceReferenceRepository",
+    "OdooOpportunityReferenceRepository",
     "OdooPartnerRepository",
+    "OdooPartnerReferenceRepository",
     "OdooProductRepository",
+    "OdooPurchaseOrderReferenceRepository",
     "OdooReadOnlyAdapter",
     "OdooRepositoryProvider",
+    "OdooSalesOrderLineReferenceRepository",
+    "OdooSalesOrderReferenceRepository",
     "OdooTaxRepository",
     "OdooWorkbenchAllocationFieldMapping",
     "OdooWorkbenchDecisionCandidateReader",

@@ -145,7 +145,9 @@ The Odoo Workbench candidate reader is read-only. It uses JSON-2 `search_read` a
 
 Odoo user identity captured in the projection is audit evidence only. The Hub must validate `review_id`, `company_id`, expected version, idempotency key, selected workflow, and resolution details against Hub persistence before accepting a decision.
 
-The Odoo Workbench decision submission orchestrator enforces requested company scope before submitting to Hub decision persistence. It preserves the Odoo candidate's expected version and idempotency key, does not accept client-supplied `decided_by`, and does not use Odoo user identity for authorization. It does not write back to Odoo, acknowledge projection fields, validate ERP references, execute workflows, create ERP documents, or retry stale submissions.
+The Odoo Workbench decision submission orchestrator enforces requested company scope before submitting to Hub decision persistence. It preserves the Odoo candidate's expected version and idempotency key, does not accept client-supplied `decided_by`, and does not use Odoo user identity for authorization. It validates supported ERP references through read-only exact-ID repositories before decision persistence. It does not write back to Odoo, acknowledge projection fields, execute workflows, create ERP documents, or retry stale submissions.
+
+ERP reference validation must not leak raw Odoo payloads, display names, URLs, credentials, tokens, SQL, provider exception text, or Studio field names. Failed validations use safe canonical messages. `target_company_id` is traceability context only; it does not authorize cross-company execution or override the requested company scope.
 
 Future decision ingestion must run as a Hub-controlled scheduler or service. Browser-side JavaScript must never receive Odoo API keys, Hub service tokens, or Keycloak client secrets.
 

@@ -69,6 +69,7 @@ Current implemented capabilities:
 - Business Context Allocation contracts and Workbench decision submission evidence for multi-Sales-Order, customer recharge, affiliate, project, and internal cost traceability.
 - Production-safe read-only Odoo Workbench decision candidate reader for configured Studio parent projection and allocation child models.
 - Odoo Workbench decision submission orchestrator that reads one decision-ready candidate and submits immutable Hub decision evidence without writing back to Odoo.
+- Read-only ERP reference validation for Odoo-submitted Workbench allocation identifiers before Hub decision evidence is accepted.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
@@ -83,7 +84,6 @@ Not implemented or not allowed by default:
 - Custom Odoo Python addons for Odoo Online.
 - Odoo Studio projection publishing, acknowledgement writes, model/view setup, or workflow execution.
 - Allocation execution, customer invoice creation, recharge execution, or profitability posting.
-- ERP reference validation for Odoo-submitted Workbench allocation identifiers.
 - AI-driven automatic decisions.
 - Database schema changes without Alembic migrations and tests.
 

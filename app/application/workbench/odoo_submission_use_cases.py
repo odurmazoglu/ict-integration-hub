@@ -10,6 +10,7 @@ from app.application.exceptions import ApplicationError
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.decision_use_cases import SubmitReviewDecisionUseCase
 from app.application.workbench.dto import ReviewDecisionAcknowledgement
+from app.application.workbench.erp_reference_validation import WorkbenchErpReferenceValidator
 from app.application.workbench.exceptions import (
     WorkbenchCandidateNotFoundError,
     WorkbenchContractError,
@@ -72,9 +73,11 @@ class SubmitOdooWorkbenchCandidateUseCase:
         self,
         *,
         candidate_reader: WorkbenchDecisionCandidateReader,
+        erp_reference_validator: WorkbenchErpReferenceValidator,
         decision_submitter: SubmitReviewDecisionUseCase,
     ) -> None:
         self._candidate_reader = candidate_reader
+        self._erp_reference_validator = erp_reference_validator
         self._decision_submitter = decision_submitter
 
     def execute(self, command: SubmitOdooWorkbenchCandidateCommand) -> OdooWorkbenchSubmissionResult:
@@ -90,6 +93,9 @@ class SubmitOdooWorkbenchCandidateUseCase:
         if candidate is None:
             return _not_ready_or_not_found(command.review_id)
         _require_candidate_company_scope(candidate, requested_company_id=command.company_id)
+        _translate_submission_orchestration_failure(
+            lambda: self._erp_reference_validator.validate(candidate, requested_company_id=command.company_id)
+        )
 
         review_command = ReviewDecisionCommand(
             review_id=candidate.review_id,

@@ -234,6 +234,7 @@ It also introduces narrow application ports:
 - `WorkbenchProjectionPublisher`
 - `WorkbenchDecisionCandidateReader`
 - `SubmitOdooWorkbenchCandidateUseCase`
+- `WorkbenchErpReferenceValidator` and focused read-only ERP reference repository ports
 
 The ports do not expose Odoo client objects, Odoo model objects, SQLAlchemy sessions, HTTP objects, or provider exceptions. Odoo JSON-2 code lives in infrastructure adapters behind these ports.
 
@@ -254,11 +255,13 @@ The application contract has replaced legacy `business_context` with `business_c
 
 ## Decision Submission Orchestrator
 
-`SubmitOdooWorkbenchCandidateUseCase` consumes the `WorkbenchDecisionCandidateReader` port and submits one immutable candidate through `SubmitReviewDecisionUseCase`. It maps the candidate to `ReviewDecisionCommand` without revalidating ERP references and without reserializing allocation evidence.
+`SubmitOdooWorkbenchCandidateUseCase` consumes the `WorkbenchDecisionCandidateReader` port, validates supported ERP references through `WorkbenchErpReferenceValidator`, and submits one immutable candidate through `SubmitReviewDecisionUseCase`. It maps the candidate to `ReviewDecisionCommand` without reserializing allocation evidence.
 
 Candidate `company_id` must match the requested company scope. Candidate `expected_version` and `idempotency_key` flow unchanged into the Hub command. Candidate `decided_by_odoo_user_id` is preserved as audit evidence and is not used for authorization.
 
-Successful submission returns a safe immutable result with `SUBMITTED` and the original Hub acknowledgement. Not-ready or missing candidates return `NOT_READY_OR_NOT_FOUND`. The orchestrator does not write acknowledgement fields, clear decision readiness, update projection records, retry stale versions, or execute workflows.
+Successful submission returns a safe immutable result with `SUBMITTED` and the original Hub acknowledgement. Not-ready or missing candidates return `NOT_READY_OR_NOT_FOUND`. Invalid ERP references fail before Hub decision persistence. The orchestrator does not write acknowledgement fields, clear decision readiness, update projection records, retry stale versions, or execute workflows.
+
+ERP reference validation uses exact numeric identifiers only. It does not trust Odoo display names, infer missing references, perform broad searches, cache results, persist validation snapshots, or use fuzzy/AI matching.
 
 ## Read-Only Candidate Reader
 
