@@ -112,6 +112,8 @@ The event stream records immutable evidence such as `ExecutionCreated`, `Plannin
 
 One logical runtime transition is persisted atomically by the repository adapter. The application layer prepares a new immutable `ExecutionSnapshot` and one or more `ExecutionEventDraft` values; it does not manage SQLAlchemy sessions, transactions, or event sequence numbers.
 
+The application layer has no independent snapshot, checkpoint, or event mutation API. Runtime mutations are only legal through atomic execution creation or `persist_transition`.
+
 For each transition, the SQLAlchemy repository persists in one database transaction:
 
 - execution snapshot state

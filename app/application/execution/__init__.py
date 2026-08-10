@@ -30,7 +30,6 @@ from app.application.execution.exceptions import (
 from app.application.execution.planner import ExecutionPlanner, execution_idempotency_key
 from app.application.execution.ports import (
     AcceptedReviewDecisionReader,
-    ExecutionCheckpointRepository,
     ExecutionEventRepository,
     ExecutionRuntimeRepository,
     ExecutionStateRepository,
@@ -72,7 +71,6 @@ __all__ = [
     "ExecutionError",
     "ExecutionConcurrencyConflictError",
     "ExecutionCheckpoint",
-    "ExecutionCheckpointRepository",
     "ExecutionCursor",
     "ExecutionEvent",
     "ExecutionEventDraft",

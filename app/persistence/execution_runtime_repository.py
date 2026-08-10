@@ -121,31 +121,6 @@ class SqlAlchemyExecutionRuntimeRepository:
         except SQLAlchemyError as exc:
             raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
 
-    def save_snapshot(self, snapshot: ExecutionSnapshot) -> ExecutionSnapshot:
-        try:
-            record = self._execution_record(execution_id=snapshot.execution_id)
-            if record is None:
-                raise ExecutionStateError("Execution runtime was not found.")
-            with self._session.begin_nested():
-                record.state = snapshot.state.value
-                record.mode = snapshot.mode.value
-                record.checkpoint = _checkpoint_to_data(snapshot.checkpoint)
-                record.retry_policy = _retry_policy_to_data(snapshot.retry_policy)
-                record.failure = _failure_to_data(snapshot.failure)
-                record.current_step_key = snapshot.checkpoint.current_step_key
-                existing_steps = {step.step_key: step for step in record.steps}
-                for step in snapshot.steps:
-                    model_step = existing_steps[step.step_key]
-                    model_step.state = step.state.value
-                    model_step.retry_count = step.retry_count
-                    model_step.last_result = _step_result_to_data(step.last_result)
-                self._session.flush()
-            return self.get_snapshot(execution_id=snapshot.execution_id) or snapshot
-        except (ExecutionIdempotencyConflictError, ExecutionStateError):
-            raise
-        except SQLAlchemyError as exc:
-            raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
-
     def persist_transition(
         self,
         *,
@@ -205,36 +180,6 @@ class SqlAlchemyExecutionRuntimeRepository:
         except SQLAlchemyError as exc:
             raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
 
-    def append(self, event: ExecutionEvent) -> ExecutionEvent:
-        try:
-            record = self._execution_record(execution_id=event.execution_id)
-            if record is None:
-                raise ExecutionStateError("Execution runtime was not found.")
-            with self._session.begin_nested():
-                next_event = ExecutionEvent(
-                    event_id=event.event_id,
-                    execution_id=event.execution_id,
-                    event_type=event.event_type,
-                    sequence=record.next_event_sequence,
-                    state=event.state,
-                    step_key=event.step_key,
-                    step_type=event.step_type,
-                    data=event.data,
-                )
-                self._session.add(self._event_model_from_event(next_event))
-                checkpoint = dict(record.checkpoint)
-                checkpoint["last_event_id"] = next_event.event_id
-                record.checkpoint = checkpoint
-                record.next_event_sequence += 1
-                self._session.flush()
-            return next_event
-        except IntegrityError as exc:
-            raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
-        except ExecutionStateError:
-            raise
-        except SQLAlchemyError as exc:
-            raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
-
     def history(self, *, execution_id: str) -> ExecutionHistory:
         try:
             records = tuple(
@@ -248,21 +193,6 @@ class SqlAlchemyExecutionRuntimeRepository:
                 execution_id=execution_id,
                 events=tuple(_event_from_model(record) for record in records),
             )
-        except SQLAlchemyError as exc:
-            raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
-
-    def save_checkpoint(self, checkpoint: ExecutionCheckpoint) -> ExecutionCheckpoint:
-        try:
-            record = self._execution_record(execution_id=checkpoint.execution_id)
-            if record is None:
-                raise ExecutionStateError("Execution runtime was not found.")
-            with self._session.begin_nested():
-                record.checkpoint = _checkpoint_to_data(checkpoint)
-                record.current_step_key = checkpoint.current_step_key
-                self._session.flush()
-            return checkpoint
-        except ExecutionStateError:
-            raise
         except SQLAlchemyError as exc:
             raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
 

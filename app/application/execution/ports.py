@@ -9,8 +9,6 @@ from app.application.execution.contracts import (
     ExecutionStepResult,
 )
 from app.application.execution.runtime import (
-    ExecutionCheckpoint,
-    ExecutionEvent,
     ExecutionEventDraft,
     ExecutionHistory,
     ExecutionRetryPolicy,
@@ -59,9 +57,6 @@ class ExecutionRuntimeRepository(Protocol):
     def get_by_idempotency_key(self, *, company_id: int, idempotency_key: str) -> ExecutionSnapshot | None:
         pass
 
-    def save_snapshot(self, snapshot: ExecutionSnapshot) -> ExecutionSnapshot:
-        pass
-
     def persist_transition(
         self,
         *,
@@ -75,20 +70,7 @@ class ExecutionRuntimeRepository(Protocol):
 class ExecutionEventRepository(Protocol):
     """Append-only execution event repository."""
 
-    def append(self, event: ExecutionEvent) -> ExecutionEvent:
-        pass
-
     def history(self, *, execution_id: str) -> ExecutionHistory:
-        pass
-
-
-class ExecutionCheckpointRepository(Protocol):
-    """Execution checkpoint repository for crash recovery."""
-
-    def save_checkpoint(self, checkpoint: ExecutionCheckpoint) -> ExecutionCheckpoint:
-        pass
-
-    def get_checkpoint(self, *, execution_id: str) -> ExecutionCheckpoint | None:
         pass
 
 

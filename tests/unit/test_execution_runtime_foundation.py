@@ -10,10 +10,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.application.execution as execution_exports
 from app.application.execution import (
     ExecutionConcurrencyConflictError,
     ExecutionEvent,
     ExecutionEventDraft,
+    ExecutionEventRepository,
     ExecutionEventType,
     ExecutionIdempotencyConflictError,
     ExecutionMode,
@@ -22,6 +24,7 @@ from app.application.execution import (
     ExecutionRequest,
     ExecutionRetryPolicy,
     ExecutionRuntimeCoordinator,
+    ExecutionRuntimeRepository,
     ExecutionRuntimeService,
     ExecutionRuntimeStepState,
     ExecutionState,
@@ -105,23 +108,13 @@ def test_failed_creation_event_persistence_leaves_no_partial_runtime() -> None:
     assert session.query(WorkflowExecutionEvent).count() == 0
 
 
-def test_checkpoint_save_and_restore() -> None:
+def test_checkpoint_is_readable_but_not_independently_writable() -> None:
     repository = _repository(_session())
     snapshot = repository.create_from_plan(plan=_plan(), retry_policy=ExecutionRetryPolicy.never())
-    checkpoint = snapshot.checkpoint
-    restored = repository.save_checkpoint(
-        type(checkpoint)(
-            execution_id=checkpoint.execution_id,
-            completed_step_keys=(snapshot.steps[0].step_key,),
-            failed_step_key=None,
-            current_step_key=None,
-            retry_count=0,
-            last_event_id="event-1",
-        )
-    )
 
-    assert restored.completed_step_keys == (snapshot.steps[0].step_key,)
-    assert repository.get_checkpoint(execution_id=snapshot.execution_id) == restored
+    assert repository.get_checkpoint(execution_id=snapshot.execution_id) == snapshot.checkpoint
+    assert not hasattr(repository, "save_checkpoint")
+    assert not hasattr(execution_exports, "ExecutionCheckpointRepository")
 
 
 def test_runtime_coordinator_persists_events_snapshot_and_resumes_from_crash_cursor() -> None:
@@ -352,24 +345,30 @@ def test_never_retry_policy_fails_execution_safely() -> None:
     assert events[-1].sequence == events[-2].sequence + 1
 
 
-def test_event_store_is_append_only_from_repository_surface() -> None:
+def test_event_store_is_append_only_readable_and_has_no_public_append_escape_hatch() -> None:
     repository = _repository(_session())
     snapshot = repository.create_from_plan(plan=_plan(), retry_policy=ExecutionRetryPolicy.never())
-    event = ExecutionEvent(
-        event_id="event-manual-1",
-        execution_id=snapshot.execution_id,
-        event_type=ExecutionEventType.EXECUTION_STARTED,
-        sequence=1,
-        state=ExecutionState.RUNNING,
+    repository.persist_transition(
+        snapshot=_snapshot_state(snapshot, ExecutionState.RUNNING),
+        events=(_draft(snapshot, event_type=ExecutionEventType.EXECUTION_STARTED, state=ExecutionState.RUNNING),),
+        expected_runtime_version=snapshot.runtime_version,
     )
-
-    repository.append(event)
 
     history = repository.history(execution_id=snapshot.execution_id)
     assert [event.sequence for event in history.events] == [1, 2, 3]
-    assert history.events[-1].event_id == "event-manual-1"
+    assert history.events[-1].event_type is ExecutionEventType.EXECUTION_STARTED
+    assert not hasattr(repository, "append")
     assert not hasattr(repository, "update_event")
     assert not hasattr(repository, "delete_event")
+
+
+def test_runtime_ports_expose_only_atomic_mutation_surface() -> None:
+    assert not hasattr(ExecutionRuntimeRepository, "save_snapshot")
+    assert not hasattr(ExecutionEventRepository, "append")
+    assert not hasattr(SqlAlchemyExecutionRuntimeRepository, "save_snapshot")
+    assert not hasattr(SqlAlchemyExecutionRuntimeRepository, "append")
+    assert not hasattr(SqlAlchemyExecutionRuntimeRepository, "save_checkpoint")
+    assert hasattr(ExecutionRuntimeRepository, "persist_transition")
 
 
 def test_no_len_history_event_sequencing_remains_in_application_coordinator() -> None:

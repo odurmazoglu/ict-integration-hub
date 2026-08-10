@@ -186,6 +186,8 @@ The planner performs no repository calls, provider calls, persistence, or writes
 
 `ExecutionRuntimeService` creates or loads a durable runtime snapshot from an execution plan. `ExecutionRuntimeCoordinator` runs steps sequentially through execution-specific strategies and delegates each state-changing transition to the runtime repository. The application layer emits immutable event drafts only; event sequence allocation, SQL transaction boundaries, checkpoint `last_event_id` updates, and optimistic runtime-version checks are owned by persistence adapters. `DRY_RUN` mode remains no-write. `EXECUTE` mode is supported only as runtime vocabulary; foundation strategies currently return safe unsupported results instead of performing writes.
 
+The application layer has no independent snapshot, checkpoint, or event mutation API. Runtime mutations are only legal through atomic execution creation or `persist_transition`.
+
 SQLAlchemy persistence is implemented by runtime repositories for `workflow_executions`, `workflow_execution_steps`, and `workflow_execution_events`. Runtime rows carry `runtime_version` for stale-transition rejection and `next_event_sequence` for monotonic event ordering. Background workers, distributed locks, real ERP write strategies, and provider execution remain out of scope.
 
 ## ImportInvoiceUseCase
