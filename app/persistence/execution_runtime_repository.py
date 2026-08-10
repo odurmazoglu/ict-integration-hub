@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
@@ -39,6 +40,7 @@ from app.application.execution.runtime import (
     ExecutionSnapshot,
     ExecutionState,
 )
+from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationType
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 
 SAFE_EXECUTION_PERSISTENCE_ERROR = "Execution runtime persistence operation failed."
@@ -413,6 +415,7 @@ def _plan_to_data(plan: ExecutionPlan) -> dict[str, Any]:
                 "sequence": step.sequence,
                 "dry_run_supported": step.dry_run_supported,
                 "execute_supported": step.execute_supported,
+                "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
             }
             for step in plan.steps
         ],
@@ -434,6 +437,7 @@ def _plan_from_data(data: dict[str, Any]) -> ExecutionPlan:
                 sequence=int(step["sequence"]),
                 dry_run_supported=bool(step["dry_run_supported"]),
                 execute_supported=bool(step["execute_supported"]),
+                allocations=tuple(_allocation_from_data(allocation) for allocation in step.get("allocations", ())),
             )
             for step in data["steps"]
         ),
@@ -451,6 +455,78 @@ def _checkpoint_to_data(checkpoint: ExecutionCheckpoint) -> dict[str, Any]:
         "retry_count": checkpoint.retry_count,
         "last_event_id": checkpoint.last_event_id,
     }
+
+
+def _allocation_to_data(allocation: BusinessContextAllocation) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "allocation_key": allocation.allocation_key,
+        "allocation_type": allocation.allocation_type.value,
+    }
+    optional: dict[str, Any] = {
+        "source_line_number": allocation.source_line_number,
+        "description": allocation.description,
+        "amount": str(allocation.amount) if allocation.amount is not None else None,
+        "percentage": str(allocation.percentage) if allocation.percentage is not None else None,
+        "currency": allocation.currency,
+        "customer_id": allocation.customer_id,
+        "recharge_partner_id": allocation.recharge_partner_id,
+        "customer_invoice_id": allocation.customer_invoice_id,
+        "target_company_id": allocation.target_company_id,
+        "opportunity_id": allocation.opportunity_id,
+        "sales_order_id": allocation.sales_order_id,
+        "sales_order_line_id": allocation.sales_order_line_id,
+        "proposal_scenario_id": allocation.proposal_scenario_id,
+        "purchase_order_id": allocation.purchase_order_id,
+        "project_id": allocation.project_id,
+        "analytic_account_id": allocation.analytic_account_id,
+        "subscription_id": allocation.subscription_id,
+        "internal_note": allocation.internal_note,
+    }
+    payload.update({key: value for key, value in optional.items() if value is not None})
+    return payload
+
+
+def _allocation_from_data(data: dict[str, Any]) -> BusinessContextAllocation:
+    return BusinessContextAllocation(
+        allocation_key=str(data["allocation_key"]),
+        allocation_type=BusinessContextAllocationType(str(data["allocation_type"])),
+        source_line_number=_optional_string(data.get("source_line_number")),
+        description=_optional_string(data.get("description")),
+        amount=_optional_decimal(data.get("amount")),
+        percentage=_optional_decimal(data.get("percentage")),
+        currency=_optional_string(data.get("currency")),
+        customer_id=_optional_int(data.get("customer_id")),
+        recharge_partner_id=_optional_int(data.get("recharge_partner_id")),
+        customer_invoice_id=_optional_int(data.get("customer_invoice_id")),
+        target_company_id=_optional_int(data.get("target_company_id")),
+        opportunity_id=_optional_int(data.get("opportunity_id")),
+        sales_order_id=_optional_int(data.get("sales_order_id")),
+        sales_order_line_id=_optional_int(data.get("sales_order_line_id")),
+        proposal_scenario_id=_optional_int(data.get("proposal_scenario_id")),
+        purchase_order_id=_optional_int(data.get("purchase_order_id")),
+        project_id=_optional_int(data.get("project_id")),
+        analytic_account_id=_optional_int(data.get("analytic_account_id")),
+        subscription_id=_optional_int(data.get("subscription_id")),
+        internal_note=_optional_string(data.get("internal_note")),
+    )
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(value))
 
 
 def _checkpoint_from_data(data: dict[str, Any]) -> ExecutionCheckpoint:
@@ -584,6 +660,8 @@ def _plan_signature(plan: ExecutionPlan) -> str:
                 "step_type": step.step_type.value,
                 "allocation_keys": list(step.allocation_keys),
                 "sequence": step.sequence,
+                "execute_supported": step.execute_supported,
+                "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
             }
             for step in plan.steps
         ],

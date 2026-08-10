@@ -12,7 +12,7 @@ from app.application.execution.contracts import (
     ExecutionStepType,
 )
 from app.application.execution.exceptions import ExecutionPlanningError
-from app.application.workbench.allocations import BusinessContextAllocationType
+from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationType
 from app.application.workflow import WorkflowType
 
 STEP_TYPE_ORDER: tuple[ExecutionStepType, ...] = (
@@ -90,6 +90,7 @@ def execution_idempotency_key(plan: ExecutionPlan) -> str:
 
 def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
     grouped: dict[ExecutionStepType, set[str]] = defaultdict(set)
+    allocations_by_step: dict[ExecutionStepType, list[BusinessContextAllocation]] = defaultdict(list)
     if request.business_context_allocations is not None:
         for allocation in request.business_context_allocations.allocations:
             try:
@@ -97,6 +98,7 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
             except KeyError as exc:
                 raise ExecutionPlanningError("Unsupported allocation execution type.") from exc
             grouped[step_type].add(allocation.allocation_key)
+            allocations_by_step[step_type].append(allocation)
 
     if request.selected_workflow is WorkflowType.VENDOR_BILL:
         grouped.setdefault(ExecutionStepType.VENDOR_BILL, set())
@@ -104,11 +106,15 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
             grouped[ExecutionStepType.VENDOR_BILL].update(
                 allocation.allocation_key for allocation in request.business_context_allocations.allocations
             )
+            allocations_by_step[ExecutionStepType.VENDOR_BILL].extend(request.business_context_allocations.allocations)
 
     steps: list[ExecutionStep] = []
     for step_type in STEP_TYPE_ORDER:
         allocation_keys = tuple(sorted(grouped.get(step_type, ())))
         if step_type in grouped:
+            allocations = tuple(
+                sorted(allocations_by_step.get(step_type, ()), key=lambda allocation: allocation.allocation_key)
+            )
             steps.append(
                 ExecutionStep(
                     step_key=_step_key(request, step_type=step_type, allocation_keys=allocation_keys),
@@ -116,7 +122,8 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
                     allocation_keys=allocation_keys,
                     sequence=len(steps) + 1,
                     dry_run_supported=True,
-                    execute_supported=step_type is ExecutionStepType.VENDOR_BILL,
+                    execute_supported=_execute_supported(step_type=step_type, allocations=allocations),
+                    allocations=allocations,
                 )
             )
     if not steps:
@@ -127,6 +134,14 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
 def _step_key(request: ExecutionRequest, *, step_type: ExecutionStepType, allocation_keys: tuple[str, ...]) -> str:
     allocation_part = "+".join(allocation_keys) if allocation_keys else "workflow"
     return f"{request.review_id}:{request.decision_version}:{step_type.value}:{allocation_part}"
+
+
+def _execute_supported(*, step_type: ExecutionStepType, allocations: tuple[BusinessContextAllocation, ...]) -> bool:
+    if step_type is ExecutionStepType.VENDOR_BILL:
+        return True
+    if step_type is ExecutionStepType.CUSTOMER_RECHARGE:
+        return bool(allocations) and all(allocation.customer_invoice_id is not None for allocation in allocations)
+    return False
 
 
 def _warnings(request: ExecutionRequest) -> tuple[str, ...]:

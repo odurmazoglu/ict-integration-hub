@@ -27,6 +27,12 @@ class ExecutionUnsupportedStepError(ExecutionError):
     error_category = "execution_unsupported_step_error"
 
 
+class CustomerRechargeInvoiceCreationRequiredError(ExecutionUnsupportedStepError):
+    """Safe error raised when Customer Recharge requires future invoice creation."""
+
+    error_category = "customer_recharge_invoice_creation_required"
+
+
 class ExecutionModeNotEnabledError(ExecutionError):
     """Safe error raised when production execution is intentionally disabled."""
 
