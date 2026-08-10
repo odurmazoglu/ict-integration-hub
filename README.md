@@ -79,6 +79,7 @@ Current implemented capabilities:
 - SQLAlchemy execution source invoice reader that loads version-pinned persisted Hub evidence for Vendor Bill execution without Odoo/Uyumsoft rereads or rematching.
 - Atomic execution source evidence capture for accepted executable Vendor Bill Workbench decisions, storing immutable schema-versioned invoice and deterministic match snapshots in the same Hub transaction as decision persistence.
 - Production Vendor Bill execution wiring that composes accepted decisions, the durable runtime, `VendorBillExecutionStrategy`, `VendorBillWriter`, and `OdooVendorBillWriter` for opt-in Draft Vendor Bill creation and duplicate-safe recovery.
+- No-write Customer Recharge execution for allocations that already reference validated existing outgoing customer invoices, producing `CUSTOMER_INVOICE` artifacts with `created=false`.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.
@@ -91,7 +92,7 @@ Not implemented or not allowed by default:
 - Business decision logic inside Odoo.
 - Custom Odoo Python addons for Odoo Online.
 - Odoo Studio projection publishing, acknowledgement writes, model/view setup, or workflow execution.
-- Allocation execution, customer invoice creation, recharge execution, or profitability posting.
+- Customer invoice creation, recharge settlement, collections, allocation profitability posting, or analytic writes.
 - `EXECUTE` mode by default; real execution additionally requires `EXECUTION_EXECUTE_ENABLED`, explicit `ExecutionApproval.approved_by`, `PRODUCTION_OPERATIONS_ENABLED`, the production approval acknowledgement, and a pure supported `VENDOR_BILL` plan.
 - `EXECUTE` mode for non-`VENDOR_BILL` execution steps, heterogeneous executable plans, background execution workers, retry scheduling, and ERP posting/payment/reconciliation.
 - Live execution source reconstruction from current ERP/provider state or regenerated matching results.

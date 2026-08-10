@@ -156,13 +156,13 @@ Neither stage may reconstruct evidence from Odoo, Uyumsoft, current ERP master d
 
 For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed result without replaying completed steps.
 
-`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, `EXECUTION_EXECUTE_ENABLED` is true, writer production gates pass, and every planned step supports `EXECUTE`. In this slice only a pure `VENDOR_BILL` plan can pass that preflight. Heterogeneous plans, customer recharge, purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
+`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, `EXECUTION_EXECUTE_ENABLED` is true, writer production gates pass when a writer-backed strategy is present, and every planned step supports `EXECUTE`. In this slice a `VENDOR_BILL` plan and a `VENDOR_BILL + CUSTOMER_RECHARGE` plan can pass preflight only when every Customer Recharge allocation references an existing customer invoice. Customer Recharge allocations without `customer_invoice_id`, purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
 
 ## Vendor Bill Execution
 
 Vendor Bill execution bridges the durable runtime to the existing Draft Vendor Bill writer. The strategy constructs a deterministic writer idempotency key from execution identity and the `VENDOR_BILL` step key, then delegates duplicate detection and production gates to `VendorBillWriter` and its concrete Odoo implementation.
 
-The production composition root wires `SqlAlchemyExecutionSourceInvoiceReader -> ExecutionPlanner -> ExecutionRuntimeService/ExecutionRuntimeCoordinator -> VendorBillExecutionStrategy -> VendorBillWriter -> OdooVendorBillWriter`. Application services depend only on ports and do not instantiate SQLAlchemy, Odoo, or account.move adapters directly.
+The production composition root wires `SqlAlchemyExecutionSourceInvoiceReader -> ExecutionPlanner -> ExecutionRuntimeService/ExecutionRuntimeCoordinator -> VendorBillExecutionStrategy + CustomerRechargeExecutionStrategy -> VendorBillWriter -> OdooVendorBillWriter`. Application services depend only on ports and do not instantiate SQLAlchemy, Odoo, or account.move adapters directly.
 
 On `created` or `existing` writer results, the step result contains exactly one `ExecutionArtifact`:
 
@@ -176,6 +176,25 @@ The strategy itself does not call Odoo, SQLAlchemy, Uyumsoft, AI, fuzzy matching
 Hub runtime persistence and the Odoo draft write are a distributed write boundary. They cannot be committed atomically in one database transaction. Recovery relies on runtime state, deterministic writer idempotency, and Odoo-side duplicate lookup before draft creation. `ExecutionArtifact` is retained for audit, operator visibility, and replay diagnostics; it is not the recovery mechanism itself. If an Odoo draft is created and the response is lost before Hub records the step result, retrying the same step uses the same writer idempotency key so the writer can return the existing draft instead of creating a duplicate, then the runtime can complete and persist the recovered `ExecutionArtifact`.
 
 Checkpoint consistency remains inside the Hub runtime boundary. Checkpoints are not independently writable; all checkpoint changes occur through `persist_transition`.
+
+## Customer Recharge Existing Invoice Execution
+
+`CUSTOMER_RECHARGE` means a vendor cost is rechargeable or attributable to a customer billing context. It is not synonymous with customer invoice creation.
+
+This slice supports only allocations that already carry `customer_invoice_id`. That value is immutable accepted-decision evidence for an existing outgoing customer invoice or refund that already passed ERP reference validation. It is not authorization, not unique, not proof of payment or collection, and not a one-to-one relationship. One vendor invoice may reference multiple customer invoices, multiple vendor invoices may reference the same customer invoice, and multiple allocations may point at the same customer invoice.
+
+`CustomerRechargeExecutionStrategy` performs no ERP mutation. It does not create customer invoices, modify account moves, post invoices, register payments, reconcile, write analytics, modify Sales Orders, call Odoo, call Uyumsoft, rematch customers, or use display names.
+
+For `DRY_RUN`, the strategy validates typed allocation context and returns preview `CUSTOMER_INVOICE` artifacts for referenced invoices without claiming creation. For `EXECUTE`, every Customer Recharge allocation in the step must have `customer_invoice_id`; otherwise full-plan preflight marks the step non-execute-capable and rejects the plan before any Vendor Bill writer call can occur.
+
+Artifacts are deduplicated by customer invoice ID and ordered by numeric invoice ID ascending:
+
+- `artifact_type`: `CUSTOMER_INVOICE`
+- `artifact_id`: existing Odoo `account.move` id
+- `external_identity`: `account.move:<id>`
+- `created`: `false`
+
+Successful execution means the recharge allocation has been associated with already-existing validated customer invoice evidence. It does not mean an invoice was created, posted, paid, collected, or settled. Customer invoice creation remains a future strategy for recharge allocations where `customer_invoice_id` is absent.
 
 `SqlAlchemyExecutionSourceInvoiceReader` is the production persistence adapter for the `ExecutionSourceInvoiceReader` port. It reconstructs execution input only from persisted Hub evidence tied to the accepted decision:
 

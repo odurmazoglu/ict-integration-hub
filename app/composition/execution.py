@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.application.execution import (
+    CustomerRechargeExecutionStrategy,
     ExecutionPlanner,
     ExecutionPreflightPolicy,
     ExecutionRetryPolicy,
@@ -55,7 +56,7 @@ def build_vendor_bill_execution_use_case(
         runtime_coordinator=ExecutionRuntimeCoordinator(
             runtime_repository=runtime_repository,
             event_repository=runtime_repository,
-            strategy_resolver=ExecutionStrategyResolver((strategy,)),
+            strategy_resolver=ExecutionStrategyResolver((strategy, CustomerRechargeExecutionStrategy())),
         ),
         runtime_repository=runtime_repository,
         retry_policy_resolver=StaticRetryPolicyResolver(ExecutionRetryPolicy.immediate(max_attempts=2)),

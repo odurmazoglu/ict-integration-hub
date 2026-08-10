@@ -6,7 +6,7 @@ from enum import StrEnum
 from app.application.commands import Command
 from app.application.dto import ApplicationDTO
 from app.application.execution.exceptions import ExecutionPlanningError
-from app.application.workbench.allocations import BusinessContextAllocationSet
+from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationSet
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workflow import WorkflowType
 from app.domain.invoice import InternalInvoice
@@ -105,6 +105,7 @@ class ExecutionStep(ApplicationDTO):
     sequence: int
     dry_run_supported: bool = True
     execute_supported: bool = False
+    allocations: tuple[BusinessContextAllocation, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _require_text(self.step_key, "step_key is required.")
@@ -119,6 +120,14 @@ class ExecutionStep(ApplicationDTO):
         object.__setattr__(self, "allocation_keys", allocation_keys)
         _require_bool(self.dry_run_supported, "dry_run_supported must be boolean.")
         _require_bool(self.execute_supported, "execute_supported must be boolean.")
+        allocations = tuple(self.allocations)
+        for allocation in allocations:
+            if not isinstance(allocation, BusinessContextAllocation):
+                raise ExecutionPlanningError("allocations must contain canonical BusinessContextAllocation values.")
+        allocation_context_keys = tuple(allocation.allocation_key for allocation in allocations)
+        if allocation_context_keys and tuple(sorted(allocation_context_keys)) != allocation_keys:
+            raise ExecutionPlanningError("allocation context must match execution step allocation keys.")
+        object.__setattr__(self, "allocations", allocations)
 
 
 @dataclass(frozen=True, slots=True)

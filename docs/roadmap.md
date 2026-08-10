@@ -29,14 +29,15 @@
 - Pre-Decision Execution Evidence Persistence for immutable review-version source snapshots before human decision
 - Execution Source Evidence Capture for atomically persisting immutable Vendor Bill execution evidence with accepted Workbench decisions
 - Vendor Bill Production Wiring and Recovery Verification for opt-in Draft Vendor Bill execution through the durable runtime, writer gates, deterministic idempotency, and Odoo duplicate lookup
+- Customer Recharge Existing Invoice Strategy for no-write association of recharge allocations to validated existing outgoing customer invoice artifacts
 
 ## Next Milestones
 
-### 1. Customer Recharge Strategy
+### 1. Customer Invoice Creation Strategy
 
-- customer invoice/recharge execution boundaries
+- create customer invoices only for recharge allocations without `customer_invoice_id`
 - intercompany safety model
-- profitability traceability without automatic posting
+- no automatic posting, payment, reconciliation, or collection
 
 ### 2. Purchase Workflow Strategies
 

@@ -216,13 +216,13 @@ This foundation is distinct from Rule Engine workflow selection and from `Decisi
 
 Execution steps run sequentially through the durable runtime. `DRY_RUN` creates or loads the same runtime idempotently, appends safe events only through repository-owned atomic transitions, and can resume from checkpoints without replaying completed steps. `DISMISS` decisions are not executable and create no runtime row. `EXECUTE` requires explicit `ExecutionApproval` and all planned steps must support `EXECUTE` before runtime creation.
 
-Only `ExecutionStepType.VENDOR_BILL` has a production-capable strategy in this slice. It builds through `VendorBillBuilder`, writes only through `VendorBillWriter`, preserves the writer's production gates and Odoo duplicate lookup, and creates draft Vendor Bills only. Heterogeneous plans and all non-Vendor-Bill execution steps are rejected before runtime creation and before any ERP writer call.
+`ExecutionStepType.VENDOR_BILL` builds through `VendorBillBuilder`, writes only through `VendorBillWriter`, preserves the writer's production gates and Odoo duplicate lookup, and creates draft Vendor Bills only. `ExecutionStepType.CUSTOMER_RECHARGE` is executable only when every allocation already references an existing outgoing customer invoice through `customer_invoice_id`; it performs no ERP writes and records `CUSTOMER_INVOICE` artifacts with `created=false`. Heterogeneous `VENDOR_BILL + CUSTOMER_RECHARGE` plans can execute only when the recharge step is existing-invoice mode. Customer Recharge allocations that need new invoice creation are rejected before runtime creation and before any Vendor Bill writer call.
 
-`ExecutionArtifact` is the canonical runtime representation of ERP objects produced by execution. Vendor Bill execution returns a typed `VENDOR_BILL` artifact; future RFQ, Purchase Order, Expense, Fixed Asset, Subscription, and Customer Invoice strategies should reuse the same artifact model.
+`ExecutionArtifact` is the canonical runtime representation of ERP objects produced by execution or associated as existing ERP evidence. Vendor Bill execution returns a typed `VENDOR_BILL` artifact. Existing-invoice Customer Recharge returns deduplicated `CUSTOMER_INVOICE` artifacts. Future RFQ, Purchase Order, Expense, Fixed Asset, Subscription, and customer invoice creation strategies should reuse the same artifact model.
 
 Hub runtime state and Odoo draft creation are a distributed write boundary; they are not atomically committed together. Recovery depends on deterministic writer idempotency and Odoo-side duplicate lookup before create.
 
-No Customer Invoice, RFQ, Purchase Order, expense, asset, subscription, analytic distribution, profitability posting, payment, reconciliation, unlink, or projection acknowledgement is created in this slice.
+No new Customer Invoice, RFQ, Purchase Order, expense, asset, subscription, analytic distribution, profitability posting, payment, reconciliation, unlink, or projection acknowledgement is created in this slice.
 
 See [Workflow Execution](WORKFLOW_EXECUTION.md).
 

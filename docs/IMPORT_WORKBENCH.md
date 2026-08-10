@@ -346,7 +346,7 @@ Mapping is deployment configuration, not application contract. `OdooWorkbenchFie
 
 Monetary and percentage values are parsed into `Decimal` without float arithmetic. Equivalent textual forms such as `259.2000` and `259.20` remain the same business value inside the immutable allocation contract; invalid, infinite, or boolean numeric values are rejected with safe errors. The reader does not infer allocation completeness from totals: completeness must come from an explicit mapped parent field or a configured fixed completeness value.
 
-`customer_invoice_id` is optional evidence for an existing outgoing customer invoice or refund. If its field mapping is absent, the reader sets it to `None`. If it is present, the value is parsed from a Many2one or integer identifier only; the reader does not validate move type and does not create customer invoices.
+`customer_invoice_id` is optional, non-unique evidence for an existing outgoing customer invoice or refund. If its field mapping is absent, the reader sets it to `None`. If it is present, the value is parsed from a Many2one or integer identifier only; the reader does not validate move type and does not create customer invoices. Multiple allocations and multiple accepted decisions may reference the same customer invoice.
 
 See [Odoo Workbench Projection](ODOO_WORKBENCH_PROJECTION.md) and [ADR-0011](adr/ADR-0011-odoo-online-import-workbench-projection.md).
 
