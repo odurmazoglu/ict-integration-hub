@@ -22,6 +22,8 @@ from app.application.execution import (
     ExecutionArtifact,
     ExecutionArtifactType,
     ExecutionMode,
+    ExecutionModeNotEnabledError,
+    ExecutionPreflightPolicy,
     ExecutionRetryPolicy,
     ExecutionRuntimeCoordinator,
     ExecutionRuntimeService,
@@ -207,6 +209,22 @@ def test_decided_by_is_not_automatically_used_as_approved_by(session: Session) -
 
     assert writer.calls == 0
     assert session.query(WorkflowExecution).count() == 0
+
+
+def test_execute_disabled_fails_before_runtime_creation(session: Session) -> None:
+    writer = RecordingVendorBillWriter()
+
+    with pytest.raises(ExecutionModeNotEnabledError):
+        _use_case(
+            session,
+            accepted_decision_reader=StaticAcceptedDecisionReader(_accepted_decision()),
+            strategy=_strategy(writer=writer),
+            production_execution_enabled=False,
+        ).execute(_command(mode=ExecutionMode.EXECUTE, approved_by="finance.lead"))
+
+    assert writer.calls == 0
+    assert session.query(WorkflowExecution).count() == 0
+    assert session.query(WorkflowExecutionEvent).count() == 0
 
 
 def test_execute_preflight_allows_vendor_bill_only_plan(session: Session) -> None:
@@ -754,6 +772,7 @@ def _use_case(
     accepted_decision_reader: AcceptedReviewDecisionReader,
     strategy: VendorBillExecutionStrategy,
     runtime_repository: SqlAlchemyExecutionRuntimeRepository | None = None,
+    production_execution_enabled: bool = True,
 ) -> RunAcceptedDecisionExecutionUseCase:
     repository = runtime_repository or SqlAlchemyExecutionRuntimeRepository(session)
     return RunAcceptedDecisionExecutionUseCase(
@@ -767,6 +786,7 @@ def _use_case(
         ),
         runtime_repository=repository,
         retry_policy_resolver=StaticRetryPolicyResolver(ExecutionRetryPolicy.never()),
+        execution_preflight=ExecutionPreflightPolicy(production_execution_enabled=production_execution_enabled),
     )
 
 

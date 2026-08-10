@@ -12,6 +12,7 @@ from app.api.security import (
     RequestContextResolver,
     RequestMetadata,
 )
+from app.application.execution import RunAcceptedDecisionExecutionUseCase
 from app.application.workbench import (
     GetReviewItemUseCase,
     ListReviewQueueUseCase,
@@ -19,6 +20,7 @@ from app.application.workbench import (
     ReviewQueueReader,
     SubmitReviewDecisionUseCase,
 )
+from app.composition import build_vendor_bill_execution_use_case
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
@@ -113,4 +115,17 @@ GetReviewItemUseCaseDep = Annotated[GetReviewItemUseCase, Depends(get_review_ite
 SubmitReviewDecisionUseCaseDep = Annotated[
     SubmitReviewDecisionUseCase,
     Depends(get_submit_review_decision_use_case),
+]
+
+
+def get_vendor_bill_execution_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> RunAcceptedDecisionExecutionUseCase:
+    return build_vendor_bill_execution_use_case(session=session, settings=settings)
+
+
+VendorBillExecutionUseCaseDep = Annotated[
+    RunAcceptedDecisionExecutionUseCase,
+    Depends(get_vendor_bill_execution_use_case),
 ]

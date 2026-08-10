@@ -13,13 +13,15 @@ from app.application.execution.contracts import (
     ExecutionRequest,
     ExecutionStatus,
 )
-from app.application.execution.exceptions import ExecutionApprovalError, ExecutionPlanningError
+from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.ports import (
     AcceptedReviewDecisionReader,
+    ExecutionPreflight,
     ExecutionRuntimeRepository,
     RetryPolicyResolver,
 )
+from app.application.execution.preflight import ExecutionPreflightPolicy
 from app.application.execution.runtime import ExecutionState
 from app.application.execution.runtime_service import ExecutionRuntimeCoordinator, ExecutionRuntimeService
 from app.application.workbench.dto import ReviewDecisionType
@@ -27,6 +29,7 @@ from app.application.workbench.exceptions import ReviewNotFoundError
 
 
 class AcceptedDecisionExecutionStatus(StrEnum):
+    PLANNED = ExecutionStatus.PLANNED.value
     DRY_RUN_COMPLETED = ExecutionStatus.DRY_RUN_COMPLETED.value
     EXECUTED = ExecutionStatus.EXECUTED.value
     FAILED = ExecutionStatus.FAILED.value
@@ -87,6 +90,7 @@ class RunAcceptedDecisionExecutionUseCase:
         runtime_coordinator: ExecutionRuntimeCoordinator,
         runtime_repository: ExecutionRuntimeRepository,
         retry_policy_resolver: RetryPolicyResolver,
+        execution_preflight: ExecutionPreflight | None = None,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
         self._execution_planner = execution_planner
@@ -94,6 +98,7 @@ class RunAcceptedDecisionExecutionUseCase:
         self._runtime_coordinator = runtime_coordinator
         self._runtime_repository = runtime_repository
         self._retry_policy_resolver = retry_policy_resolver
+        self._execution_preflight = execution_preflight or ExecutionPreflightPolicy()
 
     def execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         if not isinstance(command, RunAcceptedDecisionExecutionCommand):
@@ -124,8 +129,7 @@ class RunAcceptedDecisionExecutionUseCase:
         request = _execution_request(command, decision=decision)
         plan = self._execution_planner.plan(request)
         if command.mode is ExecutionMode.EXECUTE:
-            if command.approval is None:
-                raise ExecutionApprovalError("Explicit execution approval is required for EXECUTE mode.")
+            self._execution_preflight.ensure_execute_allowed(plan=plan, approval=command.approval)
             self._runtime_coordinator.ensure_plan_supports_mode(plan=plan, mode=command.mode)
         runtime = self._runtime_service.create_or_load(
             plan=plan,

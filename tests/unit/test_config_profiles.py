@@ -181,6 +181,14 @@ def test_live_readonly_profile_rejects_production_write_enablement() -> None:
     assert "PRODUCTION_APPROVAL_ACK must be empty outside production." in errors
 
 
+def test_non_production_profile_rejects_execution_enablement() -> None:
+    settings = Settings(app_env="development", execution_execute_enabled=True)
+
+    errors = runtime_configuration_errors(settings)
+
+    assert "EXECUTION_EXECUTE_ENABLED must be false outside production." in errors
+
+
 def test_live_readonly_profile_accepts_odoo_staging_url() -> None:
     settings = Settings(
         app_env="development",
@@ -233,6 +241,7 @@ def test_example_profiles_define_authentication_mode() -> None:
         assert values["IPP_OIDC_COMPANY_ID_CLAIM"] == "ipp_company_id"
         assert values["IPP_OIDC_PERMISSIONS_CLAIM"] == "ipp_permissions"
         assert values["IPP_OIDC_USERNAME_CLAIM"] == "preferred_username"
+        assert values["EXECUTION_EXECUTE_ENABLED"] == "false"
 
 
 def test_production_example_profile_requires_oidc_jwt() -> None:

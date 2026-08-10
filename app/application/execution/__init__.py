@@ -46,11 +46,13 @@ from app.application.execution.planner import ExecutionPlanner, execution_idempo
 from app.application.execution.ports import (
     AcceptedReviewDecisionReader,
     ExecutionEventRepository,
+    ExecutionPreflight,
     ExecutionRuntimeRepository,
     ExecutionSourceInvoiceReader,
     ExecutionStateRepository,
     RetryPolicyResolver,
 )
+from app.application.execution.preflight import ExecutionPreflightPolicy, RealWriteGate
 from app.application.execution.runtime import (
     ExecutionCheckpoint,
     ExecutionCursor,
@@ -114,6 +116,8 @@ __all__ = [
     "ExecutionPlan",
     "ExecutionPlanner",
     "ExecutionPlanningError",
+    "ExecutionPreflight",
+    "ExecutionPreflightPolicy",
     "ExecutionRequest",
     "ExecutionRetryPolicy",
     "ExecutionRetryPolicyType",
@@ -147,6 +151,7 @@ __all__ = [
     "FoundationExecutionStrategy",
     "InMemoryExecutionStateRepository",
     "RetryPolicyResolver",
+    "RealWriteGate",
     "RunAcceptedDecisionExecutionCommand",
     "RunAcceptedDecisionExecutionUseCase",
     "StaticRetryPolicyResolver",

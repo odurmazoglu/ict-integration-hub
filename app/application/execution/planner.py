@@ -116,7 +116,7 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
                     allocation_keys=allocation_keys,
                     sequence=len(steps) + 1,
                     dry_run_supported=True,
-                    execute_supported=False,
+                    execute_supported=step_type is ExecutionStepType.VENDOR_BILL,
                 )
             )
     if not steps:
@@ -131,5 +131,5 @@ def _step_key(request: ExecutionRequest, *, step_type: ExecutionStepType, alloca
 
 def _warnings(request: ExecutionRequest) -> tuple[str, ...]:
     if request.mode is ExecutionMode.EXECUTE:
-        return ("Execution mode requested, but foundation strategies do not perform ERP writes in this PR.",)
+        return ("Execution mode requested. Only execute-capable plan steps may run.",)
     return ()
