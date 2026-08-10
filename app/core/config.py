@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://ict:ict@localhost:5432/ict_integration_hub"
     document_storage_root: Path = Path("var/document_storage")
     live_connector_readonly: bool = False
+    execution_execute_enabled: bool = False
     production_operations_enabled: bool = False
     production_approval_ack: str = ""
     ipp_auth_mode: AuthenticationMode = "disabled"

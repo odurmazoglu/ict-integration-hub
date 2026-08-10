@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.application.execution.contracts import (
     AcceptedReviewDecision,
+    ExecutionApproval,
     ExecutionPlan,
     ExecutionResult,
     ExecutionSourceInvoice,
@@ -98,4 +99,11 @@ class RetryPolicyResolver(Protocol):
     """Resolve retry policy for a runtime execution."""
 
     def resolve(self, plan: ExecutionPlan) -> ExecutionRetryPolicy:
+        pass
+
+
+class ExecutionPreflight(Protocol):
+    """Validate EXECUTE-mode safety before durable runtime mutation."""
+
+    def ensure_execute_allowed(self, *, plan: ExecutionPlan, approval: ExecutionApproval | None) -> None:
         pass

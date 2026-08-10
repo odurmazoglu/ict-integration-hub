@@ -130,6 +130,8 @@ def _validate_production_settings(settings: Settings, errors: list[str]) -> None
 
 
 def _validate_non_production_settings(settings: Settings, errors: list[str]) -> None:
+    if settings.execution_execute_enabled:
+        errors.append("EXECUTION_EXECUTE_ENABLED must be false outside production.")
     if settings.production_operations_enabled:
         errors.append("PRODUCTION_OPERATIONS_ENABLED must be false outside production.")
     if settings.production_approval_ack:

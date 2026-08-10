@@ -156,11 +156,13 @@ Neither stage may reconstruct evidence from Odoo, Uyumsoft, current ERP master d
 
 For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed result without replaying completed steps.
 
-`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, and every planned step supports `EXECUTE`. In this slice only a pure `VENDOR_BILL` plan can pass that preflight. Heterogeneous plans, customer recharge, purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
+`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, `EXECUTION_EXECUTE_ENABLED` is true, writer production gates pass, and every planned step supports `EXECUTE`. In this slice only a pure `VENDOR_BILL` plan can pass that preflight. Heterogeneous plans, customer recharge, purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
 
 ## Vendor Bill Execution
 
 Vendor Bill execution bridges the durable runtime to the existing Draft Vendor Bill writer. The strategy constructs a deterministic writer idempotency key from execution identity and the `VENDOR_BILL` step key, then delegates duplicate detection and production gates to `VendorBillWriter` and its concrete Odoo implementation.
+
+The production composition root wires `SqlAlchemyExecutionSourceInvoiceReader -> ExecutionPlanner -> ExecutionRuntimeService/ExecutionRuntimeCoordinator -> VendorBillExecutionStrategy -> VendorBillWriter -> OdooVendorBillWriter`. Application services depend only on ports and do not instantiate SQLAlchemy, Odoo, or account.move adapters directly.
 
 On `created` or `existing` writer results, the step result contains exactly one `ExecutionArtifact`:
 
@@ -171,7 +173,7 @@ On `created` or `existing` writer results, the step result contains exactly one 
 
 The strategy itself does not call Odoo, SQLAlchemy, Uyumsoft, AI, fuzzy matching, provider clients, posting, payment, reconciliation, unlink, customer invoice creation, RFQ, Purchase Order creation, workers, or schedulers.
 
-Hub runtime persistence and the Odoo draft write are a distributed write boundary. They cannot be committed atomically in one database transaction. Recovery relies on runtime state, deterministic writer idempotency, and Odoo-side duplicate lookup before draft creation. `ExecutionArtifact` is retained for audit, operator visibility, and replay diagnostics; it is not the recovery mechanism itself. If an Odoo draft is created and the response is lost before Hub records the step result, retrying the same step must use the same writer idempotency key so the writer can return the existing draft instead of creating a duplicate.
+Hub runtime persistence and the Odoo draft write are a distributed write boundary. They cannot be committed atomically in one database transaction. Recovery relies on runtime state, deterministic writer idempotency, and Odoo-side duplicate lookup before draft creation. `ExecutionArtifact` is retained for audit, operator visibility, and replay diagnostics; it is not the recovery mechanism itself. If an Odoo draft is created and the response is lost before Hub records the step result, retrying the same step uses the same writer idempotency key so the writer can return the existing draft instead of creating a duplicate, then the runtime can complete and persist the recovered `ExecutionArtifact`.
 
 Checkpoint consistency remains inside the Hub runtime boundary. Checkpoints are not independently writable; all checkpoint changes occur through `persist_transition`.
 
@@ -203,7 +205,7 @@ Retry policy is persisted as policy only:
 - `RetryLater`
 - `ExponentialBackoff`
 
-The current runtime can mark an execution `WAITING_RETRY` and append `RetryScheduled`. It does not schedule jobs, start workers, run timers, or perform automatic retry execution.
+The current runtime can mark an execution `WAITING_RETRY` and append `RetryScheduled`. The Vendor Bill production composition uses the existing immediate retry policy with two attempts so an explicit rerun can recover a response-loss case through Odoo duplicate lookup. It does not schedule jobs, start workers, run timers, or perform automatic retry execution.
 
 ## Safety Boundaries
 
