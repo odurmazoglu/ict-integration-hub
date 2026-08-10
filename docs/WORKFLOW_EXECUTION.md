@@ -6,10 +6,12 @@ Current flow:
 
 ```text
 Accepted Workbench Decision
+  -> RunAcceptedDecisionExecutionUseCase
+  -> AcceptedReviewDecisionReader
   -> ExecutionRequest
-  -> ExecutionRuntimeService
   -> ExecutionPlanner
   -> ExecutionPlan
+  -> ExecutionRuntimeService.create_or_load
   -> WorkflowExecution / WorkflowExecutionStep / WorkflowExecutionEvent
   -> ExecutionCheckpoint
   -> ExecutionStrategyResolver
@@ -22,15 +24,18 @@ This foundation is separate from decision selection. `WorkflowType` remains the 
 
 ## Identity And Idempotency
 
-`ExecutionRequest` carries `execution_id`, `review_id`, `company_id`, accepted decision version, optional accepted `decision_id`, execution mode, selected workflow, and immutable allocation evidence.
+`RunAcceptedDecisionExecutionCommand` accepts only `review_id`, `company_id`, accepted decision version, and execution mode. It does not accept an allocation payload, workflow, execution id, or idempotency key from the caller. The use case reads the canonical persisted Hub decision evidence, then derives the internal `ExecutionRequest`.
 
-Execution idempotency is distinct from Workbench decision idempotency. The deterministic execution key is derived from:
+`ExecutionRequest` carries `execution_id`, `review_id`, `company_id`, accepted decision version, optional accepted `decision_id`, execution mode, selected workflow, and immutable allocation evidence. In the accepted-decision integration path, `execution_id` is a deterministic runtime identifier derived from `company_id`, `review_id`, accepted decision version, accepted `decision_id` when present, and execution mode. For legacy rows without a `decision_id`, the deterministic identifier uses an explicit `decision-id-absent` fallback. This identifier is not the canonical execution idempotency key.
+
+Execution idempotency is distinct from Workbench decision idempotency and from `execution_id`. The canonical execution idempotency key is owned by `ExecutionPlanner.execution_idempotency_key(...)` and is derived from:
 
 - `company_id`
 - `review_id`
 - accepted decision version
 - execution mode
 - canonical execution plan steps
+- allocation keys
 
 The key does not use timestamps or random UUIDs. The same accepted decision in `DRY_RUN` and `EXECUTE` mode has different execution idempotency.
 
@@ -74,7 +79,7 @@ Execution strategies use the execution-specific `ExecutionStrategy` contract. Th
 The current foundation includes a no-write `FoundationExecutionStrategy` only:
 
 - `DRY_RUN` returns `DRY_RUN_OK`
-- `EXECUTE` returns `UNSUPPORTED`
+- `EXECUTE` is rejected by the accepted-decision execution use case before runtime creation
 - no writer ports are called
 - `VendorBillWriter` is not invoked
 
@@ -108,7 +113,7 @@ Durable tables:
 - `workflow_execution_steps`: one row per planned step, with sequence, step type, allocation keys, step state, retry count, and safe result summary
 - `workflow_execution_events`: append-only event stream with sequence and safe event data
 
-The event stream records immutable evidence such as `ExecutionCreated`, `PlanningCompleted`, `ExecutionStarted`, `StepStarted`, `StepCompleted`, `StepFailed`, `RetryScheduled`, `ExecutionCompleted`, `ExecutionFailed`, and `ExecutionCancelled`. Repository APIs expose append and history operations only; event update and delete operations are intentionally absent.
+The event stream records immutable evidence such as `ExecutionCreated`, `PlanningCompleted`, `ExecutionStarted`, `StepStarted`, `StepCompleted`, `StepFailed`, `RetryScheduled`, `ExecutionCompleted`, `ExecutionFailed`, and `ExecutionCancelled`. Transition events are created only inside atomic execution creation or `persist_transition`. Repository APIs expose event history reads only; independent append, event update, and event delete operations are intentionally absent.
 
 One logical runtime transition is persisted atomically by the repository adapter. The application layer prepares a new immutable `ExecutionSnapshot` and one or more `ExecutionEventDraft` values; it does not manage SQLAlchemy sessions, transactions, or event sequence numbers.
 
@@ -126,6 +131,14 @@ For each transition, the SQLAlchemy repository persists in one database transact
 Event sequence allocation is repository-owned. The `workflow_executions.next_event_sequence` counter is incremented inside the same transaction, and multiple events in a transition receive consecutive sequence numbers. The coordinator never derives event ordering from history length.
 
 Optimistic runtime concurrency is enforced with `workflow_executions.runtime_version`. `persist_transition` receives the expected version from the snapshot and updates only when the persisted runtime version still matches. Stale concurrent attempts fail safely with a runtime concurrency conflict and do not append events.
+
+## Accepted Decision Integration
+
+`RunAcceptedDecisionExecutionUseCase` is the current end-to-end runtime integration. It reads the accepted decision through `AcceptedReviewDecisionReader` by exact `review_id`, `company_id`, and decision version. It never reads raw Odoo projection rows, never infers the latest decision, and never accepts caller-supplied workflow or allocation data.
+
+For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed dry-run result without replaying completed steps.
+
+`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is intentionally disabled in this integration and is rejected before strategy resolution, ERP/provider access, or runtime creation.
 
 ## Recovery And Retry
 

@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.application.exceptions import ApplicationError
+from app.application.execution.contracts import AcceptedReviewDecision
 from app.application.workbench.allocations import (
     AllocationCompleteness,
     BusinessContextAllocation,
@@ -163,6 +164,41 @@ class SqlAlchemyReviewRepository:
         except SQLAlchemyError as exc:
             raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
 
+    def get_accepted_decision(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+    ) -> AcceptedReviewDecision:
+        _validate_accepted_decision_query(
+            review_id=review_id,
+            company_id=company_id,
+            decision_version=decision_version,
+        )
+        try:
+            records = tuple(
+                self._session.scalars(
+                    select(WorkbenchReviewDecision)
+                    .where(
+                        WorkbenchReviewDecision.review_id == review_id,
+                        WorkbenchReviewDecision.company_id == company_id,
+                        WorkbenchReviewDecision.review_version_after == decision_version,
+                    )
+                    .order_by(WorkbenchReviewDecision.id.asc())
+                    .limit(2)
+                )
+            )
+            if not records:
+                raise ReviewNotFoundError("Accepted review decision was not found.")
+            if len(records) > 1:
+                raise ReviewDecisionDataIntegrityError("Accepted review decision is ambiguous.")
+            return _accepted_review_decision_from_model(records[0])
+        except ApplicationError:
+            raise
+        except SQLAlchemyError as exc:
+            raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
+
     def _find_by_idempotency_key(
         self,
         *,
@@ -294,6 +330,15 @@ def _validate_create_request(item: ReviewItem, *, company_id: int, idempotency_k
     _validate_supported_amount(item.total_amount)
 
 
+def _validate_accepted_decision_query(*, review_id: str, company_id: int, decision_version: int) -> None:
+    if review_id is None or not isinstance(review_id, str) or not review_id.strip():
+        raise WorkbenchContractError("review_id is required.")
+    if type(company_id) is not int or company_id <= 0:
+        raise WorkbenchContractError("company_id must be positive.")
+    if type(decision_version) is not int or decision_version <= 0:
+        raise WorkbenchContractError("decision_version must be positive.")
+
+
 def _query_filters(query: ReviewQueueQuery) -> list[Any]:
     filters: list[Any] = [
         WorkbenchReviewItem.company_id == query.company_id,
@@ -370,6 +415,23 @@ def _acknowledgement_from_decision_model(record: WorkbenchReviewDecision) -> Rev
             version=record.review_version_after,
             decision=decision,
             selected_workflow=selected_workflow,
+        )
+    except ReviewDecisionDataIntegrityError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.") from exc
+
+
+def _accepted_review_decision_from_model(record: WorkbenchReviewDecision) -> AcceptedReviewDecision:
+    try:
+        return AcceptedReviewDecision(
+            review_id=record.review_id,
+            company_id=record.company_id,
+            decision_version=record.review_version_after,
+            decision_id=record.decision_id,
+            selected_workflow=WorkflowType(record.selected_workflow) if record.selected_workflow is not None else None,
+            business_context_allocations=_deserialize_business_context_allocations(record.business_context_allocations),
+            decision_type=ReviewDecisionType(record.decision_type),
         )
     except ReviewDecisionDataIntegrityError:
         raise

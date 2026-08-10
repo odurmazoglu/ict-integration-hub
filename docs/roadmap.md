@@ -23,6 +23,7 @@
 - ERP Reference Validation for Odoo Workbench allocation decisions
 - Workflow Execution Foundation for accepted decisions, deterministic plans, dry-run strategy coordination, and execution state ports
 - Execution Runtime Foundation with SQLAlchemy persistence, state machine, append-only events, checkpoints, recovery contracts, and retry policy vocabulary
+- No-write Runtime Integration from accepted Hub decisions to durable dry-run completed runtimes without ERP/provider mutation
 
 ## Next Milestones
 

@@ -197,21 +197,24 @@ flowchart TB
 
 ## Workflow Execution Foundation
 
-Accepted Workbench decisions can now be transformed into immutable execution plans without ERP writes:
+Accepted Workbench decisions can now be transformed into durable completed dry-run runtimes without ERP writes:
 
 ```text
 Accepted Workbench Decision
+  -> AcceptedReviewDecisionReader
   -> ExecutionRequest
   -> ExecutionPlanner
   -> ExecutionPlan
+  -> ExecutionRuntimeService.create_or_load
+  -> WorkflowExecution / WorkflowExecutionStep / WorkflowExecutionEvent
+  -> ExecutionRuntimeCoordinator
   -> ExecutionStrategyResolver
-  -> ExecutionCoordinator
-  -> ExecutionResult
+  -> dry-run ExecutionResult
 ```
 
-This foundation is distinct from Rule Engine workflow selection and from `DecisionEngine`. It supports composite plans for heterogeneous `BusinessContextAllocationSet` rows. Each allocation purpose maps to an explicit `ExecutionStepType`, and `WorkflowType.VENDOR_BILL` creates a separate `VENDOR_BILL` planning step.
+This foundation is distinct from Rule Engine workflow selection and from `DecisionEngine`. `RunAcceptedDecisionExecutionUseCase` starts from persisted Hub decision evidence by exact review, company, and decision version. It supports composite plans for heterogeneous `BusinessContextAllocationSet` rows. Each allocation purpose maps to an explicit `ExecutionStepType`, and `WorkflowType.VENDOR_BILL` creates a separate `VENDOR_BILL` planning step.
 
-Execution steps run sequentially. `DRY_RUN` mode uses collect-all failure behavior. `EXECUTE` mode is fail-fast, but current foundation strategies return safe unsupported results and do not call writer ports.
+Execution steps run sequentially through the durable runtime. `DRY_RUN` creates or loads the same runtime idempotently, appends safe events only through repository-owned atomic transitions, and can resume from checkpoints without replaying completed steps. `DISMISS` decisions are not executable and create no runtime row. `EXECUTE` mode is rejected before runtime creation.
 
 No Vendor Bill, Customer Invoice, RFQ, Purchase Order, expense, asset, subscription, analytic distribution, profitability, or projection acknowledgement is created in this slice.
 
