@@ -4,6 +4,22 @@ from app.application.commands import Command
 from app.application.decision import DecisionEngine, ManualReviewStrategy, VendorBillStrategy, WorkflowStrategyResolver
 from app.application.dto import ApplicationDTO
 from app.application.exceptions import ApplicationError
+from app.application.execution import (
+    ExecutionCoordinator,
+    ExecutionMode,
+    ExecutionPlan,
+    ExecutionPlanner,
+    ExecutionRequest,
+    ExecutionResult,
+    ExecutionStateRepository,
+    ExecutionStatus,
+    ExecutionStep,
+    ExecutionStepResult,
+    ExecutionStepStatus,
+    ExecutionStepType,
+    ExecutionStrategyResolver,
+    FoundationExecutionStrategy,
+)
 from app.application.queries import Query
 from app.application.rules import DeterministicRuleEngine
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
@@ -41,6 +57,20 @@ __all__ = [
     "Command",
     "DecisionEngine",
     "DeterministicRuleEngine",
+    "ExecutionCoordinator",
+    "ExecutionMode",
+    "ExecutionPlan",
+    "ExecutionPlanner",
+    "ExecutionRequest",
+    "ExecutionResult",
+    "ExecutionStateRepository",
+    "ExecutionStatus",
+    "ExecutionStep",
+    "ExecutionStepResult",
+    "ExecutionStepStatus",
+    "ExecutionStepType",
+    "ExecutionStrategyResolver",
+    "FoundationExecutionStrategy",
     "ImportInvoiceUseCase",
     "ImportSession",
     "LineResolution",

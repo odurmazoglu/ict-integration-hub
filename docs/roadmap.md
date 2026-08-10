@@ -21,20 +21,49 @@
 - Odoo Workbench Decision Submission Orchestrator
 - Odoo Workbench read-to-validation-to-Hub-submit flow without Odoo acknowledgement or workflow execution
 - ERP Reference Validation for Odoo Workbench allocation decisions
+- Workflow Execution Foundation for accepted decisions, deterministic plans, dry-run strategy coordination, and execution state ports
 
 ## Next Milestones
 
-### 1. Workflow Execution Foundation
+### 1. Execution Persistence
 
-- accepted decision execution boundary
-- Composite Workflow Strategy for mixed allocations
-- execution idempotency
-- execution state
-- ERP write safety
-- dry-run-first behavior
+- SQLAlchemy execution state repository
+- Alembic migration for execution plans, steps, and results
+- idempotency conflict handling against durable storage
+- recovery-safe state transitions
+
+### 2. Vendor Bill Execution Strategy
+
+- bridge accepted execution plans to `VendorBillWriter`
+- dry-run-first strategy behavior
+- production gates before real ERP writes
+- draft-only Vendor Bill execution
+
+### 3. Purchase Workflow Strategies
+
+- existing Purchase Order matching execution
+- RFQ/Purchase Order creation strategy contracts
+- no posting or payment side effects
+
+### 4. Customer Recharge Strategy
+
+- customer invoice/recharge execution boundaries
+- intercompany safety model
+- profitability traceability without automatic posting
+
+### 5. Expense / Asset / Subscription Strategies
+
 - workflow-specific strategy separation
+- dry-run support for each strategy
+- ERP write safety gates
 
-### 2. Odoo Online Workbench Projection Synchronization
+### 6. Odoo Projection Acknowledgement
+
+- Hub-to-Odoo acknowledgement projection
+- decision-ready clearing only after Hub acceptance
+- safe projection status update boundaries
+
+### 7. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
 - Hub-to-Odoo JSON-2 projection publishing
@@ -42,14 +71,14 @@
 - no custom Odoo Python addon
 - no workflow execution
 
-### 3. Odoo Import Workbench UI
+### 8. Odoo Import Workbench UI
 
 - Odoo Studio list, form, and search views backed by the projection model
 - queue and detail screens for pending review items
 - explicit `SELECT_WORKFLOW` and `DISMISS` decision submission
 - no Odoo-owned business logic
 
-### 4. Odoo Vendor Bill Write Service
+### 9. Odoo Vendor Bill Write Service
 
 - dry-run by default
 - explicit production approval
@@ -57,7 +86,7 @@
 - draft Vendor Bill only
 - no automatic posting
 
-### 5. Import Session and Pipeline
+### 10. Import Session and Pipeline
 
 - download
 - parse
@@ -67,14 +96,14 @@
 - write
 - per-item and session summaries
 
-### 6. Rule Engine and Decision Engine
+### 11. Rule Engine and Decision Engine
 
 - company-scoped deterministic rules
 - workflow recommendation
 - priority and conflict handling
 - full audit trail
 
-### 7. Odoo Import Workbench
+### 12. Odoo Import Workbench
 
 - incoming invoice queue
 - matching and warning display
@@ -86,7 +115,7 @@
 - RFQ/PO creation option
 - direct Vendor Bill, expense, asset, manual review, and ignore actions
 
-### 8. Procurement Traceability
+### 13. Procurement Traceability
 
 - link invoice to existing PO where possible
 - support reconstructing RFQ/PO for out-of-system purchases
@@ -95,14 +124,14 @@
 - support future Composite Workflow Strategy for mixed allocation purposes
 - expose actual profitability
 
-### 8. Scheduler, Retry, and Recovery
+### 14. Scheduler, Retry, and Recovery
 
 - scheduled collection
 - retry policies
 - recoverable import states
 - idempotent replay
 
-### 9. Monitoring and Operations
+### 15. Monitoring and Operations
 
 - metrics
 - structured logs
@@ -110,7 +139,7 @@
 - alerts
 - operational reconciliation
 
-### 10. AI Advisor and Company Memory
+### 16. AI Advisor and Company Memory
 
 - pgvector retrieval of similar historical decisions
 - local Ollama-compatible model
