@@ -33,6 +33,7 @@ from app.application.execution import (
     ExecutionRuntimeStep,
     ExecutionRuntimeStepState,
     ExecutionSnapshot,
+    ExecutionSourceInvoice,
     ExecutionState,
     ExecutionStepRequest,
     ExecutionStepResult,
@@ -58,11 +59,15 @@ from app.application.workbench import (
 from app.application.workbench.exceptions import ReviewDecisionDataIntegrityError, ReviewNotFoundError
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.db.base import Base
+from app.domain.invoice import Header, InternalInvoice, MonetaryTotals, Party
+from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus
+from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 from app.persistence import SqlAlchemyReviewRepository
 from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRuntimeRepository
+from app.tax_mapping import InvoiceTaxMappingResult
 
 
 @pytest.fixture()
@@ -399,7 +404,7 @@ def _command() -> RunAcceptedDecisionExecutionCommand:
 
 def _submit_select_workflow(repository: SqlAlchemyReviewRepository, *, review_id: str, company_id: int) -> None:
     repository.create_review_item(_review_item(review_id), company_id=company_id, idempotency_key=f"item:{review_id}")
-    repository.submit_review_decision(
+    repository.submit_review_decision_with_execution_evidence(
         ReviewDecisionCommand(
             review_id=review_id,
             company_id=company_id,
@@ -409,7 +414,8 @@ def _submit_select_workflow(repository: SqlAlchemyReviewRepository, *, review_id
             business_context_allocations=_allocation_set(),
             decided_by="finance.user",
             idempotency_key=f"decision:{review_id}",
-        )
+        ),
+        _source_evidence(review_id=review_id, company_id=company_id),
     )
 
 
@@ -449,6 +455,32 @@ def _review_item(review_id: str) -> ReviewItem:
         ),
         warnings=(),
         version=1,
+    )
+
+
+def _source_evidence(*, review_id: str, company_id: int) -> ExecutionSourceInvoice:
+    source_invoice_id = f"invoice-{review_id}"
+    return ExecutionSourceInvoice(
+        review_id=review_id,
+        company_id=company_id,
+        decision_version=2,
+        source_invoice_id=source_invoice_id,
+        invoice=InternalInvoice(
+            header=Header(invoice_number="INV-1", invoice_uuid=source_invoice_id, ettn=source_invoice_id),
+            supplier=Party(name="Supplier Display", tax_number="1234567890"),
+            customer=Party(name="Customer", tax_number="0987654321"),
+            totals=MonetaryTotals(payable_amount=Decimal("100.00")),
+        ),
+        partner_match=PartnerMatchResult(
+            status=PartnerMatchStatus.MATCHED,
+            partner_id=50,
+            matched_by="tax_number",
+            reason="Matched by supplier tax number.",
+            candidate_count=1,
+            confidence=Decimal("1.00"),
+        ),
+        product_match=InvoiceProductMatchResult(),
+        tax_match=InvoiceTaxMappingResult(),
     )
 
 
@@ -680,6 +712,7 @@ def _engine() -> Engine:
         tables=[
             WorkbenchReviewItem.__table__,
             WorkbenchReviewDecision.__table__,
+            ExecutionSourceInvoiceEvidence.__table__,
             WorkflowExecution.__table__,
             WorkflowExecutionStep.__table__,
             WorkflowExecutionEvent.__table__,

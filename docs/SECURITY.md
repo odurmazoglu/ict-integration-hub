@@ -157,6 +157,8 @@ Execution source invoice reconstruction uses persisted Hub evidence only. The SQ
 
 Pre-decision execution evidence is also Hub-owned persistence. `workbench_review_execution_evidence` stores immutable review-version snapshots before human decision submission, keyed by exact `company_id`, `review_id`, and `review_version`. Vendor Bill-capable review creation and pre-decision evidence insertion must be atomic so a decision-ready review is not visible without its authoritative evidence. Replays may reuse identical evidence but must not update historical evidence or accept changed evidence for the same review version.
 
+Executable Vendor Bill decision acceptance and execution source evidence capture are atomic inside the Hub database. An accepted `SELECT_WORKFLOW + VENDOR_BILL` decision must not commit unless the matching schema-versioned evidence snapshot is inserted in the same transaction. Evidence is immutable and unique per accepted decision id; idempotent replay may read and verify identical evidence, but must not update, replace, or duplicate historical snapshots.
+
 Hub runtime persistence and Odoo draft creation are a distributed write boundary and cannot be committed atomically together. Recovery depends on deterministic writer idempotency and Odoo-side duplicate lookup before create. The execution runtime must not acknowledge Odoo projections, run in parallel, schedule background jobs, post accounting moves, register payments, reconcile, unlink, create customer invoices, create RFQs or Purchase Orders, or expose raw provider details.
 
 Future decision ingestion must run as a Hub-controlled scheduler or service. Browser-side JavaScript must never receive Odoo API keys, Hub service tokens, or Keycloak client secrets.

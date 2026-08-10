@@ -188,6 +188,10 @@ Checkpoint consistency remains inside the Hub runtime boundary. Checkpoints are 
 
 The reader does not call Odoo, call Uyumsoft, re-download raw documents, rerun matching, rerun tax mapping, use current product names, use current supplier resolution, parse Workbench comments, or infer missing evidence. If evidence is absent, malformed, cross-company, or ambiguous, it fails closed with safe execution-source errors. Production Vendor Bill execute wiring remains disabled unless this full evidence snapshot is available.
 
+For accepted executable Vendor Bill decisions, decision persistence and execution source evidence capture are one Hub database transaction. The SQLAlchemy review repository updates the pending review, inserts the accepted decision, and inserts the `execution_source_invoice_evidence` row linked to the generated decision id in the same transaction. If source evidence is missing, malformed, from another company, linked to another invoice, or conflicts with existing idempotent evidence, the decision is not committed.
+
+Execution source evidence is immutable historical data. It uses schema version `1`, stores Decimal values as strings, stores enum values as stable strings, and enforces one evidence snapshot per accepted decision id. A later review version creates a separate evidence row and never updates the older one. Idempotent replay verifies semantic equality and does not duplicate evidence.
+
 ## Recovery And Retry
 
 `ExecutionCheckpoint` stores completed step keys, failed step key, current cursor, retry count, and last event id. On restart, the runtime loads the snapshot and checkpoint, then resumes from the current incomplete step instead of replaying completed steps from the beginning.

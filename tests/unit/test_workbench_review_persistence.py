@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.application.execution import ExecutionSourceInvoice
+from app.application.execution.exceptions import ExecutionSourceInvoiceIntegrityError
 from app.application.workbench import (
     AllocationCompleteness,
     BusinessContextAllocation,
@@ -19,6 +21,7 @@ from app.application.workbench import (
     ReviewDecisionType,
     ReviewDecisionWriter,
     ReviewDetailQuery,
+    ReviewExecutionEvidenceReader,
     ReviewItem,
     ReviewItemCreationService,
     ReviewItemWriter,
@@ -40,15 +43,34 @@ from app.application.workbench.exceptions import (
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.db.base import Base
+from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
+from app.matching import (
+    InvoiceProductLineResult,
+    InvoiceProductMatchResult,
+    PartnerMatchResult,
+    PartnerMatchStatus,
+    ProductMatchResult,
+    ProductMatchStatus,
+)
+from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.persistence import SqlAlchemyReviewRepository
+from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
+from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
 
 @pytest.fixture()
 def session() -> Session:
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[WorkbenchReviewItem.__table__, WorkbenchReviewDecision.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            WorkbenchReviewItem.__table__,
+            WorkbenchReviewDecision.__table__,
+            ExecutionSourceInvoiceEvidence.__table__,
+        ],
+    )
     factory = sessionmaker(bind=engine)
     with factory() as db_session:
         yield db_session
@@ -365,7 +387,11 @@ def test_repository_paginates_with_offset(session: Session) -> None:
 
 def test_repository_submits_select_workflow_decision_and_persists_explicit_content(session: Session) -> None:
     repository = SqlAlchemyReviewRepository(session)
-    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
     command = _select_workflow_command(
         line_resolutions=(LineResolution(line_number="1", selected_product_id=10),),
         tax_resolutions=(TaxResolution(line_number="1", tax_index=0, selected_tax_id=20),),
@@ -382,7 +408,7 @@ def test_repository_submits_select_workflow_decision_and_persists_explicit_conte
     assert acknowledgement.status is ReviewStatus.DECISION_SUBMITTED
     assert acknowledgement.version == 2
     assert acknowledgement.decision is ReviewDecisionType.SELECT_WORKFLOW
-    assert acknowledgement.selected_workflow is WorkflowType.VENDOR_BILL
+    assert acknowledgement.selected_workflow is WorkflowType.RFQ
 
     record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
     assert record is not None
@@ -390,7 +416,7 @@ def test_repository_submits_select_workflow_decision_and_persists_explicit_conte
     assert record.review_version_before == 1
     assert record.review_version_after == 2
     assert record.decision_type == ReviewDecisionType.SELECT_WORKFLOW.value
-    assert record.selected_workflow == WorkflowType.VENDOR_BILL.value
+    assert record.selected_workflow == WorkflowType.RFQ.value
     assert record.selected_partner_id == 50
     assert record.line_resolutions == [{"line_number": "1", "selected_product_id": 10}]
     assert record.tax_resolutions == [{"line_number": "1", "tax_index": 0, "selected_tax_id": 20}]
@@ -424,6 +450,266 @@ def test_repository_submits_select_workflow_decision_and_persists_explicit_conte
     assert record.decided_by == "finance.user"
     assert record.idempotency_key == "decision-key-1"
     assert record.submitted_at is not None
+
+
+def test_repository_atomically_persists_vendor_bill_decision_with_execution_source_evidence(
+    session: Session,
+) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1", workflow=WorkflowType.VENDOR_BILL),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+    evidence = _source_evidence()
+
+    acknowledgement = repository.submit_review_decision_with_execution_evidence(_vendor_bill_command(), evidence)
+
+    assert acknowledgement.version == 2
+    decision = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert decision is not None
+    stored = session.scalar(select(ExecutionSourceInvoiceEvidence))
+    assert stored is not None
+    assert stored.decision_id == decision.decision_id
+    assert stored.review_id == "review-1"
+    assert stored.company_id == 7
+    assert stored.decision_version == 2
+    assert stored.source_invoice_id == "ETTN-1"
+    assert stored.schema_version == 1
+
+
+def test_repository_rolls_back_decision_when_execution_evidence_insert_fails(
+    session: Session,
+    monkeypatch,
+) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+    original_add = session.add
+    sensitive = SQLAlchemyError("evidence insert failed password=secret")
+
+    def fail_on_evidence_add(record: object) -> None:
+        if isinstance(record, ExecutionSourceInvoiceEvidence):
+            raise sensitive
+        original_add(record)
+
+    monkeypatch.setattr(session, "add", fail_on_evidence_add)
+
+    with pytest.raises(ReviewDecisionError) as error:
+        repository.submit_review_decision_with_execution_evidence(_vendor_bill_command(), _source_evidence())
+
+    assert str(error.value) == "Review decision persistence operation failed."
+    assert "secret" not in str(error.value)
+    assert error.value.__cause__ is sensitive
+    monkeypatch.undo()
+    loaded = repository.get_review_item(ReviewDetailQuery(review_id="review-1", company_id=7))
+    assert loaded.status is ReviewStatus.PENDING_REVIEW
+    assert loaded.version == 1
+    assert session.query(WorkbenchReviewDecision).count() == 0
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+
+
+def test_repository_decision_insert_failure_leaves_no_execution_evidence(
+    session: Session,
+    monkeypatch,
+) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+    original_add = session.add
+    sensitive = SQLAlchemyError("decision insert failed token=secret")
+
+    def fail_on_decision_add(record: object) -> None:
+        if isinstance(record, WorkbenchReviewDecision):
+            raise sensitive
+        original_add(record)
+
+    monkeypatch.setattr(session, "add", fail_on_decision_add)
+
+    with pytest.raises(ReviewDecisionError):
+        repository.submit_review_decision_with_execution_evidence(_vendor_bill_command(), _source_evidence())
+
+    monkeypatch.undo()
+    assert session.query(WorkbenchReviewDecision).count() == 0
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+
+
+def test_repository_dismiss_stores_no_execution_evidence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+
+    repository.submit_review_decision(_dismiss_command())
+
+    assert session.query(WorkbenchReviewDecision).count() == 1
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+
+
+def test_repository_non_vendor_bill_workflow_stores_no_execution_evidence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+
+    repository.submit_review_decision(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
+
+    assert session.query(WorkbenchReviewDecision).count() == 1
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+
+
+def test_repository_persists_execution_evidence_losslessly_and_reader_hydrates_it(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+    evidence = _source_evidence()
+
+    repository.submit_review_decision_with_execution_evidence(_vendor_bill_command(), evidence)
+
+    stored = session.scalar(select(ExecutionSourceInvoiceEvidence))
+    assert stored is not None
+    assert stored.invoice["totals"]["payable_amount"] == "120.10"
+    assert stored.invoice["lines"][0]["quantity"] == "2.50"
+    assert not isinstance(stored.invoice["lines"][0]["quantity"], float)
+    assert stored.partner_match["confidence"] == "1.00"
+    assert stored.product_match["line_results"][0]["result"]["default_code"] == "P-001"
+    assert stored.tax_match["line_results"][0]["result"]["tax_rate"] == "20"
+
+    hydrated = SqlAlchemyExecutionSourceInvoiceReader(session).get_source_invoice(
+        review_id="review-1",
+        company_id=7,
+        decision_version=2,
+    )
+    assert hydrated == evidence
+
+
+def test_repository_idempotent_replay_does_not_duplicate_execution_evidence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+    command = _vendor_bill_command()
+
+    first = repository.submit_review_decision_with_execution_evidence(command, _source_evidence())
+    second = repository.submit_review_decision_with_execution_evidence(command, _source_evidence())
+
+    assert second == first
+    assert session.query(WorkbenchReviewDecision).count() == 1
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 1
+
+
+def test_repository_idempotent_replay_conflicts_when_execution_evidence_changed(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+    command = _vendor_bill_command()
+    repository.submit_review_decision_with_execution_evidence(command, _source_evidence())
+
+    with pytest.raises(ReviewDecisionIdempotencyConflictError):
+        repository.submit_review_decision_with_execution_evidence(
+            command,
+            _source_evidence(payable_amount=Decimal("121.10")),
+        )
+
+    stored = session.scalar(select(ExecutionSourceInvoiceEvidence))
+    assert stored is not None
+    assert stored.invoice["totals"]["payable_amount"] == "120.10"
+
+
+def test_repository_later_decision_version_creates_separate_execution_evidence_without_changing_older(
+    session: Session,
+) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+    repository.submit_review_decision_with_execution_evidence(_vendor_bill_command(), _source_evidence())
+    item = session.scalar(select(WorkbenchReviewItem).where(WorkbenchReviewItem.review_id == "review-1"))
+    assert item is not None
+    item.status = ReviewStatus.PENDING_REVIEW.value
+    item.invoice_id = "ETTN-2"
+    session.flush()
+
+    repository.submit_review_decision_with_execution_evidence(
+        _vendor_bill_command(expected_version=2, idempotency_key="decision-key-2"),
+        _source_evidence(decision_version=3, source_invoice_id="ETTN-2", invoice_number="INV-2"),
+    )
+
+    records = tuple(
+        session.scalars(
+            select(ExecutionSourceInvoiceEvidence).order_by(ExecutionSourceInvoiceEvidence.decision_version.asc())
+        )
+    )
+    assert [record.decision_version for record in records] == [2, 3]
+    assert records[0].source_invoice_id == "ETTN-1"
+    assert records[0].invoice["header"]["invoice_number"] == "INV-1"
+    assert records[1].source_invoice_id == "ETTN-2"
+
+
+def test_repository_rejects_wrong_company_execution_evidence_without_decision_persistence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        repository.submit_review_decision_with_execution_evidence(
+            _vendor_bill_command(),
+            _source_evidence(company_id=8),
+        )
+
+    assert session.query(WorkbenchReviewDecision).count() == 0
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+
+
+def test_repository_rejects_malformed_execution_evidence_without_decision_persistence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1"), company_id=7, idempotency_key="review-key-1")
+
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        repository.submit_review_decision_with_execution_evidence(
+            _vendor_bill_command(),
+            _source_evidence(decision_version=3),
+        )
+
+    assert session.query(WorkbenchReviewDecision).count() == 0
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+
+
+def test_repository_rejects_wrong_source_invoice_evidence_without_decision_persistence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(
+        _review_item("review-1", invoice_id="ETTN-1"),
+        company_id=7,
+        idempotency_key="review-key-1",
+    )
+
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        repository.submit_review_decision_with_execution_evidence(
+            _vendor_bill_command(),
+            _source_evidence(source_invoice_id="ETTN-OTHER"),
+        )
+
+    assert session.query(WorkbenchReviewDecision).count() == 0
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
 
 
 def test_repository_submits_dismiss_decision(session: Session) -> None:
@@ -598,7 +884,7 @@ def test_repository_rejects_conflicting_decision_idempotency_reuse_without_mutat
     repository.submit_review_decision(_select_workflow_command())
 
     with pytest.raises(ReviewDecisionIdempotencyConflictError) as error:
-        repository.submit_review_decision(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
+        repository.submit_review_decision(_select_workflow_command(selected_workflow=WorkflowType.EXPENSE))
 
     assert "vendor_bill" not in str(error.value)
     assert "rfq" not in str(error.value)
@@ -834,9 +1120,18 @@ def test_review_item_writer_port_has_no_update_delete_or_save_mutation() -> None
 
 def test_review_decision_writer_port_is_submit_only() -> None:
     assert "submit_review_decision" in ReviewDecisionWriter.__dict__
+    assert "submit_review_decision_with_execution_evidence" in ReviewDecisionWriter.__dict__
     assert "create_review_item" not in ReviewDecisionWriter.__dict__
+    assert "save_execution_evidence" not in ReviewDecisionWriter.__dict__
     assert "list_review_items" not in ReviewDecisionWriter.__dict__
     assert "delete" not in ReviewDecisionWriter.__dict__
+
+
+def test_review_execution_evidence_reader_port_is_read_only() -> None:
+    assert "get_evidence" in ReviewExecutionEvidenceReader.__dict__
+    assert "save" not in ReviewExecutionEvidenceReader.__dict__
+    assert "append" not in ReviewExecutionEvidenceReader.__dict__
+    assert "delete" not in ReviewExecutionEvidenceReader.__dict__
 
 
 class RecordingWriter:
@@ -851,23 +1146,25 @@ class RecordingWriter:
 def _review_item(
     review_id: str,
     *,
+    invoice_id: str | None = None,
     invoice_number: str = "INV-1",
     supplier_tax_number: str | None = "1234567890",
     total_amount: Decimal = Decimal("120.00"),
+    workflow: WorkflowType = WorkflowType.MANUAL_REVIEW,
     status: ReviewStatus = ReviewStatus.PENDING_REVIEW,
     version: int = 1,
     review_reasons: tuple[ManualReviewReason, ...] | None = None,
 ) -> ReviewItem:
     return ReviewItem(
         review_id=review_id,
-        invoice_id=f"invoice-{review_id}",
+        invoice_id=invoice_id or f"invoice-{review_id}",
         invoice_number=invoice_number,
         supplier_tax_number=supplier_tax_number,
         supplier_name="Supplier Display",
         invoice_date=date(2026, 8, 2),
         currency="TRY",
         total_amount=total_amount,
-        workflow=WorkflowType.MANUAL_REVIEW,
+        workflow=workflow,
         status=status,
         review_reasons=review_reasons
         or (
@@ -880,6 +1177,106 @@ def _review_item(
         ),
         warnings=("safe warning",),
         version=version,
+    )
+
+
+def _source_evidence(
+    *,
+    review_id: str = "review-1",
+    company_id: int = 7,
+    decision_version: int = 2,
+    source_invoice_id: str = "ETTN-1",
+    invoice_number: str = "INV-1",
+    payable_amount: Decimal = Decimal("120.10"),
+) -> ExecutionSourceInvoice:
+    return ExecutionSourceInvoice(
+        review_id=review_id,
+        company_id=company_id,
+        decision_version=decision_version,
+        source_invoice_id=source_invoice_id,
+        invoice=InternalInvoice(
+            header=Header(
+                invoice_number=invoice_number,
+                invoice_uuid=source_invoice_id,
+                ettn=source_invoice_id,
+                currency_code="TRY",
+            ),
+            supplier=Party(name="Supplier Display", tax_number="1234567890"),
+            customer=Party(name="Customer", tax_number="0987654321"),
+            totals=MonetaryTotals(
+                line_extension_amount=Decimal("100.10"),
+                tax_exclusive_amount=Decimal("100.10"),
+                tax_inclusive_amount=payable_amount,
+                payable_amount=payable_amount,
+            ),
+            lines=(
+                InvoiceLine(
+                    line_number="1",
+                    description="Service",
+                    seller_item_code="SELL-1",
+                    buyer_item_code="P-001",
+                    barcode="BAR-1",
+                    quantity=Decimal("2.50"),
+                    unit_code="EA",
+                    unit_price=Decimal("40.04"),
+                    line_extension_amount=Decimal("100.10"),
+                    taxes=(
+                        Tax(
+                            tax_type="VAT",
+                            rate=Decimal("20"),
+                            base_amount=Decimal("100.10"),
+                            tax_amount=Decimal("20.00"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        partner_match=PartnerMatchResult(
+            status=PartnerMatchStatus.MATCHED,
+            partner_id=50,
+            matched_by="tax_number",
+            reason="Matched by supplier tax number.",
+            candidate_count=1,
+            confidence=Decimal("1.00"),
+        ),
+        product_match=InvoiceProductMatchResult(
+            line_results=(
+                InvoiceProductLineResult(
+                    line_number="1",
+                    result=ProductMatchResult(
+                        status=ProductMatchStatus.MATCHED,
+                        line_number="1",
+                        product_id=10,
+                        default_code="P-001",
+                        barcode="BAR-1",
+                        seller_item_code="SELL-1",
+                        matched_by="default_code",
+                        reason="Matched by default_code.",
+                        candidate_count=1,
+                        confidence=Decimal("1.00"),
+                    ),
+                ),
+            )
+        ),
+        tax_match=InvoiceTaxMappingResult(
+            line_results=(
+                InvoiceTaxLineResult(
+                    line_number="1",
+                    tax_index=0,
+                    result=TaxMatchResult(
+                        status=TaxMatchStatus.MATCHED,
+                        tax_id=20,
+                        company_id=company_id,
+                        tax_type=TaxType.VAT,
+                        tax_rate=Decimal("20"),
+                        matched_by="rate",
+                        confidence=Decimal("1.00"),
+                        reason="Matched by VAT rate.",
+                        candidate_count=1,
+                    ),
+                ),
+            )
+        ),
     )
 
 
@@ -938,6 +1335,7 @@ def _insert_decision_record(
     session: Session,
     *,
     decision_type: str = ReviewDecisionType.SELECT_WORKFLOW.value,
+    selected_workflow: WorkflowType | str = WorkflowType.RFQ,
     review_id: str = "review-1",
     company_id: int = 7,
     idempotency_key: str = "decision-key-1",
@@ -952,7 +1350,9 @@ def _insert_decision_record(
             review_version_before=1,
             review_version_after=2,
             decision_type=decision_type,
-            selected_workflow=WorkflowType.VENDOR_BILL.value,
+            selected_workflow=(
+                selected_workflow.value if isinstance(selected_workflow, WorkflowType) else selected_workflow
+            ),
             selected_partner_id=None,
             line_resolutions=[],
             tax_resolutions=[],
@@ -971,7 +1371,7 @@ def _select_workflow_command(
     review_id: str = "review-1",
     company_id: int = 7,
     expected_version: int = 1,
-    selected_workflow: WorkflowType = WorkflowType.VENDOR_BILL,
+    selected_workflow: WorkflowType = WorkflowType.RFQ,
     selected_partner_id: int | None = None,
     line_resolutions: tuple[LineResolution, ...] = (),
     tax_resolutions: tuple[TaxResolution, ...] = (),
@@ -986,6 +1386,34 @@ def _select_workflow_command(
         expected_version=expected_version,
         decision=ReviewDecisionType.SELECT_WORKFLOW,
         selected_workflow=selected_workflow,
+        selected_partner_id=selected_partner_id,
+        line_resolutions=line_resolutions,
+        tax_resolutions=tax_resolutions,
+        business_context_allocations=business_context_allocations,
+        comment=comment,
+        decided_by=decided_by,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _vendor_bill_command(
+    *,
+    review_id: str = "review-1",
+    company_id: int = 7,
+    expected_version: int = 1,
+    selected_partner_id: int | None = None,
+    line_resolutions: tuple[LineResolution, ...] = (),
+    tax_resolutions: tuple[TaxResolution, ...] = (),
+    business_context_allocations: BusinessContextAllocationSet | None = None,
+    comment: str | None = None,
+    decided_by: str = "finance.user",
+    idempotency_key: str = "decision-key-1",
+) -> ReviewDecisionCommand:
+    return _select_workflow_command(
+        review_id=review_id,
+        company_id=company_id,
+        expected_version=expected_version,
+        selected_workflow=WorkflowType.VENDOR_BILL,
         selected_partner_id=selected_partner_id,
         line_resolutions=line_resolutions,
         tax_resolutions=tax_resolutions,

@@ -258,10 +258,11 @@ The current implementation includes:
 - Authenticated Import Workbench REST API for direct Hub clients
 - Odoo Online Workbench projection contracts for future Studio-based review display and decision candidate capture
 - Business Context Allocation contracts and Workbench decision submission evidence for multi-line cost traceability
+- Atomic execution source evidence capture for accepted executable Vendor Bill decisions without ERP/provider calls or rematching
 
 The next implementation milestone is:
 
-- Odoo Studio projection synchronization, allocation child-line setup, and controlled Workbench UI setup when explicitly scoped
+- Vendor Bill production wiring and recovery verification when explicitly scoped
 
 Future milestones include:
 

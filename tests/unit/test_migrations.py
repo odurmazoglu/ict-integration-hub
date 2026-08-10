@@ -210,6 +210,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "decision_version",
         "decision_id",
         "source_invoice_id",
+        "schema_version",
         "invoice",
         "partner_match",
         "product_match",
@@ -222,6 +223,11 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "ix_execution_source_invoice_evidence_decision_id",
         "ix_execution_source_invoice_evidence_source_invoice_id",
     }.issubset(source_evidence_indexes)
+    source_evidence_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("execution_source_invoice_evidence")
+    }
+    assert "uq_execution_source_invoice_evidence_decision_id" in source_evidence_unique_constraints
+    assert ExecutionSourceInvoiceEvidence.__table__.c.schema_version.nullable is False
     assert ExecutionSourceInvoiceEvidence.__table__.c.invoice.nullable is False
     review_evidence_columns = {
         column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
@@ -248,6 +254,15 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     }
     assert "uq_workbench_review_execution_evidence_company_review_version" in review_evidence_unique_constraints
     assert WorkbenchReviewExecutionEvidence.__table__.c.invoice.nullable is False
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_execution_evidence" in inspector.get_table_names()
+    assert "execution_source_invoice_evidence" in inspector.get_table_names()
+    source_evidence_columns_after_capture_downgrade = {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+    assert "schema_version" not in source_evidence_columns_after_capture_downgrade
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
