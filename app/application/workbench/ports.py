@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewItem, ReviewQueueResult
+from app.application.workbench.evidence import ReviewExecutionEvidence
 from app.application.workbench.projection import (
     OdooWorkbenchDecisionCandidate,
     ProjectionPublishResult,
@@ -26,6 +27,16 @@ class ReviewItemWriter(Protocol):
     """Write port for idempotent creation of pending Workbench review items."""
 
     def create_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
+        pass
+
+    def create_review_item_with_execution_evidence(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        evidence: ReviewExecutionEvidence,
+    ) -> ReviewItem:
         pass
 
 

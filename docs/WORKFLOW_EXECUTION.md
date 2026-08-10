@@ -150,6 +150,10 @@ Optimistic runtime concurrency is enforced with `workflow_executions.runtime_ver
 
 `RunAcceptedDecisionExecutionUseCase` is the current end-to-end runtime integration. It reads the accepted decision through `AcceptedReviewDecisionReader` by exact `review_id`, `company_id`, and decision version. It never reads raw Odoo projection rows, never infers the latest decision, and never accepts caller-supplied workflow or allocation data.
 
+Execution evidence is intentionally two-stage. Stage 1 pre-decision evidence is persisted in `workbench_review_execution_evidence` before the Workbench review becomes available for human decision. It is pinned by exact `company_id`, `review_id`, and `review_version`, where `review_version` equals the decision command's later `expected_version`. Stage 2 accepted execution evidence is a future decision-time copy pinned to the accepted `decision_id`; that accepted decision version is `expected_version + 1`.
+
+Neither stage may reconstruct evidence from Odoo, Uyumsoft, current ERP master data, Workbench display fields, rematching, fuzzy matching, or AI. Stage 1 is the authoritative source for the later PR #83 `ReviewExecutionEvidenceReader`; Stage 2 is the historical execution snapshot consumed by `ExecutionSourceInvoiceReader`.
+
 For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed result without replaying completed steps.
 
 `DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, and every planned step supports `EXECUTE`. In this slice only a pure `VENDOR_BILL` plan can pass that preflight. Heterogeneous plans, customer recharge, purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.

@@ -62,6 +62,7 @@ Current implemented capabilities:
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.
 - Durable Import Workbench review persistence for idempotent pending review creation, company-scoped queue/detail reads, and explicit decision submission.
+- Authoritative pre-decision Workbench execution evidence persistence for immutable review-version snapshots of `InternalInvoice`, supplier match, product match, and tax mapping results before human decision.
 - Import Workbench review query use cases for listing the review queue and retrieving one review item through `ReviewQueueReader`.
 - Import Workbench review decision submission use case for optimistic, idempotent `SELECT_WORKFLOW` and `DISMISS` decisions without workflow execution.
 - Authenticated Import Workbench REST API for queue, detail, and decision submission through `RequestContext` permissions.

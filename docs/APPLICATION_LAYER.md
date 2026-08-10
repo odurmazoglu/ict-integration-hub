@@ -406,7 +406,7 @@ Manual Review is an application outcome for deterministic business mismatches on
 
 ## Import Workbench Contracts
 
-`app/application/workbench` defines the application-layer contract surface for direct Hub Workbench API adapters and the future Odoo Online Studio projection synchronization. This package contains immutable DTOs, queries, commands, safe validation errors, a read-only review queue port, a create-only review item writer port, a focused decision submission writer port, projection DTOs, projection ports, and small use-case/service boundaries.
+`app/application/workbench` defines the application-layer contract surface for direct Hub Workbench API adapters and the future Odoo Online Studio projection synchronization. This package contains immutable DTOs, queries, commands, safe validation errors, a read-only review queue port, an evidence-aware review item writer port, a focused decision submission writer port, projection DTOs, projection ports, and small use-case/service boundaries.
 
 Current contracts:
 
@@ -423,8 +423,9 @@ Current contracts:
 - `BusinessContextAllocation`: immutable ERP-neutral allocation line with amount and/or percentage, commercial customer, recharge recipient, optional existing customer invoice, target company, Sales Order, Purchase Order, project, analytic account, and cost-purpose context
 - `BusinessContextAllocationSet`: immutable aggregate that validates unique allocation keys, currency consistency, and complete or partial amount/percentage reconciliation
 - `ReviewDecisionAcknowledgement`: immutable acknowledgement contract for a future command handler
+- `ReviewExecutionEvidence`: immutable pre-decision evidence pinned to the current Workbench review version, carrying the normalized `InternalInvoice`, supplier match, product match, and tax mapping result
 - `ReviewQueueReader`: read-only port for future queue/detail adapters
-- `ReviewItemWriter`: create-only port for idempotent persistence of pending review items
+- `ReviewItemWriter`: port for idempotent pending review item creation, with a focused atomic creation method for Vendor Bill-capable reviews that persists pre-decision execution evidence in the same repository transaction
 - `ReviewDecisionWriter`: decision submission port for optimistic, idempotent user decisions
 - `ReviewItemCreationService`: application service that delegates pending review item creation to the writer port
 - `ListReviewQueueUseCase`: application boundary that delegates `ReviewQueueQuery` to `ReviewQueueReader.list_review_items`
@@ -437,7 +438,11 @@ Current contracts:
 - `WorkbenchDecisionCandidateReader`: port for ready-decision reads from an ERP UI projection surface
 - `OdooWorkbenchDecisionCandidateReader`: read-only Odoo JSON-2 adapter for configured Studio projection candidate and allocation child models
 
-The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation, queue/detail reads, and explicit review decision submission. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, scopes detail reads by `review_id` plus `company_id`, and records submitted decisions in append-only audit rows.
+The current infrastructure provides a SQLAlchemy repository behind these ports for durable PostgreSQL-backed review item creation, queue/detail reads, explicit review decision submission, and pre-decision execution evidence persistence. It persists structured `ManualReviewReason` values as controlled JSON, stores optimistic-concurrency metadata through `version`, stores `total_amount` as `Numeric(24, 6)`, scopes detail reads by `review_id` plus `company_id`, and records submitted decisions in append-only audit rows.
+
+Pre-decision execution evidence is Stage 1 of the execution evidence model. `workbench_review_execution_evidence` stores one immutable row for `(company_id, review_id, review_version)` before a review is exposed for human decision. The row uses `review_version == ReviewItem.version`, which is the later `ReviewDecisionCommand.expected_version`; an accepted decision in the later Stage 2 flow maps that evidence to decision version `expected_version + 1`.
+
+Stage 1 evidence is sourced only from already-created immutable import and deterministic matching DTOs. It does not call Odoo, call Uyumsoft, refresh current ERP master data, rerun supplier/product/tax matching, parse Workbench display text, use AI, or infer missing fields. Replaying the same review version with identical evidence is idempotent; replaying with different evidence fails closed. Historical review-version evidence is never updated in place.
 
 `ReviewDecisionCommand` now accepts `business_context_allocations: BusinessContextAllocationSet | None` and no longer accepts the legacy `business_context` field. New decision rows write allocation evidence to `business_context_allocations` JSON and leave legacy `business_context` empty. Existing historical rows with no allocation payload remain readable; historical rows with legacy `business_context` preserve that legacy object as evidence and are not rewritten or converted into fabricated allocation amounts.
 

@@ -73,10 +73,13 @@ This includes:
 - AI Advisor
 - Import Session orchestration
 - Procurement traceability
+- Pre-decision execution evidence snapshots
 
 ERP systems execute decisions.
 
 ERP systems do **not** make procurement decisions.
+
+When a Workbench review can lead to execution, Hub must persist the exact immutable pre-decision source evidence before human decision. This evidence is version-pinned to the current review version and must not be reconstructed from ERP display fields, current master data, provider rereads, rematching, fuzzy matching, or AI.
 
 **Hub decides. Odoo executes.**
 

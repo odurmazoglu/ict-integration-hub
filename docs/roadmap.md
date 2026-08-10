@@ -26,41 +26,49 @@
 - No-write Runtime Integration from accepted Hub decisions to durable dry-run completed runtimes without ERP/provider mutation
 - Vendor Bill Execution Strategy for approved pure `VENDOR_BILL` plans, Draft Vendor Bill writer delegation, deterministic write idempotency, and distributed-write recovery documentation
 - Execution Source Invoice Persistence Adapter for version-pinned persisted Hub invoice, supplier match, product match, and tax mapping evidence
+- Pre-Decision Execution Evidence Persistence for immutable review-version source snapshots before human decision
 
 ## Next Milestones
 
-### 1. Vendor Bill Production Wiring and Recovery Verification
+### 1. Rebase Atomic Decision Evidence Capture
+
+- rebase open PR #83 onto main after pre-decision evidence persistence merges
+- add the concrete `ReviewExecutionEvidenceReader` backed by `workbench_review_execution_evidence`
+- validate atomic accepted-decision snapshot capture from Stage 1 evidence into Stage 2 accepted execution evidence
+- do not proceed to live Vendor Bill production wiring before PR #83 is completed
+
+### 2. Vendor Bill Production Wiring and Recovery Verification
 
 - wire production execution only when full source evidence is available
 - reconcile Hub runtime status with Odoo duplicate lookup after response loss
 - operator-facing safe recovery diagnostics
 - no posting, payment, or reconciliation
 
-### 2. Purchase Workflow Strategies
+### 3. Purchase Workflow Strategies
 
 - existing Purchase Order matching execution
 - RFQ/Purchase Order creation strategy contracts
 - no posting or payment side effects
 
-### 3. Customer Recharge Strategy
+### 4. Customer Recharge Strategy
 
 - customer invoice/recharge execution boundaries
 - intercompany safety model
 - profitability traceability without automatic posting
 
-### 4. Expense / Asset / Subscription Strategies
+### 5. Expense / Asset / Subscription Strategies
 
 - workflow-specific strategy separation
 - dry-run support for each strategy
 - ERP write safety gates
 
-### 5. Odoo Projection Acknowledgement
+### 6. Odoo Projection Acknowledgement
 
 - Hub-to-Odoo acknowledgement projection
 - decision-ready clearing only after Hub acceptance
 - safe projection status update boundaries
 
-### 6. Odoo Online Workbench Projection Synchronization
+### 7. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
 - Hub-to-Odoo JSON-2 projection publishing
@@ -68,14 +76,14 @@
 - no custom Odoo Python addon
 - no workflow execution
 
-### 7. Odoo Import Workbench UI
+### 8. Odoo Import Workbench UI
 
 - Odoo Studio list, form, and search views backed by the projection model
 - queue and detail screens for pending review items
 - explicit `SELECT_WORKFLOW` and `DISMISS` decision submission
 - no Odoo-owned business logic
 
-### 8. Odoo Vendor Bill Write Service
+### 9. Odoo Vendor Bill Write Service
 
 - dry-run by default
 - explicit production approval
@@ -83,7 +91,7 @@
 - draft Vendor Bill only
 - no automatic posting
 
-### 9. Import Session and Pipeline
+### 10. Import Session and Pipeline
 
 - download
 - parse
@@ -93,14 +101,14 @@
 - write
 - per-item and session summaries
 
-### 10. Rule Engine and Decision Engine
+### 11. Rule Engine and Decision Engine
 
 - company-scoped deterministic rules
 - workflow recommendation
 - priority and conflict handling
 - full audit trail
 
-### 11. Odoo Import Workbench
+### 12. Odoo Import Workbench
 
 - incoming invoice queue
 - matching and warning display
@@ -112,7 +120,7 @@
 - RFQ/PO creation option
 - direct Vendor Bill, expense, asset, manual review, and ignore actions
 
-### 12. Procurement Traceability
+### 13. Procurement Traceability
 
 - link invoice to existing PO where possible
 - support reconstructing RFQ/PO for out-of-system purchases
@@ -121,14 +129,14 @@
 - support future Composite Workflow Strategy for mixed allocation purposes
 - expose actual profitability
 
-### 13. Scheduler And Runtime Recovery
+### 14. Scheduler And Runtime Recovery
 
 - scheduled collection
 - retry execution workers
 - recoverable import states
 - idempotent replay
 
-### 14. Monitoring and Operations
+### 15. Monitoring and Operations
 
 - metrics
 - structured logs
@@ -136,7 +144,7 @@
 - alerts
 - operational reconciliation
 
-### 15. AI Advisor and Company Memory
+### 16. AI Advisor and Company Memory
 
 - pgvector retrieval of similar historical decisions
 - local Ollama-compatible model

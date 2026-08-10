@@ -82,7 +82,7 @@ flowchart TB
 
 ### Import Workbench Persistence
 
-Manual Review items can be persisted durably for future Odoo Workbench display. The Application layer owns the immutable `ReviewItem`, `ReviewQueueQuery`, `ReviewDetailQuery`, `ReviewDecisionCommand`, `ReviewDecisionAcknowledgement`, `ReviewQueueReader`, `ReviewItemWriter`, and `ReviewDecisionWriter` contracts. The SQLAlchemy repository is an infrastructure adapter that creates pending review records idempotently, serves company-scoped read-only queue/detail queries, and submits explicit user decisions with optimistic concurrency and idempotency.
+Manual Review items can be persisted durably for future Odoo Workbench display. The Application layer owns the immutable `ReviewItem`, `ReviewExecutionEvidence`, `ReviewQueueQuery`, `ReviewDetailQuery`, `ReviewDecisionCommand`, `ReviewDecisionAcknowledgement`, `ReviewQueueReader`, `ReviewItemWriter`, and `ReviewDecisionWriter` contracts. The SQLAlchemy repository is an infrastructure adapter that creates pending review records idempotently, atomically persists pre-decision execution evidence for Vendor Bill-capable reviews, serves company-scoped read-only queue/detail queries, and submits explicit user decisions with optimistic concurrency and idempotency.
 
 Decision submission changes only local Workbench review state. It does not execute the selected workflow, write ERP records, create Vendor Bills, create rules, call AI, or contact Odoo/Uyumsoft.
 

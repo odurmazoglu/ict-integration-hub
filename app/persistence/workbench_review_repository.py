@@ -10,7 +10,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.application.exceptions import ApplicationError
-from app.application.execution.contracts import AcceptedReviewDecision
+from app.application.execution.contracts import AcceptedReviewDecision, ExecutionSourceInvoice
+from app.application.execution.exceptions import ExecutionSourceInvoiceError
 from app.application.workbench.allocations import (
     AllocationCompleteness,
     BusinessContextAllocation,
@@ -28,6 +29,7 @@ from app.application.workbench.dto import (
     ReviewStatus,
     TaxResolution,
 )
+from app.application.workbench.evidence import ReviewExecutionEvidence
 from app.application.workbench.exceptions import (
     ReviewDataIntegrityError,
     ReviewDecisionDataIntegrityError,
@@ -43,11 +45,17 @@ from app.application.workbench.exceptions import (
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.models.workbench_review_decision import WorkbenchReviewDecision
+from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
+from app.persistence.execution_source_invoice_reader import (
+    deserialize_execution_source_invoice_payload,
+    serialize_execution_source_invoice_payload,
+)
 
 SAFE_PERSISTENCE_ERROR = "Review persistence operation failed."
 SAFE_DECISION_ERROR = "Review decision persistence operation failed."
 REVIEW_AMOUNT_INTEGER_DIGITS = REVIEW_AMOUNT_PRECISION - REVIEW_AMOUNT_SCALE
+REVIEW_EVIDENCE_SCHEMA_VERSION = 1
 
 
 class SqlAlchemyReviewRepository:
@@ -78,6 +86,80 @@ class SqlAlchemyReviewRepository:
             )
         except ReviewPersistenceError:
             raise
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def create_review_item_with_execution_evidence(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        evidence: ReviewExecutionEvidence,
+    ) -> ReviewItem:
+        _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
+        _validate_review_evidence_linkage(item=item, company_id=company_id, evidence=evidence)
+        try:
+            existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
+            if existing is not None:
+                existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                self._return_existing_evidence_or_raise_conflict(evidence)
+                return existing_item
+
+            record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
+            evidence_record = _evidence_model_from_review_evidence(evidence)
+            with self._session.begin_nested():
+                self._session.add(record)
+                self._session.flush()
+                self._session.add(evidence_record)
+                self._session.flush()
+                self._session.refresh(record)
+            return _review_item_from_model(record)
+        except IntegrityError as exc:
+            return self._handle_create_with_evidence_integrity_error(
+                item,
+                company_id=company_id,
+                idempotency_key=idempotency_key,
+                evidence=evidence,
+                exc=exc,
+            )
+        except ReviewPersistenceError:
+            raise
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def get_review_execution_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> ReviewExecutionEvidence:
+        _validate_evidence_query(review_id=review_id, company_id=company_id, review_version=review_version)
+        try:
+            records = tuple(
+                self._session.scalars(
+                    select(WorkbenchReviewExecutionEvidence)
+                    .where(
+                        WorkbenchReviewExecutionEvidence.review_id == review_id,
+                        WorkbenchReviewExecutionEvidence.company_id == company_id,
+                        WorkbenchReviewExecutionEvidence.review_version == review_version,
+                    )
+                    .order_by(WorkbenchReviewExecutionEvidence.id.asc())
+                    .limit(2)
+                )
+            )
+            if not records:
+                raise ReviewNotFoundError("Review execution evidence was not found.")
+            if len(records) > 1:
+                raise ReviewDataIntegrityError("Review execution evidence is ambiguous.")
+            return _review_evidence_from_model(records[0])
+        except ExecutionSourceInvoiceError as exc:
+            raise ReviewDataIntegrityError("Review execution evidence is invalid.") from exc
+        except ApplicationError:
+            raise
+        except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
+            raise ReviewDataIntegrityError("Review execution evidence is invalid.") from exc
         except SQLAlchemyError as exc:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
@@ -255,6 +337,56 @@ class SqlAlchemyReviewRepository:
             raise ReviewDataIntegrityError("Review item already exists.") from exc
         raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
+    def _handle_create_with_evidence_integrity_error(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        evidence: ReviewExecutionEvidence,
+        exc: IntegrityError,
+    ) -> ReviewItem:
+        try:
+            existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
+        except SQLAlchemyError as lookup_exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from lookup_exc
+        if existing is not None:
+            try:
+                existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                self._return_existing_evidence_or_raise_conflict(evidence)
+                return existing_item
+            except ReviewPersistenceError as conflict_exc:
+                raise conflict_exc from exc
+        raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def _return_existing_evidence_or_raise_conflict(self, evidence: ReviewExecutionEvidence) -> ReviewExecutionEvidence:
+        existing = self._find_review_execution_evidence(
+            review_id=evidence.review_id,
+            company_id=evidence.company_id,
+            review_version=evidence.review_version,
+        )
+        if existing is None:
+            raise ReviewDataIntegrityError("Review execution evidence is missing for existing review item.")
+        existing_evidence = _review_evidence_from_model(existing)
+        if _review_evidence_fingerprint(existing_evidence) != _review_evidence_fingerprint(evidence):
+            raise ReviewIdempotencyConflictError("Review execution evidence conflicts with existing review version.")
+        return existing_evidence
+
+    def _find_review_execution_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> WorkbenchReviewExecutionEvidence | None:
+        return self._session.scalar(
+            select(WorkbenchReviewExecutionEvidence).where(
+                WorkbenchReviewExecutionEvidence.review_id == review_id,
+                WorkbenchReviewExecutionEvidence.company_id == company_id,
+                WorkbenchReviewExecutionEvidence.review_version == review_version,
+            )
+        )
+
     def _find_decision_by_idempotency_key(
         self,
         *,
@@ -339,6 +471,37 @@ def _validate_accepted_decision_query(*, review_id: str, company_id: int, decisi
         raise WorkbenchContractError("decision_version must be positive.")
 
 
+def _validate_evidence_query(*, review_id: str, company_id: int, review_version: int) -> None:
+    if review_id is None or not isinstance(review_id, str) or not review_id.strip():
+        raise WorkbenchContractError("review_id is required.")
+    if type(company_id) is not int or company_id <= 0:
+        raise WorkbenchContractError("company_id must be positive.")
+    if type(review_version) is not int or review_version <= 0:
+        raise WorkbenchContractError("review_version must be positive.")
+
+
+def _validate_review_evidence_linkage(
+    *,
+    item: ReviewItem,
+    company_id: int,
+    evidence: ReviewExecutionEvidence,
+) -> None:
+    if evidence.review_id != item.review_id:
+        raise WorkbenchContractError("Evidence review_id must match review item.")
+    if evidence.company_id != company_id:
+        raise WorkbenchContractError("Evidence company_id must match review item company.")
+    if evidence.review_version != item.version:
+        raise WorkbenchContractError("Evidence review_version must match review item version.")
+    if evidence.source_invoice_id != item.invoice_id:
+        raise WorkbenchContractError("Evidence source_invoice_id must match review item invoice_id.")
+    for line_result in evidence.product_match.line_results:
+        if line_result.result.line_number != line_result.line_number:
+            raise WorkbenchContractError("Product match line linkage is invalid.")
+    for tax_result in evidence.tax_match.line_results:
+        if tax_result.result.company_id is not None and tax_result.result.company_id != company_id:
+            raise WorkbenchContractError("Tax mapping company_id must match review item company.")
+
+
 def _query_filters(query: ReviewQueueQuery) -> list[Any]:
     filters: list[Any] = [
         WorkbenchReviewItem.company_id == query.company_id,
@@ -377,6 +540,69 @@ def _model_from_review_item(
         warnings=[str(warning) for warning in item.warnings],
         version=1,
         idempotency_key=idempotency_key,
+    )
+
+
+def _evidence_model_from_review_evidence(evidence: ReviewExecutionEvidence) -> WorkbenchReviewExecutionEvidence:
+    payload = _execution_source_payload_from_review_evidence(evidence)
+    return WorkbenchReviewExecutionEvidence(
+        review_id=evidence.review_id,
+        company_id=evidence.company_id,
+        review_version=evidence.review_version,
+        source_invoice_id=evidence.source_invoice_id,
+        schema_version=REVIEW_EVIDENCE_SCHEMA_VERSION,
+        invoice=payload["invoice"],
+        partner_match=payload["partner_match"],
+        product_match=payload["product_match"],
+        tax_match=payload["tax_match"],
+    )
+
+
+def _review_evidence_from_model(record: WorkbenchReviewExecutionEvidence) -> ReviewExecutionEvidence:
+    if record.schema_version != REVIEW_EVIDENCE_SCHEMA_VERSION:
+        raise ReviewDataIntegrityError("Review execution evidence schema version is not supported.")
+    source = deserialize_execution_source_invoice_payload(
+        {
+            "review_id": record.review_id,
+            "company_id": record.company_id,
+            "decision_version": record.review_version,
+            "source_invoice_id": record.source_invoice_id,
+            "invoice": record.invoice,
+            "partner_match": record.partner_match,
+            "product_match": record.product_match,
+            "tax_match": record.tax_match,
+        }
+    )
+    return _review_evidence_from_execution_source(source)
+
+
+def _execution_source_payload_from_review_evidence(evidence: ReviewExecutionEvidence) -> dict[str, Any]:
+    return serialize_execution_source_invoice_payload(_execution_source_from_review_evidence(evidence))
+
+
+def _execution_source_from_review_evidence(evidence: ReviewExecutionEvidence) -> ExecutionSourceInvoice:
+    return ExecutionSourceInvoice(
+        review_id=evidence.review_id,
+        company_id=evidence.company_id,
+        decision_version=evidence.review_version,
+        source_invoice_id=evidence.source_invoice_id,
+        invoice=evidence.invoice,
+        partner_match=evidence.partner_match,
+        product_match=evidence.product_match,
+        tax_match=evidence.tax_match,
+    )
+
+
+def _review_evidence_from_execution_source(source: ExecutionSourceInvoice) -> ReviewExecutionEvidence:
+    return ReviewExecutionEvidence(
+        review_id=source.review_id,
+        company_id=source.company_id,
+        review_version=source.decision_version,
+        source_invoice_id=source.source_invoice_id,
+        invoice=source.invoice,
+        partner_match=source.partner_match,
+        product_match=source.product_match,
+        tax_match=source.tax_match,
     )
 
 
@@ -749,6 +975,20 @@ def _business_fingerprint(item: ReviewItem, *, company_id: int) -> tuple[Any, ..
         tuple(_reason_fingerprint(reason) for reason in item.review_reasons),
         item.warnings,
         item.version,
+    )
+
+
+def _review_evidence_fingerprint(evidence: ReviewExecutionEvidence) -> tuple[Any, ...]:
+    payload = _execution_source_payload_from_review_evidence(evidence)
+    return (
+        payload["review_id"],
+        payload["company_id"],
+        payload["decision_version"],
+        payload["source_invoice_id"],
+        payload["invoice"],
+        payload["partner_match"],
+        payload["product_match"],
+        payload["tax_match"],
     )
 
 

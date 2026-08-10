@@ -143,17 +143,43 @@ def serialize_execution_source_invoice(source: ExecutionSourceInvoice, *, decisi
     """Serialize immutable source evidence for persistence by future import/review writers."""
 
     _require_text(decision_id)
+    return serialize_execution_source_invoice_payload(source) | {
+        "decision_id": decision_id,
+    }
+
+
+def serialize_execution_source_invoice_payload(source: ExecutionSourceInvoice) -> dict[str, Any]:
+    """Serialize immutable invoice/match evidence without coupling to accepted decisions."""
+
     return {
         "review_id": source.review_id,
         "company_id": source.company_id,
         "decision_version": source.decision_version,
-        "decision_id": decision_id,
         "source_invoice_id": source.source_invoice_id,
         "invoice": _invoice_to_data(source.invoice),
         "partner_match": _partner_match_to_data(source.partner_match),
         "product_match": _product_match_to_data(source.product_match),
         "tax_match": _tax_match_to_data(source.tax_match),
     }
+
+
+def deserialize_execution_source_invoice_payload(data: dict[str, Any]) -> ExecutionSourceInvoice:
+    """Hydrate immutable invoice/match evidence from the canonical JSON shape."""
+
+    source = ExecutionSourceInvoice(
+        review_id=_required_text(data.get("review_id")),
+        company_id=_required_int(data.get("company_id")),
+        decision_version=_required_int(data.get("decision_version")),
+        source_invoice_id=_required_text(data.get("source_invoice_id")),
+        invoice=_invoice_from_data(_require_dict(data.get("invoice"))),
+        partner_match=_partner_match_from_data(_require_dict(data.get("partner_match"))),
+        product_match=_product_match_from_data(_require_dict(data.get("product_match"))),
+        tax_match=_tax_match_from_data(_require_dict(data.get("tax_match"))),
+    )
+    invoice_identity = source.invoice.header.ettn or source.invoice.header.invoice_uuid
+    if source.source_invoice_id != invoice_identity:
+        raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR)
+    return source
 
 
 def _validate_query(*, review_id: str, company_id: int, decision_version: int) -> None:
@@ -165,15 +191,17 @@ def _validate_query(*, review_id: str, company_id: int, decision_version: int) -
 
 
 def _source_from_evidence(evidence: ExecutionSourceInvoiceEvidence) -> ExecutionSourceInvoice:
-    return ExecutionSourceInvoice(
-        review_id=evidence.review_id,
-        company_id=evidence.company_id,
-        decision_version=evidence.decision_version,
-        source_invoice_id=evidence.source_invoice_id,
-        invoice=_invoice_from_data(_require_dict(evidence.invoice)),
-        partner_match=_partner_match_from_data(_require_dict(evidence.partner_match)),
-        product_match=_product_match_from_data(_require_dict(evidence.product_match)),
-        tax_match=_tax_match_from_data(_require_dict(evidence.tax_match)),
+    return deserialize_execution_source_invoice_payload(
+        {
+            "review_id": evidence.review_id,
+            "company_id": evidence.company_id,
+            "decision_version": evidence.decision_version,
+            "source_invoice_id": evidence.source_invoice_id,
+            "invoice": evidence.invoice,
+            "partner_match": evidence.partner_match,
+            "product_match": evidence.product_match,
+            "tax_match": evidence.tax_match,
+        }
     )
 
 
