@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.application.commands import VendorBillWriteCommand
@@ -237,12 +238,24 @@ def test_malformed_match_evidence_fails_safely(session: Session) -> None:
     assert "raw" not in str(exc_info.value).lower()
 
 
-def test_duplicate_source_rows_are_rejected_as_ambiguous(session: Session) -> None:
+def test_duplicate_decision_evidence_is_prevented_by_unique_constraint(session: Session) -> None:
     _seed_decision_and_evidence(session)
-    _seed_evidence(session)
 
-    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+    with pytest.raises(IntegrityError):
+        _seed_evidence(session)
+
+
+def test_unsupported_schema_version_is_rejected_safely(session: Session) -> None:
+    _seed_decision_and_evidence(session)
+    evidence = session.scalar(select(ExecutionSourceInvoiceEvidence))
+    assert evidence is not None
+    evidence.schema_version = 999
+    session.flush()
+
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError) as exc_info:
         _load_source(session)
+
+    assert str(exc_info.value) == "Execution source invoice evidence is invalid."
 
 
 def test_company_isolation_is_enforced_in_evidence_query(session: Session) -> None:

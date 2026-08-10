@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.application.exceptions import ApplicationError
 from app.application.execution.contracts import AcceptedReviewDecision, ExecutionSourceInvoice
-from app.application.execution.exceptions import ExecutionSourceInvoiceError
+from app.application.execution.exceptions import ExecutionSourceInvoiceError, ExecutionSourceInvoiceIntegrityError
 from app.application.workbench.allocations import (
     AllocationCompleteness,
     BusinessContextAllocation,
@@ -44,11 +44,13 @@ from app.application.workbench.exceptions import (
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
+from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
 from app.persistence.execution_source_invoice_reader import (
     deserialize_execution_source_invoice_payload,
+    serialize_execution_source_invoice,
     serialize_execution_source_invoice_payload,
 )
 
@@ -103,7 +105,7 @@ class SqlAlchemyReviewRepository:
             existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
             if existing is not None:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
-                self._return_existing_evidence_or_raise_conflict(evidence)
+                self._return_existing_review_evidence_or_raise_conflict(evidence)
                 return existing_item
 
             record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
@@ -204,6 +206,8 @@ class SqlAlchemyReviewRepository:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
     def submit_review_decision(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
+        if _requires_execution_evidence(command):
+            raise ReviewDecisionError("Execution source evidence is required for Vendor Bill decisions.")
         try:
             existing = self._find_decision_by_idempotency_key(
                 company_id=command.company_id,
@@ -242,8 +246,66 @@ class SqlAlchemyReviewRepository:
         except IntegrityError as exc:
             return self._handle_decision_integrity_error(command, exc=exc)
         except ApplicationError:
+            self._session.expire_all()
             raise
         except SQLAlchemyError as exc:
+            self._session.expire_all()
+            raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
+
+    def submit_review_decision_with_execution_evidence(
+        self,
+        command: ReviewDecisionCommand,
+        evidence: ExecutionSourceInvoice,
+    ) -> ReviewDecisionAcknowledgement:
+        _validate_execution_evidence_for_command(command, evidence)
+        try:
+            existing = self._find_decision_by_idempotency_key(
+                company_id=command.company_id,
+                idempotency_key=command.idempotency_key,
+            )
+            if existing is not None:
+                acknowledgement = self._return_existing_decision_or_raise_conflict(existing, command)
+                self._return_existing_evidence_or_raise_conflict(existing, evidence)
+                return acknowledgement
+
+            target_status = _target_status_for_decision(command.decision)
+            decision = _decision_model_from_command(
+                command,
+                decision_id=f"review-decision:{uuid4()}",
+            )
+            with self._session.begin_nested():
+                result = self._session.execute(
+                    update(WorkbenchReviewItem)
+                    .where(
+                        WorkbenchReviewItem.review_id == command.review_id,
+                        WorkbenchReviewItem.company_id == command.company_id,
+                        WorkbenchReviewItem.status == ReviewStatus.PENDING_REVIEW.value,
+                        WorkbenchReviewItem.version == command.expected_version,
+                    )
+                    .values(
+                        status=target_status.value,
+                        version=command.expected_version + 1,
+                        updated_at=func.now(),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if int(result.rowcount or 0) != 1:
+                    self._raise_submission_conflict(command)
+                review_item = self._review_item_for_evidence_capture(command)
+                _validate_execution_evidence_for_review_item(review_item, evidence)
+                self._session.add(decision)
+                self._session.flush()
+                self._session.refresh(decision)
+                self._add_execution_source_evidence(decision, evidence)
+                self._session.flush()
+            return _acknowledgement_from_decision_model(decision)
+        except IntegrityError as exc:
+            return self._handle_decision_with_evidence_integrity_error(command, evidence, exc=exc)
+        except ApplicationError:
+            self._session.expire_all()
+            raise
+        except SQLAlchemyError as exc:
+            self._session.expire_all()
             raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
 
     def get_accepted_decision(
@@ -353,13 +415,16 @@ class SqlAlchemyReviewRepository:
         if existing is not None:
             try:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
-                self._return_existing_evidence_or_raise_conflict(evidence)
+                self._return_existing_review_evidence_or_raise_conflict(evidence)
                 return existing_item
             except ReviewPersistenceError as conflict_exc:
                 raise conflict_exc from exc
         raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
-    def _return_existing_evidence_or_raise_conflict(self, evidence: ReviewExecutionEvidence) -> ReviewExecutionEvidence:
+    def _return_existing_review_evidence_or_raise_conflict(
+        self,
+        evidence: ReviewExecutionEvidence,
+    ) -> ReviewExecutionEvidence:
         existing = self._find_review_execution_evidence(
             review_id=evidence.review_id,
             company_id=evidence.company_id,
@@ -411,6 +476,50 @@ class SqlAlchemyReviewRepository:
             )
         return _acknowledgement_from_decision_model(existing)
 
+    def _return_existing_evidence_or_raise_conflict(
+        self,
+        existing_decision: WorkbenchReviewDecision,
+        evidence: ExecutionSourceInvoice,
+    ) -> ExecutionSourceInvoiceEvidence:
+        record = self._find_execution_evidence_by_decision_id(existing_decision.decision_id)
+        if record is None:
+            raise ReviewDecisionDataIntegrityError("Execution source evidence is missing for the accepted decision.")
+        if _evidence_fingerprint_from_model(record) != _evidence_fingerprint(
+            evidence,
+            decision_id=existing_decision.decision_id,
+        ):
+            raise ReviewDecisionIdempotencyConflictError(
+                "Execution source evidence conflicts with the accepted decision."
+            )
+        return record
+
+    def _add_execution_source_evidence(
+        self,
+        decision: WorkbenchReviewDecision,
+        evidence: ExecutionSourceInvoice,
+    ) -> None:
+        self._session.add(
+            ExecutionSourceInvoiceEvidence(
+                **serialize_execution_source_invoice(evidence, decision_id=decision.decision_id)
+            )
+        )
+
+    def _find_execution_evidence_by_decision_id(self, decision_id: str) -> ExecutionSourceInvoiceEvidence | None:
+        return self._session.scalar(
+            select(ExecutionSourceInvoiceEvidence).where(ExecutionSourceInvoiceEvidence.decision_id == decision_id)
+        )
+
+    def _review_item_for_evidence_capture(self, command: ReviewDecisionCommand) -> WorkbenchReviewItem:
+        record = self._session.scalar(
+            select(WorkbenchReviewItem).where(
+                WorkbenchReviewItem.review_id == command.review_id,
+                WorkbenchReviewItem.company_id == command.company_id,
+            )
+        )
+        if record is None:
+            raise ReviewNotFoundError("Review item was not found.")
+        return record
+
     def _raise_submission_conflict(self, command: ReviewDecisionCommand) -> None:
         try:
             record = self._session.scalar(
@@ -445,6 +554,29 @@ class SqlAlchemyReviewRepository:
         if existing is not None:
             try:
                 return self._return_existing_decision_or_raise_conflict(existing, command)
+            except ReviewDecisionError as conflict_exc:
+                raise conflict_exc from exc
+        raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
+
+    def _handle_decision_with_evidence_integrity_error(
+        self,
+        command: ReviewDecisionCommand,
+        evidence: ExecutionSourceInvoice,
+        *,
+        exc: IntegrityError,
+    ) -> ReviewDecisionAcknowledgement:
+        try:
+            existing = self._find_decision_by_idempotency_key(
+                company_id=command.company_id,
+                idempotency_key=command.idempotency_key,
+            )
+        except SQLAlchemyError as lookup_exc:
+            raise ReviewDecisionError(SAFE_DECISION_ERROR) from lookup_exc
+        if existing is not None:
+            try:
+                acknowledgement = self._return_existing_decision_or_raise_conflict(existing, command)
+                self._return_existing_evidence_or_raise_conflict(existing, evidence)
+                return acknowledgement
             except ReviewDecisionError as conflict_exc:
                 raise conflict_exc from exc
         raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
@@ -500,6 +632,43 @@ def _validate_review_evidence_linkage(
     for tax_result in evidence.tax_match.line_results:
         if tax_result.result.company_id is not None and tax_result.result.company_id != company_id:
             raise WorkbenchContractError("Tax mapping company_id must match review item company.")
+
+
+def _validate_execution_evidence_for_command(
+    command: ReviewDecisionCommand,
+    evidence: ExecutionSourceInvoice,
+) -> None:
+    if not _requires_execution_evidence(command):
+        raise WorkbenchContractError("Execution source evidence is only accepted for Vendor Bill decisions.")
+    if not isinstance(evidence, ExecutionSourceInvoice):
+        raise WorkbenchContractError("ExecutionSourceInvoice evidence is required.")
+    if evidence.review_id != command.review_id:
+        raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+    if evidence.company_id != command.company_id:
+        raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+    if evidence.decision_version != command.expected_version + 1:
+        raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+    invoice_identity = evidence.invoice.header.ettn or evidence.invoice.header.invoice_uuid
+    if evidence.source_invoice_id != invoice_identity:
+        raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+
+
+def _validate_execution_evidence_for_review_item(
+    review_item: WorkbenchReviewItem,
+    evidence: ExecutionSourceInvoice,
+) -> None:
+    if review_item.review_id != evidence.review_id:
+        raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+    if review_item.company_id != evidence.company_id:
+        raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+    if review_item.invoice_id != evidence.source_invoice_id:
+        raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+
+
+def _requires_execution_evidence(command: ReviewDecisionCommand) -> bool:
+    return (
+        command.decision is ReviewDecisionType.SELECT_WORKFLOW and command.selected_workflow is WorkflowType.VENDOR_BILL
+    )
 
 
 def _query_filters(query: ReviewQueueQuery) -> list[Any]:
@@ -1067,6 +1236,39 @@ def _business_context_allocations_fingerprint(context: BusinessContextAllocation
         serialized.get("currency"),
         tuple(tuple((key, allocation[key]) for key in sorted(allocation)) for allocation in serialized["allocations"]),
     )
+
+
+def _evidence_fingerprint(
+    evidence: ExecutionSourceInvoice,
+    *,
+    decision_id: str,
+) -> tuple[Any, ...]:
+    return _canonical_mapping_fingerprint(serialize_execution_source_invoice(evidence, decision_id=decision_id))
+
+
+def _evidence_fingerprint_from_model(record: ExecutionSourceInvoiceEvidence) -> tuple[Any, ...]:
+    return _canonical_mapping_fingerprint(
+        {
+            "schema_version": record.schema_version,
+            "review_id": record.review_id,
+            "company_id": record.company_id,
+            "decision_version": record.decision_version,
+            "decision_id": record.decision_id,
+            "source_invoice_id": record.source_invoice_id,
+            "invoice": record.invoice,
+            "partner_match": record.partner_match,
+            "product_match": record.product_match,
+            "tax_match": record.tax_match,
+        }
+    )
+
+
+def _canonical_mapping_fingerprint(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple((str(key), _canonical_mapping_fingerprint(value[key])) for key in sorted(value))
+    if isinstance(value, list | tuple):
+        return tuple(_canonical_mapping_fingerprint(item) for item in value)
+    return value
 
 
 def _target_status_for_decision(decision: ReviewDecisionType) -> ReviewStatus:

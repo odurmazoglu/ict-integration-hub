@@ -61,6 +61,7 @@ from app.application.workbench.odoo_submission_use_cases import (
 )
 from app.application.workbench.ports import (
     ReviewDecisionWriter,
+    ReviewExecutionEvidenceReader,
     ReviewItemWriter,
     ReviewQueueReader,
     WorkbenchDecisionCandidateReader,
@@ -105,6 +106,7 @@ __all__ = [
     "ReviewDecisionType",
     "ReviewDecisionWriter",
     "ReviewExecutionEvidence",
+    "ReviewExecutionEvidenceReader",
     "ReviewDetailQuery",
     "ReviewItem",
     "ReviewItemCreationService",

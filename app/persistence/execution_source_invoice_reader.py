@@ -41,6 +41,7 @@ from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMa
 SAFE_SOURCE_ERROR = "Execution source invoice evidence could not be loaded safely."
 SAFE_SOURCE_NOT_FOUND = "Execution source invoice evidence was not found."
 SAFE_SOURCE_INTEGRITY_ERROR = "Execution source invoice evidence is invalid."
+EXECUTION_SOURCE_EVIDENCE_SCHEMA_VERSION = 1
 
 
 class SqlAlchemyExecutionSourceInvoiceReader:
@@ -152,6 +153,7 @@ def serialize_execution_source_invoice_payload(source: ExecutionSourceInvoice) -
     """Serialize immutable invoice/match evidence without coupling to accepted decisions."""
 
     return {
+        "schema_version": EXECUTION_SOURCE_EVIDENCE_SCHEMA_VERSION,
         "review_id": source.review_id,
         "company_id": source.company_id,
         "decision_version": source.decision_version,
@@ -191,6 +193,8 @@ def _validate_query(*, review_id: str, company_id: int, decision_version: int) -
 
 
 def _source_from_evidence(evidence: ExecutionSourceInvoiceEvidence) -> ExecutionSourceInvoice:
+    if evidence.schema_version != EXECUTION_SOURCE_EVIDENCE_SCHEMA_VERSION:
+        raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR)
     return deserialize_execution_source_invoice_payload(
         {
             "review_id": evidence.review_id,

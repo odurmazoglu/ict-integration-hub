@@ -10,9 +10,24 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.application.workbench import ReviewExecutionEvidence, ReviewItem, ReviewItemCreationService, ReviewStatus
+from app.application.execution.exceptions import (
+    ExecutionSourceInvoiceIntegrityError,
+    ExecutionSourceInvoiceNotFoundError,
+)
+from app.application.workbench import (
+    LineResolution,
+    ReviewDecisionCommand,
+    ReviewDecisionType,
+    ReviewExecutionEvidence,
+    ReviewItem,
+    ReviewItemCreationService,
+    ReviewStatus,
+    SubmitReviewDecisionUseCase,
+    TaxResolution,
+)
 from app.application.workbench.exceptions import (
     ReviewDataIntegrityError,
+    ReviewDecisionIdempotencyConflictError,
     ReviewIdempotencyConflictError,
     ReviewNotFoundError,
     ReviewPersistenceError,
@@ -29,9 +44,11 @@ from app.matching import (
     ProductMatchResult,
     ProductMatchStatus,
 )
+from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
+from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
-from app.persistence import SqlAlchemyReviewRepository
+from app.persistence import SqlAlchemyReviewExecutionEvidenceReader, SqlAlchemyReviewRepository
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
 
@@ -117,6 +134,93 @@ def test_schema_version_persisted(session: Session) -> None:
     record = session.scalar(select(WorkbenchReviewExecutionEvidence))
     assert record is not None
     assert record.schema_version == 1
+
+
+def test_concrete_review_execution_evidence_reader_exists() -> None:
+    assert SqlAlchemyReviewExecutionEvidenceReader.__name__ == "SqlAlchemyReviewExecutionEvidenceReader"
+
+
+def test_concrete_reader_maps_stage_one_expected_version_to_stage_two_decision_version(session: Session) -> None:
+    _create_stage_one_evidence(session)
+
+    source = SqlAlchemyReviewExecutionEvidenceReader(session).get_evidence(
+        review_id="review-1",
+        company_id=7,
+        expected_version=1,
+    )
+
+    assert source.review_id == "review-1"
+    assert source.company_id == 7
+    assert source.decision_version == 2
+    assert source.source_invoice_id == "ETTN-1"
+    assert source.invoice.header.invoice_number == "INV-1"
+
+
+def test_concrete_reader_rejects_wrong_company(session: Session) -> None:
+    _create_stage_one_evidence(session)
+
+    with pytest.raises(ExecutionSourceInvoiceNotFoundError):
+        SqlAlchemyReviewExecutionEvidenceReader(session).get_evidence(
+            review_id="review-1",
+            company_id=8,
+            expected_version=1,
+        )
+
+
+def test_concrete_reader_rejects_wrong_review_version(session: Session) -> None:
+    _create_stage_one_evidence(session)
+
+    with pytest.raises(ExecutionSourceInvoiceNotFoundError):
+        SqlAlchemyReviewExecutionEvidenceReader(session).get_evidence(
+            review_id="review-1",
+            company_id=7,
+            expected_version=2,
+        )
+
+
+def test_concrete_reader_rejects_missing_stage_one_evidence(session: Session) -> None:
+    with pytest.raises(ExecutionSourceInvoiceNotFoundError):
+        SqlAlchemyReviewExecutionEvidenceReader(session).get_evidence(
+            review_id="review-1",
+            company_id=7,
+            expected_version=1,
+        )
+
+
+def test_concrete_reader_rejects_malformed_stage_one_evidence(session: Session) -> None:
+    _seed_malformed_evidence(session, invoice={"raw": "<secret-token>"})
+
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError) as exc_info:
+        SqlAlchemyReviewExecutionEvidenceReader(session).get_evidence(
+            review_id="review-1",
+            company_id=7,
+            expected_version=1,
+        )
+
+    assert "secret-token" not in str(exc_info.value)
+    assert "raw" not in str(exc_info.value).lower()
+
+
+def test_concrete_reader_rejects_unsupported_stage_one_schema_version(session: Session) -> None:
+    _create_stage_one_evidence(session)
+    record = session.scalar(select(WorkbenchReviewExecutionEvidence))
+    assert record is not None
+    record.schema_version = 999
+    session.flush()
+
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        SqlAlchemyReviewExecutionEvidenceReader(session).get_evidence(
+            review_id="review-1",
+            company_id=7,
+            expected_version=1,
+        )
+
+
+def test_concrete_reader_does_not_use_stage_two_evidence_table_as_source() -> None:
+    source = Path("app/persistence/review_execution_evidence_reader.py").read_text(encoding="utf-8")
+
+    assert "ExecutionSourceInvoiceEvidence" not in source
+    assert "execution_source_invoice_evidence" not in source
 
 
 def test_exact_review_company_version_lookup(session: Session) -> None:
@@ -327,6 +431,7 @@ def test_no_provider_odoo_uyumsoft_or_rematching_boundaries() -> None:
         path.read_text(encoding="utf-8")
         for path in (
             Path("app/persistence/workbench_review_repository.py"),
+            Path("app/persistence/review_execution_evidence_reader.py"),
             Path("app/application/workbench/evidence.py"),
             Path("app/models/workbench_review_execution_evidence.py"),
         )
@@ -359,6 +464,72 @@ def test_sqlalchemy_stays_out_of_application_workbench_layer() -> None:
     assert "sqlalchemy" not in source.lower()
     assert "app.models" not in source.lower()
     assert "app.db" not in source.lower()
+
+
+def test_submit_use_case_with_concrete_reader_persists_vendor_bill_decision_and_stage_two_evidence(
+    session: Session,
+) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    _create_stage_one_evidence(session, repository=repository)
+
+    acknowledgement = SubmitReviewDecisionUseCase(
+        review_decision_writer=repository,
+        execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+    ).execute(_select_workflow_command())
+
+    stage_two = session.scalar(select(ExecutionSourceInvoiceEvidence))
+    assert acknowledgement.version == 2
+    assert session.query(WorkbenchReviewDecision).count() == 1
+    assert stage_two is not None
+    assert stage_two.review_id == "review-1"
+    assert stage_two.company_id == 7
+    assert stage_two.decision_version == 2
+    assert stage_two.source_invoice_id == "ETTN-1"
+    assert stage_two.invoice["header"]["invoice_number"] == "INV-1"
+    assert stage_two.partner_match["partner_id"] == 501
+    assert stage_two.product_match["line_results"][0]["result"]["product_id"] == 701
+    assert stage_two.tax_match["line_results"][0]["result"]["tax_id"] == 801
+
+
+def test_submit_use_case_replay_with_concrete_reader_does_not_duplicate_stage_two_evidence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    _create_stage_one_evidence(session, repository=repository)
+    use_case = SubmitReviewDecisionUseCase(
+        review_decision_writer=repository,
+        execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+    )
+    command = _select_workflow_command()
+
+    first = use_case.execute(command)
+    second = use_case.execute(command)
+
+    assert second == first
+    assert session.query(WorkbenchReviewDecision).count() == 1
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 1
+
+
+def test_submit_use_case_changed_stage_one_evidence_for_same_decision_identity_conflicts(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    _create_stage_one_evidence(session, repository=repository)
+    use_case = SubmitReviewDecisionUseCase(
+        review_decision_writer=repository,
+        execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+    )
+    command = _select_workflow_command()
+    use_case.execute(command)
+    stage_one = session.scalar(select(WorkbenchReviewExecutionEvidence))
+    assert stage_one is not None
+    stage_one.invoice = dict(
+        stage_one.invoice,
+        header=dict(stage_one.invoice["header"], invoice_number="INV-CHANGED"),
+    )
+    session.flush()
+
+    with pytest.raises(ReviewDecisionIdempotencyConflictError):
+        use_case.execute(command)
+
+    assert session.query(WorkbenchReviewDecision).count() == 1
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 1
 
 
 def test_service_delegates_atomic_creation_to_writer() -> None:
@@ -442,6 +613,34 @@ def _evidence(
         partner_match=_partner_match(),
         product_match=product_match or _product_match(),
         tax_match=tax_match or _tax_match(company_id=company_id),
+    )
+
+
+def _create_stage_one_evidence(
+    session: Session,
+    *,
+    repository: SqlAlchemyReviewRepository | None = None,
+) -> None:
+    (repository or SqlAlchemyReviewRepository(session)).create_review_item_with_execution_evidence(
+        _review_item("review-1", workflow=WorkflowType.VENDOR_BILL),
+        company_id=7,
+        idempotency_key="review-key-1",
+        evidence=_evidence(),
+    )
+
+
+def _select_workflow_command() -> ReviewDecisionCommand:
+    return ReviewDecisionCommand(
+        review_id="review-1",
+        company_id=7,
+        expected_version=1,
+        decision=ReviewDecisionType.SELECT_WORKFLOW,
+        selected_workflow=WorkflowType.VENDOR_BILL,
+        selected_partner_id=501,
+        line_resolutions=(LineResolution(line_number="1", selected_product_id=701),),
+        tax_resolutions=(TaxResolution(line_number="1", tax_index=0, selected_tax_id=801),),
+        decided_by="finance.user",
+        idempotency_key="decision-key-1",
     )
 
 
@@ -589,7 +788,15 @@ def _seed_malformed_evidence(session: Session, **overrides: object) -> None:
 @pytest.fixture()
 def session() -> Session:
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[WorkbenchReviewItem.__table__, WorkbenchReviewExecutionEvidence.__table__])
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            WorkbenchReviewItem.__table__,
+            WorkbenchReviewExecutionEvidence.__table__,
+            WorkbenchReviewDecision.__table__,
+            ExecutionSourceInvoiceEvidence.__table__,
+        ],
+    )
     factory = sessionmaker(bind=engine)
     with factory() as db_session:
         yield db_session

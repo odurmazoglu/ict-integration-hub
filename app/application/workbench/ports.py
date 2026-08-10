@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewItem, ReviewQueueResult
@@ -11,6 +11,9 @@ from app.application.workbench.projection import (
     WorkbenchProjection,
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
+
+if TYPE_CHECKING:
+    from app.application.execution.contracts import ExecutionSourceInvoice
 
 
 class ReviewQueueReader(Protocol):
@@ -44,6 +47,26 @@ class ReviewDecisionWriter(Protocol):
     """Write port for explicit user decision submission against a pending review item."""
 
     def submit_review_decision(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
+        pass
+
+    def submit_review_decision_with_execution_evidence(
+        self,
+        command: ReviewDecisionCommand,
+        evidence: ExecutionSourceInvoice,
+    ) -> ReviewDecisionAcknowledgement:
+        pass
+
+
+class ReviewExecutionEvidenceReader(Protocol):
+    """Read-only port for immutable execution source evidence available at review submission time."""
+
+    def get_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        expected_version: int,
+    ) -> ExecutionSourceInvoice:
         pass
 
 
