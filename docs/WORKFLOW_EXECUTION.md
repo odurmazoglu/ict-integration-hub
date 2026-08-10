@@ -110,6 +110,21 @@ Durable tables:
 
 The event stream records immutable evidence such as `ExecutionCreated`, `PlanningCompleted`, `ExecutionStarted`, `StepStarted`, `StepCompleted`, `StepFailed`, `RetryScheduled`, `ExecutionCompleted`, `ExecutionFailed`, and `ExecutionCancelled`. Repository APIs expose append and history operations only; event update and delete operations are intentionally absent.
 
+One logical runtime transition is persisted atomically by the repository adapter. The application layer prepares a new immutable `ExecutionSnapshot` and one or more `ExecutionEventDraft` values; it does not manage SQLAlchemy sessions, transactions, or event sequence numbers.
+
+For each transition, the SQLAlchemy repository persists in one database transaction:
+
+- execution snapshot state
+- affected step state and safe result summary
+- checkpoint/current step
+- retry count and failure summary when applicable
+- one or more append-only events
+- `checkpoint.last_event_id` pointing at the final committed event in that transition
+
+Event sequence allocation is repository-owned. The `workflow_executions.next_event_sequence` counter is incremented inside the same transaction, and multiple events in a transition receive consecutive sequence numbers. The coordinator never derives event ordering from history length.
+
+Optimistic runtime concurrency is enforced with `workflow_executions.runtime_version`. `persist_transition` receives the expected version from the snapshot and updates only when the persisted runtime version still matches. Stale concurrent attempts fail safely with a runtime concurrency conflict and do not append events.
+
 ## Recovery And Retry
 
 `ExecutionCheckpoint` stores completed step keys, failed step key, current cursor, retry count, and last event id. On restart, the runtime loads the snapshot and checkpoint, then resumes from the current incomplete step instead of replaying completed steps from the beginning.

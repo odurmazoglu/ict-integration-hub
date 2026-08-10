@@ -156,6 +156,8 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "retry_policy",
         "failure",
         "current_step_key",
+        "runtime_version",
+        "next_event_sequence",
         "created_at",
         "updated_at",
     }.issubset(execution_columns)

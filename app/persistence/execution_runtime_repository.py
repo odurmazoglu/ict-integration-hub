@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -17,6 +18,7 @@ from app.application.execution.contracts import (
     ExecutionStepType,
 )
 from app.application.execution.exceptions import (
+    ExecutionConcurrencyConflictError,
     ExecutionIdempotencyConflictError,
     ExecutionPersistenceError,
     ExecutionStateError,
@@ -24,6 +26,7 @@ from app.application.execution.exceptions import (
 from app.application.execution.runtime import (
     ExecutionCheckpoint,
     ExecutionEvent,
+    ExecutionEventDraft,
     ExecutionEventType,
     ExecutionFailure,
     ExecutionHistory,
@@ -56,8 +59,28 @@ class SqlAlchemyExecutionRuntimeRepository:
 
             snapshot = _snapshot_from_plan(plan, retry_policy=retry_policy)
             record = _execution_model_from_snapshot(snapshot)
+            created_event = _event_draft(
+                execution_id=snapshot.execution_id,
+                event_type=ExecutionEventType.EXECUTION_CREATED,
+                state=ExecutionState.NEW,
+            )
+            planned_event = _event_draft(
+                execution_id=snapshot.execution_id,
+                event_type=ExecutionEventType.PLANNING_COMPLETED,
+                state=ExecutionState.PLANNED,
+            )
             with self._session.begin_nested():
                 self._session.add(record)
+                events = _assign_event_sequences(
+                    execution_id=snapshot.execution_id,
+                    first_sequence=record.next_event_sequence,
+                    drafts=(created_event, planned_event),
+                )
+                record.next_event_sequence += len(events)
+                record.checkpoint = _checkpoint_to_data(
+                    _checkpoint_with_last_event_id(snapshot.checkpoint, events[-1].event_id)
+                )
+                self._session.add_all(self._event_model_from_event(event) for event in events)
                 self._session.flush()
             return self.get_snapshot(execution_id=plan.execution_id) or snapshot
         except IntegrityError as exc:
@@ -123,18 +146,88 @@ class SqlAlchemyExecutionRuntimeRepository:
         except SQLAlchemyError as exc:
             raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
 
+    def persist_transition(
+        self,
+        *,
+        snapshot: ExecutionSnapshot,
+        events: tuple[ExecutionEventDraft, ...],
+        expected_runtime_version: int,
+    ) -> ExecutionSnapshot:
+        if not events:
+            raise ExecutionStateError("Execution transition requires at least one event.")
+        try:
+            record = self._execution_record(execution_id=snapshot.execution_id)
+            if record is None:
+                raise ExecutionStateError("Execution runtime was not found.")
+            if record.runtime_version != expected_runtime_version:
+                raise ExecutionConcurrencyConflictError("Execution runtime snapshot is stale.")
+            assigned_events = _assign_event_sequences(
+                execution_id=snapshot.execution_id,
+                first_sequence=record.next_event_sequence,
+                drafts=events,
+            )
+            final_event_id = assigned_events[-1].event_id
+            checkpoint = _checkpoint_with_last_event_id(snapshot.checkpoint, final_event_id)
+            with self._session.begin_nested():
+                result = self._session.execute(
+                    update(WorkflowExecution)
+                    .where(
+                        WorkflowExecution.execution_id == snapshot.execution_id,
+                        WorkflowExecution.runtime_version == expected_runtime_version,
+                    )
+                    .values(
+                        state=snapshot.state.value,
+                        mode=snapshot.mode.value,
+                        checkpoint=_checkpoint_to_data(checkpoint),
+                        retry_policy=_retry_policy_to_data(snapshot.retry_policy),
+                        failure=_failure_to_data(snapshot.failure),
+                        current_step_key=checkpoint.current_step_key,
+                        runtime_version=expected_runtime_version + 1,
+                        next_event_sequence=record.next_event_sequence + len(assigned_events),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if int(result.rowcount or 0) != 1:
+                    raise ExecutionConcurrencyConflictError("Execution runtime snapshot is stale.")
+                existing_steps = {step.step_key: step for step in record.steps}
+                for step in snapshot.steps:
+                    model_step = existing_steps[step.step_key]
+                    model_step.state = step.state.value
+                    model_step.retry_count = step.retry_count
+                    model_step.last_result = _step_result_to_data(step.last_result)
+                self._session.add_all(self._event_model_from_event(event) for event in assigned_events)
+                self._session.flush()
+            return self.get_snapshot(execution_id=snapshot.execution_id) or snapshot
+        except (ExecutionConcurrencyConflictError, ExecutionStateError):
+            raise
+        except IntegrityError as exc:
+            raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
+        except SQLAlchemyError as exc:
+            raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
+
     def append(self, event: ExecutionEvent) -> ExecutionEvent:
         try:
             record = self._execution_record(execution_id=event.execution_id)
             if record is None:
                 raise ExecutionStateError("Execution runtime was not found.")
             with self._session.begin_nested():
-                self._session.add(_event_model_from_event(event))
+                next_event = ExecutionEvent(
+                    event_id=event.event_id,
+                    execution_id=event.execution_id,
+                    event_type=event.event_type,
+                    sequence=record.next_event_sequence,
+                    state=event.state,
+                    step_key=event.step_key,
+                    step_type=event.step_type,
+                    data=event.data,
+                )
+                self._session.add(self._event_model_from_event(next_event))
                 checkpoint = dict(record.checkpoint)
-                checkpoint["last_event_id"] = event.event_id
+                checkpoint["last_event_id"] = next_event.event_id
                 record.checkpoint = checkpoint
+                record.next_event_sequence += 1
                 self._session.flush()
-            return event
+            return next_event
         except IntegrityError as exc:
             raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
         except ExecutionStateError:
@@ -187,7 +280,11 @@ class SqlAlchemyExecutionRuntimeRepository:
             select(WorkflowExecution)
             .options(selectinload(WorkflowExecution.steps))
             .where(WorkflowExecution.execution_id == execution_id)
+            .execution_options(populate_existing=True)
         )
+
+    def _event_model_from_event(self, event: ExecutionEvent) -> WorkflowExecutionEvent:
+        return _event_model_from_event(event)
 
 
 def _snapshot_from_plan(plan: ExecutionPlan, *, retry_policy: ExecutionRetryPolicy) -> ExecutionSnapshot:
@@ -222,6 +319,7 @@ def _snapshot_from_plan(plan: ExecutionPlan, *, retry_policy: ExecutionRetryPoli
         steps=runtime_steps,
         checkpoint=checkpoint,
         retry_policy=retry_policy,
+        runtime_version=1,
     )
 
 
@@ -240,6 +338,8 @@ def _execution_model_from_snapshot(snapshot: ExecutionSnapshot) -> WorkflowExecu
         retry_policy=_retry_policy_to_data(snapshot.retry_policy),
         failure=_failure_to_data(snapshot.failure),
         current_step_key=snapshot.checkpoint.current_step_key,
+        runtime_version=snapshot.runtime_version,
+        next_event_sequence=1,
     )
     record.steps = [_step_model_from_runtime_step(snapshot.execution_id, step) for step in snapshot.steps]
     return record
@@ -259,6 +359,7 @@ def _snapshot_from_model(record: WorkflowExecution) -> ExecutionSnapshot:
         steps=tuple(_runtime_step_from_model(step) for step in sorted(record.steps, key=lambda item: item.sequence)),
         checkpoint=_checkpoint_from_data(record.checkpoint),
         retry_policy=_retry_policy_from_data(record.retry_policy),
+        runtime_version=record.runtime_version,
         failure=_failure_from_data(record.failure),
     )
 
@@ -285,6 +386,55 @@ def _runtime_step_from_model(record: WorkflowExecutionStep) -> ExecutionRuntimeS
         allocation_keys=tuple(record.allocation_keys),
         retry_count=record.retry_count,
         last_result=_step_result_from_data(record.last_result),
+    )
+
+
+def _assign_event_sequences(
+    *,
+    execution_id: str,
+    first_sequence: int,
+    drafts: tuple[ExecutionEventDraft, ...],
+) -> tuple[ExecutionEvent, ...]:
+    return tuple(
+        ExecutionEvent(
+            event_id=draft.event_id,
+            execution_id=execution_id,
+            event_type=draft.event_type,
+            sequence=first_sequence + index,
+            state=draft.state,
+            step_key=draft.step_key,
+            step_type=draft.step_type,
+            data=draft.data,
+        )
+        for index, draft in enumerate(drafts)
+    )
+
+
+def _event_draft(
+    *,
+    execution_id: str,
+    event_type: ExecutionEventType,
+    state: ExecutionState,
+) -> ExecutionEventDraft:
+    return ExecutionEventDraft(
+        event_id=f"execution-event:{uuid4()}",
+        execution_id=execution_id,
+        event_type=event_type,
+        state=state,
+    )
+
+
+def _checkpoint_with_last_event_id(
+    checkpoint: ExecutionCheckpoint,
+    last_event_id: str,
+) -> ExecutionCheckpoint:
+    return ExecutionCheckpoint(
+        execution_id=checkpoint.execution_id,
+        completed_step_keys=checkpoint.completed_step_keys,
+        failed_step_key=checkpoint.failed_step_key,
+        current_step_key=checkpoint.current_step_key,
+        retry_count=checkpoint.retry_count,
+        last_event_id=last_event_id,
     )
 
 

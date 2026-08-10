@@ -41,6 +41,8 @@ class WorkflowExecution(Base):
     retry_policy: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     failure: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     current_step_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    runtime_version: Mapped[int] = mapped_column(nullable=False, default=1)
+    next_event_sequence: Mapped[int] = mapped_column(nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime(), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         AwareDateTime(),

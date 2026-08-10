@@ -195,6 +195,28 @@ class ExecutionEvent(ApplicationDTO):
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutionEventDraft(ApplicationDTO):
+    event_id: str
+    execution_id: str
+    event_type: ExecutionEventType
+    state: ExecutionState
+    step_key: str | None = None
+    step_type: ExecutionStepType | None = None
+    data: dict[str, str | int | bool | None] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require_text(self.event_id, "event_id is required.")
+        _require_text(self.execution_id, "execution_id is required.")
+        _require_enum(self.event_type, ExecutionEventType, "event_type must be canonical.")
+        _require_enum(self.state, ExecutionState, "state must be canonical.")
+        if self.step_key is not None:
+            _require_text(self.step_key, "step_key must be non-empty when supplied.")
+        if self.step_type is not None:
+            _require_enum(self.step_type, ExecutionStepType, "step_type must be canonical.")
+        object.__setattr__(self, "data", dict(self.data))
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionRuntimeStep(ApplicationDTO):
     step_key: str
     step_type: ExecutionStepType
@@ -233,6 +255,7 @@ class ExecutionSnapshot(ApplicationDTO):
     steps: tuple[ExecutionRuntimeStep, ...]
     checkpoint: ExecutionCheckpoint
     retry_policy: ExecutionRetryPolicy
+    runtime_version: int = 1
     failure: ExecutionFailure | None = None
 
     def __post_init__(self) -> None:
@@ -255,6 +278,8 @@ class ExecutionSnapshot(ApplicationDTO):
             raise ExecutionPlanningError("ExecutionCheckpoint is required.")
         if not isinstance(self.retry_policy, ExecutionRetryPolicy):
             raise ExecutionPlanningError("ExecutionRetryPolicy is required.")
+        if type(self.runtime_version) is not int or self.runtime_version < 1:
+            raise ExecutionPlanningError("runtime_version must be positive.")
         if self.failure is not None and not isinstance(self.failure, ExecutionFailure):
             raise ExecutionPlanningError("failure must be an ExecutionFailure.")
 

@@ -71,7 +71,7 @@ Current implemented capabilities:
 - Odoo Workbench decision submission orchestrator that reads one decision-ready candidate and submits immutable Hub decision evidence without writing back to Odoo.
 - Read-only ERP reference validation for Odoo-submitted Workbench allocation identifiers before Hub decision evidence is accepted.
 - Workflow execution foundation for accepted Workbench decisions with immutable execution plans, deterministic execution idempotency, composite dry-run coordination, and no ERP writes.
-- Durable workflow execution runtime with SQLAlchemy execution snapshots, step state, append-only events, checkpoints, recovery contracts, and retry policy vocabulary without ERP writes.
+- Durable workflow execution runtime with SQLAlchemy execution snapshots, step state, atomic append-only events, repository-owned event sequencing, optimistic runtime-version checks, checkpoints, recovery contracts, and retry policy vocabulary without ERP writes.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.

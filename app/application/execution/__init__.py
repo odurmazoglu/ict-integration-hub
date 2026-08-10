@@ -16,6 +16,7 @@ from app.application.execution.contracts import (
 )
 from app.application.execution.coordinator import ExecutionCoordinator
 from app.application.execution.exceptions import (
+    ExecutionConcurrencyConflictError,
     ExecutionError,
     ExecutionIdempotencyConflictError,
     ExecutionNotFoundError,
@@ -39,6 +40,7 @@ from app.application.execution.runtime import (
     ExecutionCheckpoint,
     ExecutionCursor,
     ExecutionEvent,
+    ExecutionEventDraft,
     ExecutionEventType,
     ExecutionFailure,
     ExecutionHistory,
@@ -68,10 +70,12 @@ __all__ = [
     "AcceptedReviewDecisionReader",
     "ExecutionCoordinator",
     "ExecutionError",
+    "ExecutionConcurrencyConflictError",
     "ExecutionCheckpoint",
     "ExecutionCheckpointRepository",
     "ExecutionCursor",
     "ExecutionEvent",
+    "ExecutionEventDraft",
     "ExecutionEventRepository",
     "ExecutionEventType",
     "ExecutionFailure",

@@ -18,7 +18,7 @@ from app.application.execution.ports import (
 )
 from app.application.execution.runtime import (
     ExecutionCheckpoint,
-    ExecutionEvent,
+    ExecutionEventDraft,
     ExecutionEventType,
     ExecutionFailure,
     ExecutionRetryPolicy,
@@ -65,25 +65,6 @@ class ExecutionRuntimeService:
     def create_or_load(self, *, plan: ExecutionPlan, retry_policy: ExecutionRetryPolicy) -> ExecutionRuntime:
         snapshot = self._runtime_repository.create_from_plan(plan=plan, retry_policy=retry_policy)
         history = self._event_repository.history(execution_id=snapshot.execution_id)
-        if not history.events:
-            self._event_repository.append(
-                _event(
-                    execution_id=snapshot.execution_id,
-                    sequence=1,
-                    event_type=ExecutionEventType.EXECUTION_CREATED,
-                    state=ExecutionState.NEW,
-                )
-            )
-            self._event_repository.append(
-                _event(
-                    execution_id=snapshot.execution_id,
-                    sequence=2,
-                    event_type=ExecutionEventType.PLANNING_COMPLETED,
-                    state=ExecutionState.PLANNED,
-                )
-            )
-            history = self._event_repository.history(execution_id=snapshot.execution_id)
-            snapshot = self._runtime_repository.get_snapshot(execution_id=snapshot.execution_id) or snapshot
         return ExecutionRuntime(snapshot=snapshot, history=history)
 
 
@@ -140,13 +121,17 @@ class ExecutionRuntimeCoordinator:
         else:
             assert_legal_transition(snapshot.state, ExecutionState.RUNNING)
         next_snapshot = _replace_snapshot(snapshot, state=ExecutionState.RUNNING)
-        next_snapshot = self._runtime_repository.save_snapshot(next_snapshot)
-        self._append_event(
-            next_snapshot,
-            event_type=ExecutionEventType.EXECUTION_STARTED,
-            state=ExecutionState.RUNNING,
+        return self._runtime_repository.persist_transition(
+            snapshot=next_snapshot,
+            events=(
+                _event(
+                    execution_id=next_snapshot.execution_id,
+                    event_type=ExecutionEventType.EXECUTION_STARTED,
+                    state=ExecutionState.RUNNING,
+                ),
+            ),
+            expected_runtime_version=snapshot.runtime_version,
         )
-        return next_snapshot
 
     def _mark_step_running(self, snapshot: ExecutionSnapshot, step: ExecutionRuntimeStep) -> ExecutionSnapshot:
         next_snapshot = _replace_step(
@@ -155,14 +140,18 @@ class ExecutionRuntimeCoordinator:
             state=ExecutionRuntimeStepState.RUNNING,
             current_step_key=step.step_key,
         )
-        next_snapshot = self._runtime_repository.save_snapshot(next_snapshot)
-        self._append_event(
-            next_snapshot,
-            event_type=ExecutionEventType.STEP_STARTED,
-            state=ExecutionState.RUNNING,
-            step=step,
+        return self._runtime_repository.persist_transition(
+            snapshot=next_snapshot,
+            events=(
+                _event(
+                    execution_id=next_snapshot.execution_id,
+                    event_type=ExecutionEventType.STEP_STARTED,
+                    state=ExecutionState.RUNNING,
+                    step=step,
+                ),
+            ),
+            expected_runtime_version=snapshot.runtime_version,
         )
-        return next_snapshot
 
     def _execute_step(self, snapshot: ExecutionSnapshot, step: ExecutionRuntimeStep) -> ExecutionStepResult:
         plan_step = next(plan_step for plan_step in snapshot.plan.steps if plan_step.step_key == step.step_key)
@@ -194,15 +183,19 @@ class ExecutionRuntimeCoordinator:
             completed_step_keys=completed,
             current_step_key=next_step,
         )
-        next_snapshot = self._runtime_repository.save_snapshot(next_snapshot)
-        self._append_event(
-            next_snapshot,
-            event_type=ExecutionEventType.STEP_COMPLETED,
-            state=ExecutionState.RUNNING,
-            step=step,
-            result=result,
+        return self._runtime_repository.persist_transition(
+            snapshot=next_snapshot,
+            events=(
+                _event(
+                    execution_id=next_snapshot.execution_id,
+                    event_type=ExecutionEventType.STEP_COMPLETED,
+                    state=ExecutionState.RUNNING,
+                    step=step,
+                    result=result,
+                ),
+            ),
+            expected_runtime_version=snapshot.runtime_version,
         )
-        return next_snapshot
 
     def _handle_failure(
         self,
@@ -223,22 +216,26 @@ class ExecutionRuntimeCoordinator:
                 failed_step_key=step.step_key,
                 failure=_failure_from_result(result),
             )
-            next_snapshot = self._runtime_repository.save_snapshot(next_snapshot)
-            self._append_event(
-                next_snapshot,
-                event_type=ExecutionEventType.STEP_FAILED,
-                state=ExecutionState.RUNNING,
-                step=step,
-                result=result,
+            return self._runtime_repository.persist_transition(
+                snapshot=next_snapshot,
+                events=(
+                    _event(
+                        execution_id=next_snapshot.execution_id,
+                        event_type=ExecutionEventType.STEP_FAILED,
+                        state=ExecutionState.RUNNING,
+                        step=step,
+                        result=result,
+                    ),
+                    _event(
+                        execution_id=next_snapshot.execution_id,
+                        event_type=ExecutionEventType.RETRY_SCHEDULED,
+                        state=ExecutionState.WAITING_RETRY,
+                        step=step,
+                        result=result,
+                    ),
+                ),
+                expected_runtime_version=snapshot.runtime_version,
             )
-            self._append_event(
-                next_snapshot,
-                event_type=ExecutionEventType.RETRY_SCHEDULED,
-                state=ExecutionState.WAITING_RETRY,
-                step=step,
-                result=result,
-            )
-            return next_snapshot
 
         next_snapshot = _replace_step(
             snapshot,
@@ -251,82 +248,68 @@ class ExecutionRuntimeCoordinator:
             failed_step_key=step.step_key,
             failure=_failure_from_result(result),
         )
-        next_snapshot = self._runtime_repository.save_snapshot(next_snapshot)
-        self._append_event(
-            next_snapshot,
-            event_type=ExecutionEventType.STEP_FAILED,
-            state=ExecutionState.RUNNING,
-            step=step,
-            result=result,
+        return self._runtime_repository.persist_transition(
+            snapshot=next_snapshot,
+            events=(
+                _event(
+                    execution_id=next_snapshot.execution_id,
+                    event_type=ExecutionEventType.STEP_FAILED,
+                    state=ExecutionState.RUNNING,
+                    step=step,
+                    result=result,
+                ),
+                _event(
+                    execution_id=next_snapshot.execution_id,
+                    event_type=ExecutionEventType.EXECUTION_FAILED,
+                    state=ExecutionState.FAILED,
+                    step=step,
+                    result=result,
+                ),
+            ),
+            expected_runtime_version=snapshot.runtime_version,
         )
-        self._append_event(
-            next_snapshot,
-            event_type=ExecutionEventType.EXECUTION_FAILED,
-            state=ExecutionState.FAILED,
-            step=step,
-            result=result,
-        )
-        return next_snapshot
 
     def _complete(self, snapshot: ExecutionSnapshot) -> ExecutionSnapshot:
         assert_legal_transition(snapshot.state, ExecutionState.COMPLETED)
         next_snapshot = _replace_snapshot(snapshot, state=ExecutionState.COMPLETED, current_step_key=None)
-        next_snapshot = self._runtime_repository.save_snapshot(next_snapshot)
-        self._append_event(
-            next_snapshot,
-            event_type=ExecutionEventType.EXECUTION_COMPLETED,
-            state=ExecutionState.COMPLETED,
-        )
-        return next_snapshot
-
-    def _append_event(
-        self,
-        snapshot: ExecutionSnapshot,
-        *,
-        event_type: ExecutionEventType,
-        state: ExecutionState,
-        step: ExecutionRuntimeStep | None = None,
-        result: ExecutionStepResult | None = None,
-    ) -> ExecutionEvent:
-        history = self._event_repository.history(execution_id=snapshot.execution_id)
-        data: dict[str, str | int | bool | None] = {}
-        if result is not None:
-            data = {
-                "status": result.status.value,
-                "dry_run": result.dry_run,
-                "error_code": result.error_code,
-                "message": result.message,
-            }
-        return self._event_repository.append(
-            _event(
-                execution_id=snapshot.execution_id,
-                sequence=len(history.events) + 1,
-                event_type=event_type,
-                state=state,
-                step=step,
-                data=data,
-            )
+        return self._runtime_repository.persist_transition(
+            snapshot=next_snapshot,
+            events=(
+                _event(
+                    execution_id=next_snapshot.execution_id,
+                    event_type=ExecutionEventType.EXECUTION_COMPLETED,
+                    state=ExecutionState.COMPLETED,
+                ),
+            ),
+            expected_runtime_version=snapshot.runtime_version,
         )
 
 
 def _event(
     *,
     execution_id: str,
-    sequence: int,
     event_type: ExecutionEventType,
     state: ExecutionState,
     step: ExecutionRuntimeStep | None = None,
+    result: ExecutionStepResult | None = None,
     data: dict[str, str | int | bool | None] | None = None,
-) -> ExecutionEvent:
-    return ExecutionEvent(
+) -> ExecutionEventDraft:
+    event_data = data or {}
+    if result is not None:
+        event_data = {
+            "status": result.status.value,
+            "dry_run": result.dry_run,
+            "error_code": result.error_code,
+            "message": result.message,
+        }
+    return ExecutionEventDraft(
         event_id=f"execution-event:{uuid4()}",
         execution_id=execution_id,
         event_type=event_type,
-        sequence=sequence,
         state=state,
         step_key=step.step_key if step else None,
         step_type=step.step_type if step else None,
-        data=data or {},
+        data=event_data,
     )
 
 
@@ -387,6 +370,7 @@ def _replace_snapshot(
         steps=snapshot.steps,
         checkpoint=checkpoint,
         retry_policy=snapshot.retry_policy,
+        runtime_version=snapshot.runtime_version,
         failure=snapshot.failure,
     )
 
@@ -443,6 +427,7 @@ def _replace_step(
         steps=tuple(steps),
         checkpoint=checkpoint,
         retry_policy=snapshot.retry_policy,
+        runtime_version=snapshot.runtime_version,
         failure=failure or snapshot.failure,
     )
 

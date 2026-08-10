@@ -11,6 +11,7 @@ from app.application.execution.contracts import (
 from app.application.execution.runtime import (
     ExecutionCheckpoint,
     ExecutionEvent,
+    ExecutionEventDraft,
     ExecutionHistory,
     ExecutionRetryPolicy,
     ExecutionSnapshot,
@@ -59,6 +60,15 @@ class ExecutionRuntimeRepository(Protocol):
         pass
 
     def save_snapshot(self, snapshot: ExecutionSnapshot) -> ExecutionSnapshot:
+        pass
+
+    def persist_transition(
+        self,
+        *,
+        snapshot: ExecutionSnapshot,
+        events: tuple[ExecutionEventDraft, ...],
+        expected_runtime_version: int,
+    ) -> ExecutionSnapshot:
         pass
 
 

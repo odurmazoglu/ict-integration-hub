@@ -55,3 +55,9 @@ class ExecutionNotFoundError(ExecutionRuntimeError):
     """Safe error raised when an execution runtime cannot be found."""
 
     error_category = "execution_not_found"
+
+
+class ExecutionConcurrencyConflictError(ExecutionRuntimeError):
+    """Safe error raised when a stale runtime snapshot attempts a transition."""
+
+    error_category = "execution_concurrency_conflict"
