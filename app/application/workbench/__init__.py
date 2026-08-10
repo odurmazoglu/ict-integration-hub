@@ -37,6 +37,7 @@ from app.application.workbench.erp_references import (
     SalesOrderReference,
     SalesOrderReferenceRepository,
 )
+from app.application.workbench.evidence import ReviewExecutionEvidence
 from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateDataError,
@@ -103,6 +104,7 @@ __all__ = [
     "ReviewDecisionCommand",
     "ReviewDecisionType",
     "ReviewDecisionWriter",
+    "ReviewExecutionEvidence",
     "ReviewDetailQuery",
     "ReviewItem",
     "ReviewItemCreationService",

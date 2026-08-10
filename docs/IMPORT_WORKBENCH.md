@@ -75,11 +75,12 @@ Implemented contract types:
 - `ReviewDetailQuery`: one-item lookup contract
 - `ReviewDecisionCommand`: explicit user decision command for `SELECT_WORKFLOW` or `DISMISS`
 - `ReviewDecisionAcknowledgement`: safe acknowledgement contract
+- `ReviewExecutionEvidence`: immutable pre-decision execution evidence pinned to the current review version
 - `LineResolution` and `TaxResolution`: explicit selected ERP IDs for invoice lines and taxes
 - `BusinessContextDecision`: legacy single-context procurement traceability evidence retained for historical rows
 - `BusinessContextAllocationType`, `AllocationCompleteness`, `BusinessContextAllocation`, and `BusinessContextAllocationSet`: canonical multi-allocation business context contracts
 - `ReviewQueueReader`: read-only application port for future queue/detail adapters
-- `ReviewItemWriter`: create-only application port for idempotent pending review item creation
+- `ReviewItemWriter`: application port for idempotent pending review item creation, including atomic creation with pre-decision execution evidence for Vendor Bill-capable reviews
 - `ReviewDecisionWriter`: decision submission application port for explicit user decisions
 - `ReviewItemCreationService`: small application service that delegates review item creation through the writer port
 - `ListReviewQueueUseCase`: application query boundary for listing review items through `ReviewQueueReader`
@@ -95,7 +96,7 @@ Implemented contract types:
 
 ## Current Persistence Foundation
 
-The persistence foundation stores Workbench review items in `workbench_review_items` and append-only user decisions in `workbench_review_decisions`.
+The persistence foundation stores Workbench review items in `workbench_review_items`, pre-decision execution evidence in `workbench_review_execution_evidence`, and append-only user decisions in `workbench_review_decisions`.
 
 Implemented behavior:
 
@@ -121,9 +122,12 @@ Implemented behavior:
 - persist selected workflow, partner, line resolutions, tax resolutions, business context allocation evidence, comment, user identity, idempotency key, and version-before/version-after as controlled audit data
 - serialize allocation evidence as deterministic JSON with enum values as strings, Decimal values as canonical strings, and allocation rows sorted by `allocation_key`
 - include complete allocation payloads in decision idempotency while treating equivalent Decimal forms and list/tuple hydration differences as identical
-- persist version-pinned execution source invoice evidence separately for future Vendor Bill execution: structured `InternalInvoice`, supplier partner match, product match, and tax mapping snapshots tied to the accepted decision identity
+- persist version-pinned pre-decision execution evidence before a Vendor Bill-capable review is ready: structured `InternalInvoice`, supplier partner match, product match, and tax mapping snapshots tied to the current review version
+- persist version-pinned accepted execution source invoice evidence separately for future Vendor Bill execution: the later decision-time snapshot is tied to the accepted decision identity
 
-The execution source evidence reader reconstructs from persisted Hub evidence only. It does not reread Uyumsoft, reread Odoo, rematch suppliers, rematch products, remap taxes, parse Workbench display text, or infer missing evidence. Missing or malformed evidence fails closed.
+The two-stage evidence model is deliberate. Stage 1 pre-decision evidence is the authoritative source snapshot for `(company_id, review_id, review_version)`. Stage 2 accepted execution evidence, added by the follow-up decision-capture PR, pins/copies that exact snapshot to the accepted `decision_id` atomically with decision submission. A request with `expected_version=4` reads Stage 1 evidence where `review_version=4` and creates Stage 2 execution evidence for accepted decision version `5`.
+
+The execution source evidence readers reconstruct from persisted Hub evidence only. They do not reread Uyumsoft, reread Odoo, refresh current ERP master data, rematch suppliers, rematch products, remap taxes, parse Workbench display text, use fuzzy matching, use AI, or infer missing evidence. Missing or malformed evidence fails closed. A Vendor Bill-capable review must not become decision-ready without successful pre-decision evidence persistence; the SQLAlchemy adapter persists review creation and Stage 1 evidence in one transaction for that path.
 
 The persistence adapter does not store raw XML in execution source evidence, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.
 
@@ -134,6 +138,7 @@ flowchart TB
     Writer[ReviewItemWriter Port]
     Repository[SQLAlchemy Review Repository]
     ReviewItems[(PostgreSQL workbench_review_items)]
+    ReviewEvidence[(PostgreSQL workbench_review_execution_evidence)]
     Decisions[(PostgreSQL workbench_review_decisions)]
     ProjectionAdapter[Future Projection Adapter]
     Reader[ReviewQueueReader Port]
@@ -144,6 +149,7 @@ flowchart TB
     Service --> Writer
     Writer --> Repository
     Repository --> ReviewItems
+    Repository --> ReviewEvidence
     Repository --> Decisions
     ProjectionAdapter --> Reader
     Reader --> Repository

@@ -6,12 +6,14 @@ from app.models.provider import Provider
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
 from app.models.workbench_review_decision import WorkbenchReviewDecision
+from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 
 __all__ = [
     "ConnectorEvent",
     "ExecutionSourceInvoiceEvidence",
+    "WorkbenchReviewExecutionEvidence",
     "InvoiceDocument",
     "OdooDraftInvoice",
     "Provider",

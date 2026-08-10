@@ -824,8 +824,9 @@ def test_application_workbench_contracts_do_not_import_sqlalchemy_or_models() ->
     assert "app.db" not in source.lower()
 
 
-def test_review_item_writer_port_is_create_only() -> None:
+def test_review_item_writer_port_has_no_update_delete_or_save_mutation() -> None:
     assert "create_review_item" in ReviewItemWriter.__dict__
+    assert "create_review_item_with_execution_evidence" in ReviewItemWriter.__dict__
     assert "update" not in ReviewItemWriter.__dict__
     assert "delete" not in ReviewItemWriter.__dict__
     assert "save" not in ReviewItemWriter.__dict__
