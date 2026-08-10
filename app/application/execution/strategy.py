@@ -68,3 +68,9 @@ class FoundationExecutionStrategy:
             message="Execution strategy is not enabled in this foundation PR.",
             error_code="EXECUTION_NOT_ENABLED",
         )
+
+
+def foundation_no_write_strategy_resolver() -> ExecutionStrategyResolver:
+    """Register the dry-run foundation strategy for every known execution step type."""
+
+    return ExecutionStrategyResolver((FoundationExecutionStrategy(supported_step_types=tuple(ExecutionStepType)),))

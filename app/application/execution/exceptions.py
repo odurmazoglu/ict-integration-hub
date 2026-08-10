@@ -27,6 +27,12 @@ class ExecutionUnsupportedStepError(ExecutionError):
     error_category = "execution_unsupported_step_error"
 
 
+class ExecutionModeNotEnabledError(ExecutionError):
+    """Safe error raised when production execution is intentionally disabled."""
+
+    error_category = "execution_mode_not_enabled"
+
+
 class ExecutionIdempotencyConflictError(ExecutionError):
     """Safe error raised when an execution idempotency key conflicts."""
 

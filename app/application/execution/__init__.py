@@ -1,5 +1,11 @@
 """Workflow execution foundation contracts."""
 
+from app.application.execution.accepted_decision_use_cases import (
+    AcceptedDecisionExecutionResult,
+    AcceptedDecisionExecutionStatus,
+    RunAcceptedDecisionExecutionCommand,
+    RunAcceptedDecisionExecutionUseCase,
+)
 from app.application.execution.contracts import (
     AcceptedReviewDecision,
     ExecutionFailurePolicy,
@@ -19,6 +25,7 @@ from app.application.execution.exceptions import (
     ExecutionConcurrencyConflictError,
     ExecutionError,
     ExecutionIdempotencyConflictError,
+    ExecutionModeNotEnabledError,
     ExecutionNotFoundError,
     ExecutionPersistenceError,
     ExecutionPlanningError,
@@ -62,9 +69,12 @@ from app.application.execution.strategy import (
     ExecutionStrategy,
     ExecutionStrategyResolver,
     FoundationExecutionStrategy,
+    foundation_no_write_strategy_resolver,
 )
 
 __all__ = [
+    "AcceptedDecisionExecutionResult",
+    "AcceptedDecisionExecutionStatus",
     "AcceptedReviewDecision",
     "AcceptedReviewDecisionReader",
     "ExecutionCoordinator",
@@ -81,6 +91,7 @@ __all__ = [
     "ExecutionHistory",
     "ExecutionIdempotencyConflictError",
     "ExecutionMode",
+    "ExecutionModeNotEnabledError",
     "ExecutionNotFoundError",
     "ExecutionPersistenceError",
     "ExecutionPlan",
@@ -114,7 +125,10 @@ __all__ = [
     "FoundationExecutionStrategy",
     "InMemoryExecutionStateRepository",
     "RetryPolicyResolver",
+    "RunAcceptedDecisionExecutionCommand",
+    "RunAcceptedDecisionExecutionUseCase",
     "StaticRetryPolicyResolver",
     "assert_legal_transition",
     "execution_idempotency_key",
+    "foundation_no_write_strategy_resolver",
 ]

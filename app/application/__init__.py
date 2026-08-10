@@ -5,8 +5,11 @@ from app.application.decision import DecisionEngine, ManualReviewStrategy, Vendo
 from app.application.dto import ApplicationDTO
 from app.application.exceptions import ApplicationError
 from app.application.execution import (
+    AcceptedDecisionExecutionResult,
+    AcceptedDecisionExecutionStatus,
     ExecutionCoordinator,
     ExecutionMode,
+    ExecutionModeNotEnabledError,
     ExecutionPlan,
     ExecutionPlanner,
     ExecutionRequest,
@@ -21,7 +24,10 @@ from app.application.execution import (
     ExecutionStepType,
     ExecutionStrategyResolver,
     FoundationExecutionStrategy,
+    RunAcceptedDecisionExecutionCommand,
+    RunAcceptedDecisionExecutionUseCase,
     StaticRetryPolicyResolver,
+    foundation_no_write_strategy_resolver,
 )
 from app.application.queries import Query
 from app.application.rules import DeterministicRuleEngine
@@ -56,6 +62,8 @@ from app.application.workflow import (
 __all__ = [
     "ApplicationDTO",
     "ApplicationError",
+    "AcceptedDecisionExecutionResult",
+    "AcceptedDecisionExecutionStatus",
     "BusinessContextDecision",
     "Command",
     "DecisionEngine",
@@ -64,6 +72,7 @@ __all__ = [
     "ExecutionRuntimeCoordinator",
     "ExecutionRuntimeService",
     "ExecutionMode",
+    "ExecutionModeNotEnabledError",
     "ExecutionPlan",
     "ExecutionPlanner",
     "ExecutionRequest",
@@ -76,6 +85,7 @@ __all__ = [
     "ExecutionStepType",
     "ExecutionStrategyResolver",
     "FoundationExecutionStrategy",
+    "foundation_no_write_strategy_resolver",
     "StaticRetryPolicyResolver",
     "ImportInvoiceUseCase",
     "ImportSession",
@@ -97,6 +107,8 @@ __all__ = [
     "ReviewQueueReader",
     "ReviewQueueResult",
     "ReviewStatus",
+    "RunAcceptedDecisionExecutionCommand",
+    "RunAcceptedDecisionExecutionUseCase",
     "SubmitReviewDecisionUseCase",
     "TaxResolution",
     "UseCase",

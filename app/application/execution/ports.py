@@ -19,7 +19,13 @@ from app.application.execution.runtime import (
 class AcceptedReviewDecisionReader(Protocol):
     """Read one accepted authoritative Hub decision for execution planning."""
 
-    def get_accepted_decision(self, *, review_id: str, company_id: int) -> AcceptedReviewDecision:
+    def get_accepted_decision(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+    ) -> AcceptedReviewDecision:
         pass
 
 

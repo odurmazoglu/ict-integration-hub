@@ -7,6 +7,7 @@ from app.application.commands import Command
 from app.application.dto import ApplicationDTO
 from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.workbench.allocations import BusinessContextAllocationSet
+from app.application.workbench.dto import ReviewDecisionType
 from app.application.workflow import WorkflowType
 
 
@@ -60,7 +61,7 @@ class ExecutionRequest(Command):
     company_id: int
     decision_version: int
     decision_id: str | None
-    idempotency_key: str
+    idempotency_key: str | None
     mode: ExecutionMode
     selected_workflow: WorkflowType | None
     business_context_allocations: BusinessContextAllocationSet | None = None
@@ -72,7 +73,8 @@ class ExecutionRequest(Command):
         _require_positive_int(self.decision_version, "decision_version must be positive.")
         if self.decision_id is not None:
             _require_text(self.decision_id, "decision_id must be non-empty when supplied.")
-        _require_text(self.idempotency_key, "idempotency_key is required.")
+        if self.idempotency_key is not None:
+            _require_text(self.idempotency_key, "idempotency_key must be non-empty when supplied.")
         _require_enum(self.mode, ExecutionMode, "mode must be a canonical ExecutionMode.")
         if self.selected_workflow is not None:
             _require_enum(
@@ -216,11 +218,13 @@ class AcceptedReviewDecision(ApplicationDTO):
     decision_id: str | None
     selected_workflow: WorkflowType | None
     business_context_allocations: BusinessContextAllocationSet | None = None
+    decision_type: ReviewDecisionType = ReviewDecisionType.SELECT_WORKFLOW
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
         _require_positive_int(self.company_id, "company_id must be positive.")
         _require_positive_int(self.decision_version, "decision_version must be positive.")
+        _require_enum(self.decision_type, ReviewDecisionType, "decision_type must be a canonical ReviewDecisionType.")
         if self.decision_id is not None:
             _require_text(self.decision_id, "decision_id must be non-empty when supplied.")
         if self.selected_workflow is not None:
