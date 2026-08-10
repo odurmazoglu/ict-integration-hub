@@ -96,6 +96,7 @@ flowchart TB
     Decision[ReviewDecisionCommand]
     Projection[WorkbenchProjection]
     Candidate[OdooWorkbenchDecisionCandidate]
+    OdooSubmit[SubmitOdooWorkbenchCandidateUseCase]
     Submit[SubmitReviewDecisionUseCase]
     Writer[ReviewDecisionWriter Port]
     Store[(PostgreSQL workbench_review_decisions)]
@@ -105,7 +106,8 @@ flowchart TB
     ReviewItem --> Projection
     Queue --> ReviewItem
     Detail --> ReviewItem
-    Candidate --> Decision
+    Candidate --> OdooSubmit
+    OdooSubmit --> Decision
     ReviewItem --> Decision
     Decision --> Submit
     Submit --> Writer
@@ -118,6 +120,8 @@ Traceability choices in the current `ReviewDecisionCommand` are explicit user-pr
 A single invoice-level selected workflow may not describe every allocation purpose in mixed cases. Future workflow handling must distinguish the review decision, the overall processing strategy, and allocation-line purposes. Mixed allocations will require a future Composite Workflow Strategy. This PR does not add `WorkflowType.MIXED`, change the existing workflow vocabulary, or implement composite execution.
 
 Submitted decisions are persisted append-only and update the review item status/version atomically. `SELECT_WORKFLOW` moves `PENDING_REVIEW` to `DECISION_SUBMITTED`; `DISMISS` moves `PENDING_REVIEW` to `DISMISSED`. Optimistic concurrency uses `expected_version`, and decision-command idempotency uses `(company_id, idempotency_key)` so identical replays return the original acknowledgement without incrementing the review version again. Allocation idempotency compares canonical Decimal strings, canonical currency values, and allocation rows sorted by `allocation_key`; order-only changes do not conflict, but changed amounts, percentages, allocation types, target ERP identifiers, customer invoice links, completeness, totals, or allocation keys do.
+
+`SubmitOdooWorkbenchCandidateUseCase` is the narrow Odoo-read-to-Hub-submit bridge. It reads one decision-ready Odoo candidate, preserves company scope, expected version, idempotency key, selected workflow, audit identity, and allocation evidence, then submits exactly once through `SubmitReviewDecisionUseCase`. It does not acknowledge Odoo, validate ERP references, execute workflow strategies, or create downstream ERP records.
 
 Recommendation acceptance is future work. It must be introduced together with a versioned recommendation contract that carries identity, source, and rationale metadata so stale recommendations cannot be accepted silently.
 

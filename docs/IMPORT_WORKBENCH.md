@@ -368,6 +368,26 @@ sequenceDiagram
 
 Future `SELECT_WORKFLOW` decisions may carry `BusinessContextAllocationSet` evidence. Future `DISMISS` decisions must reject allocations. Allocation requirements will depend on selected workflow and future execution strategy.
 
+## Odoo Candidate Submission Orchestration
+
+The Odoo Workbench decision submission orchestrator is an application-layer bridge from the read-only Odoo candidate reader to `SubmitReviewDecisionUseCase`:
+
+```text
+Odoo Studio
+  -> OdooWorkbenchDecisionCandidateReader
+  -> OdooWorkbenchDecisionCandidate
+  -> SubmitOdooWorkbenchCandidateUseCase
+  -> ReviewDecisionCommand
+  -> SubmitReviewDecisionUseCase
+  -> append-only Hub decision evidence
+```
+
+It reads one decision-ready candidate for an exact `review_id` and requested `company_id`. If the candidate is not ready or cannot be found, the result is `NOT_READY_OR_NOT_FOUND` and no Hub decision is submitted. If a candidate is returned for a different company, orchestration fails safely and the company scope is not rewritten.
+
+The orchestrator preserves `expected_version` and `idempotency_key` from the Odoo candidate. The Odoo user id is retained only as audit evidence in `decided_by`; it is not authorization. Stale-version and idempotency conflicts from Hub decision submission are not reread or retried.
+
+This slice does not write acknowledgement fields to Odoo, clear readiness, update projection version, validate ERP references, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, perform profitability posting, infer allocations, or use AI/fuzzy matching. ERP reference validation belongs to PR #77, and Hub-to-Odoo acknowledgement projection remains a future focused slice.
+
 `DISMISS` stores the dismissal decision, moves the review item to `DISMISSED`, and stores no workflow-specific selections.
 
 ## UI Responsibilities

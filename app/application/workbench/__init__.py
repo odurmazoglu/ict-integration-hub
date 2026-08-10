@@ -24,6 +24,14 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateNotFoundError,
     WorkbenchCandidateReadError,
     WorkbenchContractError,
+    WorkbenchSubmissionCompanyMismatchError,
+    WorkbenchSubmissionOrchestrationError,
+)
+from app.application.workbench.odoo_submission_use_cases import (
+    OdooWorkbenchSubmissionResult,
+    OdooWorkbenchSubmissionStatus,
+    SubmitOdooWorkbenchCandidateCommand,
+    SubmitOdooWorkbenchCandidateUseCase,
 )
 from app.application.workbench.ports import (
     ReviewDecisionWriter,
@@ -51,6 +59,8 @@ __all__ = [
     "LineResolution",
     "ListReviewQueueUseCase",
     "OdooWorkbenchDecisionCandidate",
+    "OdooWorkbenchSubmissionResult",
+    "OdooWorkbenchSubmissionStatus",
     "ProjectionPublishResult",
     "ReviewDecisionAcknowledgement",
     "ReviewDecisionCommand",
@@ -65,6 +75,8 @@ __all__ = [
     "ReviewQueueResult",
     "ReviewStatus",
     "SubmitReviewDecisionUseCase",
+    "SubmitOdooWorkbenchCandidateCommand",
+    "SubmitOdooWorkbenchCandidateUseCase",
     "TaxResolution",
     "WorkbenchCandidateAmbiguityError",
     "WorkbenchCandidateDataError",
@@ -74,4 +86,6 @@ __all__ = [
     "WorkbenchContractError",
     "WorkbenchProjection",
     "WorkbenchProjectionPublisher",
+    "WorkbenchSubmissionCompanyMismatchError",
+    "WorkbenchSubmissionOrchestrationError",
 ]

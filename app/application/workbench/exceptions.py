@@ -91,3 +91,15 @@ class WorkbenchCandidateAmbiguityError(WorkbenchCandidateReadError):
     """Safe error raised when more than one matching candidate projection exists."""
 
     error_category = "workbench_candidate_ambiguity"
+
+
+class WorkbenchSubmissionOrchestrationError(ApplicationError):
+    """Safe base error for Odoo Workbench decision submission orchestration failures."""
+
+    error_category = "workbench_submission_orchestration_error"
+
+
+class WorkbenchSubmissionCompanyMismatchError(WorkbenchSubmissionOrchestrationError):
+    """Safe error raised when a candidate escapes the requested company scope."""
+
+    error_category = "workbench_submission_company_mismatch"
