@@ -233,6 +233,7 @@ It also introduces narrow application ports:
 
 - `WorkbenchProjectionPublisher`
 - `WorkbenchDecisionCandidateReader`
+- `SubmitOdooWorkbenchCandidateUseCase`
 
 The ports do not expose Odoo client objects, Odoo model objects, SQLAlchemy sessions, HTTP objects, or provider exceptions. Odoo JSON-2 code lives in infrastructure adapters behind these ports.
 
@@ -250,6 +251,14 @@ Business context allocation contracts are defined in the Application layer and a
 - `BusinessContextAllocationSet`
 
 The application contract has replaced legacy `business_context` with `business_context_allocations`. Projection ingestion maps `IPP Review Allocation` child lines into that allocation set. Do not accept both legacy `x_ipp_business_context_json` and child allocation lines as authoritative sources in the same command.
+
+## Decision Submission Orchestrator
+
+`SubmitOdooWorkbenchCandidateUseCase` consumes the `WorkbenchDecisionCandidateReader` port and submits one immutable candidate through `SubmitReviewDecisionUseCase`. It maps the candidate to `ReviewDecisionCommand` without revalidating ERP references and without reserializing allocation evidence.
+
+Candidate `company_id` must match the requested company scope. Candidate `expected_version` and `idempotency_key` flow unchanged into the Hub command. Candidate `decided_by_odoo_user_id` is preserved as audit evidence and is not used for authorization.
+
+Successful submission returns a safe immutable result with `SUBMITTED` and the original Hub acknowledgement. Not-ready or missing candidates return `NOT_READY_OR_NOT_FOUND`. The orchestrator does not write acknowledgement fields, clear decision readiness, update projection records, retry stale versions, or execute workflows.
 
 ## Read-Only Candidate Reader
 

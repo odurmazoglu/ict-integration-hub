@@ -17,10 +17,27 @@
 - Odoo Online Workbench projection architecture, Studio model contract, immutable projection DTOs, and projection ports
 - Business Context Allocation architecture, immutable application contracts, Workbench API submission, append-only decision persistence, and idempotency canonicalization
 - Production-safe read-only Odoo Workbench decision candidate reader for configured Studio parent projection and allocation child models
+- Odoo Workbench Allocation Candidate Reader
+- Odoo Workbench Decision Submission Orchestrator
+- Odoo Workbench read-to-Hub-submit flow without Odoo acknowledgement, ERP reference validation, or workflow execution
 
 ## Next Milestones
 
-### 1. Odoo Online Workbench Projection Synchronization
+### 1. ERP Reference Validation
+
+- validate selected Customer
+- validate Recharge Recipient
+- validate Customer Invoice
+- validate Target Company
+- validate Sales Order
+- validate Purchase Order
+- validate Opportunity
+- validate Project
+- validate Analytic Account
+- validate Subscription reference
+- enforce company-scoped ERP repository checks before workflow execution
+
+### 2. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
 - Hub-to-Odoo JSON-2 projection publishing
@@ -28,14 +45,14 @@
 - no custom Odoo Python addon
 - no workflow execution
 
-### 2. Odoo Import Workbench UI
+### 3. Odoo Import Workbench UI
 
 - Odoo Studio list, form, and search views backed by the projection model
 - queue and detail screens for pending review items
 - explicit `SELECT_WORKFLOW` and `DISMISS` decision submission
 - no Odoo-owned business logic
 
-### 3. Odoo Vendor Bill Write Service
+### 4. Odoo Vendor Bill Write Service
 
 - dry-run by default
 - explicit production approval
@@ -43,7 +60,7 @@
 - draft Vendor Bill only
 - no automatic posting
 
-### 4. Import Session and Pipeline
+### 5. Import Session and Pipeline
 
 - download
 - parse
@@ -53,14 +70,14 @@
 - write
 - per-item and session summaries
 
-### 5. Rule Engine and Decision Engine
+### 6. Rule Engine and Decision Engine
 
 - company-scoped deterministic rules
 - workflow recommendation
 - priority and conflict handling
 - full audit trail
 
-### 6. Odoo Import Workbench
+### 7. Odoo Import Workbench
 
 - incoming invoice queue
 - matching and warning display
@@ -72,7 +89,7 @@
 - RFQ/PO creation option
 - direct Vendor Bill, expense, asset, manual review, and ignore actions
 
-### 7. Procurement Traceability
+### 8. Procurement Traceability
 
 - link invoice to existing PO where possible
 - support reconstructing RFQ/PO for out-of-system purchases

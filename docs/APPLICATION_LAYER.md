@@ -78,11 +78,15 @@ Current foundation contracts:
 - `AllocationCompleteness`
 - `BusinessContextAllocation`
 - `BusinessContextAllocationSet`
+- `SubmitOdooWorkbenchCandidateCommand`
+- `OdooWorkbenchSubmissionResult`
+- `OdooWorkbenchSubmissionStatus`
 - `ReviewQueueReader`
 - `ReviewDecisionWriter`
 - `ListReviewQueueUseCase`
 - `GetReviewItemUseCase`
 - `SubmitReviewDecisionUseCase`
+- `SubmitOdooWorkbenchCandidateUseCase`
 
 ## Use Case Convention
 
@@ -111,6 +115,30 @@ Current executable use cases:
 - `ImportSession`
 - `ListReviewQueueUseCase`
 - `GetReviewItemUseCase`
+- `SubmitReviewDecisionUseCase`
+- `SubmitOdooWorkbenchCandidateUseCase`
+
+## Odoo Workbench Decision Submission
+
+`SubmitOdooWorkbenchCandidateUseCase` connects the read-only Odoo Workbench candidate reader port to the existing Hub decision submission use case:
+
+```text
+Odoo candidate
+  -> WorkbenchDecisionCandidateReader
+  -> OdooWorkbenchDecisionCandidate
+  -> SubmitOdooWorkbenchCandidateUseCase
+  -> ReviewDecisionCommand
+  -> SubmitReviewDecisionUseCase
+  -> append-only Hub decision evidence
+```
+
+The use case depends only on `WorkbenchDecisionCandidateReader` and `SubmitReviewDecisionUseCase`. It does not know Odoo JSON-2 details, Studio field names, SQLAlchemy, HTTP, provider credentials, or Odoo model names.
+
+The requested `company_id` is the authoritative execution scope. A candidate whose company differs from the requested company is rejected with a safe application error and is never submitted. The candidate's `expected_version`, `idempotency_key`, selected workflow, selected partner, line resolutions, tax resolutions, business context allocation set, comment, and Odoo user audit identity are copied into the canonical `ReviewDecisionCommand`. The allocation set object is passed through as immutable evidence; it is not serialized and parsed again.
+
+`WorkbenchCandidateNotFoundError` and not-ready candidates produce `OdooWorkbenchSubmissionStatus.NOT_READY_OR_NOT_FOUND` without submission. Stale versions, idempotency conflicts, malformed decisions, ambiguity, provider read failures, and submission failures are not retried by the orchestrator.
+
+This application service remains Odoo read -> Hub submit only. It does not acknowledge the projection, modify Odoo, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, validate ERP references, post profitability, infer decisions, infer allocations, or use AI/fuzzy matching.
 
 ## ImportInvoiceUseCase
 
