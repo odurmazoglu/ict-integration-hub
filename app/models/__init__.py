@@ -1,4 +1,5 @@
 from app.models.connector_event import ConnectorEvent
+from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.models.invoice_document import InvoiceDocument
 from app.models.odoo_draft_invoice import OdooDraftInvoice
 from app.models.provider import Provider
@@ -10,6 +11,7 @@ from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEv
 
 __all__ = [
     "ConnectorEvent",
+    "ExecutionSourceInvoiceEvidence",
     "InvoiceDocument",
     "OdooDraftInvoice",
     "Provider",

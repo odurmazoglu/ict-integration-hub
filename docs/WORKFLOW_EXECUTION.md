@@ -171,7 +171,18 @@ Hub runtime persistence and the Odoo draft write are a distributed write boundar
 
 Checkpoint consistency remains inside the Hub runtime boundary. Checkpoints are not independently writable; all checkpoint changes occur through `persist_transition`.
 
-The repository currently defines the `ExecutionSourceInvoiceReader` application port for authoritative source invoice and match evidence reads. It does not invent a production reader from Workbench free-form fields or partial projection data. Production wiring must provide a reader that returns the full `InternalInvoice`, `PartnerMatchResult`, `InvoiceProductMatchResult`, and `InvoiceTaxMappingResult` for the exact accepted decision identity.
+`SqlAlchemyExecutionSourceInvoiceReader` is the production persistence adapter for the `ExecutionSourceInvoiceReader` port. It reconstructs execution input only from persisted Hub evidence tied to the accepted decision:
+
+- exact `review_id`
+- exact `company_id`
+- exact accepted `decision_version`
+- exact accepted `decision_id`
+- persisted structured `InternalInvoice`
+- persisted supplier partner match evidence
+- persisted product match evidence
+- persisted tax mapping evidence
+
+The reader does not call Odoo, call Uyumsoft, re-download raw documents, rerun matching, rerun tax mapping, use current product names, use current supplier resolution, parse Workbench comments, or infer missing evidence. If evidence is absent, malformed, cross-company, or ambiguous, it fails closed with safe execution-source errors. Production Vendor Bill execute wiring remains disabled unless this full evidence snapshot is available.
 
 ## Recovery And Retry
 

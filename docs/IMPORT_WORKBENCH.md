@@ -121,8 +121,11 @@ Implemented behavior:
 - persist selected workflow, partner, line resolutions, tax resolutions, business context allocation evidence, comment, user identity, idempotency key, and version-before/version-after as controlled audit data
 - serialize allocation evidence as deterministic JSON with enum values as strings, Decimal values as canonical strings, and allocation rows sorted by `allocation_key`
 - include complete allocation payloads in decision idempotency while treating equivalent Decimal forms and list/tuple hydration differences as identical
+- persist version-pinned execution source invoice evidence separately for future Vendor Bill execution: structured `InternalInvoice`, supplier partner match, product match, and tax mapping snapshots tied to the accepted decision identity
 
-The persistence adapter does not store raw XML, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.
+The execution source evidence reader reconstructs from persisted Hub evidence only. It does not reread Uyumsoft, reread Odoo, rematch suppliers, rematch products, remap taxes, parse Workbench display text, or infer missing evidence. Missing or malformed evidence fails closed.
+
+The persistence adapter does not store raw XML in execution source evidence, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.
 
 ```mermaid
 flowchart TB
