@@ -16,7 +16,7 @@ Accepted Workbench Decision
   -> ExecutionCheckpoint
   -> ExecutionStrategyResolver
   -> ExecutionRuntimeCoordinator
-  -> dry-run ExecutionStepResult values
+  -> dry-run or supported execution step result values
   -> ExecutionResult
 ```
 
@@ -24,7 +24,7 @@ This foundation is separate from decision selection. `WorkflowType` remains the 
 
 ## Identity And Idempotency
 
-`RunAcceptedDecisionExecutionCommand` accepts only `review_id`, `company_id`, accepted decision version, and execution mode. It does not accept an allocation payload, workflow, execution id, or idempotency key from the caller. The use case reads the canonical persisted Hub decision evidence, then derives the internal `ExecutionRequest`.
+`RunAcceptedDecisionExecutionCommand` accepts only `review_id`, `company_id`, accepted decision version, execution mode, and optional explicit execution approval. It does not accept an allocation payload, workflow, execution id, or idempotency key from the caller. The use case reads the canonical persisted Hub decision evidence, then derives the internal `ExecutionRequest`.
 
 `ExecutionRequest` carries `execution_id`, `review_id`, `company_id`, accepted decision version, optional accepted `decision_id`, execution mode, selected workflow, and immutable allocation evidence. In the accepted-decision integration path, `execution_id` is a deterministic runtime identifier derived from `company_id`, `review_id`, accepted decision version, accepted `decision_id` when present, and execution mode. For legacy rows without a `decision_id`, the deterministic identifier uses an explicit `decision-id-absent` fallback. This identifier is not the canonical execution idempotency key.
 
@@ -76,12 +76,24 @@ Execution strategies use the execution-specific `ExecutionStrategy` contract. Th
 
 `ExecutionStrategyResolver` requires exactly one strategy per `ExecutionStepType`. Missing or duplicate strategies fail safely; the resolver never silently chooses the first match.
 
-The current foundation includes a no-write `FoundationExecutionStrategy` only:
+The `FoundationExecutionStrategy` remains the no-write strategy for dry-run planning:
 
 - `DRY_RUN` returns `DRY_RUN_OK`
-- `EXECUTE` is rejected by the accepted-decision execution use case before runtime creation
+- `EXECUTE` is unsupported by this strategy
 - no writer ports are called
 - `VendorBillWriter` is not invoked
+
+`VendorBillExecutionStrategy` is the first production-capable strategy:
+
+- supports only `ExecutionStepType.VENDOR_BILL`
+- supports `DRY_RUN` and `EXECUTE`
+- requires `ExecutionApproval.approved_by` for `EXECUTE`
+- reads authoritative source invoice and deterministic match evidence through `ExecutionSourceInvoiceReader`
+- builds only through `VendorBillBuilder`
+- writes only through `VendorBillWriter`
+- returns a typed `ExecutionArtifact` when a draft Vendor Bill is created or recovered
+
+Workbench `decided_by`, Odoo user identity, and Odoo projection audit fields are not execution approval. The approval acknowledgement needed by the concrete writer remains at the write-policy boundary and is not persisted in runtime events.
 
 ## Composite Coordination
 
@@ -119,6 +131,8 @@ One logical runtime transition is persisted atomically by the repository adapter
 
 The application layer has no independent snapshot, checkpoint, or event mutation API. Runtime mutations are only legal through atomic execution creation or `persist_transition`.
 
+`ExecutionArtifact` is the canonical runtime representation of ERP objects produced by execution. It is immutable, deterministic, and contains only safe artifact identity: artifact type, artifact id, external identity, and whether the current execution created the artifact. It must not contain raw provider payloads, URLs, authentication data, or secrets. Future strategies such as RFQ, Purchase Order, Expense, Fixed Asset, Subscription, and Customer Invoice execution should reuse this same artifact model instead of adding step-specific reference fields.
+
 For each transition, the SQLAlchemy repository persists in one database transaction:
 
 - execution snapshot state
@@ -136,9 +150,28 @@ Optimistic runtime concurrency is enforced with `workflow_executions.runtime_ver
 
 `RunAcceptedDecisionExecutionUseCase` is the current end-to-end runtime integration. It reads the accepted decision through `AcceptedReviewDecisionReader` by exact `review_id`, `company_id`, and decision version. It never reads raw Odoo projection rows, never infers the latest decision, and never accepts caller-supplied workflow or allocation data.
 
-For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed dry-run result without replaying completed steps.
+For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed result without replaying completed steps.
 
-`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is intentionally disabled in this integration and is rejected before strategy resolution, ERP/provider access, or runtime creation.
+`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, and every planned step supports `EXECUTE`. In this slice only a pure `VENDOR_BILL` plan can pass that preflight. Heterogeneous plans, customer recharge, purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
+
+## Vendor Bill Execution
+
+Vendor Bill execution bridges the durable runtime to the existing Draft Vendor Bill writer. The strategy constructs a deterministic writer idempotency key from execution identity and the `VENDOR_BILL` step key, then delegates duplicate detection and production gates to `VendorBillWriter` and its concrete Odoo implementation.
+
+On `created` or `existing` writer results, the step result contains exactly one `ExecutionArtifact`:
+
+- `artifact_type`: `VENDOR_BILL`
+- `artifact_id`: canonical Odoo `account.move` identifier
+- `external_identity`: deterministic writer idempotency identity used for duplicate detection
+- `created`: `true` when the writer created the draft, `false` when duplicate lookup returned an existing draft
+
+The strategy itself does not call Odoo, SQLAlchemy, Uyumsoft, AI, fuzzy matching, provider clients, posting, payment, reconciliation, unlink, customer invoice creation, RFQ, Purchase Order creation, workers, or schedulers.
+
+Hub runtime persistence and the Odoo draft write are a distributed write boundary. They cannot be committed atomically in one database transaction. Recovery relies on runtime state, deterministic writer idempotency, and Odoo-side duplicate lookup before draft creation. `ExecutionArtifact` is retained for audit, operator visibility, and replay diagnostics; it is not the recovery mechanism itself. If an Odoo draft is created and the response is lost before Hub records the step result, retrying the same step must use the same writer idempotency key so the writer can return the existing draft instead of creating a duplicate.
+
+Checkpoint consistency remains inside the Hub runtime boundary. Checkpoints are not independently writable; all checkpoint changes occur through `persist_transition`.
+
+The repository currently defines the `ExecutionSourceInvoiceReader` application port for authoritative source invoice and match evidence reads. It does not invent a production reader from Workbench free-form fields or partial projection data. Production wiring must provide a reader that returns the full `InternalInvoice`, `PartnerMatchResult`, `InvoiceProductMatchResult`, and `InvoiceTaxMappingResult` for the exact accepted decision identity.
 
 ## Recovery And Retry
 
@@ -157,9 +190,8 @@ The current runtime can mark an execution `WAITING_RETRY` and append `RetrySched
 
 This foundation does not:
 
-- write to Odoo
-- invoke `VendorBillWriter`
-- create Vendor Bills
+- write to Odoo outside the `VendorBillWriter` port
+- create non-draft Vendor Bills
 - create Customer Invoices
 - create RFQs or Purchase Orders
 - create Expenses, Assets, or Subscriptions

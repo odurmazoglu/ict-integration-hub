@@ -197,7 +197,7 @@ flowchart TB
 
 ## Workflow Execution Foundation
 
-Accepted Workbench decisions can now be transformed into durable completed dry-run runtimes without ERP writes:
+Accepted Workbench decisions can now be transformed into durable runtimes. `DRY_RUN` remains no-write. `EXECUTE` is supported only for pure `VENDOR_BILL` plans through the Draft Vendor Bill writer boundary.
 
 ```text
 Accepted Workbench Decision
@@ -209,14 +209,20 @@ Accepted Workbench Decision
   -> WorkflowExecution / WorkflowExecutionStep / WorkflowExecutionEvent
   -> ExecutionRuntimeCoordinator
   -> ExecutionStrategyResolver
-  -> dry-run ExecutionResult
+  -> dry-run or supported execution result
 ```
 
 This foundation is distinct from Rule Engine workflow selection and from `DecisionEngine`. `RunAcceptedDecisionExecutionUseCase` starts from persisted Hub decision evidence by exact review, company, and decision version. It supports composite plans for heterogeneous `BusinessContextAllocationSet` rows. Each allocation purpose maps to an explicit `ExecutionStepType`, and `WorkflowType.VENDOR_BILL` creates a separate `VENDOR_BILL` planning step.
 
-Execution steps run sequentially through the durable runtime. `DRY_RUN` creates or loads the same runtime idempotently, appends safe events only through repository-owned atomic transitions, and can resume from checkpoints without replaying completed steps. `DISMISS` decisions are not executable and create no runtime row. `EXECUTE` mode is rejected before runtime creation.
+Execution steps run sequentially through the durable runtime. `DRY_RUN` creates or loads the same runtime idempotently, appends safe events only through repository-owned atomic transitions, and can resume from checkpoints without replaying completed steps. `DISMISS` decisions are not executable and create no runtime row. `EXECUTE` requires explicit `ExecutionApproval` and all planned steps must support `EXECUTE` before runtime creation.
 
-No Vendor Bill, Customer Invoice, RFQ, Purchase Order, expense, asset, subscription, analytic distribution, profitability, or projection acknowledgement is created in this slice.
+Only `ExecutionStepType.VENDOR_BILL` has a production-capable strategy in this slice. It builds through `VendorBillBuilder`, writes only through `VendorBillWriter`, preserves the writer's production gates and Odoo duplicate lookup, and creates draft Vendor Bills only. Heterogeneous plans and all non-Vendor-Bill execution steps are rejected before runtime creation and before any ERP writer call.
+
+`ExecutionArtifact` is the canonical runtime representation of ERP objects produced by execution. Vendor Bill execution returns a typed `VENDOR_BILL` artifact; future RFQ, Purchase Order, Expense, Fixed Asset, Subscription, and Customer Invoice strategies should reuse the same artifact model.
+
+Hub runtime state and Odoo draft creation are a distributed write boundary; they are not atomically committed together. Recovery depends on deterministic writer idempotency and Odoo-side duplicate lookup before create.
+
+No Customer Invoice, RFQ, Purchase Order, expense, asset, subscription, analytic distribution, profitability posting, payment, reconciliation, unlink, or projection acknowledgement is created in this slice.
 
 See [Workflow Execution](WORKFLOW_EXECUTION.md).
 

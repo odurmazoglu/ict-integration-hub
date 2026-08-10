@@ -9,6 +9,9 @@ from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.workbench.allocations import BusinessContextAllocationSet
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workflow import WorkflowType
+from app.domain.invoice import InternalInvoice
+from app.matching import InvoiceProductMatchResult, PartnerMatchResult
+from app.tax_mapping import InvoiceTaxMappingResult
 
 
 class ExecutionStatus(StrEnum):
@@ -47,6 +50,16 @@ class ExecutionStepStatus(StrEnum):
     SKIPPED = "skipped"
     FAILED = "failed"
     UNSUPPORTED = "unsupported"
+
+
+class ExecutionArtifactType(StrEnum):
+    VENDOR_BILL = WorkflowType.VENDOR_BILL.value
+    RFQ = WorkflowType.RFQ.value
+    PURCHASE_ORDER = "purchase_order"
+    EXPENSE = WorkflowType.EXPENSE.value
+    FIXED_ASSET = WorkflowType.ASSET.value
+    SUBSCRIPTION = WorkflowType.SUBSCRIPTION.value
+    CUSTOMER_INVOICE = "customer_invoice"
 
 
 class ExecutionFailurePolicy(StrEnum):
@@ -143,6 +156,7 @@ class ExecutionStepRequest(ApplicationDTO):
     decision_version: int
     mode: ExecutionMode
     step: ExecutionStep
+    approval: ExecutionApproval | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.execution_id, "execution_id is required.")
@@ -152,6 +166,26 @@ class ExecutionStepRequest(ApplicationDTO):
         _require_enum(self.mode, ExecutionMode, "mode must be a canonical ExecutionMode.")
         if not isinstance(self.step, ExecutionStep):
             raise ExecutionPlanningError("ExecutionStep is required.")
+        if self.approval is not None and not isinstance(self.approval, ExecutionApproval):
+            raise ExecutionPlanningError("approval must be a canonical ExecutionApproval when supplied.")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionArtifact(ApplicationDTO):
+    artifact_type: ExecutionArtifactType
+    artifact_id: str
+    external_identity: str
+    created: bool
+
+    def __post_init__(self) -> None:
+        _require_enum(
+            self.artifact_type,
+            ExecutionArtifactType,
+            "artifact_type must be a canonical ExecutionArtifactType.",
+        )
+        _require_text(self.artifact_id, "artifact_id is required.")
+        _require_text(self.external_identity, "external_identity is required.")
+        _require_bool(self.created, "created must be boolean.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +196,7 @@ class ExecutionStepResult(ApplicationDTO):
     dry_run: bool
     message: str | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
-    produced_reference_ids: tuple[str, ...] = field(default_factory=tuple)
+    produced_artifacts: tuple[ExecutionArtifact, ...] = field(default_factory=tuple)
     error_code: str | None = None
 
     def __post_init__(self) -> None:
@@ -175,7 +209,11 @@ class ExecutionStepResult(ApplicationDTO):
         if self.error_code is not None:
             _require_text(self.error_code, "error_code must be non-empty when supplied.")
         object.__setattr__(self, "warnings", tuple(str(warning) for warning in self.warnings))
-        object.__setattr__(self, "produced_reference_ids", tuple(str(ref) for ref in self.produced_reference_ids))
+        artifacts = tuple(self.produced_artifacts)
+        for artifact in artifacts:
+            if not isinstance(artifact, ExecutionArtifact):
+                raise ExecutionPlanningError("produced_artifacts must contain canonical ExecutionArtifact values.")
+        object.__setattr__(self, "produced_artifacts", artifacts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +271,40 @@ class AcceptedReviewDecision(ApplicationDTO):
                 WorkflowType,
                 "selected_workflow must be a canonical WorkflowType.",
             )
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionApproval(ApplicationDTO):
+    approved_by: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.approved_by, "approved_by is required.")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionSourceInvoice(ApplicationDTO):
+    review_id: str
+    company_id: int
+    decision_version: int
+    source_invoice_id: str
+    invoice: InternalInvoice
+    partner_match: PartnerMatchResult
+    product_match: InvoiceProductMatchResult
+    tax_match: InvoiceTaxMappingResult
+
+    def __post_init__(self) -> None:
+        _require_text(self.review_id, "review_id is required.")
+        _require_positive_int(self.company_id, "company_id must be positive.")
+        _require_positive_int(self.decision_version, "decision_version must be positive.")
+        _require_text(self.source_invoice_id, "source_invoice_id is required.")
+        if not isinstance(self.invoice, InternalInvoice):
+            raise ExecutionPlanningError("InternalInvoice DTO is required.")
+        if not isinstance(self.partner_match, PartnerMatchResult):
+            raise ExecutionPlanningError("PartnerMatchResult DTO is required.")
+        if not isinstance(self.product_match, InvoiceProductMatchResult):
+            raise ExecutionPlanningError("InvoiceProductMatchResult DTO is required.")
+        if not isinstance(self.tax_match, InvoiceTaxMappingResult):
+            raise ExecutionPlanningError("InvoiceTaxMappingResult DTO is required.")
 
 
 def _reject_duplicate_step_keys(steps: tuple[ExecutionStep, ...]) -> None:

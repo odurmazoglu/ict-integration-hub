@@ -6,6 +6,7 @@ from app.application.execution.contracts import (
     AcceptedReviewDecision,
     ExecutionPlan,
     ExecutionResult,
+    ExecutionSourceInvoice,
     ExecutionStepResult,
 )
 from app.application.execution.runtime import (
@@ -26,6 +27,19 @@ class AcceptedReviewDecisionReader(Protocol):
         company_id: int,
         decision_version: int,
     ) -> AcceptedReviewDecision:
+        pass
+
+
+class ExecutionSourceInvoiceReader(Protocol):
+    """Read authoritative source invoice and deterministic match evidence for execution."""
+
+    def get_source_invoice(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+    ) -> ExecutionSourceInvoice:
         pass
 
 
