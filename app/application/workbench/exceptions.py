@@ -103,3 +103,39 @@ class WorkbenchSubmissionCompanyMismatchError(WorkbenchSubmissionOrchestrationEr
     """Safe error raised when a candidate escapes the requested company scope."""
 
     error_category = "workbench_submission_company_mismatch"
+
+
+class WorkbenchErpReferenceValidationError(ApplicationError):
+    """Safe base error for Workbench ERP reference validation failures."""
+
+    error_category = "workbench_erp_reference_validation_error"
+
+
+class WorkbenchErpReferenceNotFoundError(WorkbenchErpReferenceValidationError):
+    """Safe error raised when a referenced ERP record cannot be found."""
+
+    error_category = "workbench_erp_reference_not_found"
+
+
+class WorkbenchErpReferenceCompanyMismatchError(WorkbenchErpReferenceValidationError):
+    """Safe error raised when a referenced ERP record is outside the requested company scope."""
+
+    error_category = "workbench_erp_reference_company_mismatch"
+
+
+class WorkbenchErpReferenceTypeError(WorkbenchErpReferenceValidationError):
+    """Safe error raised when a referenced ERP record has an unsupported type."""
+
+    error_category = "workbench_erp_reference_type_error"
+
+
+class WorkbenchErpReferenceRelationshipError(WorkbenchErpReferenceValidationError):
+    """Safe error raised when deterministic ERP reference relationships conflict."""
+
+    error_category = "workbench_erp_reference_relationship_error"
+
+
+class WorkbenchErpReferenceUnsupportedError(WorkbenchErpReferenceValidationError):
+    """Safe error raised when semantic validation for a non-null reference is unsupported."""
+
+    error_category = "workbench_erp_reference_unsupported"

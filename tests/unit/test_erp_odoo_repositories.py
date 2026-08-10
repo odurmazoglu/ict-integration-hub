@@ -7,6 +7,16 @@ from typing import Any
 
 import pytest
 
+from app.application.workbench import (
+    AnalyticAccountReference,
+    CompanyReference,
+    CustomerInvoiceReference,
+    OpportunityReference,
+    PartnerReference,
+    PurchaseOrderReference,
+    SalesOrderLineReference,
+    SalesOrderReference,
+)
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.erp import Company, Currency, Partner, Product, StaticRepositoryProvider
 from app.erp.exceptions import ErpReadonlyViolationError, ErpRepositoryError, ErpRepositoryTimeoutError
@@ -17,6 +27,16 @@ from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.provider import OdooRepositoryProvider
 from app.erp.odoo.tax_repository import OdooTaxRepository
+from app.erp.odoo.workbench_reference_repositories import (
+    OdooAnalyticAccountReferenceRepository,
+    OdooCompanyReferenceRepository,
+    OdooCustomerInvoiceReferenceRepository,
+    OdooOpportunityReferenceRepository,
+    OdooPartnerReferenceRepository,
+    OdooPurchaseOrderReferenceRepository,
+    OdooSalesOrderLineReferenceRepository,
+    OdooSalesOrderReferenceRepository,
+)
 from app.tax_mapping.result import TaxType
 
 
@@ -222,6 +242,72 @@ def test_provider_exposes_repositories() -> None:
 
     assert isinstance(provider.partner_repository, OdooPartnerRepository)
     assert static_provider.company_repository is provider.company_repository
+
+
+def test_workbench_reference_repositories_read_exact_ids_into_minimal_dtos() -> None:
+    adapter = RecordingAdapter(
+        {
+            "res.partner": [
+                {
+                    "id": 101,
+                    "company_id": False,
+                    "commercial_partner_id": [100, "Commercial"],
+                    "active": True,
+                }
+            ],
+            "res.company": [{"id": 8}],
+            "sale.order": [{"id": 301, "company_id": [7, "Main"], "partner_id": [101, "Customer"]}],
+            "sale.order.line": [{"id": 401, "order_id": [301, "SO001"]}],
+            "purchase.order": [{"id": 501, "company_id": [7, "Main"], "partner_id": [201, "Supplier"]}],
+            "account.move": [
+                {"id": 9001, "company_id": [7, "Main"], "partner_id": [105, "Recharge"], "move_type": "out_invoice"}
+            ],
+            "crm.lead": [{"id": 601, "company_id": [7, "Main"], "partner_id": [101, "Customer"]}],
+            "account.analytic.account": [{"id": 701, "company_id": False}],
+        }
+    )
+
+    assert OdooPartnerReferenceRepository(adapter=adapter).find_partners_by_ids((101,)) == (
+        PartnerReference(id=101, company_id=None, commercial_partner_id=100, active=True),
+    )
+    assert OdooCompanyReferenceRepository(adapter=adapter).find_companies_by_ids((8,)) == (CompanyReference(id=8),)
+    assert OdooSalesOrderReferenceRepository(adapter=adapter).find_sales_orders_by_ids((301,)) == (
+        SalesOrderReference(id=301, company_id=7, partner_id=101),
+    )
+    assert OdooSalesOrderLineReferenceRepository(adapter=adapter).find_sales_order_lines_by_ids((401,)) == (
+        SalesOrderLineReference(id=401, order_id=301),
+    )
+    assert OdooPurchaseOrderReferenceRepository(adapter=adapter).find_purchase_orders_by_ids((501,)) == (
+        PurchaseOrderReference(id=501, company_id=7, partner_id=201),
+    )
+    assert OdooCustomerInvoiceReferenceRepository(adapter=adapter).find_customer_invoices_by_ids((9001,)) == (
+        CustomerInvoiceReference(id=9001, company_id=7, partner_id=105, move_type="out_invoice"),
+    )
+    assert OdooOpportunityReferenceRepository(adapter=adapter).find_opportunities_by_ids((601,)) == (
+        OpportunityReference(id=601, company_id=7, partner_id=101),
+    )
+    assert OdooAnalyticAccountReferenceRepository(adapter=adapter).find_analytic_accounts_by_ids((701,)) == (
+        AnalyticAccountReference(id=701, company_id=None),
+    )
+
+    assert [call["domain"] for call in adapter.calls] == [
+        [["id", "in", [101]]],
+        [["id", "in", [8]]],
+        [["id", "in", [301]]],
+        [["id", "in", [401]]],
+        [["id", "in", [501]]],
+        [["id", "in", [9001]]],
+        [["id", "in", [601]]],
+        [["id", "in", [701]]],
+    ]
+    assert all(call["method"] == "search_read_all" for call in adapter.calls)
+
+
+def test_workbench_reference_repositories_skip_empty_id_reads() -> None:
+    adapter = RecordingAdapter()
+
+    assert OdooSalesOrderReferenceRepository(adapter=adapter).find_sales_orders_by_ids(()) == ()
+    assert adapter.calls == []
 
 
 def test_adapter_paginates_search_read() -> None:

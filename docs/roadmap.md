@@ -19,23 +19,20 @@
 - Production-safe read-only Odoo Workbench decision candidate reader for configured Studio parent projection and allocation child models
 - Odoo Workbench Allocation Candidate Reader
 - Odoo Workbench Decision Submission Orchestrator
-- Odoo Workbench read-to-Hub-submit flow without Odoo acknowledgement, ERP reference validation, or workflow execution
+- Odoo Workbench read-to-validation-to-Hub-submit flow without Odoo acknowledgement or workflow execution
+- ERP Reference Validation for Odoo Workbench allocation decisions
 
 ## Next Milestones
 
-### 1. ERP Reference Validation
+### 1. Workflow Execution Foundation
 
-- validate selected Customer
-- validate Recharge Recipient
-- validate Customer Invoice
-- validate Target Company
-- validate Sales Order
-- validate Purchase Order
-- validate Opportunity
-- validate Project
-- validate Analytic Account
-- validate Subscription reference
-- enforce company-scoped ERP repository checks before workflow execution
+- accepted decision execution boundary
+- Composite Workflow Strategy for mixed allocations
+- execution idempotency
+- execution state
+- ERP write safety
+- dry-run-first behavior
+- workflow-specific strategy separation
 
 ### 2. Odoo Online Workbench Projection Synchronization
 
