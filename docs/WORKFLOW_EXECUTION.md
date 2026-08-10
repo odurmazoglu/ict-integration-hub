@@ -7,11 +7,13 @@ Current flow:
 ```text
 Accepted Workbench Decision
   -> ExecutionRequest
+  -> ExecutionRuntimeService
   -> ExecutionPlanner
   -> ExecutionPlan
-  -> ExecutionStateRepository port
+  -> WorkflowExecution / WorkflowExecutionStep / WorkflowExecutionEvent
+  -> ExecutionCheckpoint
   -> ExecutionStrategyResolver
-  -> ExecutionCoordinator
+  -> ExecutionRuntimeCoordinator
   -> dry-run ExecutionStepResult values
   -> ExecutionResult
 ```
@@ -85,11 +87,58 @@ Failure policy:
 - `DRY_RUN`: `COLLECT_ALL`, so all steps are evaluated and results are aggregated.
 - `EXECUTE`: `FAIL_FAST`, so execution stops at the first failed or unsupported step.
 
-## State
+## Durable Runtime
 
-`ExecutionStateRepository` is an application port for future persistence. This PR provides only `InMemoryExecutionStateRepository` for tests and examples.
+`ExecutionRuntimeService` and `ExecutionRuntimeCoordinator` are the durable runtime entry points for future ERP execution. They persist execution snapshots, steps, checkpoints, and append-only events through application ports implemented by SQLAlchemy adapters.
 
-SQLAlchemy persistence, migrations, distributed locks, retries, background jobs, and scheduler integration are future work.
+Canonical execution states:
+
+```text
+NEW -> PLANNED -> RUNNING -> WAITING_RETRY -> COMPLETED
+                                    |              ^
+                                    v              |
+                                  FAILED           |
+```
+
+`CANCELLED` is a terminal state reachable only through explicit runtime state transition rules. The runtime rejects illegal transitions, does not skip states implicitly, and does not treat retries as background work.
+
+Durable tables:
+
+- `workflow_executions`: execution identity, mode, current state, deterministic idempotency key, safe plan metadata, retry policy, failure summary, and checkpoint
+- `workflow_execution_steps`: one row per planned step, with sequence, step type, allocation keys, step state, retry count, and safe result summary
+- `workflow_execution_events`: append-only event stream with sequence and safe event data
+
+The event stream records immutable evidence such as `ExecutionCreated`, `PlanningCompleted`, `ExecutionStarted`, `StepStarted`, `StepCompleted`, `StepFailed`, `RetryScheduled`, `ExecutionCompleted`, `ExecutionFailed`, and `ExecutionCancelled`. Repository APIs expose append and history operations only; event update and delete operations are intentionally absent.
+
+One logical runtime transition is persisted atomically by the repository adapter. The application layer prepares a new immutable `ExecutionSnapshot` and one or more `ExecutionEventDraft` values; it does not manage SQLAlchemy sessions, transactions, or event sequence numbers.
+
+The application layer has no independent snapshot, checkpoint, or event mutation API. Runtime mutations are only legal through atomic execution creation or `persist_transition`.
+
+For each transition, the SQLAlchemy repository persists in one database transaction:
+
+- execution snapshot state
+- affected step state and safe result summary
+- checkpoint/current step
+- retry count and failure summary when applicable
+- one or more append-only events
+- `checkpoint.last_event_id` pointing at the final committed event in that transition
+
+Event sequence allocation is repository-owned. The `workflow_executions.next_event_sequence` counter is incremented inside the same transaction, and multiple events in a transition receive consecutive sequence numbers. The coordinator never derives event ordering from history length.
+
+Optimistic runtime concurrency is enforced with `workflow_executions.runtime_version`. `persist_transition` receives the expected version from the snapshot and updates only when the persisted runtime version still matches. Stale concurrent attempts fail safely with a runtime concurrency conflict and do not append events.
+
+## Recovery And Retry
+
+`ExecutionCheckpoint` stores completed step keys, failed step key, current cursor, retry count, and last event id. On restart, the runtime loads the snapshot and checkpoint, then resumes from the current incomplete step instead of replaying completed steps from the beginning.
+
+Retry policy is persisted as policy only:
+
+- `NeverRetry`
+- `RetryImmediately`
+- `RetryLater`
+- `ExponentialBackoff`
+
+The current runtime can mark an execution `WAITING_RETRY` and append `RetryScheduled`. It does not schedule jobs, start workers, run timers, or perform automatic retry execution.
 
 ## Safety Boundaries
 
@@ -105,3 +154,4 @@ This foundation does not:
 - acknowledge Odoo Workbench projections
 - call live Odoo or Uyumsoft providers
 - use AI or fuzzy matching
+- run a scheduler or background worker

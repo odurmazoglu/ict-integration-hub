@@ -37,3 +37,27 @@ class ExecutionStateError(ExecutionError):
     """Safe error raised for invalid execution state operations."""
 
     error_category = "execution_state_error"
+
+
+class ExecutionRuntimeError(ExecutionError):
+    """Safe error raised by the durable execution runtime."""
+
+    error_category = "execution_runtime_error"
+
+
+class ExecutionPersistenceError(ExecutionRuntimeError):
+    """Safe error raised when execution runtime persistence fails."""
+
+    error_category = "execution_persistence_error"
+
+
+class ExecutionNotFoundError(ExecutionRuntimeError):
+    """Safe error raised when an execution runtime cannot be found."""
+
+    error_category = "execution_not_found"
+
+
+class ExecutionConcurrencyConflictError(ExecutionRuntimeError):
+    """Safe error raised when a stale runtime snapshot attempts a transition."""
+
+    error_category = "execution_concurrency_conflict"

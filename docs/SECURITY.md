@@ -149,7 +149,7 @@ The Odoo Workbench decision submission orchestrator enforces requested company s
 
 ERP reference validation must not leak raw Odoo payloads, display names, URLs, credentials, tokens, SQL, provider exception text, or Studio field names. Failed validations use safe canonical messages. `target_company_id` is traceability context only; it does not authorize cross-company execution or override the requested company scope.
 
-Workflow execution foundation is dry-run-first and no-write in this slice. It must not call live providers, invoke `VendorBillWriter`, create ERP documents, acknowledge Odoo projections, persist execution state to SQL, run in parallel, or expose raw provider details. Execution idempotency is deterministic and separate from Workbench decision idempotency.
+Workflow execution runtime is dry-run-first and no-write in this slice. It persists execution snapshots, step state, checkpoints, retry policy, and append-only safe events in Hub SQL tables, but it must not call live providers, invoke `VendorBillWriter`, create ERP documents, acknowledge Odoo projections, run in parallel, schedule background jobs, or expose raw provider details. Runtime transitions persist snapshot state and corresponding events atomically, allocate event sequence numbers inside the repository transaction, and reject stale snapshots through optimistic `runtime_version` checks. Execution idempotency is deterministic and separate from Workbench decision idempotency.
 
 Future decision ingestion must run as a Hub-controlled scheduler or service. Browser-side JavaScript must never receive Odoo API keys, Hub service tokens, or Keycloak client secrets.
 
