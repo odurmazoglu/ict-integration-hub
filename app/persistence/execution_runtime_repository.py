@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app.application.execution.contracts import (
+    ExecutionArtifact,
+    ExecutionArtifactType,
     ExecutionMode,
     ExecutionPlan,
     ExecutionStep,
@@ -510,7 +512,7 @@ def _step_result_to_data(result: ExecutionStepResult | None) -> dict[str, Any] |
         "dry_run": result.dry_run,
         "message": result.message,
         "warnings": list(result.warnings),
-        "produced_reference_ids": list(result.produced_reference_ids),
+        "produced_artifacts": [_artifact_to_data(artifact) for artifact in result.produced_artifacts],
         "error_code": result.error_code,
     }
 
@@ -525,9 +527,43 @@ def _step_result_from_data(data: dict[str, Any] | None) -> ExecutionStepResult |
         dry_run=bool(data["dry_run"]),
         message=str(data["message"]) if data.get("message") is not None else None,
         warnings=tuple(str(warning) for warning in data.get("warnings", ())),
-        produced_reference_ids=tuple(str(ref) for ref in data.get("produced_reference_ids", ())),
+        produced_artifacts=_artifacts_from_step_result_data(data),
         error_code=str(data["error_code"]) if data.get("error_code") is not None else None,
     )
+
+
+def _artifact_to_data(artifact: ExecutionArtifact) -> dict[str, Any]:
+    return {
+        "artifact_type": artifact.artifact_type.value,
+        "artifact_id": artifact.artifact_id,
+        "external_identity": artifact.external_identity,
+        "created": artifact.created,
+    }
+
+
+def _artifact_from_data(data: dict[str, Any]) -> ExecutionArtifact:
+    return ExecutionArtifact(
+        artifact_type=ExecutionArtifactType(str(data["artifact_type"])),
+        artifact_id=str(data["artifact_id"]),
+        external_identity=str(data["external_identity"]),
+        created=bool(data["created"]),
+    )
+
+
+def _artifacts_from_step_result_data(data: dict[str, Any]) -> tuple[ExecutionArtifact, ...]:
+    if "produced_artifacts" in data:
+        return tuple(_artifact_from_data(artifact) for artifact in (data.get("produced_artifacts") or ()))
+    if str(data.get("step_type")) == ExecutionStepType.VENDOR_BILL.value:
+        return tuple(
+            ExecutionArtifact(
+                artifact_type=ExecutionArtifactType.VENDOR_BILL,
+                artifact_id=str(ref),
+                external_identity=str(ref),
+                created=False,
+            )
+            for ref in data.get("produced_reference_ids", ())
+        )
+    return ()
 
 
 def _plan_idempotency_key(plan: ExecutionPlan) -> str:

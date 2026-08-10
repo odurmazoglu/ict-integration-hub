@@ -16,12 +16,12 @@ from app.application.execution import (
     AcceptedDecisionExecutionStatus,
     AcceptedReviewDecision,
     AcceptedReviewDecisionReader,
+    ExecutionApprovalError,
     ExecutionCheckpoint,
     ExecutionEventDraft,
     ExecutionEventRepository,
     ExecutionEventType,
     ExecutionMode,
-    ExecutionModeNotEnabledError,
     ExecutionPlan,
     ExecutionPlanner,
     ExecutionPlanningError,
@@ -308,10 +308,10 @@ def test_partial_runtime_recovers_and_does_not_replay_completed_steps(session: S
     assert [event.sequence for event in history.events] == list(range(1, len(history.events) + 1))
 
 
-def test_execute_mode_is_rejected_before_runtime_creation(session: Session) -> None:
+def test_execute_without_approval_is_rejected_before_runtime_creation(session: Session) -> None:
     _submit_select_workflow(SqlAlchemyReviewRepository(session), review_id="review-1", company_id=7)
 
-    with pytest.raises(ExecutionModeNotEnabledError):
+    with pytest.raises(ExecutionApprovalError):
         _use_case(session).execute(
             RunAcceptedDecisionExecutionCommand(
                 review_id="review-1",
@@ -340,7 +340,9 @@ def test_no_sqlalchemy_or_provider_leaks_into_application_execution_layer() -> N
     assert "app.models" not in source
     assert "app.db" not in source
     assert "connectors" not in source
-    assert "VendorBillWriter" not in source
+    assert "OdooVendorBillWriter" not in source
+    assert "AccountMoveRepository" not in source
+    assert "app.erp" not in source
     assert "requests." not in source
     assert "httpx" not in source
 

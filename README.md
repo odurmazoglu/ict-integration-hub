@@ -74,6 +74,7 @@ Current implemented capabilities:
 - Durable workflow execution runtime with SQLAlchemy execution snapshots, step state, atomic append-only events, repository-owned event sequencing, optimistic runtime-version checks, checkpoints, recovery contracts, and retry policy vocabulary without ERP writes.
 - End-to-end no-write accepted decision execution integration that reads canonical Hub decision evidence, creates or loads the durable runtime, executes all dry-run steps, and records a completed runtime without ERP/provider mutation.
 - Production-safe `VendorBillWriter` infrastructure for dry-run-first Odoo Draft Vendor Bill creation.
+- Production-capable `VENDOR_BILL` execution strategy that builds through `VendorBillBuilder`, writes only through `VendorBillWriter`, requires explicit execution approval for `EXECUTE`, and rejects heterogeneous executable plans before runtime creation.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.
@@ -87,7 +88,7 @@ Not implemented or not allowed by default:
 - Custom Odoo Python addons for Odoo Online.
 - Odoo Studio projection publishing, acknowledgement writes, model/view setup, or workflow execution.
 - Allocation execution, customer invoice creation, recharge execution, or profitability posting.
-- Real workflow execution strategies, `EXECUTE` mode, background execution workers, retry scheduling, and ERP mutation from execution runtime.
+- `EXECUTE` mode for non-`VENDOR_BILL` execution steps, heterogeneous executable plans, background execution workers, retry scheduling, and ERP posting/payment/reconciliation.
 - AI-driven automatic decisions.
 - Database schema changes without Alembic migrations and tests.
 

@@ -6,8 +6,14 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.application.commands import Command
 from app.application.dto import ApplicationDTO
-from app.application.execution.contracts import AcceptedReviewDecision, ExecutionMode, ExecutionRequest, ExecutionStatus
-from app.application.execution.exceptions import ExecutionModeNotEnabledError, ExecutionPlanningError
+from app.application.execution.contracts import (
+    AcceptedReviewDecision,
+    ExecutionApproval,
+    ExecutionMode,
+    ExecutionRequest,
+    ExecutionStatus,
+)
+from app.application.execution.exceptions import ExecutionApprovalError, ExecutionPlanningError
 from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.ports import (
     AcceptedReviewDecisionReader,
@@ -22,6 +28,8 @@ from app.application.workbench.exceptions import ReviewNotFoundError
 
 class AcceptedDecisionExecutionStatus(StrEnum):
     DRY_RUN_COMPLETED = ExecutionStatus.DRY_RUN_COMPLETED.value
+    EXECUTED = ExecutionStatus.EXECUTED.value
+    FAILED = ExecutionStatus.FAILED.value
     NOT_EXECUTABLE = "not_executable"
     NOT_FOUND = "not_found"
 
@@ -34,6 +42,7 @@ class RunAcceptedDecisionExecutionCommand(Command):
     company_id: int
     decision_version: int
     mode: ExecutionMode = ExecutionMode.DRY_RUN
+    approval: ExecutionApproval | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -41,6 +50,8 @@ class RunAcceptedDecisionExecutionCommand(Command):
         _require_positive_int(self.decision_version, "decision_version must be positive.")
         if not isinstance(self.mode, ExecutionMode):
             raise ExecutionPlanningError("mode must be a canonical ExecutionMode.")
+        if self.approval is not None and not isinstance(self.approval, ExecutionApproval):
+            raise ExecutionPlanningError("approval must be a canonical ExecutionApproval when supplied.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,8 +98,6 @@ class RunAcceptedDecisionExecutionUseCase:
     def execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         if not isinstance(command, RunAcceptedDecisionExecutionCommand):
             raise ExecutionPlanningError("RunAcceptedDecisionExecutionCommand is required.")
-        if command.mode is ExecutionMode.EXECUTE:
-            raise ExecutionModeNotEnabledError("EXECUTE mode is not enabled for accepted decision runtime integration.")
 
         try:
             decision = self._accepted_decision_reader.get_accepted_decision(
@@ -114,11 +123,15 @@ class RunAcceptedDecisionExecutionUseCase:
 
         request = _execution_request(command, decision=decision)
         plan = self._execution_planner.plan(request)
+        if command.mode is ExecutionMode.EXECUTE:
+            if command.approval is None:
+                raise ExecutionApprovalError("Explicit execution approval is required for EXECUTE mode.")
+            self._runtime_coordinator.ensure_plan_supports_mode(plan=plan, mode=command.mode)
         runtime = self._runtime_service.create_or_load(
             plan=plan,
             retry_policy=self._retry_policy_resolver.resolve(plan),
         )
-        result = self._runtime_coordinator.execute(runtime.snapshot)
+        result = self._runtime_coordinator.execute(runtime.snapshot, approval=command.approval)
         snapshot = self._runtime_repository.get_snapshot(execution_id=result.execution_id)
         return AcceptedDecisionExecutionResult(
             review_id=command.review_id,

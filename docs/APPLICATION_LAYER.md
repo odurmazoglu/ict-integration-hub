@@ -86,6 +86,8 @@ Current foundation contracts:
 - `ExecutionRequest`
 - `ExecutionPlan`
 - `ExecutionStep`
+- `ExecutionArtifact`
+- `ExecutionArtifactType`
 - `ExecutionResult`
 - `ExecutionPlanner`
 - `ExecutionCoordinator`
@@ -98,6 +100,10 @@ Current foundation contracts:
 - `ExecutionRetryPolicy`
 - `ExecutionRuntimeService`
 - `ExecutionRuntimeCoordinator`
+- `ExecutionApproval`
+- `ExecutionSourceInvoice`
+- `ExecutionSourceInvoiceReader`
+- `VendorBillExecutionStrategy`
 - `RunAcceptedDecisionExecutionCommand`
 - `RunAcceptedDecisionExecutionUseCase`
 - `AcceptedDecisionExecutionResult`
@@ -188,13 +194,19 @@ The execution foundation is separate from import-time `DecisionEngine` strategy 
 
 The planner performs no repository calls, provider calls, persistence, or writes. It creates stable ordered `ExecutionStep` values and adds a separate `VENDOR_BILL` step when `selected_workflow == WorkflowType.VENDOR_BILL`. Real `VendorBillWriter` invocation is deferred.
 
-`ExecutionRuntimeService` creates or loads a durable runtime snapshot from an execution plan. `ExecutionRuntimeCoordinator` runs steps sequentially through execution-specific strategies and delegates each state-changing transition to the runtime repository. The application layer emits immutable event drafts only; event sequence allocation, SQL transaction boundaries, checkpoint `last_event_id` updates, and optimistic runtime-version checks are owned by persistence adapters. `DRY_RUN` mode remains no-write. `EXECUTE` mode is supported only as runtime vocabulary; the accepted-decision integration rejects it before runtime creation.
+`ExecutionRuntimeService` creates or loads a durable runtime snapshot from an execution plan. `ExecutionRuntimeCoordinator` runs steps sequentially through execution-specific strategies and delegates each state-changing transition to the runtime repository. The application layer emits immutable event drafts only; event sequence allocation, SQL transaction boundaries, checkpoint `last_event_id` updates, and optimistic runtime-version checks are owned by persistence adapters. `DRY_RUN` mode remains no-write unless an execution strategy explicitly routes to a writer in dry-run mode. `EXECUTE` mode is allowed only after planning, after explicit approval is supplied, and after every planned step resolves to a strategy that supports `EXECUTE`.
 
 The application layer has no independent snapshot, checkpoint, or event mutation API. Runtime mutations are only legal through atomic execution creation or `persist_transition`.
 
-`RunAcceptedDecisionExecutionUseCase` is the no-write bridge from canonical accepted decision evidence to the durable runtime. It reads exactly one accepted Hub decision by `review_id`, `company_id`, and decision version, derives a deterministic `execution_id` separately from execution idempotency, plans through `ExecutionPlanner`, creates or loads the runtime idempotently from the planner-owned `ExecutionPlan.idempotency_key`, and runs `DRY_RUN` steps through the no-write strategy resolver. `DISMISS` decisions return `NOT_EXECUTABLE` without creating runtime rows. `EXECUTE` mode is rejected before strategy execution and before runtime creation.
+`RunAcceptedDecisionExecutionUseCase` reads exactly one accepted Hub decision by `review_id`, `company_id`, and decision version, derives a deterministic `execution_id` separately from execution idempotency, plans through `ExecutionPlanner`, creates or loads the runtime idempotently from the planner-owned `ExecutionPlan.idempotency_key`, and runs steps through the configured strategy resolver. `DISMISS` decisions return `NOT_EXECUTABLE` without creating runtime rows. For `EXECUTE`, `ExecutionApproval.approved_by` is required; Workbench `decided_by`, Odoo user identity, and projection audit fields are not execution approval.
 
-SQLAlchemy persistence is implemented by runtime repositories for `workflow_executions`, `workflow_execution_steps`, and `workflow_execution_events`. Runtime rows carry `runtime_version` for stale-transition rejection and `next_event_sequence` for monotonic event ordering. Background workers, distributed locks, real ERP write strategies, and provider execution remain out of scope.
+`VendorBillExecutionStrategy` is the only production-capable execution strategy in this slice. It supports `ExecutionStepType.VENDOR_BILL` only, reads authoritative source invoice and deterministic matching evidence through `ExecutionSourceInvoiceReader`, builds with `VendorBillBuilder`, and writes only through the `VendorBillWriter` port. It does not import SQLAlchemy, Odoo repositories, provider connectors, Workbench free-form payloads, or ERP adapter classes.
+
+`ExecutionArtifact` is the canonical application-layer representation of ERP objects produced by execution. Vendor Bill is the first implementation. Future strategies should return typed artifacts through `ExecutionStepResult.produced_artifacts` instead of introducing generic string reference lists or step-specific result fields.
+
+The current repository defines the `ExecutionSourceInvoiceReader` port but does not add a persistence adapter that can safely reconstruct full `InternalInvoice`, partner match, product match, and tax match evidence from partial Workbench text. Until that adapter exists, production wiring must supply an authoritative reader or fail closed. The strategy must not invent a lossy source invoice from comments, display names, allocation labels, or provider payload snippets.
+
+SQLAlchemy persistence is implemented by runtime repositories for `workflow_executions`, `workflow_execution_steps`, and `workflow_execution_events`. Runtime rows carry `runtime_version` for stale-transition rejection and `next_event_sequence` for monotonic event ordering. Background workers, distributed locks, non-Vendor-Bill ERP write strategies, and provider execution beyond Draft Vendor Bill writing remain out of scope.
 
 ## ImportInvoiceUseCase
 

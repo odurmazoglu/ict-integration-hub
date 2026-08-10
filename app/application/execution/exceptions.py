@@ -33,6 +33,30 @@ class ExecutionModeNotEnabledError(ExecutionError):
     error_category = "execution_mode_not_enabled"
 
 
+class ExecutionApprovalError(ExecutionError):
+    """Safe error raised when explicit production execution approval is missing or invalid."""
+
+    error_category = "execution_approval_error"
+
+
+class ExecutionSourceInvoiceError(ExecutionError):
+    """Safe error raised when authoritative source invoice evidence cannot be used."""
+
+    error_category = "execution_source_invoice_error"
+
+
+class ExecutionSourceInvoiceNotFoundError(ExecutionSourceInvoiceError):
+    """Safe error raised when source invoice evidence is not available."""
+
+    error_category = "execution_source_invoice_not_found"
+
+
+class ExecutionSourceInvoiceIntegrityError(ExecutionSourceInvoiceError):
+    """Safe error raised when source invoice evidence does not match execution identity."""
+
+    error_category = "execution_source_invoice_integrity_error"
+
+
 class ExecutionIdempotencyConflictError(ExecutionError):
     """Safe error raised when an execution idempotency key conflicts."""
 

@@ -5,6 +5,7 @@ from typing import Protocol
 
 from app.application.execution.contracts import (
     ExecutionMode,
+    ExecutionPlan,
     ExecutionStepRequest,
     ExecutionStepResult,
     ExecutionStepStatus,
@@ -19,6 +20,9 @@ from app.application.execution.exceptions import (
 class ExecutionStrategy(Protocol):
     supported_step_types: tuple[ExecutionStepType, ...]
     name: str
+
+    def supports_mode(self, mode: ExecutionMode) -> bool:
+        pass
 
     def execute(self, request: ExecutionStepRequest) -> ExecutionStepResult:
         pass
@@ -42,6 +46,12 @@ class ExecutionStrategyResolver:
             raise ExecutionUnsupportedStepError("Execution step strategy is not supported.")
         return strategy
 
+    def ensure_plan_supports_mode(self, *, plan: ExecutionPlan, mode: ExecutionMode) -> None:
+        for step in plan.steps:
+            strategy = self.resolve(step.step_type)
+            if not strategy.supports_mode(mode):
+                raise ExecutionUnsupportedStepError("Execution plan contains a step unsupported for this mode.")
+
 
 class FoundationExecutionStrategy:
     """No-write execution foundation strategy for dry-run planning and unsupported execute mode."""
@@ -50,6 +60,9 @@ class FoundationExecutionStrategy:
 
     def __init__(self, *, supported_step_types: tuple[ExecutionStepType, ...]) -> None:
         self.supported_step_types = supported_step_types
+
+    def supports_mode(self, mode: ExecutionMode) -> bool:
+        return mode is ExecutionMode.DRY_RUN
 
     def execute(self, request: ExecutionStepRequest) -> ExecutionStepResult:
         if request.mode is ExecutionMode.DRY_RUN:

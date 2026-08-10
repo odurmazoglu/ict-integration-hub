@@ -8,11 +8,15 @@ from app.application.execution.accepted_decision_use_cases import (
 )
 from app.application.execution.contracts import (
     AcceptedReviewDecision,
+    ExecutionApproval,
+    ExecutionArtifact,
+    ExecutionArtifactType,
     ExecutionFailurePolicy,
     ExecutionMode,
     ExecutionPlan,
     ExecutionRequest,
     ExecutionResult,
+    ExecutionSourceInvoice,
     ExecutionStatus,
     ExecutionStep,
     ExecutionStepRequest,
@@ -22,6 +26,7 @@ from app.application.execution.contracts import (
 )
 from app.application.execution.coordinator import ExecutionCoordinator
 from app.application.execution.exceptions import (
+    ExecutionApprovalError,
     ExecutionConcurrencyConflictError,
     ExecutionError,
     ExecutionIdempotencyConflictError,
@@ -30,6 +35,9 @@ from app.application.execution.exceptions import (
     ExecutionPersistenceError,
     ExecutionPlanningError,
     ExecutionRuntimeError,
+    ExecutionSourceInvoiceError,
+    ExecutionSourceInvoiceIntegrityError,
+    ExecutionSourceInvoiceNotFoundError,
     ExecutionStateError,
     ExecutionStrategyResolutionError,
     ExecutionUnsupportedStepError,
@@ -39,6 +47,7 @@ from app.application.execution.ports import (
     AcceptedReviewDecisionReader,
     ExecutionEventRepository,
     ExecutionRuntimeRepository,
+    ExecutionSourceInvoiceReader,
     ExecutionStateRepository,
     RetryPolicyResolver,
 )
@@ -71,12 +80,20 @@ from app.application.execution.strategy import (
     FoundationExecutionStrategy,
     foundation_no_write_strategy_resolver,
 )
+from app.application.execution.vendor_bill_strategy import (
+    VendorBillExecutionStrategy,
+    vendor_bill_write_idempotency_key,
+)
 
 __all__ = [
     "AcceptedDecisionExecutionResult",
     "AcceptedDecisionExecutionStatus",
     "AcceptedReviewDecision",
+    "ExecutionArtifact",
+    "ExecutionArtifactType",
     "AcceptedReviewDecisionReader",
+    "ExecutionApproval",
+    "ExecutionApprovalError",
     "ExecutionCoordinator",
     "ExecutionError",
     "ExecutionConcurrencyConflictError",
@@ -109,6 +126,11 @@ __all__ = [
     "ExecutionRuntimeStep",
     "ExecutionRuntimeStepState",
     "ExecutionSnapshot",
+    "ExecutionSourceInvoice",
+    "ExecutionSourceInvoiceError",
+    "ExecutionSourceInvoiceIntegrityError",
+    "ExecutionSourceInvoiceNotFoundError",
+    "ExecutionSourceInvoiceReader",
     "ExecutionStateError",
     "ExecutionStateRepository",
     "ExecutionState",
@@ -128,7 +150,9 @@ __all__ = [
     "RunAcceptedDecisionExecutionCommand",
     "RunAcceptedDecisionExecutionUseCase",
     "StaticRetryPolicyResolver",
+    "VendorBillExecutionStrategy",
     "assert_legal_transition",
     "execution_idempotency_key",
     "foundation_no_write_strategy_resolver",
+    "vendor_bill_write_idempotency_key",
 ]

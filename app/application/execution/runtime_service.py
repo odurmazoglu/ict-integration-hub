@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app.application.execution.contracts import (
+    ExecutionApproval,
     ExecutionMode,
     ExecutionPlan,
     ExecutionResult,
@@ -82,13 +83,26 @@ class ExecutionRuntimeCoordinator:
         self._event_repository = event_repository
         self._strategy_resolver = strategy_resolver
 
-    def resume(self, *, execution_id: str) -> ExecutionResult:
+    def resume(
+        self,
+        *,
+        execution_id: str,
+        approval: ExecutionApproval | None = None,
+    ) -> ExecutionResult:
         snapshot = self._runtime_repository.get_snapshot(execution_id=execution_id)
         if snapshot is None:
             raise ExecutionNotFoundError("Execution runtime was not found.")
-        return self.execute(snapshot)
+        return self.execute(snapshot, approval=approval)
 
-    def execute(self, snapshot: ExecutionSnapshot) -> ExecutionResult:
+    def ensure_plan_supports_mode(self, *, plan: ExecutionPlan, mode: ExecutionMode) -> None:
+        self._strategy_resolver.ensure_plan_supports_mode(plan=plan, mode=mode)
+
+    def execute(
+        self,
+        snapshot: ExecutionSnapshot,
+        *,
+        approval: ExecutionApproval | None = None,
+    ) -> ExecutionResult:
         if snapshot.state in {ExecutionState.COMPLETED, ExecutionState.FAILED, ExecutionState.CANCELLED}:
             return _result_from_snapshot(snapshot)
 
@@ -99,7 +113,7 @@ class ExecutionRuntimeCoordinator:
 
         for step in _pending_steps(snapshot):
             snapshot = self._mark_step_running(snapshot, step)
-            result = self._execute_step(snapshot, step)
+            result = self._execute_step(snapshot, step, approval=approval)
             results.append(result)
             if _is_failure(result):
                 snapshot = self._handle_failure(snapshot, step, result)
@@ -153,7 +167,13 @@ class ExecutionRuntimeCoordinator:
             expected_runtime_version=snapshot.runtime_version,
         )
 
-    def _execute_step(self, snapshot: ExecutionSnapshot, step: ExecutionRuntimeStep) -> ExecutionStepResult:
+    def _execute_step(
+        self,
+        snapshot: ExecutionSnapshot,
+        step: ExecutionRuntimeStep,
+        *,
+        approval: ExecutionApproval | None,
+    ) -> ExecutionStepResult:
         plan_step = next(plan_step for plan_step in snapshot.plan.steps if plan_step.step_key == step.step_key)
         strategy = self._strategy_resolver.resolve(plan_step.step_type)
         return strategy.execute(
@@ -164,6 +184,7 @@ class ExecutionRuntimeCoordinator:
                 decision_version=snapshot.decision_version,
                 mode=snapshot.mode,
                 step=plan_step,
+                approval=approval,
             )
         )
 
