@@ -112,6 +112,18 @@ The port does not persist, write, cache, evaluate, or return raw provider payloa
 
 `OdooDecisionRuleRepository` is the production read-only Odoo adapter for this port. It reads the configured Studio model through `OdooReadOnlyAdapter.search_read_all`, maps rows into canonical Hub rule contracts, and fails closed on malformed configuration. It does not call Odoo `create`, `write`, `unlink`, or any ERP business operation.
 
+The adapter boundary is deliberately split:
+
+```text
+Odoo read-only transport
+  -> raw adapter row data
+  -> Odoo infrastructure mapper
+  -> OdooDecisionRuleAuthoringRecord
+  -> canonical InvoiceDecisionRule
+```
+
+The repository builds the company/shared Odoo query, delegates row parsing to the mapper, rejects duplicate rule identities, and returns deterministic ordering. The mapper owns raw Odoo row parsing, exact Many2one ID extraction, stored selection parsing, description-term parsing, currency reference resolution, and creation of the immutable authoring record. Neither layer evaluates rules or exposes raw Odoo rows to application services.
+
 The repository query is company-scoped:
 
 ```text

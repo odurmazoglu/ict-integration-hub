@@ -1,6 +1,7 @@
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.company_repository import OdooCompanyRepository
 from app.erp.odoo.currency_repository import OdooCurrencyRepository
+from app.erp.odoo.decision_rule_mapper import OdooDecisionRuleMapper
 from app.erp.odoo.decision_rule_repository import (
     OdooDecisionRuleDataError,
     OdooDecisionRuleReadError,
@@ -44,6 +45,7 @@ __all__ = [
     "OdooCurrencyRepository",
     "OdooCustomerInvoiceReferenceRepository",
     "OdooDecisionRuleDataError",
+    "OdooDecisionRuleMapper",
     "OdooDecisionRuleReadError",
     "OdooDecisionRuleRepository",
     "OdooOpportunityReferenceRepository",

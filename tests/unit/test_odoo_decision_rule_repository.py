@@ -8,7 +8,14 @@ import pytest
 from app.application.rules import OdooDecisionRuleFieldMapping
 from app.application.workbench import CurrencyReference
 from app.application.workflow import WorkflowType
-from app.erp.odoo import OdooDecisionRuleDataError, OdooDecisionRuleRepository
+from app.erp.exceptions import ErpRepositoryError
+from app.erp.odoo import OdooDecisionRuleDataError, OdooDecisionRuleReadError, OdooDecisionRuleRepository
+from app.erp.odoo.decision_rule_mapper import (
+    OdooDecisionRuleMapper,
+    parse_odoo_decision_rule_description_terms,
+    parse_odoo_many2one_id,
+    parse_purchase_order_presence,
+)
 
 
 def test_exact_company_specific_rule_read() -> None:
@@ -32,6 +39,16 @@ def test_exact_company_specific_rule_read() -> None:
             "fields": ("id", *OdooDecisionRuleFieldMapping().studio_fields()),
         }
     ]
+
+
+def test_repository_delegates_row_mapping_to_mapper() -> None:
+    records = [_record()]
+    adapter = FakeReadOnlyAdapter(records)
+    mapper = FakeDecisionRuleMapper()
+    repository = _repository(adapter=adapter, mapper=mapper)
+
+    assert repository.list_invoice_decision_rules(company_id=7) == ()
+    assert mapper.calls == [(tuple(records), 7)]
 
 
 def test_shared_global_rule_is_included_when_company_empty() -> None:
@@ -71,6 +88,19 @@ def test_many2one_ids_are_parsed_by_id_only() -> None:
     assert rule.match.company_id == 7
     assert rule.match.vendor_partner_id == 51
     assert rule.match.product_mapping_id == 9001
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_id"),
+    [
+        ([7, "Display Company Must Be Ignored"], 7),
+        ([51, "Display Vendor Must Be Ignored"], 51),
+        ([31, "Display Currency Must Be Ignored"], 31),
+        ([9001, "Display Product Mapping Must Be Ignored"], 9001),
+    ],
+)
+def test_many2one_helper_uses_exact_id_only(raw_value: object, expected_id: int) -> None:
+    assert parse_odoo_many2one_id(raw_value) == expected_id
 
 
 def test_currency_id_parsed_by_id_and_display_label_ignored() -> None:
@@ -151,9 +181,24 @@ def test_purchase_order_presence_tri_state_mapping(stored_value: object, expecte
     assert rule.match.purchase_order_present is expected
 
 
+@pytest.mark.parametrize(
+    ("stored_value", "expected"),
+    [
+        ("any", None),
+        ("required", True),
+        ("must_not_exist", False),
+    ],
+)
+def test_purchase_order_presence_helper_maps_stored_values(stored_value: object, expected: bool | None) -> None:
+    assert parse_purchase_order_presence(stored_value) is expected
+
+
 def test_unknown_purchase_order_presence_rejected() -> None:
     with pytest.raises(OdooDecisionRuleDataError):
         _repository(records=[_record(purchase_order_presence="Required")]).list_invoice_decision_rules(company_id=7)
+
+    with pytest.raises(OdooDecisionRuleDataError):
+        parse_purchase_order_presence("Required")
 
 
 def test_description_terms_parse_from_newline_format_only() -> None:
@@ -164,10 +209,15 @@ def test_description_terms_parse_from_newline_format_only() -> None:
     assert rule.match.description_contains == ("azure", "consumption")
 
 
+def test_description_helper_ignores_empty_lines_deterministically() -> None:
+    assert parse_odoo_decision_rule_description_terms("\nAzure\n\nConsumption  \n") == ("Azure", "Consumption")
+
+
 def test_no_fuzzy_ai_or_comma_tokenization_for_description_terms() -> None:
     rule = _repository(records=[_record(description="Azure, Consumption")]).list_invoice_decision_rules(company_id=7)[0]
 
     assert rule.match.description_contains == ("azure, consumption",)
+    assert parse_odoo_decision_rule_description_terms("Azure, Consumption; Compute") == ("Azure, Consumption; Compute",)
 
 
 def test_provider_document_type_preserved_canonically() -> None:
@@ -186,6 +236,15 @@ def test_duplicate_rule_code_and_version_rejected() -> None:
 
     with pytest.raises(OdooDecisionRuleDataError):
         _repository(records=records).list_invoice_decision_rules(company_id=7)
+
+
+def test_transport_failure_is_safe_read_error() -> None:
+    repository = _repository(adapter=FakeReadOnlyAdapter([_record()], fail=True))
+
+    with pytest.raises(OdooDecisionRuleReadError) as exc_info:
+        repository.list_invoice_decision_rules(company_id=7)
+
+    assert str(exc_info.value) == "Odoo Decision Rule read failed."
 
 
 def test_deterministic_ordering_does_not_depend_on_odoo_row_order() -> None:
@@ -213,7 +272,10 @@ def test_no_odoo_write_methods_invoked() -> None:
 
 
 def test_no_rule_evaluation_or_runtime_dependencies() -> None:
-    source = Path("app/erp/odoo/decision_rule_repository.py").read_text().lower()
+    source = (
+        Path("app/erp/odoo/decision_rule_repository.py").read_text()
+        + Path("app/erp/odoo/decision_rule_mapper.py").read_text()
+    ).lower()
 
     assert "evaluate(" not in source
     assert "decisionengine" not in source
@@ -230,8 +292,9 @@ def test_no_rule_evaluation_or_runtime_dependencies() -> None:
 
 
 class FakeReadOnlyAdapter:
-    def __init__(self, records: list[dict[str, Any]]) -> None:
+    def __init__(self, records: list[dict[str, Any]], *, fail: bool = False) -> None:
         self.records = records
+        self.fail = fail
         self.calls: list[dict[str, Any]] = []
         self.write_calls: list[str] = []
 
@@ -242,6 +305,8 @@ class FakeReadOnlyAdapter:
         domain: list[Any],
         fields: list[str],
     ) -> tuple[dict[str, Any], ...]:
+        if self.fail:
+            raise ErpRepositoryError("raw transport detail")
         self.calls.append({"model": model, "domain": domain, "fields": tuple(fields)})
         return tuple(self.records)
 
@@ -271,16 +336,32 @@ class FakeCurrencyRepository:
         raise AssertionError("currency lookup must use exact IDs")
 
 
+class FakeDecisionRuleMapper:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[dict[str, Any], ...], int]] = []
+
+    def map_records(
+        self,
+        records: tuple[dict[str, Any], ...],
+        *,
+        company_id: int,
+    ) -> tuple[()]:
+        self.calls.append((records, company_id))
+        return ()
+
+
 def _repository(
     *,
     records: list[dict[str, Any]] | None = None,
     adapter: FakeReadOnlyAdapter | None = None,
     currency_repository: FakeCurrencyRepository | None = None,
+    mapper: FakeDecisionRuleMapper | OdooDecisionRuleMapper | None = None,
 ) -> OdooDecisionRuleRepository:
     return OdooDecisionRuleRepository(
         adapter=adapter or FakeReadOnlyAdapter(records or [_record()]),  # type: ignore[arg-type]
         mapping=OdooDecisionRuleFieldMapping(),
         currency_repository=currency_repository or FakeCurrencyRepository(),
+        mapper=mapper,  # type: ignore[arg-type]
     )
 
 
