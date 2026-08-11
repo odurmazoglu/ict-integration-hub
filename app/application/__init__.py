@@ -42,7 +42,18 @@ from app.application.execution import (
     vendor_bill_write_idempotency_key,
 )
 from app.application.queries import Query
-from app.application.rules import DeterministicRuleEngine
+from app.application.rules import (
+    DeterministicRuleEngine,
+    InvoiceClassificationResult,
+    InvoiceDecisionRule,
+    InvoiceDecisionRuleAction,
+    InvoiceDecisionRuleConflict,
+    InvoiceDecisionRuleContractError,
+    InvoiceDecisionRuleMatch,
+    InvoiceDecisionRulePriority,
+    find_invoice_decision_rule_conflicts,
+    order_invoice_decision_rules,
+)
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
 from app.application.workbench import (
     BusinessContextDecision,
@@ -113,6 +124,13 @@ __all__ = [
     "StaticRetryPolicyResolver",
     "ImportInvoiceUseCase",
     "ImportSession",
+    "InvoiceClassificationResult",
+    "InvoiceDecisionRule",
+    "InvoiceDecisionRuleAction",
+    "InvoiceDecisionRuleConflict",
+    "InvoiceDecisionRuleContractError",
+    "InvoiceDecisionRuleMatch",
+    "InvoiceDecisionRulePriority",
     "LineResolution",
     "ManualReviewDecision",
     "ManualReviewReason",
@@ -145,4 +163,6 @@ __all__ = [
     "WorkflowDecision",
     "WorkflowStrategyResolver",
     "WorkflowType",
+    "find_invoice_decision_rule_conflicts",
+    "order_invoice_decision_rules",
 ]
