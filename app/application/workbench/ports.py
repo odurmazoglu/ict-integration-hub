@@ -4,13 +4,14 @@ from typing import TYPE_CHECKING, Protocol
 
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewItem, ReviewQueueResult
-from app.application.workbench.evidence import ReviewExecutionEvidence
+from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
 from app.application.workbench.projection import (
     OdooWorkbenchDecisionCandidate,
     ProjectionPublishResult,
     WorkbenchProjection,
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
+from app.billing.dto import CustomerInvoiceBillingInstruction
 
 if TYPE_CHECKING:
     from app.application.execution.contracts import ExecutionSourceInvoice
@@ -42,6 +43,27 @@ class ReviewItemWriter(Protocol):
     ) -> ReviewItem:
         pass
 
+    def create_review_item_with_billing_evidence(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+    ) -> ReviewItem:
+        pass
+
+    def create_review_item_with_execution_and_billing_evidence(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        evidence: ReviewExecutionEvidence,
+        billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+    ) -> ReviewItem:
+        pass
+
 
 class ReviewDecisionWriter(Protocol):
     """Write port for explicit user decision submission against a pending review item."""
@@ -67,6 +89,19 @@ class ReviewExecutionEvidenceReader(Protocol):
         company_id: int,
         expected_version: int,
     ) -> ExecutionSourceInvoice:
+        pass
+
+
+class ReviewBillingEvidenceReader(Protocol):
+    """Read-only port for immutable customer billing evidence available at review submission time."""
+
+    def get_billing_instructions(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> tuple[CustomerInvoiceBillingInstruction, ...]:
         pass
 
 

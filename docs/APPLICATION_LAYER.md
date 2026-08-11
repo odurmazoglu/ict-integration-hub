@@ -103,6 +103,8 @@ Current foundation contracts:
 - `ExecutionApproval`
 - `ExecutionSourceInvoice`
 - `ExecutionSourceInvoiceReader`
+- `ReviewExecutionBillingEvidence`
+- `ReviewBillingEvidenceReader`
 - `VendorBillExecutionStrategy`
 - `RunAcceptedDecisionExecutionCommand`
 - `RunAcceptedDecisionExecutionUseCase`
@@ -205,6 +207,8 @@ The application layer has no independent snapshot, checkpoint, or event mutation
 `CustomerRechargeExecutionStrategy` is the no-write strategy for `ExecutionStepType.CUSTOMER_RECHARGE` allocations that already reference existing outgoing customer invoices through `customer_invoice_id`. It consumes immutable accepted allocation evidence only, does not call Odoo or SQLAlchemy, returns one deduplicated `CUSTOMER_INVOICE` artifact per distinct `customer_invoice_id`, and always sets `created=false`. Successful execution means the recharge allocation has been associated with already-validated customer invoice evidence; it does not mean a customer invoice was created, posted, paid, collected, or settled.
 
 `CustomerInvoiceExecutionStrategy` is the write-capable strategy foundation for `ExecutionStepType.CUSTOMER_RECHARGE` allocations where `customer_invoice_id` is absent. It is reached only through the Customer Recharge router, reads immutable source evidence through `ExecutionSourceInvoiceReader`, builds with `CustomerInvoiceBuilder`, writes only through `CustomerInvoiceWriter`, and returns `CUSTOMER_INVOICE` artifacts for draft Odoo `account.move` invoices only when explicit `CustomerInvoiceBillingInstruction` evidence is present on the execution step. Current accepted decisions do not yet persist that authoritative billing evidence, so production `EXECUTE` fails closed before runtime creation. It must not handle allocations that already reference an invoice, infer customer price from cost allocation amounts, infer sales tax from purchase tax evidence, post invoices, register payments, reconcile, settle collections, mutate Sales Orders, write analytics, call providers, rematch, use fuzzy matching, or use AI.
+
+`ReviewExecutionBillingEvidence` is the application-layer contract for immutable Stage 1 customer billing terms pinned to one Workbench review version. It wraps canonical `CustomerInvoiceBillingInstruction` values and is intentionally separate from `BusinessContextAllocation`, which continues to represent vendor/source cost allocation and traceability context only. Customer Invoice pricing, quantity, outgoing product, customer, currency, and sales taxes may come only from billing evidence; they must never be inferred from allocation amount, allocation percentage, incoming purchase tax mapping, vendor product matches, display text, current ERP prices, AI, or fuzzy logic. `ReviewBillingEvidenceReader` exposes exact review/company/version reads for that evidence without SQLAlchemy leaking into the application layer.
 
 `ExecutionArtifact` is the canonical application-layer representation of ERP objects produced by execution. Vendor Bill and Customer Invoice execution both use it. Future strategies should return typed artifacts through `ExecutionStepResult.produced_artifacts` instead of introducing generic string reference lists or step-specific result fields.
 

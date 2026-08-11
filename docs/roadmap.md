@@ -31,12 +31,14 @@
 - Vendor Bill Production Wiring and Recovery Verification for opt-in Draft Vendor Bill execution through the durable runtime, writer gates, deterministic idempotency, and Odoo duplicate lookup
 - Customer Recharge Existing Invoice Strategy for no-write association of recharge allocations to validated existing outgoing customer invoice artifacts
 - Customer Invoice Creation Strategy foundation with explicit billing instruction contracts and fail-closed execution until authoritative billing terms are captured with accepted decisions
+- Customer Recharge Billing Evidence Capture for immutable, version-pinned `CustomerInvoiceBillingInstruction` persistence before accepted decision submission
 
 ## Next Milestones
 
-### 1. Customer Invoice Creation Strategy
+### 1. Customer Invoice Production Wiring
 
-- create customer invoices only for recharge allocations without `customer_invoice_id`
+- copy accepted billing evidence into execution planning
+- create customer invoices only for recharge allocations without `customer_invoice_id` after explicit billing evidence is present
 - intercompany safety model
 - no automatic posting, payment, reconciliation, or collection
 

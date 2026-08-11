@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, inspect
 from alembic import command
 from app.core.config import get_settings
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
+from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
@@ -34,6 +35,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workflow_execution_events" in inspector.get_table_names()
     assert "execution_source_invoice_evidence" in inspector.get_table_names()
     assert "workbench_review_execution_evidence" in inspector.get_table_names()
+    assert "workbench_review_billing_evidence" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -254,6 +256,32 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     }
     assert "uq_workbench_review_execution_evidence_company_review_version" in review_evidence_unique_constraints
     assert WorkbenchReviewExecutionEvidence.__table__.c.invoice.nullable is False
+    billing_evidence_columns = {column["name"] for column in inspector.get_columns("workbench_review_billing_evidence")}
+    assert {
+        "review_id",
+        "company_id",
+        "review_version",
+        "billing_key",
+        "schema_version",
+        "billing_instruction",
+        "created_at",
+    }.issubset(billing_evidence_columns)
+    billing_evidence_indexes = {index["name"] for index in inspector.get_indexes("workbench_review_billing_evidence")}
+    assert {
+        "ix_workbench_review_billing_evidence_company_review_version",
+        "ix_workbench_review_billing_evidence_billing_key",
+    }.issubset(billing_evidence_indexes)
+    billing_evidence_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("workbench_review_billing_evidence")
+    }
+    assert "uq_workbench_review_billing_evidence_company_review_version_key" in billing_evidence_unique_constraints
+    assert WorkbenchReviewBillingEvidence.__table__.c.billing_instruction.nullable is False
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_billing_evidence" not in inspector.get_table_names()
+    assert "workbench_review_execution_evidence" in inspector.get_table_names()
+    assert "execution_source_invoice_evidence" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -321,4 +349,5 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workflow_execution_events" in inspector.get_table_names()
     assert "execution_source_invoice_evidence" in inspector.get_table_names()
     assert "workbench_review_execution_evidence" in inspector.get_table_names()
+    assert "workbench_review_billing_evidence" in inspector.get_table_names()
     get_settings.cache_clear()

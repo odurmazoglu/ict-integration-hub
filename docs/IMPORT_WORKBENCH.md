@@ -76,6 +76,7 @@ Implemented contract types:
 - `ReviewDecisionCommand`: explicit user decision command for `SELECT_WORKFLOW` or `DISMISS`
 - `ReviewDecisionAcknowledgement`: safe acknowledgement contract
 - `ReviewExecutionEvidence`: immutable pre-decision execution evidence pinned to the current review version
+- `ReviewExecutionBillingEvidence`: immutable pre-decision customer billing instructions pinned to the current review version
 - `LineResolution` and `TaxResolution`: explicit selected ERP IDs for invoice lines and taxes
 - `BusinessContextDecision`: legacy single-context procurement traceability evidence retained for historical rows
 - `BusinessContextAllocationType`, `AllocationCompleteness`, `BusinessContextAllocation`, and `BusinessContextAllocationSet`: canonical multi-allocation business context contracts
@@ -96,7 +97,7 @@ Implemented contract types:
 
 ## Current Persistence Foundation
 
-The persistence foundation stores Workbench review items in `workbench_review_items`, pre-decision execution evidence in `workbench_review_execution_evidence`, and append-only user decisions in `workbench_review_decisions`.
+The persistence foundation stores Workbench review items in `workbench_review_items`, pre-decision execution evidence in `workbench_review_execution_evidence`, pre-decision customer billing evidence in `workbench_review_billing_evidence`, and append-only user decisions in `workbench_review_decisions`.
 
 Implemented behavior:
 
@@ -123,6 +124,7 @@ Implemented behavior:
 - serialize allocation evidence as deterministic JSON with enum values as strings, Decimal values as canonical strings, and allocation rows sorted by `allocation_key`
 - include complete allocation payloads in decision idempotency while treating equivalent Decimal forms and list/tuple hydration differences as identical
 - persist version-pinned pre-decision execution evidence before a Vendor Bill-capable review is ready: structured `InternalInvoice`, supplier partner match, product match, and tax mapping snapshots tied to the current review version
+- persist version-pinned pre-decision billing evidence before accepted decision submission: structured `CustomerInvoiceBillingInstruction` snapshots tied to the current review version and billing key
 - atomically persist version-pinned accepted execution source invoice evidence for accepted executable Vendor Bill decisions: the later decision-time snapshot is tied to the generated accepted decision identity
 - store Stage 2 execution evidence as immutable schema-versioned historical data with one snapshot per accepted decision id
 
@@ -131,6 +133,8 @@ The two-stage evidence model is deliberate. Stage 1 pre-decision evidence is the
 The execution source evidence capture path runs only for `SELECT_WORKFLOW + VENDOR_BILL`, the only currently executable Vendor Bill decision rule. `DISMISS`, non-Vendor-Bill workflows, and workflows not executable by the current Vendor Bill strategy persist decision evidence only and do not create Stage 2 execution source evidence.
 
 The execution source evidence readers reconstruct from persisted Hub evidence only. They do not reread Uyumsoft, reread Odoo, refresh current ERP master data, rematch suppliers, rematch products, remap taxes, parse Workbench display text, use fuzzy matching, use AI, or infer missing evidence. Missing, malformed, cross-company, unsupported-version, or conflicting evidence fails closed before an executable Vendor Bill decision is accepted. A Vendor Bill-capable review must not become decision-ready without successful pre-decision evidence persistence; the SQLAlchemy adapter persists review creation and Stage 1 evidence in one transaction for that path.
+
+Billing evidence is authoritative customer pricing evidence, not vendor/source cost allocation. `BusinessContextAllocation` continues to represent vendor cost allocation and traceability only. Customer Invoice pricing, quantity, outgoing sales product, customer, currency, and sales tax IDs must come only from `CustomerInvoiceBillingInstruction` evidence, never from allocation amount/percentage, purchase tax mapping, current ERP prices, display fields, AI, fuzzy logic, or rematching.
 
 Idempotent replay of the same accepted Vendor Bill decision returns the existing acknowledgement only when the captured Stage 2 execution source evidence is semantically identical. A duplicate replay does not insert a second evidence row. Conflicting evidence for the same decision identity raises a safe idempotency/integrity conflict and does not overwrite historical evidence.
 
