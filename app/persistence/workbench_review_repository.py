@@ -251,6 +251,55 @@ class SqlAlchemyReviewRepository:
         except SQLAlchemyError as exc:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
+    def capture_review_billing_evidence(
+        self,
+        billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+    ) -> tuple[ReviewExecutionBillingEvidence, ...]:
+        _validate_billing_evidence_tuple(billing_evidence)
+        review_id, company_id, review_version = _billing_evidence_identity(billing_evidence)
+        try:
+            review_item = self._session.scalar(
+                select(WorkbenchReviewItem).where(
+                    WorkbenchReviewItem.review_id == review_id,
+                    WorkbenchReviewItem.company_id == company_id,
+                    WorkbenchReviewItem.version == review_version,
+                )
+            )
+            if review_item is None:
+                raise ReviewNotFoundError("Review item was not found for billing evidence capture.")
+            existing = self._find_all_review_billing_evidence(
+                review_id=review_id,
+                company_id=company_id,
+                review_version=review_version,
+            )
+            if existing:
+                existing_evidence = tuple(_billing_evidence_from_model(record) for record in existing)
+                if _billing_evidence_fingerprint(existing_evidence) != _billing_evidence_fingerprint(billing_evidence):
+                    raise ReviewIdempotencyConflictError(
+                        "Review billing evidence conflicts with existing review version."
+                    )
+                return existing_evidence
+            billing_records = tuple(_billing_evidence_model(evidence) for evidence in billing_evidence)
+            with self._session.begin_nested():
+                self._session.add_all(billing_records)
+                self._session.flush()
+            return billing_evidence
+        except ApplicationError:
+            raise
+        except IntegrityError as exc:
+            existing = self._find_all_review_billing_evidence(
+                review_id=review_id,
+                company_id=company_id,
+                review_version=review_version,
+            )
+            if existing:
+                existing_evidence = tuple(_billing_evidence_from_model(record) for record in existing)
+                if _billing_evidence_fingerprint(existing_evidence) == _billing_evidence_fingerprint(billing_evidence):
+                    return existing_evidence
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
     def get_review_execution_evidence(
         self,
         *,
@@ -1608,6 +1657,19 @@ def _billing_evidence_identity(evidence: tuple[ReviewExecutionBillingEvidence, .
     if any((item.review_id, item.company_id, item.review_version) != identity for item in evidence):
         raise WorkbenchContractError("Review billing evidence identity must be consistent.")
     return identity
+
+
+def _validate_billing_evidence_tuple(evidence: tuple[ReviewExecutionBillingEvidence, ...]) -> None:
+    if not isinstance(evidence, tuple) or not evidence:
+        raise WorkbenchContractError("Review billing evidence is required.")
+    seen_billing_keys: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, ReviewExecutionBillingEvidence):
+            raise WorkbenchContractError("ReviewExecutionBillingEvidence DTO is required.")
+        billing_key = item.billing_instruction.billing_key
+        if billing_key in seen_billing_keys:
+            raise WorkbenchContractError("Review billing evidence billing_key values must be unique.")
+        seen_billing_keys.add(billing_key)
 
 
 def _decision_fingerprint(command: ReviewDecisionCommand) -> tuple[Any, ...]:

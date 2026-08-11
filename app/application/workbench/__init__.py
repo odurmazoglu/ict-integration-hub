@@ -6,6 +6,14 @@ from app.application.workbench.allocations import (
     BusinessContextAllocationSet,
     BusinessContextAllocationType,
 )
+from app.application.workbench.billing_authoring import (
+    CaptureOdooWorkbenchBillingEvidenceCommand,
+    CaptureOdooWorkbenchBillingEvidenceResult,
+    ValidatedWorkbenchBillingAuthoring,
+    WorkbenchBillingAuthoringRow,
+)
+from app.application.workbench.billing_capture_use_cases import CaptureOdooWorkbenchBillingEvidenceUseCase
+from app.application.workbench.billing_reference_validation import WorkbenchBillingReferenceValidator
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.decision_use_cases import SubmitReviewDecisionUseCase
 from app.application.workbench.dto import (
@@ -24,18 +32,24 @@ from app.application.workbench.erp_references import (
     AnalyticAccountReferenceRepository,
     CompanyReference,
     CompanyReferenceRepository,
+    CurrencyReference,
+    CurrencyReferenceRepository,
     CustomerInvoiceReference,
     CustomerInvoiceReferenceRepository,
     OpportunityReference,
     OpportunityReferenceRepository,
     PartnerReference,
     PartnerReferenceRepository,
+    ProductReference,
+    ProductReferenceRepository,
     PurchaseOrderReference,
     PurchaseOrderReferenceRepository,
     SalesOrderLineReference,
     SalesOrderLineReferenceRepository,
     SalesOrderReference,
     SalesOrderReferenceRepository,
+    SalesTaxReference,
+    SalesTaxReferenceRepository,
 )
 from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
 from app.application.workbench.exceptions import (
@@ -61,12 +75,17 @@ from app.application.workbench.odoo_submission_use_cases import (
 )
 from app.application.workbench.ports import (
     ReviewBillingEvidenceReader,
+    ReviewBillingEvidenceWriter,
     ReviewDecisionWriter,
     ReviewExecutionEvidenceReader,
     ReviewItemWriter,
     ReviewQueueReader,
+    WorkbenchBillingAuthoringReader,
     WorkbenchDecisionCandidateReader,
     WorkbenchProjectionPublisher,
+)
+from app.application.workbench.ports import (
+    WorkbenchBillingReferenceValidator as WorkbenchBillingReferenceValidatorPort,
 )
 from app.application.workbench.projection import (
     OdooWorkbenchDecisionCandidate,
@@ -85,10 +104,15 @@ __all__ = [
     "BusinessContextAllocation",
     "BusinessContextAllocationSet",
     "BusinessContextAllocationType",
+    "CaptureOdooWorkbenchBillingEvidenceCommand",
+    "CaptureOdooWorkbenchBillingEvidenceResult",
+    "CaptureOdooWorkbenchBillingEvidenceUseCase",
     "CompanyReference",
     "CompanyReferenceRepository",
     "CustomerInvoiceReference",
     "CustomerInvoiceReferenceRepository",
+    "CurrencyReference",
+    "CurrencyReferenceRepository",
     "GetReviewItemUseCase",
     "LineResolution",
     "ListReviewQueueUseCase",
@@ -99,6 +123,8 @@ __all__ = [
     "OpportunityReferenceRepository",
     "PartnerReference",
     "PartnerReferenceRepository",
+    "ProductReference",
+    "ProductReferenceRepository",
     "ProjectionPublishResult",
     "PurchaseOrderReference",
     "PurchaseOrderReferenceRepository",
@@ -107,6 +133,7 @@ __all__ = [
     "ReviewDecisionType",
     "ReviewDecisionWriter",
     "ReviewBillingEvidenceReader",
+    "ReviewBillingEvidenceWriter",
     "ReviewExecutionBillingEvidence",
     "ReviewExecutionEvidence",
     "ReviewExecutionEvidenceReader",
@@ -122,10 +149,17 @@ __all__ = [
     "SalesOrderLineReferenceRepository",
     "SalesOrderReference",
     "SalesOrderReferenceRepository",
+    "SalesTaxReference",
+    "SalesTaxReferenceRepository",
     "SubmitReviewDecisionUseCase",
     "SubmitOdooWorkbenchCandidateCommand",
     "SubmitOdooWorkbenchCandidateUseCase",
     "TaxResolution",
+    "ValidatedWorkbenchBillingAuthoring",
+    "WorkbenchBillingAuthoringReader",
+    "WorkbenchBillingAuthoringRow",
+    "WorkbenchBillingReferenceValidator",
+    "WorkbenchBillingReferenceValidatorPort",
     "WorkbenchCandidateAmbiguityError",
     "WorkbenchCandidateDataError",
     "WorkbenchCandidateNotFoundError",
