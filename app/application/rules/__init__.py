@@ -2,7 +2,6 @@
 
 from app.application.rules.contracts import (
     InvoiceClassificationResult,
-    InvoiceDecisionClassification,
     InvoiceDecisionRule,
     InvoiceDecisionRuleAction,
     InvoiceDecisionRuleConflict,
@@ -26,7 +25,6 @@ __all__ = [
     "DIRECT_VENDOR_BILL_RULE_ID",
     "DeterministicRuleEngine",
     "InvoiceClassificationResult",
-    "InvoiceDecisionClassification",
     "InvoiceDecisionRule",
     "InvoiceDecisionRuleAction",
     "InvoiceDecisionRuleConflict",

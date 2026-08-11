@@ -45,7 +45,6 @@ from app.application.queries import Query
 from app.application.rules import (
     DeterministicRuleEngine,
     InvoiceClassificationResult,
-    InvoiceDecisionClassification,
     InvoiceDecisionRule,
     InvoiceDecisionRuleAction,
     InvoiceDecisionRuleConflict,
@@ -126,7 +125,6 @@ __all__ = [
     "ImportInvoiceUseCase",
     "ImportSession",
     "InvoiceClassificationResult",
-    "InvoiceDecisionClassification",
     "InvoiceDecisionRule",
     "InvoiceDecisionRuleAction",
     "InvoiceDecisionRuleConflict",

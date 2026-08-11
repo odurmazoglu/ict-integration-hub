@@ -8,7 +8,6 @@ import pytest
 import app.application as application
 from app.application.rules import (
     InvoiceClassificationResult,
-    InvoiceDecisionClassification,
     InvoiceDecisionRule,
     InvoiceDecisionRuleAction,
     InvoiceDecisionRuleConflict,
@@ -105,6 +104,100 @@ def test_conflicting_enabled_rules_with_same_match_and_priority_fail_closed_cont
     )
 
 
+def test_workflow_and_business_classification_are_independent() -> None:
+    ev_charging_expense = InvoiceDecisionRuleAction(
+        workflow=WorkflowType.EXPENSE,
+        classification_code="EV_CHARGING",
+    )
+    cloud_cost_vendor_bill = InvoiceDecisionRuleAction(
+        workflow=WorkflowType.VENDOR_BILL,
+        classification_code="CLOUD_COST",
+    )
+
+    assert ev_charging_expense.workflow is WorkflowType.EXPENSE
+    assert ev_charging_expense.classification_code == "EV_CHARGING"
+    assert cloud_cost_vendor_bill.workflow is WorkflowType.VENDOR_BILL
+    assert cloud_cost_vendor_bill.classification_code == "CLOUD_COST"
+
+
+def test_new_valid_business_classification_requires_no_enum_change() -> None:
+    action = InvoiceDecisionRuleAction(
+        workflow=WorkflowType.EXPENSE,
+        classification_code="OFFICE_RENT",
+    )
+
+    assert action.classification_code == "OFFICE_RENT"
+
+
+def test_classification_code_canonicalizes_case_and_outer_whitespace() -> None:
+    action = InvoiceDecisionRuleAction(
+        workflow=WorkflowType.VENDOR_BILL,
+        classification_code=" cloud_cost ",
+    )
+
+    assert action.classification_code == "CLOUD_COST"
+
+
+@pytest.mark.parametrize(
+    "classification_code",
+    [
+        "",
+        " ",
+        "1CLOUD_COST",
+        "_CLOUD_COST",
+        "CLOUD-COST",
+        "CLOUD COST",
+        "CLOUD.COST",
+        "A" * 65,
+    ],
+)
+def test_malformed_classification_codes_are_rejected(classification_code: str) -> None:
+    with pytest.raises(InvoiceDecisionRuleContractError):
+        InvoiceDecisionRuleAction(workflow=WorkflowType.VENDOR_BILL, classification_code=classification_code)
+
+
+def test_classification_participates_in_deterministic_fingerprints() -> None:
+    cloud = InvoiceDecisionRuleAction(workflow=WorkflowType.VENDOR_BILL, classification_code="CLOUD_COST")
+    utility = InvoiceDecisionRuleAction(workflow=WorkflowType.VENDOR_BILL, classification_code="OFFICE_UTILITY")
+
+    assert cloud.fingerprint() != utility.fingerprint()
+
+
+def test_same_workflow_with_different_classification_is_not_equivalent() -> None:
+    first = _rule(
+        rule_id="rule-1",
+        rule_code="RULE-A",
+        action=InvoiceDecisionRuleAction(workflow=WorkflowType.EXPENSE, classification_code="EV_CHARGING"),
+    )
+    second = _rule(
+        rule_id="rule-2",
+        rule_code="RULE-B",
+        action=InvoiceDecisionRuleAction(workflow=WorkflowType.EXPENSE, classification_code="OFFICE_UTILITY"),
+    )
+
+    assert first.is_behaviorally_equivalent_to(second) is False
+
+
+def test_same_classification_with_different_workflow_is_not_equivalent() -> None:
+    first = _rule(
+        rule_id="rule-1",
+        rule_code="RULE-A",
+        action=InvoiceDecisionRuleAction(workflow=WorkflowType.EXPENSE, classification_code="CLOUD_COST"),
+    )
+    second = _rule(
+        rule_id="rule-2",
+        rule_code="RULE-B",
+        action=InvoiceDecisionRuleAction(workflow=WorkflowType.VENDOR_BILL, classification_code="CLOUD_COST"),
+    )
+
+    assert first.is_behaviorally_equivalent_to(second) is False
+
+
+def test_workflow_type_remains_closed() -> None:
+    with pytest.raises(InvoiceDecisionRuleContractError):
+        InvoiceDecisionRuleAction(workflow="EXPENSE", classification_code="EV_CHARGING")  # type: ignore[arg-type]
+
+
 def test_equivalent_rule_behaviour_is_stable_and_not_a_conflict() -> None:
     first = _rule(rule_id="rule-1", rule_code="RULE-A")
     second = _rule(rule_id="rule-2", rule_code="RULE-B")
@@ -131,6 +224,7 @@ def test_invoice_classification_result_contract_does_not_classify_by_itself() ->
 
     assert result.matched_rules == (rule,)
     assert result.selected_rule == rule
+    assert result.classification_code == "CLOUD_COST"
     assert result.conflicts == ()
     with pytest.raises(InvoiceDecisionRuleContractError):
         InvoiceClassificationResult(matched_rules=(), selected_rule=rule)
@@ -155,6 +249,7 @@ def test_invoice_classification_result_contract_does_not_classify_by_itself() ->
         lambda: InvoiceDecisionRuleMatch(description_contains=("cloud", "Cloud")),
         lambda: InvoiceDecisionRuleAction(default_department_id=1.5),  # type: ignore[arg-type]
         lambda: InvoiceDecisionRuleAction(require_review=1),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRuleAction(classification_code=1),  # type: ignore[arg-type]
         lambda: InvoiceDecisionRuleAction(),
         lambda: _rule(rule_version=0),
         lambda: _rule(enabled="yes"),  # type: ignore[arg-type]
@@ -202,7 +297,7 @@ def _rule(
         action=action
         or InvoiceDecisionRuleAction(
             workflow=WorkflowType.VENDOR_BILL,
-            classification=InvoiceDecisionClassification.VENDOR_BILL,
+            classification_code="CLOUD_COST",
             require_business_context=True,
         ),
     )

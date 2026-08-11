@@ -6,7 +6,7 @@ Invoice Decision Rules are immutable, deterministic contracts for future invoice
 
 ICT Integration Hub owns decision rules and deterministic orchestration. Odoo owns ERP business processes and document lifecycles after approved Hub decisions are executed.
 
-Rules may decide ERP-neutral outcomes such as workflow, classification, review requirement, and default accounting context. Rules must not create, update, post, pay, reconcile, or delete ERP records.
+Rules may decide ERP-neutral outcomes such as workflow, business classification, review requirement, and default accounting context. Rules must not create, update, post, pay, reconcile, or delete ERP records.
 
 Out of scope for these contracts:
 
@@ -45,11 +45,27 @@ Out of scope for these contracts:
 `InvoiceDecisionRuleAction` contains ERP-neutral requested outcomes only:
 
 - `workflow`
-- `classification`
+- `classification_code`
 - `default_department_id`
 - `default_analytic_account_id`
 - `require_review`
 - `require_business_context`
+
+Workflow answers: "How should this external document enter ERP?"
+
+Workflow remains the closed canonical `WorkflowType` contract because workflow controls supported ERP command paths and must stay code-controlled.
+
+Classification answers: "What business category does this invoice represent?"
+
+Business classifications are rule-configurable canonical codes and do not require Hub code changes. A supplied `classification_code` is trimmed, uppercased, and must match `[A-Z][A-Z0-9_]{0,63}`. It is not a free-form description and it is not a closed application enum.
+
+Examples:
+
+- `EV_CHARGING` -> `WorkflowType.EXPENSE`
+- `OFFICE_UTILITY` -> `WorkflowType.EXPENSE`
+- `CLOUD_COST` -> `WorkflowType.VENDOR_BILL`
+
+Classification alone never implies ERP execution capability. Only workflow describes the ERP entry path.
 
 `InvoiceDecisionRulePriority` defines deterministic priority as `tier` plus `rank`. Lower values sort earlier after specificity.
 
@@ -79,6 +95,7 @@ Contracts reject malformed values at construction time:
 - identifiers must be positive integers
 - booleans must be exact booleans
 - currency is canonical ISO-4217 text
+- classification code is canonical deterministic text, not an enum of business categories
 - text fields must be non-empty and bounded
 - `description_contains` must be an immutable tuple of unique canonical terms
 - priority values must be non-negative integers

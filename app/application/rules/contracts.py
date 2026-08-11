@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any
 
 from app.application.dto import ApplicationDTO
@@ -11,24 +11,11 @@ from app.application.workflow import WorkflowType
 MAX_RULE_CODE_LENGTH = 120
 MAX_RULE_NAME_LENGTH = 200
 MAX_RULE_TEXT_LENGTH = 500
+CLASSIFICATION_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
 
 class InvoiceDecisionRuleContractError(ApplicationError):
     error_category = "invoice_decision_rule_contract_error"
-
-
-class InvoiceDecisionClassification(StrEnum):
-    """ERP-neutral invoice classification labels for future rule evaluation."""
-
-    VENDOR_BILL = WorkflowType.VENDOR_BILL
-    PURCHASE_ORDER = "purchase_order"
-    RFQ = WorkflowType.RFQ
-    EXPENSE = WorkflowType.EXPENSE
-    ASSET = WorkflowType.ASSET
-    SUBSCRIPTION = WorkflowType.SUBSCRIPTION
-    CUSTOMER_RECHARGE = "customer_recharge"
-    MANUAL_REVIEW = WorkflowType.MANUAL_REVIEW
-    IGNORE = "ignore"
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +104,7 @@ class InvoiceDecisionRuleAction(ApplicationDTO):
     """ERP-neutral action requested by a deterministic invoice decision rule."""
 
     workflow: WorkflowType | None = None
-    classification: InvoiceDecisionClassification | None = None
+    classification_code: str | None = None
     default_department_id: int | None = None
     default_analytic_account_id: int | None = None
     require_review: bool = False
@@ -126,10 +113,7 @@ class InvoiceDecisionRuleAction(ApplicationDTO):
     def __post_init__(self) -> None:
         if self.workflow is not None and not isinstance(self.workflow, WorkflowType):
             raise InvoiceDecisionRuleContractError("workflow must be a canonical WorkflowType when supplied.")
-        if self.classification is not None and not isinstance(self.classification, InvoiceDecisionClassification):
-            raise InvoiceDecisionRuleContractError(
-                "classification must be a canonical InvoiceDecisionClassification when supplied."
-            )
+        classification_code = _optional_classification_code(self.classification_code)
         _require_optional_positive_int(
             self.default_department_id,
             "default_department_id must be a positive integer when supplied.",
@@ -142,18 +126,19 @@ class InvoiceDecisionRuleAction(ApplicationDTO):
         _require_bool(self.require_business_context, "require_business_context must be boolean.")
         if (
             self.workflow is None
-            and self.classification is None
+            and classification_code is None
             and self.default_department_id is None
             and self.default_analytic_account_id is None
             and self.require_review is False
             and self.require_business_context is False
         ):
             raise InvoiceDecisionRuleContractError("at least one rule action value is required.")
+        object.__setattr__(self, "classification_code", classification_code)
 
     def fingerprint(self) -> tuple[Any, ...]:
         return (
             self.workflow,
-            self.classification,
+            self.classification_code,
             self.default_department_id,
             self.default_analytic_account_id,
             self.require_review,
@@ -249,6 +234,12 @@ class InvoiceClassificationResult(ApplicationDTO):
         object.__setattr__(self, "matched_rules", matched_rules)
         object.__setattr__(self, "conflicts", conflicts)
 
+    @property
+    def classification_code(self) -> str | None:
+        if self.selected_rule is None:
+            return None
+        return self.selected_rule.action.classification_code
+
 
 def order_invoice_decision_rules(rules: tuple[InvoiceDecisionRule, ...]) -> tuple[InvoiceDecisionRule, ...]:
     """Order enabled rules deterministically without evaluating invoice facts."""
@@ -332,6 +323,15 @@ def _optional_currency(value: str | None) -> str | None:
     cleaned = _required_text(value, "currency", max_length=3).upper()
     if len(cleaned) != 3 or not cleaned.isalpha():
         raise InvoiceDecisionRuleContractError("currency must be a canonical ISO-4217 code.")
+    return cleaned
+
+
+def _optional_classification_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = _required_text(value, "classification_code", max_length=64).upper()
+    if CLASSIFICATION_CODE_PATTERN.fullmatch(cleaned) is None:
+        raise InvoiceDecisionRuleContractError("classification_code must match [A-Z][A-Z0-9_]{0,63} when supplied.")
     return cleaned
 
 
