@@ -32,29 +32,36 @@
 - Customer Recharge Existing Invoice Strategy for no-write association of recharge allocations to validated existing outgoing customer invoice artifacts
 - Customer Invoice Creation Strategy foundation with explicit billing instruction contracts and fail-closed execution until authoritative billing terms are captured with accepted decisions
 - Customer Recharge Billing Evidence Capture for immutable, version-pinned `CustomerInvoiceBillingInstruction` persistence before accepted decision submission
-- Customer Invoice Production Wiring for accepted billing evidence pinning, Stage 2 execution-only billing reads, draft customer invoice execution steps, and writer-gated duplicate recovery
+- Customer Invoice Stage 2 pinning and execution wiring for accepted billing evidence pinning, Stage 2 execution-only billing reads, draft customer invoice execution steps, and writer-gated duplicate recovery. Authoritative Stage 1 billing instruction capture source remains required.
 
 ## Next Milestones
 
-### 1. Purchase Workflow Strategies
+### 1. Customer Billing Instruction Capture / Workbench Authoring
+
+- define the authoritative business input source for `CustomerInvoiceBillingInstruction`
+- persist Stage 1 `workbench_review_billing_evidence` in the normal production review creation flow
+- preserve no inference from allocation amount/percentage, purchase tax mapping, source product matches, ERP pricelists, display text, AI, or fuzzy logic
+- prove accepted decision submission pins Stage 1 to Stage 2 and execution planning consumes Stage 2 only
+
+### 2. Purchase Workflow Strategies
 
 - existing Purchase Order matching execution
 - RFQ/Purchase Order creation strategy contracts
 - no posting or payment side effects
 
-### 2. Expense / Asset / Subscription Strategies
+### 3. Expense / Asset / Subscription Strategies
 
 - workflow-specific strategy separation
 - dry-run support for each strategy
 - ERP write safety gates
 
-### 3. Odoo Projection Acknowledgement
+### 4. Odoo Projection Acknowledgement
 
 - Hub-to-Odoo acknowledgement projection
 - decision-ready clearing only after Hub acceptance
 - safe projection status update boundaries
 
-### 4. Odoo Online Workbench Projection Synchronization
+### 5. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
 - Hub-to-Odoo JSON-2 projection publishing
@@ -62,14 +69,14 @@
 - no custom Odoo Python addon
 - no workflow execution
 
-### 5. Odoo Import Workbench UI
+### 6. Odoo Import Workbench UI
 
 - Odoo Studio list, form, and search views backed by the projection model
 - queue and detail screens for pending review items
 - explicit `SELECT_WORKFLOW` and `DISMISS` decision submission
 - no Odoo-owned business logic
 
-### 6. Odoo Vendor Bill Write Service
+### 7. Odoo Vendor Bill Write Service
 
 - dry-run by default
 - explicit production approval
@@ -77,7 +84,7 @@
 - draft Vendor Bill only
 - no automatic posting
 
-### 7. Import Session and Pipeline
+### 8. Import Session and Pipeline
 
 - download
 - parse
@@ -87,14 +94,14 @@
 - write
 - per-item and session summaries
 
-### 8. Rule Engine and Decision Engine
+### 9. Rule Engine and Decision Engine
 
 - company-scoped deterministic rules
 - workflow recommendation
 - priority and conflict handling
 - full audit trail
 
-### 9. Odoo Import Workbench
+### 10. Odoo Import Workbench
 
 - incoming invoice queue
 - matching and warning display
@@ -106,7 +113,7 @@
 - RFQ/PO creation option
 - direct Vendor Bill, expense, asset, manual review, and ignore actions
 
-### 10. Procurement Traceability
+### 11. Procurement Traceability
 
 - link invoice to existing PO where possible
 - support reconstructing RFQ/PO for out-of-system purchases
@@ -115,7 +122,7 @@
 - support future Composite Workflow Strategy for mixed allocation purposes
 - expose actual profitability
 
-### 11. Scheduler And Runtime Recovery
+### 12. Scheduler And Runtime Recovery
 
 - scheduled collection
 - retry execution workers
@@ -123,7 +130,7 @@
 - recoverable import states
 - idempotent replay
 
-### 12. Monitoring and Operations
+### 13. Monitoring and Operations
 
 - metrics
 - structured logs
@@ -131,7 +138,7 @@
 - alerts
 - operational reconciliation
 
-### 13. AI Advisor and Company Memory
+### 14. AI Advisor and Company Memory
 
 - pgvector retrieval of similar historical decisions
 - local Ollama-compatible model

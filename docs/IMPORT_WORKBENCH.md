@@ -139,6 +139,8 @@ Billing evidence is authoritative customer pricing evidence, not vendor/source c
 
 Accepted Customer Invoice creation decisions require the complete Stage 1 billing evidence set to cover exactly the creation-mode `CUSTOMER_RECHARGE` allocations, with no existing-invoice allocation coverage and no customer mismatch. The accepted decision, execution source evidence, and complete Stage 2 billing evidence set are committed atomically; insertion failure rolls back the decision. Idempotent replay compares the complete accepted billing evidence set, so removed, added, or changed billing instructions conflict and historical evidence is never overwritten or deleted.
 
+Customer Invoice Stage 2 pinning and execution wiring complete; authoritative Stage 1 billing instruction capture source remains required. The normal production-style Vendor Bill review creation path persists review items plus pre-decision execution source evidence, but it does not currently create `workbench_review_billing_evidence` rows. Missing Stage 1 billing evidence blocks accepted decision submission for creation-mode Customer Recharge allocations; no Stage 2 evidence, runtime, or writer call is created.
+
 Idempotent replay of the same accepted Vendor Bill decision returns the existing acknowledgement only when the captured Stage 2 execution source evidence is semantically identical. A duplicate replay does not insert a second evidence row. Conflicting evidence for the same decision identity raises a safe idempotency/integrity conflict and does not overwrite historical evidence.
 
 The persistence adapter does not store raw XML in execution source evidence, provider payloads, credentials, tokens, HTTP responses, stack traces, or unsafe provider exception text.

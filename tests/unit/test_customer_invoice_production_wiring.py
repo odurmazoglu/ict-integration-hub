@@ -37,6 +37,7 @@ from app.application.workbench import (
     ReviewDecisionType,
     ReviewExecutionBillingEvidence,
     ReviewItem,
+    ReviewItemCreationService,
     ReviewStatus,
     SubmitReviewDecisionUseCase,
     TaxResolution,
@@ -116,6 +117,40 @@ def test_missing_stage_one_billing_evidence_prevents_decision_persistence(sessio
         _submit_use_case(session, repository).execute(_command(_allocation("ALLOC-A", 501)))
 
     assert session.query(WorkbenchReviewDecision).count() == 0
+
+
+def test_normal_review_creation_path_does_not_fabricate_stage_one_billing_evidence(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    created = ReviewItemCreationService(repository).create_pending_review_item_with_execution_evidence(
+        _review_item(),
+        company_id=7,
+        idempotency_key="review-key-1",
+        evidence=_source_evidence(),
+    )
+
+    assert created.review_id == "review-1"
+    assert session.query(WorkbenchReviewItem).count() == 1
+    assert session.query(WorkbenchReviewExecutionEvidence).count() == 1
+    assert session.query(WorkbenchReviewBillingEvidence).count() == 0
+
+
+def test_normal_review_creation_with_customer_invoice_creation_allocation_fails_closed(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    ReviewItemCreationService(repository).create_pending_review_item_with_execution_evidence(
+        _review_item(),
+        company_id=7,
+        idempotency_key="review-key-1",
+        evidence=_source_evidence(),
+    )
+
+    with pytest.raises(ReviewNotFoundError):
+        _submit_use_case(session, repository).execute(_command(_allocation("ALLOC-A", 501)))
+
+    assert session.query(WorkbenchReviewDecision).count() == 0
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+    assert session.query(ExecutionCustomerBillingEvidence).count() == 0
+    assert session.query(WorkflowExecution).count() == 0
+    assert session.query(WorkflowExecutionEvent).count() == 0
 
 
 def test_stage_one_billing_coverage_must_be_exact(session: Session) -> None:
