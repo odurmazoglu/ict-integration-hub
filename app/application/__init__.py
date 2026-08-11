@@ -41,8 +41,10 @@ from app.application.execution import (
     foundation_no_write_strategy_resolver,
     vendor_bill_write_idempotency_key,
 )
+from app.application.ports import DecisionRuleRepository
 from app.application.queries import Query
 from app.application.rules import (
+    ODOO_DECISION_RULE_MODEL,
     DeterministicRuleEngine,
     InvoiceClassificationResult,
     InvoiceDecisionRule,
@@ -51,8 +53,13 @@ from app.application.rules import (
     InvoiceDecisionRuleContractError,
     InvoiceDecisionRuleMatch,
     InvoiceDecisionRulePriority,
+    OdooDecisionRuleAuthoringContractError,
+    OdooDecisionRuleAuthoringRecord,
+    OdooDecisionRuleFieldMapping,
     find_invoice_decision_rule_conflicts,
+    odoo_workflow_to_workflow_type,
     order_invoice_decision_rules,
+    validate_unique_odoo_decision_rule_identities,
 )
 from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCase
 from app.application.workbench import (
@@ -98,6 +105,7 @@ __all__ = [
     "BusinessContextDecision",
     "Command",
     "DecisionEngine",
+    "DecisionRuleRepository",
     "DeterministicRuleEngine",
     "ExecutionApproval",
     "ExecutionApprovalError",
@@ -136,6 +144,10 @@ __all__ = [
     "ManualReviewReason",
     "ManualReviewReasonCode",
     "ManualReviewStrategy",
+    "ODOO_DECISION_RULE_MODEL",
+    "OdooDecisionRuleAuthoringContractError",
+    "OdooDecisionRuleAuthoringRecord",
+    "OdooDecisionRuleFieldMapping",
     "Query",
     "ReviewDecisionAcknowledgement",
     "ReviewDecisionCommand",
@@ -164,5 +176,7 @@ __all__ = [
     "WorkflowStrategyResolver",
     "WorkflowType",
     "find_invoice_decision_rule_conflicts",
+    "odoo_workflow_to_workflow_type",
     "order_invoice_decision_rules",
+    "validate_unique_odoo_decision_rule_identities",
 ]

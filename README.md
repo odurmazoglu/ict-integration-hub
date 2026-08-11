@@ -59,6 +59,7 @@ Current implemented capabilities:
 - Decision Engine orchestration with a Rule Engine port and extensible workflow strategy resolver.
 - Deterministic Rule Engine implementation for the direct Vendor Bill workflow rule.
 - Immutable deterministic Invoice Decision Rule domain contracts for future rule configuration and classification work.
+- Odoo-backed Decision Rule authoring contracts for the Studio-owned `IPP Decision Rule` configuration model, centralized field mapping, and read-only canonical rule repository port.
 - Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.
@@ -170,6 +171,7 @@ Core documentation:
 - [Workflow Execution](docs/WORKFLOW_EXECUTION.md)
 - [Rule Engine](docs/RULE_ENGINE.md)
 - [Invoice Decision Rules](docs/DECISION_RULES.md)
+- [Odoo Decision Rule Authoring](docs/ODOO_DECISION_RULE_AUTHORING.md)
 - [AI Advisor](docs/AI_ADVISOR.md)
 - [Matching](docs/MATCHING.md)
 - [Import Workbench](docs/IMPORT_WORKBENCH.md)

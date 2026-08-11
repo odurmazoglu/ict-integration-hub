@@ -148,6 +148,22 @@ Current executable use cases:
 - `SubmitReviewDecisionUseCase`
 - `SubmitOdooWorkbenchCandidateUseCase`
 
+## Odoo Decision Rule Authoring
+
+Odoo is the only business UI for Invoice Decision Rule configuration. Hub does not provide an editable rule UI and does not store editable business rules.
+
+`OdooDecisionRuleFieldMapping` centralizes the Studio field names for the documented `IPP Decision Rule` model (`x_ipp_decision_rule`). Application services and future adapters must not scatter `x_studio_*` field names.
+
+`OdooDecisionRuleAuthoringRecord` is the immutable mapping contract for one already-read, normalized Odoo rule row. It maps to the canonical `InvoiceDecisionRule`, `InvoiceDecisionRuleMatch`, `InvoiceDecisionRuleAction`, and `InvoiceDecisionRulePriority` contracts. It is not an Odoo reader and does not expose raw Odoo dictionaries.
+
+`DecisionRuleRepository` is the application port for future read-only adapters:
+
+```text
+list_invoice_decision_rules(company_id=...) -> tuple[InvoiceDecisionRule, ...]
+```
+
+The port returns only canonical immutable rule contracts. It does not persist, write, cache, evaluate, expose Odoo payloads, or depend on SQLAlchemy, Odoo transport, XML-RPC, JSON-RPC, AI, fuzzy matching, or rule execution.
+
 ## Odoo Workbench Decision Submission
 
 `SubmitOdooWorkbenchCandidateUseCase` connects the read-only Odoo Workbench candidate reader port to the existing Hub decision submission use case:

@@ -20,6 +20,14 @@ from app.application.rules.deterministic import (
     RuleEvaluationError,
     TaxRuleEvaluationError,
 )
+from app.application.rules.odoo_authoring import (
+    ODOO_DECISION_RULE_MODEL,
+    OdooDecisionRuleAuthoringContractError,
+    OdooDecisionRuleAuthoringRecord,
+    OdooDecisionRuleFieldMapping,
+    odoo_workflow_to_workflow_type,
+    validate_unique_odoo_decision_rule_identities,
+)
 
 __all__ = [
     "DIRECT_VENDOR_BILL_RULE_ID",
@@ -32,10 +40,16 @@ __all__ = [
     "InvoiceDecisionRuleMatch",
     "InvoiceDecisionRulePriority",
     "MANUAL_REVIEW_RULE_ID",
+    "ODOO_DECISION_RULE_MODEL",
+    "OdooDecisionRuleAuthoringContractError",
+    "OdooDecisionRuleAuthoringRecord",
+    "OdooDecisionRuleFieldMapping",
     "PartnerRuleEvaluationError",
     "ProductRuleEvaluationError",
     "RuleEvaluationError",
     "TaxRuleEvaluationError",
     "find_invoice_decision_rule_conflicts",
+    "odoo_workflow_to_workflow_type",
     "order_invoice_decision_rules",
+    "validate_unique_odoo_decision_rule_identities",
 ]
