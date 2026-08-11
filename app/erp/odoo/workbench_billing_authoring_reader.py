@@ -200,7 +200,7 @@ def _row(
             description=_required_text_value(record.get(mapping.description)),
             quantity=_required_positive_decimal(record.get(mapping.quantity)),
             unit_price=_required_positive_decimal(record.get(mapping.unit_price)),
-            currency=_currency_code(record.get(mapping.currency_id)),
+            currency_id=_required_many2one_id(record.get(mapping.currency_id)),
             sales_tax_ids=_many2many_ids(record.get(mapping.sales_tax_ids)),
             billing_ready=_required_bool(record.get(mapping.billing_ready)),
             sequence=_optional_positive_int(record.get(mapping.sequence)) if mapping.sequence is not None else None,
@@ -234,14 +234,6 @@ def _required_many2one_id(value: Any) -> int:
         first = value[0]
         if type(first) is int and first > 0:
             return first
-    raise WorkbenchCandidateDataError(SAFE_BILLING_DATA_ERROR)
-
-
-def _currency_code(value: Any) -> str:
-    if isinstance(value, str):
-        return _required_text_value(value).upper()
-    if isinstance(value, list | tuple) and len(value) >= 2 and type(value[0]) is int:
-        return _required_text_value(value[1]).upper()
     raise WorkbenchCandidateDataError(SAFE_BILLING_DATA_ERROR)
 
 

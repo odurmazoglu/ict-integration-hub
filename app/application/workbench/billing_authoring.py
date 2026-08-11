@@ -23,7 +23,7 @@ class WorkbenchBillingAuthoringRow(ApplicationDTO):
     description: str
     quantity: Decimal
     unit_price: Decimal
-    currency: str
+    currency_id: int
     sales_tax_ids: tuple[int, ...]
     billing_ready: bool
     sequence: int | None = None
@@ -40,10 +40,7 @@ class WorkbenchBillingAuthoringRow(ApplicationDTO):
         _require_text(self.description, "description is required.")
         _require_positive_decimal(self.quantity, "quantity must be a positive Decimal value.")
         _require_positive_decimal(self.unit_price, "unit_price must be a positive Decimal value.")
-        _require_text(self.currency, "currency is required.")
-        currency = self.currency.strip().upper()
-        if len(currency) != 3 or not currency.isalpha():
-            raise WorkbenchContractError("currency must be a stable ISO-4217 code.")
+        _require_positive_int(self.currency_id, "currency_id must be a positive ERP id.")
         sales_tax_ids = tuple(self.sales_tax_ids)
         if not sales_tax_ids:
             raise WorkbenchContractError("sales_tax_ids are required.")
@@ -55,8 +52,46 @@ class WorkbenchBillingAuthoringRow(ApplicationDTO):
             raise WorkbenchContractError("billing_ready must be boolean.")
         if self.sequence is not None:
             _require_positive_int(self.sequence, "sequence must be positive when supplied.")
-        object.__setattr__(self, "currency", currency)
         object.__setattr__(self, "sales_tax_ids", sales_tax_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedWorkbenchBillingAuthoring(ApplicationDTO):
+    rows: tuple[WorkbenchBillingAuthoringRow, ...]
+    currency_codes_by_id: tuple[tuple[int, str], ...]
+
+    def __post_init__(self) -> None:
+        rows = tuple(self.rows)
+        if not rows:
+            raise WorkbenchContractError("validated billing authoring rows are required.")
+        for row in rows:
+            if not isinstance(row, WorkbenchBillingAuthoringRow):
+                raise WorkbenchContractError("validated rows must be WorkbenchBillingAuthoringRow values.")
+        currency_codes_by_id = tuple(self.currency_codes_by_id)
+        seen_currency_ids: set[int] = set()
+        for currency_id, code in currency_codes_by_id:
+            _require_positive_int(currency_id, "validated currency id must be positive.")
+            _require_text(code, "validated currency code is required.")
+            canonical_code = code.strip().upper()
+            if len(canonical_code) != 3 or not canonical_code.isalpha():
+                raise WorkbenchContractError("validated currency code must be a stable ISO-4217 code.")
+            if currency_id in seen_currency_ids:
+                raise WorkbenchContractError("validated currency ids must be unique.")
+            seen_currency_ids.add(currency_id)
+        if {row.currency_id for row in rows} != seen_currency_ids:
+            raise WorkbenchContractError("validated currency ids must cover every billing row.")
+        object.__setattr__(self, "rows", rows)
+        object.__setattr__(
+            self,
+            "currency_codes_by_id",
+            tuple((currency_id, code.strip().upper()) for currency_id, code in currency_codes_by_id),
+        )
+
+    def currency_code_for(self, currency_id: int) -> str:
+        for known_currency_id, code in self.currency_codes_by_id:
+            if known_currency_id == currency_id:
+                return code
+        raise WorkbenchContractError("validated currency code is missing.")
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from app.application.workbench.billing_authoring import WorkbenchBillingAuthoringRow
+from app.application.workbench.billing_authoring import (
+    ValidatedWorkbenchBillingAuthoring,
+    WorkbenchBillingAuthoringRow,
+)
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewItem, ReviewQueueResult
 from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
@@ -144,7 +147,7 @@ class WorkbenchBillingReferenceValidator(Protocol):
         rows: tuple[WorkbenchBillingAuthoringRow, ...],
         *,
         requested_company_id: int,
-    ) -> tuple[WorkbenchBillingAuthoringRow, ...]:
+    ) -> ValidatedWorkbenchBillingAuthoring:
         pass
 
 

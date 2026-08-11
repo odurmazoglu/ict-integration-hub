@@ -9,6 +9,7 @@ from app.application.workbench.allocations import (
 from app.application.workbench.billing_authoring import (
     CaptureOdooWorkbenchBillingEvidenceCommand,
     CaptureOdooWorkbenchBillingEvidenceResult,
+    ValidatedWorkbenchBillingAuthoring,
     WorkbenchBillingAuthoringRow,
 )
 from app.application.workbench.billing_capture_use_cases import CaptureOdooWorkbenchBillingEvidenceUseCase
@@ -154,6 +155,7 @@ __all__ = [
     "SubmitOdooWorkbenchCandidateCommand",
     "SubmitOdooWorkbenchCandidateUseCase",
     "TaxResolution",
+    "ValidatedWorkbenchBillingAuthoring",
     "WorkbenchBillingAuthoringReader",
     "WorkbenchBillingAuthoringRow",
     "WorkbenchBillingReferenceValidator",

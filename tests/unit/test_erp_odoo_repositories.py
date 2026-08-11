@@ -10,6 +10,7 @@ import pytest
 from app.application.workbench import (
     AnalyticAccountReference,
     CompanyReference,
+    CurrencyReference,
     CustomerInvoiceReference,
     OpportunityReference,
     PartnerReference,
@@ -30,6 +31,7 @@ from app.erp.odoo.tax_repository import OdooTaxRepository
 from app.erp.odoo.workbench_reference_repositories import (
     OdooAnalyticAccountReferenceRepository,
     OdooCompanyReferenceRepository,
+    OdooCurrencyReferenceRepository,
     OdooCustomerInvoiceReferenceRepository,
     OdooOpportunityReferenceRepository,
     OdooPartnerReferenceRepository,
@@ -264,6 +266,7 @@ def test_workbench_reference_repositories_read_exact_ids_into_minimal_dtos() -> 
             ],
             "crm.lead": [{"id": 601, "company_id": [7, "Main"], "partner_id": [101, "Customer"]}],
             "account.analytic.account": [{"id": 701, "company_id": False}],
+            "res.currency": [{"id": 31, "name": "TRY", "active": True}],
         }
     )
 
@@ -289,6 +292,9 @@ def test_workbench_reference_repositories_read_exact_ids_into_minimal_dtos() -> 
     assert OdooAnalyticAccountReferenceRepository(adapter=adapter).find_analytic_accounts_by_ids((701,)) == (
         AnalyticAccountReference(id=701, company_id=None),
     )
+    assert OdooCurrencyReferenceRepository(adapter=adapter).find_currencies_by_ids((31,)) == (
+        CurrencyReference(id=31, code="TRY", active=True),
+    )
 
     assert [call["domain"] for call in adapter.calls] == [
         [["id", "in", [101]]],
@@ -299,6 +305,7 @@ def test_workbench_reference_repositories_read_exact_ids_into_minimal_dtos() -> 
         [["id", "in", [9001]]],
         [["id", "in", [601]]],
         [["id", "in", [701]]],
+        [["id", "in", [31]]],
     ]
     assert all(call["method"] == "search_read_all" for call in adapter.calls)
 

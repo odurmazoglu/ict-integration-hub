@@ -206,6 +206,15 @@ class OdooCurrencyReferenceRepository:
     def __init__(self, *, adapter: OdooReadOnlyAdapter) -> None:
         self._adapter = adapter
 
+    def find_currencies_by_ids(self, ids: tuple[int, ...]) -> tuple[CurrencyReference, ...]:
+        records = _read_by_ids(
+            self._adapter,
+            model="res.currency",
+            ids=ids,
+            fields=["id", "name", "active"],
+        )
+        return tuple(_currency_reference(record) for record in records)
+
     def find_currencies_by_codes(self, codes: tuple[str, ...]) -> tuple[CurrencyReference, ...]:
         if not codes:
             return ()
@@ -215,14 +224,7 @@ class OdooCurrencyReferenceRepository:
             fields=["id", "name", "active"],
             max_records=len(codes),
         )
-        return tuple(
-            CurrencyReference(
-                id=int(record["id"]),
-                code=_required_text(record.get("name")),
-                active=bool(record.get("active", True)),
-            )
-            for record in records
-        )
+        return tuple(_currency_reference(record) for record in records)
 
 
 def _read_by_ids(
@@ -253,3 +255,11 @@ def _required_text(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("required text is missing")
     return value
+
+
+def _currency_reference(record: dict[str, Any]) -> CurrencyReference:
+    return CurrencyReference(
+        id=int(record["id"]),
+        code=_required_text(record.get("name")),
+        active=bool(record.get("active", True)),
+    )

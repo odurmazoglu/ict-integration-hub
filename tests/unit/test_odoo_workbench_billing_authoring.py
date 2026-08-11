@@ -111,7 +111,7 @@ def test_many2one_ids_and_many2many_tax_ids_are_parsed_by_id_and_display_names_i
                 _billing_record(
                     x_customer_id=[501, "Not Authority"],
                     x_product_id=[901, "Ignored Product"],
-                    x_currency_id=[1, "TRY"],
+                    x_currency_id=[31, "Localized Turkish Lira Label"],
                     x_sales_tax_ids=[[1901, "VAT 20"], [1902, "VAT 10"]],
                 )
             ],
@@ -121,8 +121,20 @@ def test_many2one_ids_and_many2many_tax_ids_are_parsed_by_id_and_display_names_i
 
     assert row.customer_id == 501
     assert row.product_id == 901
-    assert row.currency == "TRY"
+    assert row.currency_id == 31
     assert row.sales_tax_ids == (1901, 1902)
+
+
+@pytest.mark.parametrize("bad_currency", [False, "TRY", ["TRY", 31], [0, "TRY"], [], None])
+def test_malformed_currency_many2one_is_rejected(bad_currency: object) -> None:
+    with pytest.raises(WorkbenchCandidateDataError):
+        OdooWorkbenchBillingAuthoringReader(
+            adapter=RecordingAdapter(
+                parent_records=[_parent_record()],
+                billing_records=[_billing_record(x_currency_id=bad_currency)],
+            ),
+            mapping=_mapping(),
+        ).get_billing_authoring(review_id="review-1", company_id=7)
 
 
 @pytest.mark.parametrize("quantity", ["1.500", 2, 2.5, Decimal("3.25")])
@@ -182,7 +194,7 @@ def test_reference_validator_reads_exact_authored_ids() -> None:
     partner_repository = StaticReferenceRepository((PartnerReference(id=501),))
     product_repository = StaticReferenceRepository((ProductReference(id=901),))
     tax_repository = StaticReferenceRepository((SalesTaxReference(id=1901, usage_type="sale"),))
-    currency_repository = StaticReferenceRepository((CurrencyReference(id=1, code="TRY"),))
+    currency_repository = StaticReferenceRepository((CurrencyReference(id=31, code="TRY"),))
     validator = WorkbenchBillingReferenceValidator(
         partner_repository=partner_repository,
         product_repository=product_repository,
@@ -195,7 +207,7 @@ def test_reference_validator_reads_exact_authored_ids() -> None:
     assert partner_repository.calls == [(501,)]
     assert product_repository.calls == [(901,)]
     assert tax_repository.calls == [(1901,)]
-    assert currency_repository.calls == [("TRY",)]
+    assert currency_repository.calls == [(31,)]
 
 
 def test_reference_validator_rejects_wrong_company_inactive_and_purchase_tax() -> None:
@@ -216,6 +228,13 @@ def test_reference_validator_rejects_wrong_company_inactive_and_purchase_tax() -
         )
     with pytest.raises(WorkbenchErpReferenceNotFoundError):
         _reference_validator(currencies=()).validate_billing_authoring((_authoring_row(),), requested_company_id=7)
+    with pytest.raises(WorkbenchErpReferenceTypeError):
+        _reference_validator(
+            currencies=(CurrencyReference(id=31, code="TRY", active=False),),
+        ).validate_billing_authoring(
+            (_authoring_row(),),
+            requested_company_id=7,
+        )
 
 
 def test_capture_use_case_persists_stage_one_and_groups_rows(session: Session) -> None:
@@ -249,6 +268,46 @@ def test_capture_use_case_persists_stage_one_and_groups_rows(session: Session) -
     assert instructions[0].lines[0].unit_price == Decimal("150.00")
     assert instructions[0].lines[0].product_id == 901
     assert instructions[0].lines[0].sales_tax_ids == (1901,)
+
+
+def test_capture_uses_repository_validated_currency_code_not_odoo_display_label(session: Session) -> None:
+    repository = _repository_with_review(session)
+    rows = (
+        _authoring_row(odoo_record_id=1, allocation_key="ALLOC-A", currency_id=31),
+        _authoring_row(odoo_record_id=2, allocation_key="ALLOC-B", currency_id=31, sequence=2),
+    )
+    use_case = _capture_use_case(
+        repository,
+        rows=rows,
+        candidate=_candidate(_allocation("ALLOC-A", 501), _allocation("ALLOC-B", 501)),
+        currencies=(CurrencyReference(id=31, code="TRY"),),
+    )
+
+    use_case.execute(CaptureOdooWorkbenchBillingEvidenceCommand(review_id="review-1", company_id=7))
+
+    instruction = SqlAlchemyReviewBillingEvidenceReader(session).get_billing_instructions(
+        review_id="review-1",
+        company_id=7,
+        review_version=1,
+    )[0]
+    assert instruction.currency == "TRY"
+
+
+def test_capture_rejects_group_with_different_currency_ids_even_if_display_text_matches(session: Session) -> None:
+    repository = _repository_with_review(session)
+
+    with pytest.raises(ReviewDataIntegrityError):
+        _capture_use_case(
+            repository,
+            rows=(
+                _authoring_row(odoo_record_id=1, allocation_key="ALLOC-A", currency_id=31),
+                _authoring_row(odoo_record_id=2, allocation_key="ALLOC-B", currency_id=32, sequence=2),
+            ),
+            candidate=_candidate(_allocation("ALLOC-A", 501), _allocation("ALLOC-B", 501)),
+            currencies=(CurrencyReference(id=31, code="TRY"), CurrencyReference(id=32, code="TRY")),
+        ).execute(CaptureOdooWorkbenchBillingEvidenceCommand(review_id="review-1", company_id=7))
+
+    assert session.query(WorkbenchReviewBillingEvidence).count() == 0
 
 
 def test_capture_rejects_unready_stale_or_wrong_linkage(session: Session) -> None:
@@ -435,6 +494,10 @@ class StaticReferenceRepository:
         self.calls.append(ids)
         return tuple(record for record in self.records if isinstance(record, SalesTaxReference))
 
+    def find_currencies_by_ids(self, ids: tuple[int, ...]) -> tuple[CurrencyReference, ...]:
+        self.calls.append(ids)
+        return tuple(record for record in self.records if isinstance(record, CurrencyReference))
+
     def find_currencies_by_codes(self, codes: tuple[str, ...]) -> tuple[CurrencyReference, ...]:
         self.calls.append(codes)
         return tuple(record for record in self.records if isinstance(record, CurrencyReference))
@@ -445,7 +508,7 @@ def _reference_validator(
     partners: tuple[PartnerReference, ...] = (PartnerReference(id=501), PartnerReference(id=502)),
     products: tuple[ProductReference, ...] = (ProductReference(id=901),),
     taxes: tuple[SalesTaxReference, ...] = (SalesTaxReference(id=1901, usage_type="sale"),),
-    currencies: tuple[CurrencyReference, ...] = (CurrencyReference(id=1, code="TRY"),),
+    currencies: tuple[CurrencyReference, ...] = (CurrencyReference(id=31, code="TRY"),),
 ) -> WorkbenchBillingReferenceValidator:
     validator = WorkbenchBillingReferenceValidator(
         partner_repository=StaticReferenceRepository(partners),
@@ -461,13 +524,14 @@ def _capture_use_case(
     *,
     rows: tuple[WorkbenchBillingAuthoringRow, ...],
     candidate: OdooWorkbenchDecisionCandidate,
+    currencies: tuple[CurrencyReference, ...] = (CurrencyReference(id=31, code="TRY"),),
 ) -> CaptureOdooWorkbenchBillingEvidenceUseCase:
     return CaptureOdooWorkbenchBillingEvidenceUseCase(
         review_reader=repository,
         candidate_reader=StaticCandidateReader(candidate),
         billing_authoring_reader=StaticBillingReader(rows),
         billing_evidence_writer=repository,
-        reference_validator=_reference_validator(),
+        reference_validator=_reference_validator(currencies=currencies),
     )
 
 
@@ -529,6 +593,7 @@ def _authoring_row(
     allocation_key: str = "ALLOC-A",
     customer_id: int = 501,
     product_id: int = 901,
+    currency_id: int = 31,
     quantity: Decimal = Decimal("1.000"),
     unit_price: Decimal = Decimal("150.00"),
     sales_tax_ids: tuple[int, ...] = (1901,),
@@ -547,7 +612,7 @@ def _authoring_row(
         description=f"Recharge {allocation_key}",
         quantity=quantity,
         unit_price=unit_price,
-        currency="TRY",
+        currency_id=currency_id,
         sales_tax_ids=sales_tax_ids,
         billing_ready=billing_ready,
         sequence=sequence,

@@ -8,6 +8,7 @@ from app.application.workbench.allocations import BusinessContextAllocation, Bus
 from app.application.workbench.billing_authoring import (
     CaptureOdooWorkbenchBillingEvidenceCommand,
     CaptureOdooWorkbenchBillingEvidenceResult,
+    ValidatedWorkbenchBillingAuthoring,
     WorkbenchBillingAuthoringRow,
 )
 from app.application.workbench.evidence import ReviewExecutionBillingEvidence
@@ -94,11 +95,11 @@ class CaptureOdooWorkbenchBillingEvidenceUseCase:
             creation_allocations=creation_allocations,
             existing_invoice_keys=existing_invoice_keys,
         )
-        self._reference_validator.validate_billing_authoring(
+        validated_authoring = self._reference_validator.validate_billing_authoring(
             rows,
             requested_company_id=command.company_id,
         )
-        instructions = _instructions(rows)
+        instructions = _instructions(validated_authoring)
         evidence = tuple(
             ReviewExecutionBillingEvidence(
                 review_id=review.review_id,
@@ -168,9 +169,11 @@ def _validate_allocation_linkage(
         raise ReviewDataIntegrityError("Billing authoring must cover every creation allocation exactly.")
 
 
-def _instructions(rows: tuple[WorkbenchBillingAuthoringRow, ...]) -> tuple[CustomerInvoiceBillingInstruction, ...]:
+def _instructions(
+    validated_authoring: ValidatedWorkbenchBillingAuthoring,
+) -> tuple[CustomerInvoiceBillingInstruction, ...]:
     grouped: dict[str, list[WorkbenchBillingAuthoringRow]] = defaultdict(list)
-    for row in rows:
+    for row in validated_authoring.rows:
         grouped[row.billing_group_key].append(row)
     instructions: list[CustomerInvoiceBillingInstruction] = []
     for billing_key in sorted(grouped):
@@ -181,16 +184,17 @@ def _instructions(rows: tuple[WorkbenchBillingAuthoringRow, ...]) -> tuple[Custo
             )
         )
         customer_ids = {row.customer_id for row in group_rows}
-        currencies = {row.currency for row in group_rows}
+        currency_ids = {row.currency_id for row in group_rows}
+        currency_codes = {validated_authoring.currency_code_for(row.currency_id) for row in group_rows}
         if len(customer_ids) != 1:
             raise ReviewDataIntegrityError("Billing group customer must be consistent.")
-        if len(currencies) != 1:
+        if len(currency_ids) != 1 or len(currency_codes) != 1:
             raise ReviewDataIntegrityError("Billing group currency must be consistent.")
         instructions.append(
             CustomerInvoiceBillingInstruction(
                 billing_key=billing_key,
                 customer_id=group_rows[0].customer_id,
-                currency=group_rows[0].currency,
+                currency=validated_authoring.currency_code_for(group_rows[0].currency_id),
                 lines=tuple(
                     CustomerInvoiceBillingLine(
                         allocation_key=row.allocation_key,

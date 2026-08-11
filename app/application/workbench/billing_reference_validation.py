@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from app.application.exceptions import ApplicationError
-from app.application.workbench.billing_authoring import WorkbenchBillingAuthoringRow
+from app.application.workbench.billing_authoring import (
+    ValidatedWorkbenchBillingAuthoring,
+    WorkbenchBillingAuthoringRow,
+)
 from app.application.workbench.erp_references import (
     CurrencyReference,
     CurrencyReferenceRepository,
@@ -46,7 +49,7 @@ class WorkbenchBillingReferenceValidator:
         rows: tuple[WorkbenchBillingAuthoringRow, ...],
         *,
         requested_company_id: int,
-    ) -> tuple[WorkbenchBillingAuthoringRow, ...]:
+    ) -> ValidatedWorkbenchBillingAuthoring:
         if type(requested_company_id) is not int or requested_company_id <= 0:
             raise WorkbenchContractError("requested company_id must be positive.")
         for row in rows:
@@ -69,7 +72,7 @@ class WorkbenchBillingReferenceValidator:
             if product.active is not True:
                 raise WorkbenchErpReferenceTypeError("Billing product reference is inactive.")
             currency = _required_reference(
-                row.currency,
+                row.currency_id,
                 references.currencies,
                 "Billing currency reference is invalid.",
             )
@@ -86,7 +89,13 @@ class WorkbenchBillingReferenceValidator:
                     raise WorkbenchErpReferenceTypeError("Billing sales tax reference is inactive.")
                 if tax.usage_type is not None and tax.usage_type != "sale":
                     raise WorkbenchErpReferenceTypeError("Billing sales tax reference is not an outgoing tax.")
-        return rows
+        return ValidatedWorkbenchBillingAuthoring(
+            rows=rows,
+            currency_codes_by_id=tuple(
+                (currency_id, references.currencies[currency_id].code)
+                for currency_id in sorted({row.currency_id for row in rows})
+            ),
+        )
 
     def _read_references(self, rows: tuple[WorkbenchBillingAuthoringRow, ...]) -> _BillingReferenceMaps:
         return _BillingReferenceMaps(
@@ -101,12 +110,9 @@ class WorkbenchBillingReferenceValidator:
                     _unique_ints(tax_id for row in rows for tax_id in row.sales_tax_ids)
                 )
             ),
-            currencies={
-                currency.code: currency
-                for currency in self._currency_repository.find_currencies_by_codes(
-                    tuple(sorted({row.currency for row in rows}))
-                )
-            },
+            currencies=_by_id(
+                self._currency_repository.find_currencies_by_ids(_unique_ints(row.currency_id for row in rows))
+            ),
         )
 
 
@@ -117,7 +123,7 @@ class _BillingReferenceMaps:
         partners: dict[int, PartnerReference],
         products: dict[int, ProductReference],
         sales_taxes: dict[int, SalesTaxReference],
-        currencies: dict[str, CurrencyReference],
+        currencies: dict[int, CurrencyReference],
     ) -> None:
         self.partners = partners
         self.products = products

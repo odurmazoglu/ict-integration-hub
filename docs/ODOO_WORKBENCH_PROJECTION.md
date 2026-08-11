@@ -206,7 +206,7 @@ Required logical fields:
 | description | Char/Text, required | Odoo user | Explicit outgoing invoice line description. |
 | quantity | Numeric, required | Odoo user | Explicit positive Decimal quantity. |
 | unit price | Numeric, required | Odoo user | Explicit positive Decimal sales unit price. |
-| currency | Many2one or Char code | Odoo user | Exact active currency, normalized to ISO code. |
+| currency | Many2one `res.currency`, required | Odoo user | Exact active currency id. Display label is ignored; Hub resolves the canonical ISO code from ERP reference data. |
 | sales taxes | Many2many ids | Odoo user | Exact outgoing sales tax ids. Display names are ignored. |
 | billing ready | Boolean | Odoo user/System | Hub captures only rows explicitly marked ready. |
 | sequence | Integer, optional | Odoo user/System | Stable line ordering within each billing group. |
@@ -216,10 +216,10 @@ Validation rules:
 - Parent lookup is exact by `review_id` and `company_id`; duplicate parent rows are ambiguous.
 - Parent `review_version` must equal the current Hub review version. There is no latest lookup.
 - Every child row must share the same review identity, company, and version.
-- Every billing group must have one customer and one currency.
+- Every billing group must have one customer and one exact currency identity. The canonical ISO code used in `CustomerInvoiceBillingInstruction` comes only from the validated `CurrencyReference`.
 - Every line allocation key must exist in the decision candidate, must be `CUSTOMER_RECHARGE`, must not already have `customer_invoice_id`, and must match `recharge_partner_id`.
 - Creation-mode `CUSTOMER_RECHARGE` allocations must be covered exactly once. Missing, duplicate, extra, or existing-invoice allocation rows fail closed.
-- Partner, product, currency, and sales tax references are validated by exact read-only ERP reference repositories. Product, currency, and sales tax references must be active; taxes must be outgoing sales taxes when usage type is available.
+- Partner, product, currency, and sales tax references are validated by exact read-only ERP reference repositories. Currency is selected via Odoo Many2one `res.currency` ID and resolved through exact ERP reference data; the Odoo display label, localized label, or relation tuple text is never authoritative. Product, currency, and sales tax references must be active; taxes must be outgoing sales taxes when usage type is available.
 - Customer Invoice customer, product, description, quantity, unit price, currency, and sales tax ids must come from authored billing rows only.
 
 Forbidden sources:

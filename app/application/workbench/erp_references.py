@@ -195,6 +195,9 @@ class SalesTaxReferenceRepository(Protocol):
 
 
 class CurrencyReferenceRepository(Protocol):
+    def find_currencies_by_ids(self, ids: tuple[int, ...]) -> tuple[CurrencyReference, ...]:
+        pass
+
     def find_currencies_by_codes(self, codes: tuple[str, ...]) -> tuple[CurrencyReference, ...]:
         pass
 
