@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.application.commands.base import Command
-from app.billing import VendorBill
+
+if TYPE_CHECKING:
+    from app.billing import VendorBill
 
 
 @dataclass(frozen=True, slots=True)

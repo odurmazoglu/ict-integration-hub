@@ -55,6 +55,9 @@ class CustomerInvoiceExecutionStrategy:
         if not hasattr(step, "step_type") or step.step_type is not ExecutionStepType.CUSTOMER_RECHARGE:
             return False
         allocations = getattr(step, "allocations", ())
+        instruction = getattr(step, "customer_invoice_billing_instruction", None)
+        if mode is ExecutionMode.EXECUTE and instruction is None:
+            return False
         return bool(allocations) and all(_is_creation_allocation(allocation) for allocation in allocations)
 
     def execute(self, request: ExecutionStepRequest) -> ExecutionStepResult:
@@ -65,7 +68,7 @@ class CustomerInvoiceExecutionStrategy:
         if request.mode is ExecutionMode.EXECUTE and request.approval is None:
             raise ExecutionApprovalError("Explicit execution approval is required for Customer Invoice execution.")
 
-        allocations = _customer_invoice_creation_allocations(request)
+        _customer_invoice_creation_allocations(request)
         try:
             source = self._source_invoice_reader.get_source_invoice(
                 review_id=request.review_id,
@@ -77,9 +80,7 @@ class CustomerInvoiceExecutionStrategy:
                 company_id=request.company_id,
                 source_invoice_id=source.source_invoice_id,
                 invoice=source.invoice,
-                product_match=source.product_match,
-                tax_match=source.tax_match,
-                allocations=allocations,
+                billing_instruction=_billing_instruction(request),
             )
             write_result = _run_writer(
                 writer=self._customer_invoice_writer,
@@ -143,6 +144,18 @@ def _customer_invoice_creation_allocations(
     if not allocations or not all(_is_creation_allocation(allocation) for allocation in allocations):
         raise ExecutionUnsupportedStepError("Customer Invoice creation requires recharge allocations without invoices.")
     return allocations
+
+
+def _billing_instruction(request: ExecutionStepRequest):
+    instruction = request.step.customer_invoice_billing_instruction
+    if instruction is None:
+        raise CustomerInvoiceBuildError(
+            (
+                "Customer Invoice creation requires explicit accepted billing instructions; "
+                "cost allocation evidence is not customer billing evidence.",
+            ),
+        )
+    return instruction
 
 
 def _is_creation_allocation(allocation: object) -> bool:

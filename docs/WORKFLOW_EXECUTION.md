@@ -93,7 +93,7 @@ The `FoundationExecutionStrategy` remains the no-write strategy for dry-run plan
 - writes only through `VendorBillWriter`
 - returns a typed `ExecutionArtifact` when a draft Vendor Bill is created or recovered
 
-`CustomerInvoiceExecutionStrategy` is the production-capable creation strategy for Customer Recharge allocations whose `customer_invoice_id` is absent. It supports `ExecutionStepType.CUSTOMER_RECHARGE` only through the Customer Recharge router, reads immutable execution source invoice evidence, builds only through `CustomerInvoiceBuilder`, and writes only through `CustomerInvoiceWriter`.
+`CustomerInvoiceExecutionStrategy` is the creation strategy foundation for Customer Recharge allocations whose `customer_invoice_id` is absent. It supports `ExecutionStepType.CUSTOMER_RECHARGE` only through the Customer Recharge router, reads immutable execution source invoice evidence, builds only through `CustomerInvoiceBuilder`, and writes only through `CustomerInvoiceWriter` after explicit accepted billing instructions are present.
 
 Workbench `decided_by`, Odoo user identity, and Odoo projection audit fields are not execution approval. The approval acknowledgement needed by the concrete writer remains at the write-policy boundary and is not persisted in runtime events.
 
@@ -200,11 +200,11 @@ Successful existing-invoice execution means the recharge allocation has been ass
 
 ## Customer Invoice Creation Execution
 
-Customer Invoice creation is enabled only for `CUSTOMER_RECHARGE` allocation steps where every allocation has `customer_invoice_id == None`. The planner keeps existing-invoice allocations and creation allocations in separate `CUSTOMER_RECHARGE` steps; each creation allocation becomes its own writer-backed step so the Hub does not silently merge or split customer invoices.
+Customer Invoice creation is modeled only for `CUSTOMER_RECHARGE` allocation steps where every allocation has `customer_invoice_id == None`. The planner keeps existing-invoice allocations and creation allocations in separate `CUSTOMER_RECHARGE` steps; each creation allocation becomes its own writer-backed step so the Hub does not silently merge or split customer invoices. Because current accepted decision evidence does not yet capture authoritative customer billing terms, these planner-created creation steps are marked non-execute-capable and `EXECUTE` fails closed before runtime creation or any Vendor Bill writer call.
 
-`CustomerInvoiceExecutionStrategy` loads the same accepted immutable `ExecutionSourceInvoice` evidence as Vendor Bill execution. `CustomerInvoiceBuilder` uses authoritative source lines, deterministic product matches, deterministic tax matches, and accepted allocation amounts to build an ERP-neutral draft customer invoice. It does not call Odoo, Uyumsoft, repositories, current ERP refresh, rematching, fuzzy matching, AI, or display-text reconstruction.
+`CustomerInvoiceBuilder` requires explicit `CustomerInvoiceBillingInstruction` evidence. The instruction supplies one customer, one currency, and immutable billing lines with explicit allocation key, product id, description, Decimal quantity, Decimal unit price, and explicit outgoing sales tax ids. It must not derive customer sales price from cost allocation `amount` or `percentage`, must not assume pass-through billing or zero markup, must not reuse incoming purchase tax mapping as outgoing sales tax evidence, and must not assume the vendor invoice matched product is the customer invoice product. It does not call Odoo, Uyumsoft, repositories, current ERP refresh, rematching, fuzzy matching, AI, or display-text reconstruction.
 
-The concrete `OdooCustomerInvoiceWriter` creates only Odoo Draft Customer Invoices (`account.move` with `move_type=out_invoice`). `EXECUTE` requires all global execution gates plus `CUSTOMER_INVOICE_EXECUTE_ENABLED=true`, and duplicate lookup runs before create using the deterministic writer idempotency identity, company, customer partner, and move type.
+The concrete `OdooCustomerInvoiceWriter` creates only Odoo Draft Customer Invoices (`account.move` with `move_type=out_invoice`). Future `EXECUTE` enablement requires explicit billing instructions plus all global execution gates plus `CUSTOMER_INVOICE_EXECUTE_ENABLED=true`, and duplicate lookup runs before create using the deterministic writer idempotency identity, company, customer partner, and move type.
 
 On `created` or `existing` writer results, the step result contains one `ExecutionArtifact`:
 

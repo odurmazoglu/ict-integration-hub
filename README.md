@@ -80,7 +80,7 @@ Current implemented capabilities:
 - Atomic execution source evidence capture for accepted executable Vendor Bill Workbench decisions, storing immutable schema-versioned invoice and deterministic match snapshots in the same Hub transaction as decision persistence.
 - Production Vendor Bill execution wiring that composes accepted decisions, the durable runtime, `VendorBillExecutionStrategy`, `VendorBillWriter`, and `OdooVendorBillWriter` for opt-in Draft Vendor Bill creation and duplicate-safe recovery.
 - No-write Customer Recharge execution for allocations that already reference validated existing outgoing customer invoices, producing `CUSTOMER_INVOICE` artifacts with `created=false`.
-- Draft Customer Invoice creation for `CUSTOMER_RECHARGE` allocations without `customer_invoice_id`, routed through `CustomerInvoiceExecutionStrategy`, `CustomerInvoiceWriter`, and `OdooCustomerInvoiceWriter` with duplicate-safe recovery.
+- Customer Invoice creation foundation for `CUSTOMER_RECHARGE` allocations without `customer_invoice_id`, including explicit billing instruction contracts, builder/writer separation, and fail-closed `EXECUTE` behavior until authoritative billing instructions are captured with accepted decisions.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.
@@ -94,6 +94,7 @@ Not implemented or not allowed by default:
 - Custom Odoo Python addons for Odoo Online.
 - Odoo Studio projection publishing, acknowledgement writes, model/view setup, or workflow execution.
 - Customer invoice posting, recharge settlement, collections, allocation profitability posting, or analytic writes.
+- Customer Invoice `EXECUTE` without explicit, version-pinned billing instructions for customer, currency, product, quantity, unit price, and sales taxes.
 - `EXECUTE` mode by default; real execution additionally requires `EXECUTION_EXECUTE_ENABLED`, explicit `ExecutionApproval.approved_by`, `PRODUCTION_OPERATIONS_ENABLED`, the production approval acknowledgement, and per-writer gates such as `CUSTOMER_INVOICE_EXECUTE_ENABLED`.
 - `EXECUTE` mode for unsupported execution steps, background execution workers, retry scheduling, and ERP posting/payment/reconciliation.
 - Live execution source reconstruction from current ERP/provider state or regenerated matching results.

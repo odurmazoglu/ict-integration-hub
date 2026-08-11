@@ -197,7 +197,7 @@ def _customer_recharge_steps(request: ExecutionRequest, *, first_sequence: int) 
                 allocation_keys=allocation_keys,
                 sequence=first_sequence + len(steps),
                 dry_run_supported=True,
-                execute_supported=True,
+                execute_supported=False,
                 writer_required=True,
                 allocations=(allocation,),
             )

@@ -93,6 +93,7 @@ from app.application.execution.vendor_bill_strategy import (
     VendorBillExecutionStrategy,
     vendor_bill_write_idempotency_key,
 )
+from app.billing.dto import CustomerInvoiceBillingInstruction, CustomerInvoiceBillingLine
 
 __all__ = [
     "AcceptedDecisionExecutionResult",
@@ -101,6 +102,8 @@ __all__ = [
     "ExecutionArtifact",
     "ExecutionArtifactType",
     "AcceptedReviewDecisionReader",
+    "CustomerInvoiceBillingInstruction",
+    "CustomerInvoiceBillingLine",
     "CustomerInvoiceExecutionStrategy",
     "CustomerRechargeExecutionRouter",
     "CustomerRechargeExecutionStrategy",

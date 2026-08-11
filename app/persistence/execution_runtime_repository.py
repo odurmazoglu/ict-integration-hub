@@ -41,6 +41,7 @@ from app.application.execution.runtime import (
     ExecutionState,
 )
 from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationType
+from app.billing.dto import CustomerInvoiceBillingInstruction, CustomerInvoiceBillingLine
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 
 SAFE_EXECUTION_PERSISTENCE_ERROR = "Execution runtime persistence operation failed."
@@ -417,6 +418,9 @@ def _plan_to_data(plan: ExecutionPlan) -> dict[str, Any]:
                 "execute_supported": step.execute_supported,
                 "writer_required": step.writer_required,
                 "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
+                "customer_invoice_billing_instruction": _billing_instruction_to_data(
+                    step.customer_invoice_billing_instruction
+                ),
             }
             for step in plan.steps
         ],
@@ -440,6 +444,9 @@ def _plan_from_data(data: dict[str, Any]) -> ExecutionPlan:
                 execute_supported=bool(step["execute_supported"]),
                 writer_required=bool(step.get("writer_required", False)),
                 allocations=tuple(_allocation_from_data(allocation) for allocation in step.get("allocations", ())),
+                customer_invoice_billing_instruction=_billing_instruction_from_data(
+                    step.get("customer_invoice_billing_instruction")
+                ),
             )
             for step in data["steps"]
         ),
@@ -510,6 +517,50 @@ def _allocation_from_data(data: dict[str, Any]) -> BusinessContextAllocation:
         analytic_account_id=_optional_int(data.get("analytic_account_id")),
         subscription_id=_optional_int(data.get("subscription_id")),
         internal_note=_optional_string(data.get("internal_note")),
+    )
+
+
+def _billing_instruction_to_data(instruction: CustomerInvoiceBillingInstruction | None) -> dict[str, Any] | None:
+    if instruction is None:
+        return None
+    return {
+        "billing_key": instruction.billing_key,
+        "customer_id": instruction.customer_id,
+        "currency": instruction.currency,
+        "lines": [
+            {
+                "allocation_key": line.allocation_key,
+                "product_id": line.product_id,
+                "description": line.description,
+                "quantity": str(line.quantity),
+                "unit_price": str(line.unit_price),
+                "sales_tax_ids": list(line.sales_tax_ids),
+            }
+            for line in instruction.lines
+        ],
+    }
+
+
+def _billing_instruction_from_data(data: Any) -> CustomerInvoiceBillingInstruction | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR)
+    return CustomerInvoiceBillingInstruction(
+        billing_key=str(data["billing_key"]),
+        customer_id=int(data["customer_id"]),
+        currency=str(data["currency"]),
+        lines=tuple(
+            CustomerInvoiceBillingLine(
+                allocation_key=str(line["allocation_key"]),
+                product_id=int(line["product_id"]),
+                description=str(line["description"]),
+                quantity=Decimal(str(line["quantity"])),
+                unit_price=Decimal(str(line["unit_price"])),
+                sales_tax_ids=tuple(int(tax_id) for tax_id in line["sales_tax_ids"]),
+            )
+            for line in data["lines"]
+        ),
     )
 
 
@@ -665,6 +716,9 @@ def _plan_signature(plan: ExecutionPlan) -> str:
                 "execute_supported": step.execute_supported,
                 "writer_required": step.writer_required,
                 "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
+                "customer_invoice_billing_instruction": _billing_instruction_to_data(
+                    step.customer_invoice_billing_instruction
+                ),
             }
             for step in plan.steps
         ],

@@ -19,6 +19,7 @@ from app.application.execution import (
     ExecutionRuntimeStepState,
     ExecutionSourceInvoice,
     ExecutionState,
+    ExecutionUnsupportedStepError,
     RunAcceptedDecisionExecutionCommand,
 )
 from app.application.workbench import (
@@ -38,7 +39,7 @@ from app.core.config import Settings
 from app.core.runtime_checks import PRODUCTION_APPROVAL_ACK
 from app.db.base import Base
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
-from app.erp.write import CustomerInvoiceWriteSafetyGateError, VendorBillWriteSafetyGateError
+from app.erp.write import VendorBillWriteSafetyGateError
 from app.matching import (
     InvoiceProductLineResult,
     InvoiceProductMatchResult,
@@ -176,69 +177,20 @@ def test_completed_runtime_never_replays_vendor_bill_write(session: Session) -> 
     assert _runtime_count(session) == 1
 
 
-def test_customer_invoice_execute_disabled_fails_before_runtime_or_odoo_call(session: Session) -> None:
+def test_customer_invoice_creation_without_billing_instruction_fails_before_runtime_or_odoo_call(
+    session: Session,
+) -> None:
     _submit_customer_invoice_decision(session)
     client = FakeOdooVendorBillClient()
 
-    with pytest.raises(CustomerInvoiceWriteSafetyGateError):
-        _use_case(session, client=client, settings=_execute_settings(customer_invoice_execute_enabled=False)).execute(
+    with pytest.raises(ExecutionUnsupportedStepError):
+        _use_case(session, client=client, settings=_execute_settings(customer_invoice_execute_enabled=True)).execute(
             _command(mode=ExecutionMode.EXECUTE)
         )
 
     assert _runtime_count(session) == 0
     assert client.search_calls == []
     assert client.create_calls == []
-
-
-def test_execute_enabled_creates_draft_vendor_bill_and_customer_invoice_artifacts(session: Session) -> None:
-    _submit_customer_invoice_decision(session)
-    client = FakeOdooVendorBillClient(created_id=9101)
-    repository = SqlAlchemyExecutionRuntimeRepository(session)
-
-    result = _use_case(
-        session,
-        client=client,
-        settings=_execute_settings(customer_invoice_execute_enabled=True),
-    ).execute(
-        _command(mode=ExecutionMode.EXECUTE),
-    )
-
-    assert result.status is AcceptedDecisionExecutionStatus.EXECUTED
-    assert result.runtime_state is ExecutionState.COMPLETED
-    assert len(client.search_calls) == 2
-    assert len(client.create_calls) == 2
-    payload = client.create_calls[1]
-    assert payload["move_type"] == "out_invoice"
-    assert payload["company_id"] == 7
-    assert payload["partner_id"] == 701
-    assert "action_post" not in str(payload).lower()
-    assert "payment" not in str(payload).lower()
-    snapshot = repository.get_snapshot(execution_id=result.execution_id or "")
-    assert snapshot is not None
-    artifact = snapshot.steps[1].last_result.produced_artifacts[0]  # type: ignore[union-attr]
-    assert artifact.artifact_type is ExecutionArtifactType.CUSTOMER_INVOICE
-    assert artifact.artifact_id == "9101"
-    assert artifact.external_identity.startswith("customer-invoice-write:")
-    assert artifact.created is True
-
-
-def test_customer_invoice_timeout_retry_recovers_existing_without_duplicate(session: Session) -> None:
-    _submit_customer_invoice_decision(session)
-    client = FakeOdooVendorBillClient(timeout_after_create=True, timeout_move_type="out_invoice", created_id=9101)
-    use_case = _use_case(session, client=client, settings=_execute_settings(customer_invoice_execute_enabled=True))
-
-    first = use_case.execute(_command(mode=ExecutionMode.EXECUTE))
-    second = use_case.execute(_command(mode=ExecutionMode.EXECUTE))
-
-    assert first.runtime_state is ExecutionState.WAITING_RETRY
-    assert second.status is AcceptedDecisionExecutionStatus.EXECUTED
-    assert len(client.create_calls) == 2
-    assert len(client.search_calls) == 3
-    snapshot = SqlAlchemyExecutionRuntimeRepository(session).get_snapshot(execution_id=second.execution_id or "")
-    assert snapshot is not None
-    artifact = snapshot.steps[1].last_result.produced_artifacts[0]  # type: ignore[union-attr]
-    assert artifact.artifact_id == "9101"
-    assert artifact.created is False
 
 
 def test_production_composition_keeps_infrastructure_out_of_application_layer() -> None:

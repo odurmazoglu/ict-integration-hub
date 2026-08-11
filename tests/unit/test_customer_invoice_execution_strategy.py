@@ -9,6 +9,8 @@ import pytest
 from app.application.commands import CustomerInvoiceWriteCommand
 from app.application.dto import CustomerInvoiceWriteResult
 from app.application.execution import (
+    CustomerInvoiceBillingInstruction,
+    CustomerInvoiceBillingLine,
     CustomerInvoiceExecutionStrategy,
     CustomerRechargeExecutionRouter,
     CustomerRechargeExecutionStrategy,
@@ -42,7 +44,11 @@ def test_customer_invoice_strategy_supports_only_creation_mode_allocations() -> 
     strategy = _strategy(writer=RecordingCustomerInvoiceWriter())
 
     assert strategy.supported_step_types == (ExecutionStepType.CUSTOMER_RECHARGE,)
-    assert strategy.supports_step(step=_step(customer_invoice_id=None), mode=ExecutionMode.EXECUTE)
+    assert strategy.supports_step(
+        step=_step(customer_invoice_id=None, billing_instruction=_instruction()),
+        mode=ExecutionMode.EXECUTE,
+    )
+    assert not strategy.supports_step(step=_step(customer_invoice_id=None), mode=ExecutionMode.EXECUTE)
     assert not strategy.supports_step(step=_step(customer_invoice_id=7001), mode=ExecutionMode.EXECUTE)
 
 
@@ -58,7 +64,9 @@ def test_customer_recharge_router_keeps_existing_and_creation_modes_separate() -
     router = CustomerRechargeExecutionRouter((CustomerRechargeExecutionStrategy(), _strategy(writer=creation_writer)))
 
     existing = router.execute(_request(customer_invoice_id=7001, mode=ExecutionMode.EXECUTE))
-    created = router.execute(_request(customer_invoice_id=None, mode=ExecutionMode.EXECUTE))
+    created = router.execute(
+        _request(customer_invoice_id=None, mode=ExecutionMode.EXECUTE, billing_instruction=_instruction())
+    )
 
     assert existing.produced_artifacts[0].created is False
     assert created.produced_artifacts[0].artifact_type is ExecutionArtifactType.CUSTOMER_INVOICE
@@ -70,11 +78,23 @@ def test_customer_recharge_router_keeps_existing_and_creation_modes_separate() -
 
 def test_creation_dry_run_builds_without_external_write() -> None:
     writer = RecordingCustomerInvoiceWriter()
-    result = _strategy(writer=writer).execute(_request(customer_invoice_id=None, mode=ExecutionMode.DRY_RUN))
+    result = _strategy(writer=writer).execute(
+        _request(customer_invoice_id=None, mode=ExecutionMode.DRY_RUN, billing_instruction=_instruction())
+    )
 
     assert result.status is ExecutionStepStatus.DRY_RUN_OK
     assert result.produced_artifacts == ()
     assert writer.commands[0].dry_run is True
+
+
+def test_creation_dry_run_without_billing_instruction_fails_closed_without_write() -> None:
+    writer = RecordingCustomerInvoiceWriter()
+    result = _strategy(writer=writer).execute(_request(customer_invoice_id=None, mode=ExecutionMode.DRY_RUN))
+
+    assert result.status is ExecutionStepStatus.FAILED
+    assert result.error_code == "customer_invoice_build_error"
+    assert "billing instruction" in (result.message or "")
+    assert writer.calls == 0
 
 
 def test_customer_invoice_builder_returns_immutable_draft() -> None:
@@ -83,17 +103,33 @@ def test_customer_invoice_builder_returns_immutable_draft() -> None:
         company_id=7,
         source_invoice_id=source.source_invoice_id,
         invoice=source.invoice,
-        product_match=source.product_match,
-        tax_match=source.tax_match,
-        allocations=_step(customer_invoice_id=None).allocations,
+        billing_instruction=_instruction(),
     )
 
     with pytest.raises(AttributeError):
         draft.customer_id = 1  # type: ignore[misc]
 
 
+def test_customer_invoice_builder_uses_only_explicit_billing_terms() -> None:
+    source = _source(review_id="review-1", company_id=7, decision_version=2)
+
+    draft = CustomerInvoiceBuilder().build(
+        company_id=7,
+        source_invoice_id=source.source_invoice_id,
+        invoice=source.invoice,
+        billing_instruction=_instruction(product_id=9901, unit_price=Decimal("250.00"), sales_tax_ids=(8801,)),
+    )
+
+    line = draft.invoice_lines[0]
+    assert line.product_id == 9901
+    assert line.unit_price == Decimal("250.00")
+    assert line.tax_ids == (8801,)
+    assert line.product_id != source.product_match.line_results[0].result.product_id
+    assert line.tax_ids != (source.tax_match.line_results[0].result.tax_id,)
+
+
 def test_creation_idempotency_is_deterministic_and_distinct_from_execution_id() -> None:
-    request = _request(customer_invoice_id=None, mode=ExecutionMode.EXECUTE)
+    request = _request(customer_invoice_id=None, mode=ExecutionMode.EXECUTE, billing_instruction=_instruction())
 
     first = customer_invoice_write_idempotency_key(request)
     second = customer_invoice_write_idempotency_key(request)
@@ -161,19 +197,28 @@ def _strategy(*, writer: RecordingCustomerInvoiceWriter) -> CustomerInvoiceExecu
     )
 
 
-def _request(*, customer_invoice_id: int | None, mode: ExecutionMode) -> ExecutionStepRequest:
+def _request(
+    *,
+    customer_invoice_id: int | None,
+    mode: ExecutionMode,
+    billing_instruction: CustomerInvoiceBillingInstruction | None = None,
+) -> ExecutionStepRequest:
     return ExecutionStepRequest(
         execution_id="execution-1",
         review_id="review-1",
         company_id=7,
         decision_version=2,
         mode=mode,
-        step=_step(customer_invoice_id=customer_invoice_id),
+        step=_step(customer_invoice_id=customer_invoice_id, billing_instruction=billing_instruction),
         approval=ExecutionApproval(approved_by="finance.lead") if mode is ExecutionMode.EXECUTE else None,
     )
 
 
-def _step(*, customer_invoice_id: int | None) -> ExecutionStep:
+def _step(
+    *,
+    customer_invoice_id: int | None,
+    billing_instruction: CustomerInvoiceBillingInstruction | None = None,
+) -> ExecutionStep:
     allocation = BusinessContextAllocation(
         allocation_key="A",
         allocation_type=BusinessContextAllocationType.CUSTOMER_RECHARGE,
@@ -188,9 +233,33 @@ def _step(*, customer_invoice_id: int | None) -> ExecutionStep:
         step_type=ExecutionStepType.CUSTOMER_RECHARGE,
         allocation_keys=("A",),
         sequence=1,
-        execute_supported=True,
+        execute_supported=customer_invoice_id is not None or billing_instruction is not None,
         writer_required=customer_invoice_id is None,
         allocations=(allocation,),
+        customer_invoice_billing_instruction=billing_instruction,
+    )
+
+
+def _instruction(
+    *,
+    product_id: int = 3001,
+    unit_price: Decimal = Decimal("150.00"),
+    sales_tax_ids: tuple[int, ...] = (4001,),
+) -> CustomerInvoiceBillingInstruction:
+    return CustomerInvoiceBillingInstruction(
+        billing_key="billing:A",
+        customer_id=701,
+        currency="TRY",
+        lines=(
+            CustomerInvoiceBillingLine(
+                allocation_key="A",
+                product_id=product_id,
+                description="Explicit customer recharge",
+                quantity=Decimal("1"),
+                unit_price=unit_price,
+                sales_tax_ids=sales_tax_ids,
+            ),
+        ),
     )
 
 
