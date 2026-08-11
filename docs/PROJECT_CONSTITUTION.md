@@ -91,6 +91,8 @@ Odoo is an execution platform.
 
 Odoo owns:
 
+- Business-user configuration UI
+- Editable Decision Rule authoring records
 - Import Workbench user interface
 - Import Workbench projection store when implemented through Odoo Studio
 - ERP master data
@@ -105,6 +107,8 @@ Odoo owns:
 - Profitability reporting
 
 Business logic never belongs inside Odoo.
+
+Whenever an Odoo standard capability exists, Hub integrates with it instead of reimplementing business processes or configuration screens. Decision Rule authoring therefore belongs in Odoo Studio through the documented `IPP Decision Rule` model. Hub reads those records through future read-only adapters and maps them into immutable deterministic contracts; Hub does not provide an editable rule UI and does not store editable business-rule configuration.
 
 ---
 
