@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+
+import pytest
+
+import app.application as application
+from app.application.rules import (
+    InvoiceClassificationResult,
+    InvoiceDecisionClassification,
+    InvoiceDecisionRule,
+    InvoiceDecisionRuleAction,
+    InvoiceDecisionRuleConflict,
+    InvoiceDecisionRuleContractError,
+    InvoiceDecisionRuleMatch,
+    InvoiceDecisionRulePriority,
+    find_invoice_decision_rule_conflicts,
+    order_invoice_decision_rules,
+)
+from app.application.workflow import WorkflowType
+
+
+def test_invoice_decision_rule_contracts_are_exported_and_immutable() -> None:
+    rule = _rule()
+
+    assert application.InvoiceDecisionRule is InvoiceDecisionRule
+    assert application.InvoiceDecisionRuleMatch is InvoiceDecisionRuleMatch
+    assert application.InvoiceDecisionRuleAction is InvoiceDecisionRuleAction
+    assert application.InvoiceDecisionRulePriority is InvoiceDecisionRulePriority
+    assert application.InvoiceClassificationResult is InvoiceClassificationResult
+    with pytest.raises(FrozenInstanceError):
+        rule.enabled = False
+
+
+def test_enabled_rules_are_ordered_by_specificity_priority_and_identity() -> None:
+    generic = _rule(
+        rule_code="RULE-GENERIC",
+        match=InvoiceDecisionRuleMatch(vendor_tax_id="1234567890"),
+        priority=InvoiceDecisionRulePriority(tier=10, rank=10),
+    )
+    company_exact = _rule(
+        rule_code="RULE-COMPANY",
+        match=InvoiceDecisionRuleMatch(company_id=7, vendor_tax_id="1234567890"),
+        priority=InvoiceDecisionRulePriority(tier=10, rank=10),
+    )
+    disabled = _rule(
+        rule_code="RULE-DISABLED",
+        enabled=False,
+        match=InvoiceDecisionRuleMatch(company_id=7, vendor_tax_id="1234567890", currency="TRY"),
+        priority=InvoiceDecisionRulePriority(tier=0, rank=0),
+    )
+    higher_priority = _rule(
+        rule_code="RULE-PRIORITY",
+        match=InvoiceDecisionRuleMatch(company_id=7, vendor_tax_id="1234567890"),
+        priority=InvoiceDecisionRulePriority(tier=0, rank=0),
+    )
+
+    ordered = order_invoice_decision_rules((generic, company_exact, disabled, higher_priority))
+
+    assert ordered == (higher_priority, company_exact, generic)
+
+
+def test_exact_vendor_tax_company_currency_and_description_conditions_are_canonical() -> None:
+    match = InvoiceDecisionRuleMatch(
+        company_id=7,
+        vendor_partner_id=501,
+        vendor_tax_id=" 1234567890 ",
+        currency="try",
+        provider_document_type="E_INVOICE",
+        purchase_order_present=True,
+        description_contains=(" Cloud Service ", "subscription"),
+        product_mapping_id=9001,
+    )
+
+    assert match.company_id == 7
+    assert match.vendor_partner_id == 501
+    assert match.vendor_tax_id == "1234567890"
+    assert match.currency == "TRY"
+    assert match.provider_document_type == "E_INVOICE"
+    assert match.purchase_order_present is True
+    assert match.description_contains == ("cloud service", "subscription")
+    assert match.product_mapping_id == 9001
+    assert match.specificity == 8
+
+
+def test_company_isolation_prevents_same_vendor_tax_rules_from_conflicting() -> None:
+    company_7 = _rule(rule_code="RULE-C7", match=InvoiceDecisionRuleMatch(company_id=7, vendor_tax_id="1234567890"))
+    company_8 = _rule(rule_code="RULE-C8", match=InvoiceDecisionRuleMatch(company_id=8, vendor_tax_id="1234567890"))
+
+    assert find_invoice_decision_rule_conflicts((company_7, company_8)) == ()
+
+
+def test_conflicting_enabled_rules_with_same_match_and_priority_fail_closed_contract() -> None:
+    first = _rule(rule_code="RULE-A", action=InvoiceDecisionRuleAction(workflow=WorkflowType.VENDOR_BILL))
+    second = _rule(rule_code="RULE-B", action=InvoiceDecisionRuleAction(workflow=WorkflowType.MANUAL_REVIEW))
+
+    conflicts = find_invoice_decision_rule_conflicts((first, second))
+
+    assert conflicts == (
+        InvoiceDecisionRuleConflict(
+            rule_codes=("RULE-A", "RULE-B"),
+            match_fingerprint=first.match.fingerprint(),
+        ),
+    )
+
+
+def test_equivalent_rule_behaviour_is_stable_and_not_a_conflict() -> None:
+    first = _rule(rule_id="rule-1", rule_code="RULE-A")
+    second = _rule(rule_id="rule-2", rule_code="RULE-B")
+
+    assert first.is_behaviorally_equivalent_to(second) is True
+    assert first.behavior_fingerprint() == second.behavior_fingerprint()
+    assert find_invoice_decision_rule_conflicts((first, second)) == ()
+
+
+def test_disabled_rules_do_not_participate_in_conflict_detection() -> None:
+    first = _rule(rule_code="RULE-A", action=InvoiceDecisionRuleAction(workflow=WorkflowType.VENDOR_BILL))
+    disabled_conflict = _rule(
+        rule_code="RULE-B",
+        enabled=False,
+        action=InvoiceDecisionRuleAction(workflow=WorkflowType.MANUAL_REVIEW),
+    )
+
+    assert find_invoice_decision_rule_conflicts((first, disabled_conflict)) == ()
+
+
+def test_invoice_classification_result_contract_does_not_classify_by_itself() -> None:
+    rule = _rule()
+    result = InvoiceClassificationResult(matched_rules=(rule,), selected_rule=rule)
+
+    assert result.matched_rules == (rule,)
+    assert result.selected_rule == rule
+    assert result.conflicts == ()
+    with pytest.raises(InvoiceDecisionRuleContractError):
+        InvoiceClassificationResult(matched_rules=(), selected_rule=rule)
+    with pytest.raises(InvoiceDecisionRuleContractError):
+        InvoiceClassificationResult(
+            matched_rules=(rule,),
+            selected_rule=rule,
+            conflicts=(InvoiceDecisionRuleConflict(rule_codes=("RULE-A", "RULE-B"), match_fingerprint=()),),
+        )
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        lambda: InvoiceDecisionRulePriority(tier=1.5),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRulePriority(tier=True),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRuleMatch(company_id=0),
+        lambda: InvoiceDecisionRuleMatch(vendor_partner_id=1.5),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRuleMatch(currency="TRY1"),
+        lambda: InvoiceDecisionRuleMatch(purchase_order_present="yes"),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRuleMatch(description_contains=["cloud"]),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRuleMatch(description_contains=("cloud", "Cloud")),
+        lambda: InvoiceDecisionRuleAction(default_department_id=1.5),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRuleAction(require_review=1),  # type: ignore[arg-type]
+        lambda: InvoiceDecisionRuleAction(),
+        lambda: _rule(rule_version=0),
+        lambda: _rule(enabled="yes"),  # type: ignore[arg-type]
+        lambda: _rule(rule_code=""),
+    ],
+)
+def test_malformed_rule_values_are_rejected(builder: object) -> None:
+    with pytest.raises(InvoiceDecisionRuleContractError):
+        builder()
+
+
+def test_rule_contract_source_has_no_floats_ai_fuzzy_or_infrastructure_imports() -> None:
+    source = Path("app/application/rules/contracts.py").read_text().lower()
+
+    assert "float" not in source
+    assert "openai" not in source
+    assert "fuzzy" not in source
+    assert "similarity" not in source
+    assert "app.connectors" not in source
+    assert "app.erp" not in source
+    assert "app.models" not in source
+    assert "sqlalchemy" not in source
+    assert "odoo" not in source
+
+
+def _rule(
+    *,
+    rule_id: str = "rule-1",
+    rule_code: str = "RULE-VENDOR-TAX-001",
+    rule_version: int = 1,
+    name: str = "Vendor tax direct bill",
+    enabled: bool = True,
+    priority: InvoiceDecisionRulePriority | None = None,
+    match: InvoiceDecisionRuleMatch | None = None,
+    action: InvoiceDecisionRuleAction | None = None,
+) -> InvoiceDecisionRule:
+    return InvoiceDecisionRule(
+        rule_id=rule_id,
+        rule_code=rule_code,
+        rule_version=rule_version,
+        name=name,
+        enabled=enabled,
+        priority=priority or InvoiceDecisionRulePriority(tier=10, rank=100),
+        match=match or InvoiceDecisionRuleMatch(company_id=7, vendor_tax_id="1234567890", currency="TRY"),
+        action=action
+        or InvoiceDecisionRuleAction(
+            workflow=WorkflowType.VENDOR_BILL,
+            classification=InvoiceDecisionClassification.VENDOR_BILL,
+            require_business_context=True,
+        ),
+    )

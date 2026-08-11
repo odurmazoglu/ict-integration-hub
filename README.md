@@ -58,6 +58,7 @@ Current implemented capabilities:
 - In-memory `ImportSession` orchestration for sequential multi-invoice imports through `ImportInvoiceUseCase`.
 - Decision Engine orchestration with a Rule Engine port and extensible workflow strategy resolver.
 - Deterministic Rule Engine implementation for the direct Vendor Bill workflow rule.
+- Immutable deterministic Invoice Decision Rule domain contracts for future rule configuration and classification work.
 - Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.
@@ -168,6 +169,7 @@ Core documentation:
 - [Workflows](docs/WORKFLOWS.md)
 - [Workflow Execution](docs/WORKFLOW_EXECUTION.md)
 - [Rule Engine](docs/RULE_ENGINE.md)
+- [Invoice Decision Rules](docs/DECISION_RULES.md)
 - [AI Advisor](docs/AI_ADVISOR.md)
 - [Matching](docs/MATCHING.md)
 - [Import Workbench](docs/IMPORT_WORKBENCH.md)
