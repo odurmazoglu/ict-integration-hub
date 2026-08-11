@@ -405,6 +405,7 @@ def _plan_to_data(plan: ExecutionPlan) -> dict[str, Any]:
         "review_id": plan.review_id,
         "company_id": plan.company_id,
         "decision_version": plan.decision_version,
+        "decision_id": plan.decision_id,
         "mode": plan.mode.value,
         "idempotency_key": plan.idempotency_key,
         "warnings": list(plan.warnings),
@@ -434,6 +435,7 @@ def _plan_from_data(data: dict[str, Any]) -> ExecutionPlan:
         company_id=int(data["company_id"]),
         decision_version=int(data["decision_version"]),
         mode=ExecutionMode(str(data["mode"])),
+        decision_id=str(data["decision_id"]) if data.get("decision_id") is not None else None,
         steps=tuple(
             ExecutionStep(
                 step_key=str(step["step_key"]),
@@ -706,6 +708,7 @@ def _plan_signature(plan: ExecutionPlan) -> str:
         "review_id": plan.review_id,
         "company_id": plan.company_id,
         "decision_version": plan.decision_version,
+        "decision_id": plan.decision_id,
         "mode": plan.mode.value,
         "steps": [
             {

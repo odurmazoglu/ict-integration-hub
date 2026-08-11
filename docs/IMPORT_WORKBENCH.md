@@ -97,7 +97,7 @@ Implemented contract types:
 
 ## Current Persistence Foundation
 
-The persistence foundation stores Workbench review items in `workbench_review_items`, pre-decision execution evidence in `workbench_review_execution_evidence`, pre-decision customer billing evidence in `workbench_review_billing_evidence`, and append-only user decisions in `workbench_review_decisions`.
+The persistence foundation stores Workbench review items in `workbench_review_items`, pre-decision execution evidence in `workbench_review_execution_evidence`, pre-decision customer billing evidence in `workbench_review_billing_evidence`, accepted customer billing evidence in `execution_customer_billing_evidence`, and append-only user decisions in `workbench_review_decisions`.
 
 Implemented behavior:
 
@@ -126,15 +126,18 @@ Implemented behavior:
 - persist version-pinned pre-decision execution evidence before a Vendor Bill-capable review is ready: structured `InternalInvoice`, supplier partner match, product match, and tax mapping snapshots tied to the current review version
 - persist version-pinned pre-decision billing evidence before accepted decision submission: structured `CustomerInvoiceBillingInstruction` snapshots tied to the current review version and billing key
 - atomically persist version-pinned accepted execution source invoice evidence for accepted executable Vendor Bill decisions: the later decision-time snapshot is tied to the generated accepted decision identity
+- atomically persist accepted Customer Invoice billing evidence for creation-mode Customer Recharge decisions: the Stage 2 snapshot is tied to the generated accepted decision identity and decision version
 - store Stage 2 execution evidence as immutable schema-versioned historical data with one snapshot per accepted decision id
 
-The two-stage evidence model is deliberate. Stage 1 pre-decision evidence is the authoritative source snapshot for `(company_id, review_id, review_version)`. Stage 2 accepted execution evidence pins/copies that exact snapshot to the accepted `decision_id` atomically with decision submission. A request with `expected_version=4` reads Stage 1 evidence where `review_version=4` and creates Stage 2 execution evidence for accepted decision version `5`.
+The two-stage evidence model is deliberate. Stage 1 pre-decision evidence is the authoritative source snapshot for `(company_id, review_id, review_version)`. Stage 2 accepted execution evidence pins/copies that exact snapshot to the accepted `decision_id` atomically with decision submission. A request with `expected_version=4` reads Stage 1 evidence where `review_version=4` and creates Stage 2 execution evidence for accepted decision version `5`. Customer billing evidence follows the same version mapping: Stage 1 `workbench_review_billing_evidence` is read only during decision submission, while Stage 2 `execution_customer_billing_evidence` is the only billing evidence source for execution planning.
 
 The execution source evidence capture path runs only for `SELECT_WORKFLOW + VENDOR_BILL`, the only currently executable Vendor Bill decision rule. `DISMISS`, non-Vendor-Bill workflows, and workflows not executable by the current Vendor Bill strategy persist decision evidence only and do not create Stage 2 execution source evidence.
 
 The execution source evidence readers reconstruct from persisted Hub evidence only. They do not reread Uyumsoft, reread Odoo, refresh current ERP master data, rematch suppliers, rematch products, remap taxes, parse Workbench display text, use fuzzy matching, use AI, or infer missing evidence. Missing, malformed, cross-company, unsupported-version, or conflicting evidence fails closed before an executable Vendor Bill decision is accepted. A Vendor Bill-capable review must not become decision-ready without successful pre-decision evidence persistence; the SQLAlchemy adapter persists review creation and Stage 1 evidence in one transaction for that path.
 
 Billing evidence is authoritative customer pricing evidence, not vendor/source cost allocation. `BusinessContextAllocation` continues to represent vendor cost allocation and traceability only. Customer Invoice pricing, quantity, outgoing sales product, customer, currency, and sales tax IDs must come only from `CustomerInvoiceBillingInstruction` evidence, never from allocation amount/percentage, purchase tax mapping, current ERP prices, display fields, AI, fuzzy logic, or rematching.
+
+Accepted Customer Invoice creation decisions require the complete Stage 1 billing evidence set to cover exactly the creation-mode `CUSTOMER_RECHARGE` allocations, with no existing-invoice allocation coverage and no customer mismatch. The accepted decision, execution source evidence, and complete Stage 2 billing evidence set are committed atomically; insertion failure rolls back the decision. Idempotent replay compares the complete accepted billing evidence set, so removed, added, or changed billing instructions conflict and historical evidence is never overwritten or deleted.
 
 Idempotent replay of the same accepted Vendor Bill decision returns the existing acknowledgement only when the captured Stage 2 execution source evidence is semantically identical. A duplicate replay does not insert a second evidence row. Conflicting evidence for the same decision identity raises a safe idempotency/integrity conflict and does not overwrite historical evidence.
 
@@ -246,9 +249,9 @@ Not implemented in this slice:
 - Odoo Studio views and ACLs
 - Odoo JSON-2 projection publishing
 - Hub acknowledgement projection to Odoo
-- user decision execution
-- workflow execution
-- ERP writes
+- Odoo-owned user decision execution
+- Odoo-owned workflow execution
+- ungated ERP writes
 - RFQ, Purchase Order, expense, asset, or subscription workflows
 - business context allocation execution, Odoo synchronization, or acknowledgement
 - AI recommendations

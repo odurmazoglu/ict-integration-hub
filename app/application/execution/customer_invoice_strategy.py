@@ -126,9 +126,13 @@ def customer_invoice_write_idempotency_key(request: ExecutionStepRequest) -> str
         "company_id": request.company_id,
         "review_id": request.review_id,
         "decision_version": request.decision_version,
+        "decision_id": request.decision_id,
         "step_key": request.step.step_key,
         "step_type": request.step.step_type.value,
         "allocation_keys": list(request.step.allocation_keys),
+        "billing_key": request.step.customer_invoice_billing_instruction.billing_key
+        if request.step.customer_invoice_billing_instruction is not None
+        else None,
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

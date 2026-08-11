@@ -44,6 +44,8 @@ from app.application.workbench.exceptions import (
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
+from app.billing.dto import CustomerInvoiceBillingInstruction
+from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
@@ -427,6 +429,71 @@ class SqlAlchemyReviewRepository:
             self._session.expire_all()
             raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
 
+    def submit_review_decision_with_execution_and_billing_evidence(
+        self,
+        command: ReviewDecisionCommand,
+        evidence: ExecutionSourceInvoice,
+        billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+    ) -> ReviewDecisionAcknowledgement:
+        _validate_execution_evidence_for_command(command, evidence)
+        _validate_billing_instructions_for_command(command, billing_instructions)
+        try:
+            existing = self._find_decision_by_idempotency_key(
+                company_id=command.company_id,
+                idempotency_key=command.idempotency_key,
+            )
+            if existing is not None:
+                acknowledgement = self._return_existing_decision_or_raise_conflict(existing, command)
+                self._return_existing_evidence_or_raise_conflict(existing, evidence)
+                self._return_existing_customer_billing_evidence_or_raise_conflict(existing, billing_instructions)
+                return acknowledgement
+
+            target_status = _target_status_for_decision(command.decision)
+            decision = _decision_model_from_command(
+                command,
+                decision_id=f"review-decision:{uuid4()}",
+            )
+            with self._session.begin_nested():
+                result = self._session.execute(
+                    update(WorkbenchReviewItem)
+                    .where(
+                        WorkbenchReviewItem.review_id == command.review_id,
+                        WorkbenchReviewItem.company_id == command.company_id,
+                        WorkbenchReviewItem.status == ReviewStatus.PENDING_REVIEW.value,
+                        WorkbenchReviewItem.version == command.expected_version,
+                    )
+                    .values(
+                        status=target_status.value,
+                        version=command.expected_version + 1,
+                        updated_at=func.now(),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if int(result.rowcount or 0) != 1:
+                    self._raise_submission_conflict(command)
+                review_item = self._review_item_for_evidence_capture(command)
+                _validate_execution_evidence_for_review_item(review_item, evidence)
+                self._session.add(decision)
+                self._session.flush()
+                self._session.refresh(decision)
+                self._add_execution_source_evidence(decision, evidence)
+                self._add_execution_customer_billing_evidence(decision, billing_instructions)
+                self._session.flush()
+            return _acknowledgement_from_decision_model(decision)
+        except IntegrityError as exc:
+            return self._handle_decision_with_execution_and_billing_evidence_integrity_error(
+                command,
+                evidence,
+                billing_instructions,
+                exc=exc,
+            )
+        except ApplicationError:
+            self._session.expire_all()
+            raise
+        except SQLAlchemyError as exc:
+            self._session.expire_all()
+            raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
+
     def get_accepted_decision(
         self,
         *,
@@ -673,6 +740,25 @@ class SqlAlchemyReviewRepository:
             )
         return record
 
+    def _return_existing_customer_billing_evidence_or_raise_conflict(
+        self,
+        existing_decision: WorkbenchReviewDecision,
+        billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+    ) -> tuple[ExecutionCustomerBillingEvidence, ...]:
+        records = self._find_execution_customer_billing_evidence_by_decision_id(existing_decision.decision_id)
+        if not records:
+            raise ReviewDecisionDataIntegrityError(
+                "Execution customer billing evidence is missing for the accepted decision."
+            )
+        if _accepted_billing_evidence_fingerprint_from_models(records) != _accepted_billing_evidence_fingerprint(
+            billing_instructions,
+            decision=existing_decision,
+        ):
+            raise ReviewDecisionIdempotencyConflictError(
+                "Execution customer billing evidence conflicts with the accepted decision."
+            )
+        return records
+
     def _add_execution_source_evidence(
         self,
         decision: WorkbenchReviewDecision,
@@ -684,9 +770,42 @@ class SqlAlchemyReviewRepository:
             )
         )
 
+    def _add_execution_customer_billing_evidence(
+        self,
+        decision: WorkbenchReviewDecision,
+        billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+    ) -> None:
+        self._session.add_all(
+            ExecutionCustomerBillingEvidence(
+                decision_id=decision.decision_id,
+                review_id=decision.review_id,
+                company_id=decision.company_id,
+                decision_version=decision.review_version_after,
+                billing_key=instruction.billing_key,
+                schema_version=REVIEW_BILLING_EVIDENCE_SCHEMA_VERSION,
+                billing_instruction=serialize_billing_instruction_payload(instruction),
+            )
+            for instruction in billing_instructions
+        )
+
     def _find_execution_evidence_by_decision_id(self, decision_id: str) -> ExecutionSourceInvoiceEvidence | None:
         return self._session.scalar(
             select(ExecutionSourceInvoiceEvidence).where(ExecutionSourceInvoiceEvidence.decision_id == decision_id)
+        )
+
+    def _find_execution_customer_billing_evidence_by_decision_id(
+        self,
+        decision_id: str,
+    ) -> tuple[ExecutionCustomerBillingEvidence, ...]:
+        return tuple(
+            self._session.scalars(
+                select(ExecutionCustomerBillingEvidence)
+                .where(ExecutionCustomerBillingEvidence.decision_id == decision_id)
+                .order_by(
+                    ExecutionCustomerBillingEvidence.billing_key.asc(),
+                    ExecutionCustomerBillingEvidence.id.asc(),
+                )
+            )
         )
 
     def _review_item_for_evidence_capture(self, command: ReviewDecisionCommand) -> WorkbenchReviewItem:
@@ -756,6 +875,31 @@ class SqlAlchemyReviewRepository:
             try:
                 acknowledgement = self._return_existing_decision_or_raise_conflict(existing, command)
                 self._return_existing_evidence_or_raise_conflict(existing, evidence)
+                return acknowledgement
+            except ReviewDecisionError as conflict_exc:
+                raise conflict_exc from exc
+        raise ReviewDecisionError(SAFE_DECISION_ERROR) from exc
+
+    def _handle_decision_with_execution_and_billing_evidence_integrity_error(
+        self,
+        command: ReviewDecisionCommand,
+        evidence: ExecutionSourceInvoice,
+        billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+        *,
+        exc: IntegrityError,
+    ) -> ReviewDecisionAcknowledgement:
+        try:
+            existing = self._find_decision_by_idempotency_key(
+                company_id=command.company_id,
+                idempotency_key=command.idempotency_key,
+            )
+        except SQLAlchemyError as lookup_exc:
+            raise ReviewDecisionError(SAFE_DECISION_ERROR) from lookup_exc
+        if existing is not None:
+            try:
+                acknowledgement = self._return_existing_decision_or_raise_conflict(existing, command)
+                self._return_existing_evidence_or_raise_conflict(existing, evidence)
+                self._return_existing_customer_billing_evidence_or_raise_conflict(existing, billing_instructions)
                 return acknowledgement
             except ReviewDecisionError as conflict_exc:
                 raise conflict_exc from exc
@@ -854,6 +998,21 @@ def _validate_execution_evidence_for_command(
     invoice_identity = evidence.invoice.header.ettn or evidence.invoice.header.invoice_uuid
     if evidence.source_invoice_id != invoice_identity:
         raise ExecutionSourceInvoiceIntegrityError("Execution source evidence is invalid.")
+
+
+def _validate_billing_instructions_for_command(
+    command: ReviewDecisionCommand,
+    billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+) -> None:
+    if command.decision is not ReviewDecisionType.SELECT_WORKFLOW:
+        raise WorkbenchContractError("Billing evidence is only accepted for selected workflow decisions.")
+    if not isinstance(billing_instructions, tuple) or not billing_instructions:
+        raise WorkbenchContractError("Customer billing evidence is required.")
+    for instruction in billing_instructions:
+        if not isinstance(instruction, CustomerInvoiceBillingInstruction):
+            raise WorkbenchContractError("CustomerInvoiceBillingInstruction DTO is required.")
+    if len({instruction.billing_key for instruction in billing_instructions}) != len(billing_instructions):
+        raise WorkbenchContractError("Customer billing evidence billing_key values must be unique.")
 
 
 def _validate_execution_evidence_for_review_item(
@@ -1401,6 +1560,44 @@ def _billing_evidence_fingerprint(evidence: tuple[ReviewExecutionBillingEvidence
         for item in evidence
     )
     return tuple(sorted(payloads, key=lambda payload: str(payload[3]["billing_key"])))
+
+
+def _accepted_billing_evidence_fingerprint(
+    instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+    *,
+    decision: WorkbenchReviewDecision,
+) -> tuple[Any, ...]:
+    payloads = tuple(
+        (
+            decision.decision_id,
+            decision.review_id,
+            decision.company_id,
+            decision.review_version_after,
+            instruction.billing_key,
+            REVIEW_BILLING_EVIDENCE_SCHEMA_VERSION,
+            serialize_billing_instruction_payload(instruction),
+        )
+        for instruction in instructions
+    )
+    return tuple(sorted(payloads, key=lambda payload: str(payload[4])))
+
+
+def _accepted_billing_evidence_fingerprint_from_models(
+    records: tuple[ExecutionCustomerBillingEvidence, ...],
+) -> tuple[Any, ...]:
+    payloads = tuple(
+        (
+            record.decision_id,
+            record.review_id,
+            record.company_id,
+            record.decision_version,
+            record.billing_key,
+            record.schema_version,
+            record.billing_instruction,
+        )
+        for record in records
+    )
+    return tuple(sorted(payloads, key=lambda payload: str(payload[4])))
 
 
 def _billing_evidence_identity(evidence: tuple[ReviewExecutionBillingEvidence, ...]) -> tuple[str, int, int]:

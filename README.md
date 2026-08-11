@@ -81,7 +81,7 @@ Current implemented capabilities:
 - Atomic execution source evidence capture for accepted executable Vendor Bill Workbench decisions, storing immutable schema-versioned invoice and deterministic match snapshots in the same Hub transaction as decision persistence.
 - Production Vendor Bill execution wiring that composes accepted decisions, the durable runtime, `VendorBillExecutionStrategy`, `VendorBillWriter`, and `OdooVendorBillWriter` for opt-in Draft Vendor Bill creation and duplicate-safe recovery.
 - No-write Customer Recharge execution for allocations that already reference validated existing outgoing customer invoices, producing `CUSTOMER_INVOICE` artifacts with `created=false`.
-- Customer Invoice creation foundation for `CUSTOMER_RECHARGE` allocations without `customer_invoice_id`, including explicit billing instruction contracts, builder/writer separation, and fail-closed `EXECUTE` behavior until authoritative billing evidence is copied into accepted decisions and execution planning.
+- Accepted customer billing evidence pinning and Customer Invoice production wiring for `CUSTOMER_RECHARGE` allocations without `customer_invoice_id`, including one accepted billing instruction per draft customer invoice step, Stage 2 execution evidence reads only, builder/writer separation, and opt-in writer gates.
 - Deterministic supplier partner matching, tax mapping, and product matching.
 - Odoo mapping preview and read-only Odoo resolution.
 - Explicitly confirmed draft-only Odoo vendor bill creation with ETTN idempotency.

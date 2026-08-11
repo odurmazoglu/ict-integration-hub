@@ -51,6 +51,7 @@ from app.application.execution.exceptions import (
 )
 from app.application.execution.planner import ExecutionPlanner, execution_idempotency_key
 from app.application.execution.ports import (
+    AcceptedBillingEvidenceReader,
     AcceptedReviewDecisionReader,
     ExecutionEventRepository,
     ExecutionPreflight,
@@ -98,6 +99,7 @@ from app.billing.dto import CustomerInvoiceBillingInstruction, CustomerInvoiceBi
 __all__ = [
     "AcceptedDecisionExecutionResult",
     "AcceptedDecisionExecutionStatus",
+    "AcceptedBillingEvidenceReader",
     "AcceptedReviewDecision",
     "ExecutionArtifact",
     "ExecutionArtifactType",
