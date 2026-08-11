@@ -6,14 +6,14 @@ from typing import TYPE_CHECKING
 from app.application.commands.base import Command
 
 if TYPE_CHECKING:
-    from app.billing import VendorBill
+    from app.billing.dto import CustomerInvoice
 
 
 @dataclass(frozen=True, slots=True)
-class VendorBillWriteCommand(Command):
-    """Application request for a future vendor bill write use case."""
+class CustomerInvoiceWriteCommand(Command):
+    """Application request for an approved draft customer invoice write."""
 
-    vendor_bill: VendorBill
+    customer_invoice: CustomerInvoice
     idempotency_key: str
     dry_run: bool = True
     approved_by: str | None = None

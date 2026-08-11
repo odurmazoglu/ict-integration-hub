@@ -97,6 +97,8 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
                 step_type = ALLOCATION_STEP_TYPES[allocation.allocation_type]
             except KeyError as exc:
                 raise ExecutionPlanningError("Unsupported allocation execution type.") from exc
+            if step_type is ExecutionStepType.CUSTOMER_RECHARGE:
+                continue
             grouped[step_type].add(allocation.allocation_key)
             allocations_by_step[step_type].append(allocation)
 
@@ -110,6 +112,9 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
 
     steps: list[ExecutionStep] = []
     for step_type in STEP_TYPE_ORDER:
+        if step_type is ExecutionStepType.CUSTOMER_RECHARGE:
+            steps.extend(_customer_recharge_steps(request, first_sequence=len(steps) + 1))
+            continue
         allocation_keys = tuple(sorted(grouped.get(step_type, ())))
         if step_type in grouped:
             allocations = tuple(
@@ -123,6 +128,7 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
                     sequence=len(steps) + 1,
                     dry_run_supported=True,
                     execute_supported=_execute_supported(step_type=step_type, allocations=allocations),
+                    writer_required=_writer_required(step_type=step_type, allocations=allocations),
                     allocations=allocations,
                 )
             )
@@ -136,11 +142,82 @@ def _step_key(request: ExecutionRequest, *, step_type: ExecutionStepType, alloca
     return f"{request.review_id}:{request.decision_version}:{step_type.value}:{allocation_part}"
 
 
+def _customer_recharge_steps(request: ExecutionRequest, *, first_sequence: int) -> tuple[ExecutionStep, ...]:
+    if request.business_context_allocations is None:
+        return ()
+    recharge_allocations = tuple(
+        sorted(
+            (
+                allocation
+                for allocation in request.business_context_allocations.allocations
+                if allocation.allocation_type is BusinessContextAllocationType.CUSTOMER_RECHARGE
+            ),
+            key=lambda allocation: allocation.allocation_key,
+        )
+    )
+    if not recharge_allocations:
+        return ()
+
+    steps: list[ExecutionStep] = []
+    existing_allocations = tuple(
+        allocation for allocation in recharge_allocations if allocation.customer_invoice_id is not None
+    )
+    if existing_allocations:
+        allocation_keys = tuple(allocation.allocation_key for allocation in existing_allocations)
+        steps.append(
+            ExecutionStep(
+                step_key=_step_key(
+                    request,
+                    step_type=ExecutionStepType.CUSTOMER_RECHARGE,
+                    allocation_keys=allocation_keys,
+                ),
+                step_type=ExecutionStepType.CUSTOMER_RECHARGE,
+                allocation_keys=allocation_keys,
+                sequence=first_sequence,
+                dry_run_supported=True,
+                execute_supported=True,
+                writer_required=False,
+                allocations=existing_allocations,
+            )
+        )
+
+    creation_allocations = tuple(
+        allocation for allocation in recharge_allocations if allocation.customer_invoice_id is None
+    )
+    for allocation in creation_allocations:
+        allocation_keys = (allocation.allocation_key,)
+        steps.append(
+            ExecutionStep(
+                step_key=_step_key(
+                    request,
+                    step_type=ExecutionStepType.CUSTOMER_RECHARGE,
+                    allocation_keys=allocation_keys,
+                ),
+                step_type=ExecutionStepType.CUSTOMER_RECHARGE,
+                allocation_keys=allocation_keys,
+                sequence=first_sequence + len(steps),
+                dry_run_supported=True,
+                execute_supported=False,
+                writer_required=True,
+                allocations=(allocation,),
+            )
+        )
+    return tuple(steps)
+
+
 def _execute_supported(*, step_type: ExecutionStepType, allocations: tuple[BusinessContextAllocation, ...]) -> bool:
     if step_type is ExecutionStepType.VENDOR_BILL:
         return True
     if step_type is ExecutionStepType.CUSTOMER_RECHARGE:
-        return bool(allocations) and all(allocation.customer_invoice_id is not None for allocation in allocations)
+        return bool(allocations)
+    return False
+
+
+def _writer_required(*, step_type: ExecutionStepType, allocations: tuple[BusinessContextAllocation, ...]) -> bool:
+    if step_type is ExecutionStepType.VENDOR_BILL:
+        return True
+    if step_type is ExecutionStepType.CUSTOMER_RECHARGE:
+        return bool(allocations) and all(allocation.customer_invoice_id is None for allocation in allocations)
     return False
 
 

@@ -74,7 +74,7 @@ Allocation keys are preserved in each step. Allocation ordering alone does not c
 
 Execution strategies use the execution-specific `ExecutionStrategy` contract. They do not overload the import-time `WorkflowStrategy` used by `DecisionEngine`.
 
-`ExecutionStrategyResolver` requires exactly one strategy per `ExecutionStepType`. Missing or duplicate strategies fail safely; the resolver never silently chooses the first match.
+`ExecutionStrategyResolver` requires exactly one registered strategy per `ExecutionStepType`. For step types with internal modes, such as `CUSTOMER_RECHARGE`, the registered router must prove it supports the exact step allocation shape before runtime creation. Missing or duplicate top-level strategy registrations fail safely.
 
 The `FoundationExecutionStrategy` remains the no-write strategy for dry-run planning:
 
@@ -92,6 +92,8 @@ The `FoundationExecutionStrategy` remains the no-write strategy for dry-run plan
 - builds only through `VendorBillBuilder`
 - writes only through `VendorBillWriter`
 - returns a typed `ExecutionArtifact` when a draft Vendor Bill is created or recovered
+
+`CustomerInvoiceExecutionStrategy` is the creation strategy foundation for Customer Recharge allocations whose `customer_invoice_id` is absent. It supports `ExecutionStepType.CUSTOMER_RECHARGE` only through the Customer Recharge router, reads immutable execution source invoice evidence, builds only through `CustomerInvoiceBuilder`, and writes only through `CustomerInvoiceWriter` after explicit accepted billing instructions are present.
 
 Workbench `decided_by`, Odoo user identity, and Odoo projection audit fields are not execution approval. The approval acknowledgement needed by the concrete writer remains at the write-policy boundary and is not persisted in runtime events.
 
@@ -156,13 +158,13 @@ Neither stage may reconstruct evidence from Odoo, Uyumsoft, current ERP master d
 
 For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed result without replaying completed steps.
 
-`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, `EXECUTION_EXECUTE_ENABLED` is true, writer production gates pass when a writer-backed strategy is present, and every planned step supports `EXECUTE`. In this slice a `VENDOR_BILL` plan and a `VENDOR_BILL + CUSTOMER_RECHARGE` plan can pass preflight only when every Customer Recharge allocation references an existing customer invoice. Customer Recharge allocations without `customer_invoice_id`, purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
+`DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, `EXECUTION_EXECUTE_ENABLED` is true, writer production gates pass when a writer-backed strategy is present, and every planned step supports `EXECUTE`. `VENDOR_BILL + CUSTOMER_RECHARGE` plans can execute when existing-invoice recharge steps are no-write and creation-mode recharge steps pass the Customer Invoice writer gate. Purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
 
 ## Vendor Bill Execution
 
 Vendor Bill execution bridges the durable runtime to the existing Draft Vendor Bill writer. The strategy constructs a deterministic writer idempotency key from execution identity and the `VENDOR_BILL` step key, then delegates duplicate detection and production gates to `VendorBillWriter` and its concrete Odoo implementation.
 
-The production composition root wires `SqlAlchemyExecutionSourceInvoiceReader -> ExecutionPlanner -> ExecutionRuntimeService/ExecutionRuntimeCoordinator -> VendorBillExecutionStrategy + CustomerRechargeExecutionStrategy -> VendorBillWriter -> OdooVendorBillWriter`. Application services depend only on ports and do not instantiate SQLAlchemy, Odoo, or account.move adapters directly.
+The production composition root wires `SqlAlchemyExecutionSourceInvoiceReader -> ExecutionPlanner -> ExecutionRuntimeService/ExecutionRuntimeCoordinator -> VendorBillExecutionStrategy + CustomerRechargeExecutionRouter -> VendorBillWriter/CustomerInvoiceWriter -> Odoo writers`. Application services depend only on ports and do not instantiate SQLAlchemy, Odoo, or account.move adapters directly.
 
 On `created` or `existing` writer results, the step result contains exactly one `ExecutionArtifact`:
 
@@ -194,7 +196,24 @@ Artifacts are deduplicated by customer invoice ID and ordered by numeric invoice
 - `external_identity`: `account.move:<id>`
 - `created`: `false`
 
-Successful execution means the recharge allocation has been associated with already-existing validated customer invoice evidence. It does not mean an invoice was created, posted, paid, collected, or settled. Customer invoice creation remains a future strategy for recharge allocations where `customer_invoice_id` is absent.
+Successful existing-invoice execution means the recharge allocation has been associated with already-existing validated customer invoice evidence. It does not mean an invoice was created, posted, paid, collected, or settled.
+
+## Customer Invoice Creation Execution
+
+Customer Invoice creation is modeled only for `CUSTOMER_RECHARGE` allocation steps where every allocation has `customer_invoice_id == None`. The planner keeps existing-invoice allocations and creation allocations in separate `CUSTOMER_RECHARGE` steps; each creation allocation becomes its own writer-backed step so the Hub does not silently merge or split customer invoices. Because current accepted decision evidence does not yet capture authoritative customer billing terms, these planner-created creation steps are marked non-execute-capable and `EXECUTE` fails closed before runtime creation or any Vendor Bill writer call.
+
+`CustomerInvoiceBuilder` requires explicit `CustomerInvoiceBillingInstruction` evidence. The instruction supplies one customer, one currency, and immutable billing lines with explicit allocation key, product id, description, Decimal quantity, Decimal unit price, and explicit outgoing sales tax ids. It must not derive customer sales price from cost allocation `amount` or `percentage`, must not assume pass-through billing or zero markup, must not reuse incoming purchase tax mapping as outgoing sales tax evidence, and must not assume the vendor invoice matched product is the customer invoice product. It does not call Odoo, Uyumsoft, repositories, current ERP refresh, rematching, fuzzy matching, AI, or display-text reconstruction.
+
+The concrete `OdooCustomerInvoiceWriter` creates only Odoo Draft Customer Invoices (`account.move` with `move_type=out_invoice`). Future `EXECUTE` enablement requires explicit billing instructions plus all global execution gates plus `CUSTOMER_INVOICE_EXECUTE_ENABLED=true`, and duplicate lookup runs before create using the deterministic writer idempotency identity, company, customer partner, and move type.
+
+On `created` or `existing` writer results, the step result contains one `ExecutionArtifact`:
+
+- `artifact_type`: `CUSTOMER_INVOICE`
+- `artifact_id`: canonical Odoo `account.move` identifier
+- `external_identity`: deterministic customer invoice writer idempotency identity
+- `created`: `true` when the writer created the draft, `false` when duplicate lookup returned an existing draft
+
+The strategy must not post invoices, register payments, reconcile, settle collections, mutate Sales Orders, write analytics, create RFQs or Purchase Orders, call providers, run workers, or schedule retries.
 
 `SqlAlchemyExecutionSourceInvoiceReader` is the production persistence adapter for the `ExecutionSourceInvoiceReader` port. It reconstructs execution input only from persisted Hub evidence tied to the accepted decision:
 

@@ -9,6 +9,7 @@ from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationSet
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workflow import WorkflowType
+from app.billing.dto import CustomerInvoiceBillingInstruction
 from app.domain.invoice import InternalInvoice
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult
 from app.tax_mapping import InvoiceTaxMappingResult
@@ -105,7 +106,9 @@ class ExecutionStep(ApplicationDTO):
     sequence: int
     dry_run_supported: bool = True
     execute_supported: bool = False
+    writer_required: bool = False
     allocations: tuple[BusinessContextAllocation, ...] = field(default_factory=tuple)
+    customer_invoice_billing_instruction: CustomerInvoiceBillingInstruction | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.step_key, "step_key is required.")
@@ -120,6 +123,7 @@ class ExecutionStep(ApplicationDTO):
         object.__setattr__(self, "allocation_keys", allocation_keys)
         _require_bool(self.dry_run_supported, "dry_run_supported must be boolean.")
         _require_bool(self.execute_supported, "execute_supported must be boolean.")
+        _require_bool(self.writer_required, "writer_required must be boolean.")
         allocations = tuple(self.allocations)
         for allocation in allocations:
             if not isinstance(allocation, BusinessContextAllocation):
@@ -128,6 +132,12 @@ class ExecutionStep(ApplicationDTO):
         if allocation_context_keys and tuple(sorted(allocation_context_keys)) != allocation_keys:
             raise ExecutionPlanningError("allocation context must match execution step allocation keys.")
         object.__setattr__(self, "allocations", allocations)
+        if self.customer_invoice_billing_instruction is not None:
+            if not isinstance(self.customer_invoice_billing_instruction, CustomerInvoiceBillingInstruction):
+                raise ExecutionPlanningError("customer_invoice_billing_instruction must be canonical.")
+            billing_keys = tuple(line.allocation_key for line in self.customer_invoice_billing_instruction.lines)
+            if tuple(sorted(billing_keys)) != allocation_keys:
+                raise ExecutionPlanningError("billing instruction must match execution step allocation keys.")
 
 
 @dataclass(frozen=True, slots=True)

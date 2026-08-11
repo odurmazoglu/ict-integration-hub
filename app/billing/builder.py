@@ -3,8 +3,14 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from app.billing.dto import VendorBill, VendorBillLine
-from app.billing.exceptions import VendorBillBuildError
+from app.billing.dto import (
+    CustomerInvoice,
+    CustomerInvoiceBillingInstruction,
+    CustomerInvoiceLine,
+    VendorBill,
+    VendorBillLine,
+)
+from app.billing.exceptions import CustomerInvoiceBuildError, VendorBillBuildError
 from app.billing.validation import VendorBillValidationResult, validation_result
 from app.domain.invoice import InternalInvoice, InvoiceLine
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus, ProductMatchStatus
@@ -38,6 +44,72 @@ class VendorBillBuilder:
             ),
             notes=tuple(note.strip() for note in invoice.header.notes if note and note.strip()),
         )
+
+
+class CustomerInvoiceBuilder:
+    def build(
+        self,
+        *,
+        company_id: int,
+        source_invoice_id: str,
+        invoice: InternalInvoice,
+        billing_instruction: CustomerInvoiceBillingInstruction,
+    ) -> CustomerInvoice:
+        validation = validate_customer_invoice_inputs(
+            company_id=company_id,
+            source_invoice_id=source_invoice_id,
+            invoice=invoice,
+            billing_instruction=billing_instruction,
+        )
+        if not validation.is_valid:
+            raise CustomerInvoiceBuildError(validation.errors)
+
+        assert invoice.header.issue_date is not None
+        invoice_lines = tuple(
+            CustomerInvoiceLine(
+                product_id=line.product_id,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                tax_ids=line.sales_tax_ids,
+                description=line.description,
+                source_allocation_key=line.allocation_key,
+            )
+            for line in billing_instruction.lines
+        )
+        return CustomerInvoice(
+            company_id=company_id,
+            customer_id=billing_instruction.customer_id,
+            invoice_date=invoice.header.issue_date,
+            currency=billing_instruction.currency,
+            external_uuid=invoice.header.invoice_uuid.strip() or invoice.header.ettn,
+            reference=_customer_invoice_reference(
+                source_invoice_id=source_invoice_id,
+                billing_instruction=billing_instruction,
+            ),
+            invoice_lines=invoice_lines,
+            notes=(f"Source invoice: {source_invoice_id}",),
+        )
+
+
+def validate_customer_invoice_inputs(
+    *,
+    company_id: object,
+    source_invoice_id: object,
+    invoice: object,
+    billing_instruction: object,
+) -> VendorBillValidationResult:
+    errors: list[str] = []
+    if type(company_id) is not int or company_id <= 0:
+        errors.append("company_id must be a positive integer.")
+    if not isinstance(source_invoice_id, str) or not source_invoice_id.strip():
+        errors.append("source_invoice_id is required.")
+    if not isinstance(invoice, InternalInvoice):
+        return validation_result(errors + ["InternalInvoice DTO is required."])
+    if not isinstance(billing_instruction, CustomerInvoiceBillingInstruction):
+        return validation_result(errors + ["Customer Invoice billing instruction is required."])
+    if invoice.header.issue_date is None:
+        errors.append("Invoice date is required.")
+    return validation_result(errors)
 
 
 def validate_vendor_bill_inputs(
@@ -108,6 +180,27 @@ def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int | 
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def to_odoo_customer_invoice_payload(
+    customer_invoice: CustomerInvoice,
+    *,
+    currency_id: int | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "move_type": "out_invoice",
+        "company_id": customer_invoice.company_id,
+        "partner_id": customer_invoice.customer_id,
+        "invoice_date": customer_invoice.invoice_date.isoformat(),
+        "ref": customer_invoice.reference,
+        "currency": customer_invoice.currency,
+        "invoice_line_ids": tuple((0, 0, _customer_line_payload(line)) for line in customer_invoice.invoice_lines),
+    }
+    if currency_id is not None:
+        payload["currency_id"] = currency_id
+    if customer_invoice.notes:
+        payload["narration"] = "\n".join(customer_invoice.notes)
+    return {key: value for key, value in payload.items() if value is not None}
+
+
 def _line_payload(line: VendorBillLine) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "product_id": line.product_id,
@@ -119,6 +212,20 @@ def _line_payload(line: VendorBillLine) -> dict[str, Any]:
     if line.uom is not None:
         payload["product_uom_id"] = line.uom
     return {key: value for key, value in payload.items() if value is not None}
+
+
+def _customer_line_payload(line: CustomerInvoiceLine) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "product_id": line.product_id,
+            "quantity": _decimal_text(line.quantity),
+            "price_unit": _decimal_text(line.unit_price),
+            "tax_ids": ((6, 0, line.tax_ids),),
+            "name": line.description,
+        }.items()
+        if value is not None
+    }
 
 
 def _vendor_bill_line(
@@ -138,6 +245,14 @@ def _vendor_bill_line(
         tax_ids=tax_ids,
         description=line.description,
     )
+
+
+def _customer_invoice_reference(
+    *,
+    source_invoice_id: str,
+    billing_instruction: CustomerInvoiceBillingInstruction,
+) -> str:
+    return f"Recharge {source_invoice_id}:{billing_instruction.billing_key}"
 
 
 def _validated_product_results(

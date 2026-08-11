@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from app.billing import VendorBill, VendorBillLine
+from app.billing import CustomerInvoice, CustomerInvoiceLine, VendorBill, VendorBillLine
 from app.connectors.exceptions import (
     ConnectorAuthenticationError,
     ConnectorAuthorizationError,
@@ -17,6 +17,8 @@ from app.connectors.exceptions import (
 )
 from app.erp.write import (
     AccountMoveRepository,
+    CustomerInvoiceWriteDuplicateError,
+    CustomerInvoiceWriteValidationError,
     VendorBillWriteAuthenticationError,
     VendorBillWriteAuthorizationError,
     VendorBillWriteDuplicateError,
@@ -119,6 +121,66 @@ async def test_account_move_repository_rejects_missing_idempotency_key_before_od
     assert client.create_calls == []
 
 
+async def test_account_move_repository_creates_draft_customer_invoice_payload() -> None:
+    client = FakeJson2Client(create_result=9101)
+    repository = AccountMoveRepository(client=client)
+
+    result = await repository.create_draft_customer_invoice(
+        customer_invoice=_customer_invoice(),
+        idempotency_key="customer-invoice-write:1",
+    )
+
+    assert result.id == 9101
+    payload = client.create_calls[0]
+    assert payload["move_type"] == "out_invoice"
+    assert payload["company_id"] == 7
+    assert payload["partner_id"] == 701
+    assert payload["invoice_origin"] == "customer-invoice-write:1"
+    assert payload["invoice_line_ids"]
+    assert "action_post" not in str(payload).lower()
+    assert "payment" not in str(payload).lower()
+    assert "reconciled" not in str(payload).lower()
+
+
+async def test_account_move_repository_finds_existing_customer_invoice_by_exact_identity() -> None:
+    client = FakeJson2Client(search_records=[{"id": 9101, "name": "INV/2026/001"}])
+    repository = AccountMoveRepository(client=client)
+
+    result = await repository.find_existing_customer_invoice(
+        customer_invoice=_customer_invoice(),
+        idempotency_key="customer-invoice-write:1",
+    )
+
+    assert result is not None
+    assert result.id == 9101
+    assert client.search_calls[0]["domain"] == [
+        ["move_type", "=", "out_invoice"],
+        ["invoice_origin", "=", "customer-invoice-write:1"],
+        ["company_id", "=", 7],
+        ["partner_id", "=", 701],
+    ]
+
+
+async def test_account_move_repository_rejects_multiple_existing_customer_invoices() -> None:
+    repository = AccountMoveRepository(client=FakeJson2Client(search_records=[{"id": 9101}, {"id": 9102}]))
+
+    with pytest.raises(CustomerInvoiceWriteDuplicateError):
+        await repository.find_existing_customer_invoice(
+            customer_invoice=_customer_invoice(),
+            idempotency_key="customer-invoice-write:1",
+        )
+
+
+async def test_account_move_repository_rejects_missing_customer_invoice_idempotency_key_before_odoo_call() -> None:
+    client = FakeJson2Client()
+    repository = AccountMoveRepository(client=client)
+
+    with pytest.raises(CustomerInvoiceWriteValidationError):
+        await repository.create_draft_customer_invoice(customer_invoice=_customer_invoice(), idempotency_key=" ")
+
+    assert client.create_calls == []
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
@@ -199,4 +261,26 @@ def _vendor_bill() -> VendorBill:
             ),
         ),
         notes=("safe note",),
+    )
+
+
+def _customer_invoice() -> CustomerInvoice:
+    return CustomerInvoice(
+        company_id=7,
+        customer_id=701,
+        invoice_date=date(2026, 7, 30),
+        currency="TRY",
+        external_uuid="uuid-1",
+        reference="Recharge ETTN-1:A",
+        invoice_lines=(
+            CustomerInvoiceLine(
+                product_id=501,
+                quantity=Decimal("1"),
+                unit_price=Decimal("120.00"),
+                tax_ids=(401,),
+                description="Recharge",
+                source_allocation_key="A",
+            ),
+        ),
+        notes=("Source invoice: ETTN-1",),
     )

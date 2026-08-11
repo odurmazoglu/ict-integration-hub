@@ -24,6 +24,9 @@ class ExecutionStrategy(Protocol):
     def supports_mode(self, mode: ExecutionMode) -> bool:
         pass
 
+    def supports_step(self, *, step: object, mode: ExecutionMode) -> bool:
+        pass
+
     def execute(self, request: ExecutionStepRequest) -> ExecutionStepResult:
         pass
 
@@ -49,7 +52,7 @@ class ExecutionStrategyResolver:
     def ensure_plan_supports_mode(self, *, plan: ExecutionPlan, mode: ExecutionMode) -> None:
         for step in plan.steps:
             strategy = self.resolve(step.step_type)
-            if not strategy.supports_mode(mode):
+            if not _supports_step(strategy=strategy, step=step, mode=mode):
                 raise ExecutionUnsupportedStepError("Execution plan contains a step unsupported for this mode.")
 
 
@@ -63,6 +66,9 @@ class FoundationExecutionStrategy:
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode is ExecutionMode.DRY_RUN
+
+    def supports_step(self, *, step: object, mode: ExecutionMode) -> bool:
+        return self.supports_mode(mode)
 
     def execute(self, request: ExecutionStepRequest) -> ExecutionStepResult:
         if request.mode is ExecutionMode.DRY_RUN:
@@ -87,3 +93,10 @@ def foundation_no_write_strategy_resolver() -> ExecutionStrategyResolver:
     """Register the dry-run foundation strategy for every known execution step type."""
 
     return ExecutionStrategyResolver((FoundationExecutionStrategy(supported_step_types=tuple(ExecutionStepType)),))
+
+
+def _supports_step(*, strategy: ExecutionStrategy, step: object, mode: ExecutionMode) -> bool:
+    supports_step = getattr(strategy, "supports_step", None)
+    if callable(supports_step):
+        return bool(supports_step(step=step, mode=mode))
+    return strategy.supports_mode(mode)

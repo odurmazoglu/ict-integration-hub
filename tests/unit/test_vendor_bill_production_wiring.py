@@ -19,9 +19,19 @@ from app.application.execution import (
     ExecutionRuntimeStepState,
     ExecutionSourceInvoice,
     ExecutionState,
+    ExecutionUnsupportedStepError,
     RunAcceptedDecisionExecutionCommand,
 )
-from app.application.workbench import ReviewDecisionCommand, ReviewDecisionType, ReviewItem, ReviewStatus
+from app.application.workbench import (
+    AllocationCompleteness,
+    BusinessContextAllocation,
+    BusinessContextAllocationSet,
+    BusinessContextAllocationType,
+    ReviewDecisionCommand,
+    ReviewDecisionType,
+    ReviewItem,
+    ReviewStatus,
+)
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.composition import build_vendor_bill_execution_use_case
 from app.connectors.exceptions import ConnectorTimeoutError
@@ -167,23 +177,48 @@ def test_completed_runtime_never_replays_vendor_bill_write(session: Session) -> 
     assert _runtime_count(session) == 1
 
 
+def test_customer_invoice_creation_without_billing_instruction_fails_before_runtime_or_odoo_call(
+    session: Session,
+) -> None:
+    _submit_customer_invoice_decision(session)
+    client = FakeOdooVendorBillClient()
+
+    with pytest.raises(ExecutionUnsupportedStepError):
+        _use_case(session, client=client, settings=_execute_settings(customer_invoice_execute_enabled=True)).execute(
+            _command(mode=ExecutionMode.EXECUTE)
+        )
+
+    assert _runtime_count(session) == 0
+    assert client.search_calls == []
+    assert client.create_calls == []
+
+
 def test_production_composition_keeps_infrastructure_out_of_application_layer() -> None:
     application_source = "\n".join(path.read_text(encoding="utf-8") for path in Path("app/application").rglob("*.py"))
     composition_source = Path("app/composition/execution.py").read_text(encoding="utf-8")
 
     assert "OdooVendorBillWriter" not in application_source
+    assert "OdooCustomerInvoiceWriter" not in application_source
     assert "AccountMoveRepository" not in application_source
     assert "sqlalchemy" not in application_source.lower()
     assert "OdooVendorBillWriter" in composition_source
+    assert "OdooCustomerInvoiceWriter" in composition_source
     assert "AccountMoveRepository" in composition_source
     assert "ExecutionRetryPolicy.immediate(max_attempts=2)" in composition_source
 
 
 class FakeOdooVendorBillClient:
-    def __init__(self, *, created_id: int = 9001, timeout_after_create: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        created_id: int = 9001,
+        timeout_after_create: bool = False,
+        timeout_move_type: str | None = None,
+    ) -> None:
         self.created_id = created_id
         self.timeout_after_create = timeout_after_create
-        self.created = False
+        self.timeout_move_type = timeout_move_type
+        self.created_move_types: set[str] = set()
         self.search_calls: list[list[Any]] = []
         self.create_calls: list[dict[str, Any]] = []
 
@@ -197,14 +232,20 @@ class FakeOdooVendorBillClient:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         self.search_calls.append(domain)
-        if not self.created:
+        move_type = _domain_value(domain, "move_type") or "in_invoice"
+        if move_type not in self.created_move_types:
             return []
-        return [{"id": self.created_id, "name": "BILL/2026/001", "move_type": "in_invoice", "partner_id": 1001}]
+        partner_id = _domain_value(domain, "partner_id")
+        return [{"id": self.created_id, "name": "MOVE/2026/001", "move_type": move_type, "partner_id": partner_id}]
 
     async def create_account_move(self, payload: dict[str, Any]) -> int:
         self.create_calls.append(payload)
-        self.created = True
-        if self.timeout_after_create and len(self.create_calls) == 1:
+        move_type = str(payload.get("move_type"))
+        self.created_move_types.add(move_type)
+        if self.timeout_after_create and (
+            self.timeout_move_type is None and len(self.create_calls) == 1 or self.timeout_move_type == move_type
+        ):
+            self.timeout_after_create = False
             raise ConnectorTimeoutError("Odoo request timed out.")
         return self.created_id
 
@@ -233,6 +274,38 @@ def _submit_vendor_bill_decision(session: Session) -> None:
             expected_version=1,
             decision=ReviewDecisionType.SELECT_WORKFLOW,
             selected_workflow=WorkflowType.VENDOR_BILL,
+            decided_by="finance.user",
+            idempotency_key="review:decision",
+        ),
+        _source(),
+    )
+
+
+def _submit_customer_invoice_decision(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item(), company_id=7, idempotency_key="review:item")
+    repository.submit_review_decision_with_execution_evidence(
+        ReviewDecisionCommand(
+            review_id="review-1",
+            company_id=7,
+            expected_version=1,
+            decision=ReviewDecisionType.SELECT_WORKFLOW,
+            selected_workflow=WorkflowType.VENDOR_BILL,
+            business_context_allocations=BusinessContextAllocationSet(
+                allocations=(
+                    BusinessContextAllocation(
+                        allocation_key="A",
+                        allocation_type=BusinessContextAllocationType.CUSTOMER_RECHARGE,
+                        source_line_number="1",
+                        amount=Decimal("120.00"),
+                        currency="TRY",
+                        recharge_partner_id=701,
+                    ),
+                ),
+                completeness=AllocationCompleteness.PARTIAL,
+                invoice_total=Decimal("120.00"),
+                currency="TRY",
+            ),
             decided_by="finance.user",
             idempotency_key="review:decision",
         ),
@@ -350,19 +423,22 @@ def _settings(
     execution_execute_enabled: bool = False,
     production_operations_enabled: bool = False,
     production_approval_ack: str = "",
+    customer_invoice_execute_enabled: bool = False,
 ) -> Settings:
     return Settings(
         execution_execute_enabled=execution_execute_enabled,
         production_operations_enabled=production_operations_enabled,
         production_approval_ack=production_approval_ack,
+        customer_invoice_execute_enabled=customer_invoice_execute_enabled,
     )
 
 
-def _execute_settings() -> Settings:
+def _execute_settings(*, customer_invoice_execute_enabled: bool = False) -> Settings:
     return _settings(
         execution_execute_enabled=True,
         production_operations_enabled=True,
         production_approval_ack=PRODUCTION_APPROVAL_ACK,
+        customer_invoice_execute_enabled=customer_invoice_execute_enabled,
     )
 
 
@@ -370,3 +446,10 @@ def _runtime_count(session: Session) -> int:
     from app.models.workflow_execution import WorkflowExecution
 
     return session.query(WorkflowExecution).count()
+
+
+def _domain_value(domain: list[Any], field: str) -> Any:
+    for item in domain:
+        if isinstance(item, list) and len(item) >= 3 and item[0] == field:
+            return item[2]
+    return None

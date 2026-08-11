@@ -25,6 +25,18 @@ class CustomerRechargeExecutionStrategy:
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
 
+    def supports_step(self, *, step: object, mode: ExecutionMode) -> bool:
+        if not self.supports_mode(mode):
+            return False
+        if not hasattr(step, "step_type") or step.step_type is not ExecutionStepType.CUSTOMER_RECHARGE:
+            return False
+        allocations = getattr(step, "allocations", ())
+        return bool(allocations) and all(
+            allocation.allocation_type is BusinessContextAllocationType.CUSTOMER_RECHARGE
+            and allocation.customer_invoice_id is not None
+            for allocation in allocations
+        )
+
     def execute(self, request: ExecutionStepRequest) -> ExecutionStepResult:
         if request.step.step_type is not ExecutionStepType.CUSTOMER_RECHARGE:
             raise ExecutionUnsupportedStepError(
