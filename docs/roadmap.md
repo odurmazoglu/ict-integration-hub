@@ -32,36 +32,30 @@
 - Customer Recharge Existing Invoice Strategy for no-write association of recharge allocations to validated existing outgoing customer invoice artifacts
 - Customer Invoice Creation Strategy foundation with explicit billing instruction contracts and fail-closed execution until authoritative billing terms are captured with accepted decisions
 - Customer Recharge Billing Evidence Capture for immutable, version-pinned `CustomerInvoiceBillingInstruction` persistence before accepted decision submission
-- Customer Invoice Stage 2 pinning and execution wiring for accepted billing evidence pinning, Stage 2 execution-only billing reads, draft customer invoice execution steps, and writer-gated duplicate recovery. Authoritative Stage 1 billing instruction capture source remains required.
+- Customer Invoice Stage 2 pinning and execution wiring for accepted billing evidence pinning, Stage 2 execution-only billing reads, draft customer invoice execution steps, and writer-gated duplicate recovery
+- Odoo Workbench Billing Authoring Capture for exact read-only Odoo billing rows, ERP reference validation, immutable Stage 1 billing evidence persistence, and no-inference Customer Invoice terms
 
 ## Next Milestones
 
-### 1. Customer Billing Instruction Capture / Workbench Authoring
-
-- define the authoritative business input source for `CustomerInvoiceBillingInstruction`
-- persist Stage 1 `workbench_review_billing_evidence` in the normal production review creation flow
-- preserve no inference from allocation amount/percentage, purchase tax mapping, source product matches, ERP pricelists, display text, AI, or fuzzy logic
-- prove accepted decision submission pins Stage 1 to Stage 2 and execution planning consumes Stage 2 only
-
-### 2. Purchase Workflow Strategies
+### 1. Purchase Workflow Strategies
 
 - existing Purchase Order matching execution
 - RFQ/Purchase Order creation strategy contracts
 - no posting or payment side effects
 
-### 3. Expense / Asset / Subscription Strategies
+### 2. Expense / Asset / Subscription Strategies
 
 - workflow-specific strategy separation
 - dry-run support for each strategy
 - ERP write safety gates
 
-### 4. Odoo Projection Acknowledgement
+### 3. Odoo Projection Acknowledgement
 
 - Hub-to-Odoo acknowledgement projection
 - decision-ready clearing only after Hub acceptance
 - safe projection status update boundaries
 
-### 5. Odoo Online Workbench Projection Synchronization
+### 4. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
 - Hub-to-Odoo JSON-2 projection publishing
@@ -69,14 +63,14 @@
 - no custom Odoo Python addon
 - no workflow execution
 
-### 6. Odoo Import Workbench UI
+### 5. Odoo Import Workbench UI
 
 - Odoo Studio list, form, and search views backed by the projection model
 - queue and detail screens for pending review items
 - explicit `SELECT_WORKFLOW` and `DISMISS` decision submission
 - no Odoo-owned business logic
 
-### 7. Odoo Vendor Bill Write Service
+### 6. Odoo Vendor Bill Write Service
 
 - dry-run by default
 - explicit production approval
@@ -84,7 +78,7 @@
 - draft Vendor Bill only
 - no automatic posting
 
-### 8. Import Session and Pipeline
+### 7. Import Session and Pipeline
 
 - download
 - parse

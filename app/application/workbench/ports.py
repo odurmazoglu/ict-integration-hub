@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from app.application.workbench.billing_authoring import WorkbenchBillingAuthoringRow
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewItem, ReviewQueueResult
 from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
@@ -110,6 +111,40 @@ class ReviewBillingEvidenceReader(Protocol):
         company_id: int,
         review_version: int,
     ) -> tuple[CustomerInvoiceBillingInstruction, ...]:
+        pass
+
+
+class ReviewBillingEvidenceWriter(Protocol):
+    """Write port for append-only Stage 1 customer billing evidence capture."""
+
+    def capture_review_billing_evidence(
+        self,
+        billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+    ) -> tuple[ReviewExecutionBillingEvidence, ...]:
+        pass
+
+
+class WorkbenchBillingAuthoringReader(Protocol):
+    """Read-only port for Odoo-authored Customer Invoice billing terms."""
+
+    def get_billing_authoring(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> tuple[WorkbenchBillingAuthoringRow, ...]:
+        pass
+
+
+class WorkbenchBillingReferenceValidator(Protocol):
+    """Read-only exact ERP reference validator for billing authoring rows."""
+
+    def validate_billing_authoring(
+        self,
+        rows: tuple[WorkbenchBillingAuthoringRow, ...],
+        *,
+        requested_company_id: int,
+    ) -> tuple[WorkbenchBillingAuthoringRow, ...]:
         pass
 
 

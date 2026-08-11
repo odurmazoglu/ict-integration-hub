@@ -6,12 +6,15 @@ from typing import Any
 from app.application.workbench.erp_references import (
     AnalyticAccountReference,
     CompanyReference,
+    CurrencyReference,
     CustomerInvoiceReference,
     OpportunityReference,
     PartnerReference,
+    ProductReference,
     PurchaseOrderReference,
     SalesOrderLineReference,
     SalesOrderReference,
+    SalesTaxReference,
 )
 from app.erp.odoo.adapter import OdooReadOnlyAdapter, many2one_id
 
@@ -152,6 +155,72 @@ class OdooAnalyticAccountReferenceRepository:
         records = _read_by_ids(self._adapter, model="account.analytic.account", ids=ids, fields=["id", "company_id"])
         return tuple(
             AnalyticAccountReference(id=int(record["id"]), company_id=many2one_id(record.get("company_id")))
+            for record in records
+        )
+
+
+class OdooProductReferenceRepository:
+    def __init__(self, *, adapter: OdooReadOnlyAdapter) -> None:
+        self._adapter = adapter
+
+    def find_products_by_ids(self, ids: tuple[int, ...]) -> tuple[ProductReference, ...]:
+        records = _read_by_ids(
+            self._adapter,
+            model="product.product",
+            ids=ids,
+            fields=["id", "company_id", "active"],
+        )
+        return tuple(
+            ProductReference(
+                id=int(record["id"]),
+                company_id=many2one_id(record.get("company_id")),
+                active=bool(record.get("active", True)),
+            )
+            for record in records
+        )
+
+
+class OdooSalesTaxReferenceRepository:
+    def __init__(self, *, adapter: OdooReadOnlyAdapter) -> None:
+        self._adapter = adapter
+
+    def find_sales_taxes_by_ids(self, ids: tuple[int, ...]) -> tuple[SalesTaxReference, ...]:
+        records = _read_by_ids(
+            self._adapter,
+            model="account.tax",
+            ids=ids,
+            fields=["id", "company_id", "active", "type_tax_use"],
+        )
+        return tuple(
+            SalesTaxReference(
+                id=int(record["id"]),
+                company_id=many2one_id(record.get("company_id")),
+                active=bool(record.get("active", True)),
+                usage_type=record.get("type_tax_use") if isinstance(record.get("type_tax_use"), str) else None,
+            )
+            for record in records
+        )
+
+
+class OdooCurrencyReferenceRepository:
+    def __init__(self, *, adapter: OdooReadOnlyAdapter) -> None:
+        self._adapter = adapter
+
+    def find_currencies_by_codes(self, codes: tuple[str, ...]) -> tuple[CurrencyReference, ...]:
+        if not codes:
+            return ()
+        records = self._adapter.search_read_all(
+            model="res.currency",
+            domain=[["name", "in", list(codes)]],
+            fields=["id", "name", "active"],
+            max_records=len(codes),
+        )
+        return tuple(
+            CurrencyReference(
+                id=int(record["id"]),
+                code=_required_text(record.get("name")),
+                active=bool(record.get("active", True)),
+            )
             for record in records
         )
 

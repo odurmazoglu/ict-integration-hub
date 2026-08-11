@@ -2,7 +2,7 @@
 
 This document defines the architecture and contract for presenting Hub-owned Import Workbench reviews inside Odoo 19 Online through Odoo Studio projection models.
 
-This slice includes the read-only Odoo JSON-2 candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. The Studio models, Studio views, ACLs, projection publishing, scheduler, decision persistence trigger, acknowledgement projection, and workflow execution are not implemented in this slice.
+This slice includes the read-only Odoo JSON-2 candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. It also defines the Odoo Workbench billing authoring contract and capture path for Customer Invoice creation terms. The Studio models, Studio views, ACLs, projection publishing, scheduler, decision persistence trigger, acknowledgement projection, and workflow execution are not implemented in this slice.
 
 ## Architecture
 
@@ -89,6 +89,7 @@ Those deployment names are adapter configuration, not application vocabulary. Th
 | Execution state | Hub PostgreSQL and future execution records | Workflow execution is out of scope here. |
 | User-entered candidate decision before Hub acceptance | Odoo projection | Authoritative only as user input evidence before Hub validation. |
 | User-entered candidate allocation lines before Hub acceptance | Odoo child projection | Authoritative only as candidate allocation input before Hub validation. |
+| User-entered Customer Invoice billing lines before Hub acceptance | Odoo billing child projection | Authoritative only after Hub reads exact rows, validates references and linkage, and persists immutable Stage 1 billing evidence. |
 | Odoo user that submitted the candidate | Odoo projection | Audit context only; not sufficient authorization by itself. |
 
 ## Field Contract
@@ -183,6 +184,55 @@ Proposed logical fields:
 
 The child model is not created by this PR.
 
+### Billing Authoring Child Model
+
+Customer Invoice creation uses a separate Odoo Studio child model for explicit billing authoring. The model is a flat one-row-per-billing-line structure. Rows are grouped by `billing_group_key`; one billing group becomes one future Customer Invoice. Odoo is the authoring UI only. The Hub owns validation, contracts, persistence, accepted evidence pinning, planning, and execution.
+
+Suggested logical model name:
+
+```text
+x_ipp_billing_instruction
+```
+
+Required logical fields:
+
+| Logical field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| parent review | Many2one | Odoo user/System | Links the billing line to exactly one Workbench review projection. |
+| billing group key | Char, required | Odoo user/System | Stable key grouping lines into one future Customer Invoice. |
+| allocation key | Char, required | Odoo user/System | Must match one creation-mode `CUSTOMER_RECHARGE` allocation. |
+| customer | Many2one or Integer | Odoo user | Exact outgoing customer id. Display name is ignored. |
+| product | Many2one or Integer | Odoo user | Exact outgoing invoice product id. Display name is ignored. |
+| description | Char/Text, required | Odoo user | Explicit outgoing invoice line description. |
+| quantity | Numeric, required | Odoo user | Explicit positive Decimal quantity. |
+| unit price | Numeric, required | Odoo user | Explicit positive Decimal sales unit price. |
+| currency | Many2one or Char code | Odoo user | Exact active currency, normalized to ISO code. |
+| sales taxes | Many2many ids | Odoo user | Exact outgoing sales tax ids. Display names are ignored. |
+| billing ready | Boolean | Odoo user/System | Hub captures only rows explicitly marked ready. |
+| sequence | Integer, optional | Odoo user/System | Stable line ordering within each billing group. |
+
+Validation rules:
+
+- Parent lookup is exact by `review_id` and `company_id`; duplicate parent rows are ambiguous.
+- Parent `review_version` must equal the current Hub review version. There is no latest lookup.
+- Every child row must share the same review identity, company, and version.
+- Every billing group must have one customer and one currency.
+- Every line allocation key must exist in the decision candidate, must be `CUSTOMER_RECHARGE`, must not already have `customer_invoice_id`, and must match `recharge_partner_id`.
+- Creation-mode `CUSTOMER_RECHARGE` allocations must be covered exactly once. Missing, duplicate, extra, or existing-invoice allocation rows fail closed.
+- Partner, product, currency, and sales tax references are validated by exact read-only ERP reference repositories. Product, currency, and sales tax references must be active; taxes must be outgoing sales taxes when usage type is available.
+- Customer Invoice customer, product, description, quantity, unit price, currency, and sales tax ids must come from authored billing rows only.
+
+Forbidden sources:
+
+- allocation amount or percentage
+- source invoice unit price or product match
+- incoming purchase tax mapping
+- Odoo pricelists or current sales prices
+- display names
+- rematching, fuzzy matching, AI, or provider refresh
+
+The Hub persists validated rows as immutable Stage 1 `workbench_review_billing_evidence` before accepted decision submission. Replays are idempotent only when the complete persisted evidence set and incoming authored set are canonically identical. Conflicts never overwrite or delete historical evidence.
+
 ## Ownership Rules
 
 Hub-owned fields:
@@ -227,14 +277,20 @@ The application layer defines immutable ERP-neutral application DTOs:
 
 - `WorkbenchProjection`
 - `OdooWorkbenchDecisionCandidate`
+- `WorkbenchBillingAuthoringRow`
+- `CaptureOdooWorkbenchBillingEvidenceCommand`
+- `CaptureOdooWorkbenchBillingEvidenceResult`
 - `ProjectionPublishResult`
 
 It also introduces narrow application ports:
 
 - `WorkbenchProjectionPublisher`
 - `WorkbenchDecisionCandidateReader`
+- `WorkbenchBillingAuthoringReader`
 - `SubmitOdooWorkbenchCandidateUseCase`
 - `WorkbenchErpReferenceValidator` and focused read-only ERP reference repository ports
+- `WorkbenchBillingReferenceValidator` and focused read-only billing reference repository ports
+- `ReviewBillingEvidenceWriter`
 
 The ports do not expose Odoo client objects, Odoo model objects, SQLAlchemy sessions, HTTP objects, or provider exceptions. Odoo JSON-2 code lives in infrastructure adapters behind these ports.
 
@@ -258,6 +314,12 @@ The application contract has replaced legacy `business_context` with `business_c
 `SubmitOdooWorkbenchCandidateUseCase` consumes the `WorkbenchDecisionCandidateReader` port, validates supported ERP references through `WorkbenchErpReferenceValidator`, and submits one immutable candidate through `SubmitReviewDecisionUseCase`. It maps the candidate to `ReviewDecisionCommand` without reserializing allocation evidence.
 
 Candidate `company_id` must match the requested company scope. Candidate `expected_version` and `idempotency_key` flow unchanged into the Hub command. Candidate `decided_by_odoo_user_id` is preserved as audit evidence and is not used for authorization.
+
+## Billing Evidence Capture
+
+`CaptureOdooWorkbenchBillingEvidenceUseCase` reads the current Hub review, the decision-ready Odoo Workbench candidate, and the Odoo billing child rows through application ports. It validates exact version alignment, billing readiness, allocation linkage, group consistency, and exact ERP references before writing Stage 1 `ReviewExecutionBillingEvidence` through the Hub repository.
+
+This capture path does not call Odoo writers, Uyumsoft, providers, AI, fuzzy matching, rematching, pricelists, current sales-price lookups, or Hub UI code. Missing or malformed billing authoring fails closed before accepted decision persistence, Stage 2 pinning, runtime creation, or ERP writer calls.
 
 Successful submission returns a safe immutable result with `SUBMITTED` and the original Hub acknowledgement. Not-ready or missing candidates return `NOT_READY_OR_NOT_FOUND`. Invalid ERP references fail before Hub decision persistence. The orchestrator does not write acknowledgement fields, clear decision readiness, update projection records, retry stale versions, or execute workflows.
 

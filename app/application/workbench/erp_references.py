@@ -103,6 +103,47 @@ class AnalyticAccountReference(ApplicationDTO):
         _require_optional_positive_int(self.company_id, "analytic account company_id must be positive when supplied.")
 
 
+@dataclass(frozen=True, slots=True)
+class ProductReference(ApplicationDTO):
+    id: int
+    company_id: int | None = None
+    active: bool = True
+
+    def __post_init__(self) -> None:
+        _require_positive_int(self.id, "product id must be positive.")
+        _require_optional_positive_int(self.company_id, "product company_id must be positive when supplied.")
+        _require_bool(self.active, "product active must be boolean.")
+
+
+@dataclass(frozen=True, slots=True)
+class SalesTaxReference(ApplicationDTO):
+    id: int
+    company_id: int | None = None
+    active: bool = True
+    usage_type: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_positive_int(self.id, "sales tax id must be positive.")
+        _require_optional_positive_int(self.company_id, "sales tax company_id must be positive when supplied.")
+        _require_bool(self.active, "sales tax active must be boolean.")
+        if self.usage_type is not None and (not isinstance(self.usage_type, str) or not self.usage_type.strip()):
+            raise WorkbenchContractError("sales tax usage_type must be non-empty when supplied.")
+
+
+@dataclass(frozen=True, slots=True)
+class CurrencyReference(ApplicationDTO):
+    id: int
+    code: str
+    active: bool = True
+
+    def __post_init__(self) -> None:
+        _require_positive_int(self.id, "currency id must be positive.")
+        if not isinstance(self.code, str) or len(self.code.strip()) != 3 or not self.code.strip().isalpha():
+            raise WorkbenchContractError("currency code must be a stable ISO-4217 code.")
+        _require_bool(self.active, "currency active must be boolean.")
+        object.__setattr__(self, "code", self.code.strip().upper())
+
+
 class PartnerReferenceRepository(Protocol):
     def find_partners_by_ids(self, ids: tuple[int, ...]) -> tuple[PartnerReference, ...]:
         pass
@@ -140,6 +181,21 @@ class OpportunityReferenceRepository(Protocol):
 
 class AnalyticAccountReferenceRepository(Protocol):
     def find_analytic_accounts_by_ids(self, ids: tuple[int, ...]) -> tuple[AnalyticAccountReference, ...]:
+        pass
+
+
+class ProductReferenceRepository(Protocol):
+    def find_products_by_ids(self, ids: tuple[int, ...]) -> tuple[ProductReference, ...]:
+        pass
+
+
+class SalesTaxReferenceRepository(Protocol):
+    def find_sales_taxes_by_ids(self, ids: tuple[int, ...]) -> tuple[SalesTaxReference, ...]:
+        pass
+
+
+class CurrencyReferenceRepository(Protocol):
+    def find_currencies_by_codes(self, codes: tuple[str, ...]) -> tuple[CurrencyReference, ...]:
         pass
 
 
