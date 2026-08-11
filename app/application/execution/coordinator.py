@@ -32,6 +32,7 @@ class ExecutionCoordinator:
                     decision_version=plan.decision_version,
                     mode=plan.mode,
                     step=step,
+                    decision_id=plan.decision_id,
                 )
             )
             results.append(result)

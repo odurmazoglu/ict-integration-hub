@@ -152,11 +152,13 @@ Optimistic runtime concurrency is enforced with `workflow_executions.runtime_ver
 
 `RunAcceptedDecisionExecutionUseCase` is the current end-to-end runtime integration. It reads the accepted decision through `AcceptedReviewDecisionReader` by exact `review_id`, `company_id`, and decision version. It never reads raw Odoo projection rows, never infers the latest decision, and never accepts caller-supplied workflow or allocation data.
 
-Execution evidence is intentionally two-stage. Stage 1 pre-decision evidence is persisted in `workbench_review_execution_evidence` before the Workbench review becomes available for human decision. It is pinned by exact `company_id`, `review_id`, and `review_version`, where `review_version` equals the decision command's later `expected_version`. Stage 2 accepted execution evidence is a future decision-time copy pinned to the accepted `decision_id`; that accepted decision version is `expected_version + 1`.
+Execution evidence is intentionally two-stage. Stage 1 pre-decision evidence is persisted in `workbench_review_execution_evidence` before the Workbench review becomes available for human decision. It is pinned by exact `company_id`, `review_id`, and `review_version`, where `review_version` equals the decision command's later `expected_version`. Stage 2 accepted execution evidence is a decision-time copy pinned to the accepted `decision_id`; that accepted decision version is `expected_version + 1`.
 
 Neither stage may reconstruct evidence from Odoo, Uyumsoft, current ERP master data, Workbench display fields, rematching, fuzzy matching, or AI. Stage 1 is the authoritative source for the later PR #83 `ReviewExecutionEvidenceReader`; Stage 2 is the historical execution snapshot consumed by `ExecutionSourceInvoiceReader`.
 
-Customer recharge billing evidence is a separate Stage 1 evidence stream in `workbench_review_billing_evidence`. It is pinned by exact `company_id`, `review_id`, `review_version`, and `billing_key`, and stores canonical `CustomerInvoiceBillingInstruction` payloads with Decimal values as strings. This evidence is the only future authority for Customer Invoice customer, currency, product, quantity, unit price, and outgoing sales taxes. `BusinessContextAllocation` remains vendor/source cost allocation and traceability evidence only; it is not customer billing evidence and must not be merged with billing instructions.
+Customer recharge billing evidence is a separate Stage 1 evidence stream in `workbench_review_billing_evidence`. It is pinned by exact `company_id`, `review_id`, `review_version`, and `billing_key`, and stores canonical `CustomerInvoiceBillingInstruction` payloads with Decimal values as strings. Accepted Stage 2 billing evidence is stored in `execution_customer_billing_evidence` by accepted `decision_id`, decision version, and `billing_key`. Stage 1 is read only during decision submission; Stage 2 is the only billing evidence consumed by execution planning. Billing evidence is the only authority for Customer Invoice customer, currency, product, quantity, unit price, and outgoing sales taxes. `BusinessContextAllocation` remains vendor/source cost allocation and traceability evidence only; it is not customer billing evidence and must not be merged with billing instructions.
+
+Customer Invoice Stage 2 pinning and execution wiring complete; authoritative Stage 1 billing instruction capture source remains required. The current normal production Workbench/import flow does not author `CustomerInvoiceBillingInstruction` values, so creation-mode Customer Recharge decisions remain fail-closed until a dedicated capture or Workbench authoring source exists.
 
 For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evidence, calls `ExecutionRuntimeService.create_or_load`, and delegates runtime mutation to `ExecutionRuntimeCoordinator`, which uses repository-owned atomic `persist_transition` calls. Repeating the same command loads the same runtime and returns the completed result without replaying completed steps.
 
@@ -202,11 +204,11 @@ Successful existing-invoice execution means the recharge allocation has been ass
 
 ## Customer Invoice Creation Execution
 
-Customer Invoice creation is modeled only for `CUSTOMER_RECHARGE` allocation steps where every allocation has `customer_invoice_id == None`. The planner keeps existing-invoice allocations and creation allocations in separate `CUSTOMER_RECHARGE` steps; each creation allocation becomes its own writer-backed step so the Hub does not silently merge or split customer invoices. Stage 1 billing evidence is now persisted before accepted decision submission, but execution remains unchanged in this PR: accepted decisions and execution planning do not yet copy or consume that billing evidence. Until that later wiring exists, planner-created creation steps remain non-execute-capable and `EXECUTE` fails closed before runtime creation or any Vendor Bill writer call.
+Customer Invoice creation is modeled only for `CUSTOMER_RECHARGE` allocation steps where every allocation has `customer_invoice_id == None`. The planner keeps existing-invoice allocations and creation allocations in separate `CUSTOMER_RECHARGE` steps. With accepted Stage 2 billing evidence present, the planner creates one writer-backed creation step per accepted `CustomerInvoiceBillingInstruction`; each step key includes the billing key and carries the canonical instruction. If accepted billing evidence is absent or does not exactly cover the creation allocations, creation steps remain non-execute-capable or planning fails closed, and `EXECUTE` is rejected before runtime creation or any writer call. In the normal production flow today, Stage 2 cannot exist for Customer Invoice creation because the authoritative Stage 1 billing instruction capture source is still missing.
 
 `CustomerInvoiceBuilder` requires explicit `CustomerInvoiceBillingInstruction` evidence. The instruction supplies one customer, one currency, and immutable billing lines with explicit allocation key, product id, description, Decimal quantity, Decimal unit price, and explicit outgoing sales tax ids. It must not derive customer sales price from cost allocation `amount` or `percentage`, must not assume pass-through billing or zero markup, must not reuse incoming purchase tax mapping as outgoing sales tax evidence, and must not assume the vendor invoice matched product is the customer invoice product. It does not call Odoo, Uyumsoft, repositories, current ERP refresh, rematching, fuzzy matching, AI, or display-text reconstruction.
 
-The concrete `OdooCustomerInvoiceWriter` creates only Odoo Draft Customer Invoices (`account.move` with `move_type=out_invoice`). Future `EXECUTE` enablement requires explicit billing instructions plus all global execution gates plus `CUSTOMER_INVOICE_EXECUTE_ENABLED=true`, and duplicate lookup runs before create using the deterministic writer idempotency identity, company, customer partner, and move type.
+The concrete `OdooCustomerInvoiceWriter` creates only Odoo Draft Customer Invoices (`account.move` with `move_type=out_invoice`). `EXECUTE` requires explicit accepted billing instructions plus all global execution gates plus `CUSTOMER_INVOICE_EXECUTE_ENABLED=true`, and duplicate lookup runs before create using the deterministic writer idempotency identity, company, customer partner, and move type.
 
 On `created` or `existing` writer results, the step result contains one `ExecutionArtifact`:
 
@@ -251,9 +253,9 @@ The current runtime can mark an execution `WAITING_RETRY` and append `RetrySched
 
 This foundation does not:
 
-- write to Odoo outside the `VendorBillWriter` port
+- write to Odoo outside approved writer ports
 - create non-draft Vendor Bills
-- create Customer Invoices
+- create non-draft Customer Invoices
 - create RFQs or Purchase Orders
 - create Expenses, Assets, or Subscriptions
 - write analytic distribution or profitability data

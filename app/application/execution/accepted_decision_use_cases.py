@@ -16,6 +16,7 @@ from app.application.execution.contracts import (
 from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.ports import (
+    AcceptedBillingEvidenceReader,
     AcceptedReviewDecisionReader,
     ExecutionPreflight,
     ExecutionRuntimeRepository,
@@ -24,6 +25,7 @@ from app.application.execution.ports import (
 from app.application.execution.preflight import ExecutionPreflightPolicy
 from app.application.execution.runtime import ExecutionState
 from app.application.execution.runtime_service import ExecutionRuntimeCoordinator, ExecutionRuntimeService
+from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workbench.exceptions import ReviewNotFoundError
 
@@ -91,6 +93,7 @@ class RunAcceptedDecisionExecutionUseCase:
         runtime_repository: ExecutionRuntimeRepository,
         retry_policy_resolver: RetryPolicyResolver,
         execution_preflight: ExecutionPreflight | None = None,
+        accepted_billing_evidence_reader: AcceptedBillingEvidenceReader | None = None,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
         self._execution_planner = execution_planner
@@ -99,6 +102,7 @@ class RunAcceptedDecisionExecutionUseCase:
         self._runtime_repository = runtime_repository
         self._retry_policy_resolver = retry_policy_resolver
         self._execution_preflight = execution_preflight or ExecutionPreflightPolicy()
+        self._accepted_billing_evidence_reader = accepted_billing_evidence_reader
 
     def execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         if not isinstance(command, RunAcceptedDecisionExecutionCommand):
@@ -126,7 +130,23 @@ class RunAcceptedDecisionExecutionUseCase:
                 status=AcceptedDecisionExecutionStatus.NOT_EXECUTABLE,
             )
 
-        request = _execution_request(command, decision=decision)
+        accepted_billing_instructions = ()
+        if _has_customer_invoice_creation_allocations(decision) and self._accepted_billing_evidence_reader is not None:
+            try:
+                accepted_billing_instructions = self._accepted_billing_evidence_reader.get_billing_instructions(
+                    review_id=decision.review_id,
+                    company_id=decision.company_id,
+                    decision_version=decision.decision_version,
+                    decision_id=decision.decision_id,
+                )
+            except ReviewNotFoundError:
+                accepted_billing_instructions = ()
+
+        request = _execution_request(
+            command,
+            decision=decision,
+            accepted_billing_instructions=accepted_billing_instructions,
+        )
         plan = self._execution_planner.plan(request)
         if command.mode is ExecutionMode.EXECUTE:
             self._execution_preflight.ensure_execute_allowed(plan=plan, approval=command.approval)
@@ -151,6 +171,7 @@ def _execution_request(
     command: RunAcceptedDecisionExecutionCommand,
     *,
     decision: AcceptedReviewDecision,
+    accepted_billing_instructions=(),
 ) -> ExecutionRequest:
     execution_id = _execution_id(command, decision=decision)
     return ExecutionRequest(
@@ -163,6 +184,7 @@ def _execution_request(
         mode=command.mode,
         selected_workflow=decision.selected_workflow,
         business_context_allocations=decision.business_context_allocations,
+        accepted_billing_instructions=accepted_billing_instructions,
     )
 
 
@@ -173,6 +195,17 @@ def _execution_id(command: RunAcceptedDecisionExecutionCommand, *, decision: Acc
         f"{command.review_id}:{command.decision_version}:{decision_identity}:{command.mode.value}"
     )
     return f"accepted-decision-execution:{uuid5(NAMESPACE_URL, identity)}"
+
+
+def _has_customer_invoice_creation_allocations(decision: AcceptedReviewDecision) -> bool:
+    allocations = decision.business_context_allocations
+    if allocations is None:
+        return False
+    return any(
+        allocation.allocation_type is BusinessContextAllocationType.CUSTOMER_RECHARGE
+        and allocation.customer_invoice_id is None
+        for allocation in allocations.allocations
+    )
 
 
 def _require_text(value: str | None, message: str) -> None:

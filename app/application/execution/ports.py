@@ -16,6 +16,7 @@ from app.application.execution.runtime import (
     ExecutionRetryPolicy,
     ExecutionSnapshot,
 )
+from app.billing.dto import CustomerInvoiceBillingInstruction
 
 
 class AcceptedReviewDecisionReader(Protocol):
@@ -41,6 +42,20 @@ class ExecutionSourceInvoiceReader(Protocol):
         company_id: int,
         decision_version: int,
     ) -> ExecutionSourceInvoice:
+        pass
+
+
+class AcceptedBillingEvidenceReader(Protocol):
+    """Read accepted Stage 2 customer billing evidence for execution planning."""
+
+    def get_billing_instructions(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+        decision_id: str | None,
+    ) -> tuple[CustomerInvoiceBillingInstruction, ...]:
         pass
 
 

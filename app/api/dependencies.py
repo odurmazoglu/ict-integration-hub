@@ -25,6 +25,8 @@ from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
 from app.db.session import SessionLocal
+from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBillingEvidenceReader
+from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
 from app.services.document_storage import DocumentStorage, LocalDocumentStorage
 
@@ -106,8 +108,15 @@ def get_review_item_use_case(reader: ReviewQueueReaderDep) -> GetReviewItemUseCa
     return GetReviewItemUseCase(review_queue_reader=reader)
 
 
-def get_submit_review_decision_use_case(writer: ReviewDecisionWriterDep) -> SubmitReviewDecisionUseCase:
-    return SubmitReviewDecisionUseCase(review_decision_writer=writer)
+def get_submit_review_decision_use_case(
+    writer: ReviewDecisionWriterDep,
+    session: DbSessionDep,
+) -> SubmitReviewDecisionUseCase:
+    return SubmitReviewDecisionUseCase(
+        review_decision_writer=writer,
+        execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+        billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
+    )
 
 
 ListReviewQueueUseCaseDep = Annotated[ListReviewQueueUseCase, Depends(get_list_review_queue_use_case)]

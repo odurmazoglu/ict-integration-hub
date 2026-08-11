@@ -32,15 +32,16 @@
 - Customer Recharge Existing Invoice Strategy for no-write association of recharge allocations to validated existing outgoing customer invoice artifacts
 - Customer Invoice Creation Strategy foundation with explicit billing instruction contracts and fail-closed execution until authoritative billing terms are captured with accepted decisions
 - Customer Recharge Billing Evidence Capture for immutable, version-pinned `CustomerInvoiceBillingInstruction` persistence before accepted decision submission
+- Customer Invoice Stage 2 pinning and execution wiring for accepted billing evidence pinning, Stage 2 execution-only billing reads, draft customer invoice execution steps, and writer-gated duplicate recovery. Authoritative Stage 1 billing instruction capture source remains required.
 
 ## Next Milestones
 
-### 1. Customer Invoice Production Wiring
+### 1. Customer Billing Instruction Capture / Workbench Authoring
 
-- copy accepted billing evidence into execution planning
-- create customer invoices only for recharge allocations without `customer_invoice_id` after explicit billing evidence is present
-- intercompany safety model
-- no automatic posting, payment, reconciliation, or collection
+- define the authoritative business input source for `CustomerInvoiceBillingInstruction`
+- persist Stage 1 `workbench_review_billing_evidence` in the normal production review creation flow
+- preserve no inference from allocation amount/percentage, purchase tax mapping, source product matches, ERP pricelists, display text, AI, or fuzzy logic
+- prove accepted decision submission pins Stage 1 to Stage 2 and execution planning consumes Stage 2 only
 
 ### 2. Purchase Workflow Strategies
 

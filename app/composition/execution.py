@@ -27,6 +27,7 @@ from app.erp.write import (
     OdooVendorBillWriter,
 )
 from app.persistence import (
+    SqlAlchemyAcceptedBillingEvidenceReader,
     SqlAlchemyExecutionRuntimeRepository,
     SqlAlchemyExecutionSourceInvoiceReader,
     SqlAlchemyReviewRepository,
@@ -44,6 +45,7 @@ def build_vendor_bill_execution_use_case(
     review_repository = SqlAlchemyReviewRepository(session)
     runtime_repository = SqlAlchemyExecutionRuntimeRepository(session)
     source_invoice_reader = SqlAlchemyExecutionSourceInvoiceReader(session)
+    accepted_billing_reader = SqlAlchemyAcceptedBillingEvidenceReader(session)
     account_move_repository = AccountMoveRepository(client=odoo_client or OdooJson2Client.from_settings(settings))
     vendor_bill_policy = OdooVendorBillWritePolicy.from_settings(settings)
     customer_invoice_policy = OdooCustomerInvoiceWritePolicy.from_settings(settings)
@@ -91,4 +93,5 @@ def build_vendor_bill_execution_use_case(
                 customer_recharge_strategy.supported_step_types[0]: customer_invoice_policy,
             },
         ),
+        accepted_billing_evidence_reader=accepted_billing_reader,
     )

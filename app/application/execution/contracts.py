@@ -79,6 +79,7 @@ class ExecutionRequest(Command):
     mode: ExecutionMode
     selected_workflow: WorkflowType | None
     business_context_allocations: BusinessContextAllocationSet | None = None
+    accepted_billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _require_text(self.execution_id, "execution_id is required.")
@@ -96,6 +97,13 @@ class ExecutionRequest(Command):
                 WorkflowType,
                 "selected_workflow must be a canonical WorkflowType.",
             )
+        instructions = tuple(self.accepted_billing_instructions)
+        for instruction in instructions:
+            if not isinstance(instruction, CustomerInvoiceBillingInstruction):
+                raise ExecutionPlanningError("accepted_billing_instructions must be canonical.")
+        if len({instruction.billing_key for instruction in instructions}) != len(instructions):
+            raise ExecutionPlanningError("accepted_billing_instructions billing_key values must be unique.")
+        object.__setattr__(self, "accepted_billing_instructions", instructions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +156,7 @@ class ExecutionPlan(ApplicationDTO):
     decision_version: int
     mode: ExecutionMode
     steps: tuple[ExecutionStep, ...]
+    decision_id: str | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     idempotency_key: str | None = None
 
@@ -157,6 +166,8 @@ class ExecutionPlan(ApplicationDTO):
         _require_positive_int(self.company_id, "company_id must be positive.")
         _require_positive_int(self.decision_version, "decision_version must be positive.")
         _require_enum(self.mode, ExecutionMode, "mode must be a canonical ExecutionMode.")
+        if self.decision_id is not None:
+            _require_text(self.decision_id, "decision_id must be non-empty when supplied.")
         steps = tuple(self.steps)
         if not steps:
             raise ExecutionPlanningError("execution plan requires at least one step.")
@@ -176,6 +187,7 @@ class ExecutionStepRequest(ApplicationDTO):
     mode: ExecutionMode
     step: ExecutionStep
     approval: ExecutionApproval | None = None
+    decision_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.execution_id, "execution_id is required.")
@@ -183,6 +195,8 @@ class ExecutionStepRequest(ApplicationDTO):
         _require_positive_int(self.company_id, "company_id must be positive.")
         _require_positive_int(self.decision_version, "decision_version must be positive.")
         _require_enum(self.mode, ExecutionMode, "mode must be a canonical ExecutionMode.")
+        if self.decision_id is not None:
+            _require_text(self.decision_id, "decision_id must be non-empty when supplied.")
         if not isinstance(self.step, ExecutionStep):
             raise ExecutionPlanningError("ExecutionStep is required.")
         if self.approval is not None and not isinstance(self.approval, ExecutionApproval):

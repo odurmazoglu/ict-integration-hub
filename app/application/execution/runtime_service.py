@@ -185,6 +185,7 @@ class ExecutionRuntimeCoordinator:
                 mode=snapshot.mode,
                 step=plan_step,
                 approval=approval,
+                decision_id=snapshot.plan.decision_id,
             )
         )
 

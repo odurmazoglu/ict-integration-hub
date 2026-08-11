@@ -78,6 +78,14 @@ class ReviewDecisionWriter(Protocol):
     ) -> ReviewDecisionAcknowledgement:
         pass
 
+    def submit_review_decision_with_execution_and_billing_evidence(
+        self,
+        command: ReviewDecisionCommand,
+        evidence: ExecutionSourceInvoice,
+        billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+    ) -> ReviewDecisionAcknowledgement:
+        pass
+
 
 class ReviewExecutionEvidenceReader(Protocol):
     """Read-only port for immutable execution source evidence available at review submission time."""
