@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from app.application.dto import ApplicationDTO
 from app.application.workbench.exceptions import WorkbenchContractError
+from app.billing.dto import CustomerInvoiceBillingInstruction
 from app.domain.invoice import InternalInvoice
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult
 from app.tax_mapping import InvoiceTaxMappingResult
@@ -40,6 +41,23 @@ class ReviewExecutionEvidence(ApplicationDTO):
             raise WorkbenchContractError("source_invoice_id must match InternalInvoice identity.")
         _validate_product_scope(self.invoice, self.product_match)
         _validate_tax_scope(self.invoice, self.tax_match)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewExecutionBillingEvidence(ApplicationDTO):
+    """Immutable customer billing terms pinned to a Workbench review version."""
+
+    review_id: str
+    company_id: int
+    review_version: int
+    billing_instruction: CustomerInvoiceBillingInstruction
+
+    def __post_init__(self) -> None:
+        _require_text(self.review_id, "review_id is required.")
+        _require_positive_int(self.company_id, "company_id must be positive.")
+        _require_positive_int(self.review_version, "review_version must be positive.")
+        if not isinstance(self.billing_instruction, CustomerInvoiceBillingInstruction):
+            raise WorkbenchContractError("CustomerInvoiceBillingInstruction DTO is required.")
 
 
 def _validate_product_scope(invoice: InternalInvoice, product_match: InvoiceProductMatchResult) -> None:

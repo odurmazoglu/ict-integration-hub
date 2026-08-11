@@ -37,7 +37,7 @@ from app.application.workbench.erp_references import (
     SalesOrderReference,
     SalesOrderReferenceRepository,
 )
-from app.application.workbench.evidence import ReviewExecutionEvidence
+from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
 from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateDataError,
@@ -60,6 +60,7 @@ from app.application.workbench.odoo_submission_use_cases import (
     SubmitOdooWorkbenchCandidateUseCase,
 )
 from app.application.workbench.ports import (
+    ReviewBillingEvidenceReader,
     ReviewDecisionWriter,
     ReviewExecutionEvidenceReader,
     ReviewItemWriter,
@@ -105,6 +106,8 @@ __all__ = [
     "ReviewDecisionCommand",
     "ReviewDecisionType",
     "ReviewDecisionWriter",
+    "ReviewBillingEvidenceReader",
+    "ReviewExecutionBillingEvidence",
     "ReviewExecutionEvidence",
     "ReviewExecutionEvidenceReader",
     "ReviewDetailQuery",
