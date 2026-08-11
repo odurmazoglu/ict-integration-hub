@@ -25,15 +25,18 @@ class OdooDecisionRuleFieldMapping(ApplicationDTO):
     """Centralized Odoo Studio field names for authored decision rules."""
 
     model_name: str = ODOO_DECISION_RULE_MODEL
-    name: str = "x_studio_name"
+    name: str = "x_name"
     rule_code: str = "x_studio_rule_code"
-    active: str = "x_studio_active"
+    active: str = "active"
     priority: str = "x_studio_priority"
-    company: str = "x_studio_company_id"
+    company: str = "company_id"
     vendor: str = "x_studio_vendor_id"
     vendor_tax_id: str = "x_studio_vendor_tax_id"
     currency: str = "x_studio_currency_id"
+    provider_document_type: str = "x_studio_provider_document_type"
+    purchase_order_present: str = "x_studio_purchase_order_presence"
     description_contains: str = "x_studio_description_contains"
+    product_mapping: str = "x_studio_product_mapping_id"
     workflow: str = "x_studio_workflow"
     classification_code: str = "x_studio_classification_code"
     require_review: str = "x_studio_require_review"
@@ -60,7 +63,10 @@ class OdooDecisionRuleFieldMapping(ApplicationDTO):
             self.vendor,
             self.vendor_tax_id,
             self.currency,
+            self.provider_document_type,
+            self.purchase_order_present,
             self.description_contains,
+            self.product_mapping,
             self.workflow,
             self.classification_code,
             self.require_review,
@@ -88,7 +94,10 @@ class OdooDecisionRuleAuthoringRecord(ApplicationDTO):
     vendor_tax_id: str | None = None
     currency_id: int | None = None
     currency_code: str | None = None
+    provider_document_type: str | None = None
+    purchase_order_present: bool | None = None
     description_contains: tuple[str, ...] = ()
+    product_mapping_id: int | None = None
     require_review: bool = False
     require_business_context: bool = False
     notes: str | None = None
@@ -106,6 +115,12 @@ class OdooDecisionRuleAuthoringRecord(ApplicationDTO):
             "vendor_partner_id must be a positive integer when supplied.",
         )
         _require_optional_positive_int(self.currency_id, "currency_id must be a positive integer when supplied.")
+        _require_optional_positive_int(
+            self.product_mapping_id,
+            "product_mapping_id must be a positive integer when supplied.",
+        )
+        if self.purchase_order_present is not None and type(self.purchase_order_present) is not bool:
+            raise OdooDecisionRuleAuthoringContractError("purchase_order_present must be boolean when supplied.")
         if (self.currency_id is None) != (self.currency_code is None):
             raise OdooDecisionRuleAuthoringContractError(
                 "currency_id and canonical currency_code must be supplied together."
@@ -113,6 +128,11 @@ class OdooDecisionRuleAuthoringRecord(ApplicationDTO):
         object.__setattr__(self, "name", _required_text(self.name, "name"))
         object.__setattr__(self, "rule_code", _required_text(self.rule_code, "rule_code").upper())
         object.__setattr__(self, "workflow", odoo_workflow_to_workflow_type(self.workflow))
+        object.__setattr__(
+            self,
+            "provider_document_type",
+            _optional_canonical_text(self.provider_document_type, "provider_document_type"),
+        )
         if self.notes is not None:
             object.__setattr__(self, "notes", _required_text(self.notes, "notes"))
         if not isinstance(self.description_contains, tuple):
@@ -133,7 +153,10 @@ class OdooDecisionRuleAuthoringRecord(ApplicationDTO):
                 vendor_partner_id=self.vendor_partner_id,
                 vendor_tax_id=self.vendor_tax_id,
                 currency=self.currency_code,
+                provider_document_type=self.provider_document_type,
+                purchase_order_present=self.purchase_order_present,
                 description_contains=self.description_contains,
+                product_mapping_id=self.product_mapping_id,
             ),
             action=InvoiceDecisionRuleAction(
                 workflow=self.workflow,
@@ -178,8 +201,12 @@ def _required_model_name(value: str) -> str:
 
 def _required_studio_field_name(value: str) -> str:
     cleaned = _required_text(value, "field_name")
+    if cleaned in {"active", "company_id", "x_name"}:
+        return cleaned
     if not cleaned.startswith("x_studio_"):
-        raise OdooDecisionRuleAuthoringContractError("Odoo decision rule fields must be centralized Studio fields.")
+        raise OdooDecisionRuleAuthoringContractError(
+            "Odoo decision rule fields must be centralized Studio fields or documented standard Odoo fields."
+        )
     return cleaned
 
 
@@ -187,6 +214,12 @@ def _required_text(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise OdooDecisionRuleAuthoringContractError(f"{field_name} is required.")
     return value.strip()
+
+
+def _optional_canonical_text(value: str | None, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _required_text(value, field_name).upper()
 
 
 def _require_positive_int(value: int, message: str) -> None:

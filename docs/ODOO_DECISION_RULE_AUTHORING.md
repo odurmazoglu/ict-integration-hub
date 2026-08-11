@@ -44,7 +44,10 @@ This PR documents the model only. It does not generate Studio XML, create Odoo r
 | Vendor | Exact `res.partner` Many2one ERP ID |
 | Vendor Tax ID | Exact vendor tax identifier text |
 | Currency | Exact `res.currency` Many2one ERP ID |
+| Provider Document Type | Deterministic source/provider document classification when available |
+| Purchase Order Present | Tri-state PO evidence condition |
 | Description Contains | Deterministic text terms |
+| Product Mapping | Exact canonical product mapping/reference ID |
 | Workflow | Odoo selection value mapped exactly to `WorkflowType` |
 | Classification Code | Canonical business classification code |
 | Require Review | Boolean review requirement |
@@ -58,21 +61,32 @@ Hub centralizes all Studio field names in `OdooDecisionRuleFieldMapping`. Field 
 
 Default technical field contract:
 
-- `x_studio_name`
+- `x_name`
 - `x_studio_rule_code`
-- `x_studio_active`
+- `active`
 - `x_studio_priority`
-- `x_studio_company_id`
+- `company_id`
 - `x_studio_vendor_id`
 - `x_studio_vendor_tax_id`
 - `x_studio_currency_id`
+- `x_studio_provider_document_type`
+- `x_studio_purchase_order_presence`
 - `x_studio_description_contains`
+- `x_studio_product_mapping_id`
 - `x_studio_workflow`
 - `x_studio_classification_code`
 - `x_studio_require_review`
 - `x_studio_require_business_context`
 - `x_studio_rule_version`
 - `x_studio_notes`
+
+The defaults intentionally prefer standard Odoo capabilities when they exist:
+
+- `active` uses Odoo's standard archive/active semantics instead of an `x_studio_active` duplicate.
+- `x_name` is the Studio model record display field. If a deployment uses a standard `name` display field instead, configure the mapping rather than duplicating display text.
+- `company_id` should use Odoo's standard company-aware field when the Studio model supports it. If the actual Odoo Online setup requires a Studio Many2one field instead, configure the mapping and document the deployment-specific technical name.
+
+All other fields are documented Studio fields by default. The mapping DTO is configurable because actual Odoo Studio technical names can differ between deployments.
 
 ## Mapping Contract
 
@@ -113,7 +127,14 @@ Required validation:
 - Vendor must be an exact ERP ID when supplied.
 - Currency must be selected by exact ERP ID when supplied.
 - The canonical currency code used in `InvoiceDecisionRuleMatch.currency` must come from exact ERP reference validation, not an Odoo display label.
+- Provider Document Type is optional canonical deterministic text and is not inferred from vendor, currency, or invoice description.
+- Purchase Order Present must preserve tri-state semantics:
+  - unset means do not care
+  - true means PO evidence must exist
+  - false means PO evidence must not exist
+- Odoo should model Purchase Order Present as a Selection such as `Any`, `Required`, and `Must Not Exist`, then map deterministically to `None`, `True`, and `False`. Do not use a normal Boolean if that collapses unset and false into the same value. If a deployment proves that nullable Odoo Boolean state is preserved safely end to end, document that deployment-specific choice.
 - Description terms must be immutable deterministic text, not fuzzy patterns.
+- Product Mapping must be an exact canonical mapping/reference ID when supplied. Odoo display names are not authoritative.
 - Missing required fields, invalid workflow, invalid classification, malformed priority, invalid IDs, and duplicate identities are rejected.
 
 ## Boundaries

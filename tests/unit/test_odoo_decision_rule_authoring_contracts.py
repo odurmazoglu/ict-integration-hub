@@ -27,18 +27,24 @@ def test_odoo_decision_rule_field_mapping_is_immutable_and_exported() -> None:
     assert application.OdooDecisionRuleFieldMapping is OdooDecisionRuleFieldMapping
     assert application.ODOO_DECISION_RULE_MODEL == ODOO_DECISION_RULE_MODEL
     assert mapping.model_name == "x_ipp_decision_rule"
+    assert mapping.name == "x_name"
+    assert mapping.active == "active"
+    assert mapping.company == "company_id"
     assert mapping.workflow == "x_studio_workflow"
     assert mapping.classification_code == "x_studio_classification_code"
     assert mapping.studio_fields() == (
-        "x_studio_name",
+        "x_name",
         "x_studio_rule_code",
-        "x_studio_active",
+        "active",
         "x_studio_priority",
-        "x_studio_company_id",
+        "company_id",
         "x_studio_vendor_id",
         "x_studio_vendor_tax_id",
         "x_studio_currency_id",
+        "x_studio_provider_document_type",
+        "x_studio_purchase_order_presence",
         "x_studio_description_contains",
+        "x_studio_product_mapping_id",
         "x_studio_workflow",
         "x_studio_classification_code",
         "x_studio_require_review",
@@ -56,7 +62,7 @@ def test_field_mapping_rejects_non_studio_model_fields_and_duplicates() -> None:
     with pytest.raises(OdooDecisionRuleAuthoringContractError):
         OdooDecisionRuleFieldMapping(rule_code="rule_code")
     with pytest.raises(OdooDecisionRuleAuthoringContractError):
-        OdooDecisionRuleFieldMapping(rule_code="x_studio_name")
+        OdooDecisionRuleFieldMapping(rule_code="x_name")
 
 
 def test_odoo_authoring_record_maps_to_canonical_invoice_decision_rule() -> None:
@@ -74,7 +80,10 @@ def test_odoo_authoring_record_maps_to_canonical_invoice_decision_rule() -> None
     assert rule.match.vendor_partner_id == 51
     assert rule.match.vendor_tax_id == "1234567890"
     assert rule.match.currency == "TRY"
+    assert rule.match.provider_document_type == "E_INVOICE"
+    assert rule.match.purchase_order_present is True
     assert rule.match.description_contains == ("azure", "cloud")
+    assert rule.match.product_mapping_id == 9001
     assert rule.action.workflow is WorkflowType.VENDOR_BILL
     assert rule.action.classification_code == "CLOUD_COST"
     assert rule.action.require_review is True
@@ -101,6 +110,73 @@ def test_classification_code_validation_comes_from_canonical_rule_contract() -> 
         _authoring_record(classification_code="EV CHARGING").to_invoice_decision_rule()
 
 
+def test_provider_document_type_round_trips_into_match() -> None:
+    rule = _authoring_record(provider_document_type=" e_invoice ").to_invoice_decision_rule()
+
+    assert rule.match.provider_document_type == "E_INVOICE"
+
+
+@pytest.mark.parametrize("purchase_order_present", [None, True, False])
+def test_purchase_order_present_tri_state_round_trips_into_match(purchase_order_present: bool | None) -> None:
+    rule = _authoring_record(purchase_order_present=purchase_order_present).to_invoice_decision_rule()
+
+    assert rule.match.purchase_order_present is purchase_order_present
+
+
+def test_product_mapping_id_round_trips_exactly_into_match() -> None:
+    rule = _authoring_record(product_mapping_id=12345).to_invoice_decision_rule()
+
+    assert rule.match.product_mapping_id == 12345
+
+
+def test_new_match_fields_do_not_infer_each_other() -> None:
+    provider_only = _authoring_record(
+        provider_document_type="E_ARCHIVE",
+        purchase_order_present=None,
+        product_mapping_id=None,
+    ).to_invoice_decision_rule()
+    po_only = _authoring_record(
+        provider_document_type=None,
+        purchase_order_present=False,
+        product_mapping_id=None,
+    ).to_invoice_decision_rule()
+    product_only = _authoring_record(
+        provider_document_type=None,
+        purchase_order_present=None,
+        product_mapping_id=777,
+    ).to_invoice_decision_rule()
+
+    assert provider_only.match.provider_document_type == "E_ARCHIVE"
+    assert provider_only.match.purchase_order_present is None
+    assert provider_only.match.product_mapping_id is None
+    assert po_only.match.provider_document_type is None
+    assert po_only.match.purchase_order_present is False
+    assert po_only.match.product_mapping_id is None
+    assert product_only.match.provider_document_type is None
+    assert product_only.match.purchase_order_present is None
+    assert product_only.match.product_mapping_id == 777
+
+
+def test_field_mapping_includes_complete_pr91_match_surface() -> None:
+    mapping = OdooDecisionRuleFieldMapping()
+
+    match_field_names = {
+        "company",
+        "vendor",
+        "vendor_tax_id",
+        "currency",
+        "provider_document_type",
+        "purchase_order_present",
+        "description_contains",
+        "product_mapping",
+    }
+
+    assert match_field_names <= set(OdooDecisionRuleFieldMapping.__dataclass_fields__)
+    assert mapping.provider_document_type == "x_studio_provider_document_type"
+    assert mapping.purchase_order_present == "x_studio_purchase_order_presence"
+    assert mapping.product_mapping == "x_studio_product_mapping_id"
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -115,6 +191,9 @@ def test_classification_code_validation_comes_from_canonical_rule_contract() -> 
         {"currency_id": 0},
         {"currency_id": 31, "currency_code": None},
         {"currency_id": None, "currency_code": "TRY"},
+        {"purchase_order_present": "false"},
+        {"product_mapping_id": 0},
+        {"product_mapping_id": 1.5},
         {"description_contains": ["cloud"]},
         {"name": ""},
         {"rule_code": " "},
@@ -201,7 +280,10 @@ def _authoring_record(**overrides: object) -> OdooDecisionRuleAuthoringRecord:
         "vendor_tax_id": " 1234567890 ",
         "currency_id": 31,
         "currency_code": "try",
+        "provider_document_type": " e_invoice ",
+        "purchase_order_present": True,
         "description_contains": (" Cloud ", "Azure"),
+        "product_mapping_id": 9001,
         "require_review": True,
         "require_business_context": True,
         "notes": "Configured in Odoo.",
