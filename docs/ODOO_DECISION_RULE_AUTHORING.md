@@ -2,7 +2,7 @@
 
 Odoo is the only business UI for Invoice Decision Rule configuration. ICT Integration Hub remains an integration and orchestration platform: it reads rule configuration, maps it into immutable application contracts, and later may evaluate those contracts without storing editable business rules or providing a Hub-owned configuration UI.
 
-This document defines the Odoo-facing authoring contract only. It does not implement an Odoo reader, Odoo API calls, rule evaluation, Workbench changes, runtime changes, migrations, execution, or ERP writes.
+This document defines the Odoo-facing authoring and read-only mapping contract. It does not implement rule evaluation, Workbench changes, runtime changes, migrations, execution, or ERP writes.
 
 ## Ownership
 
@@ -90,7 +90,7 @@ All other fields are documented Studio fields by default. The mapping DTO is con
 
 ## Mapping Contract
 
-`OdooDecisionRuleAuthoringRecord` represents one already-read, normalized, immutable Odoo rule row. It is not an Odoo reader and it must not expose raw Odoo dictionaries.
+`OdooDecisionRuleAuthoringRecord` represents one already-read, normalized, immutable Odoo rule row. It must not expose raw Odoo dictionaries.
 
 The mapping output is always the canonical PR #91 domain contract:
 
@@ -102,13 +102,27 @@ OdooDecisionRuleAuthoringRecord
   -> InvoiceDecisionRulePriority
 ```
 
-`DecisionRuleRepository` is the application port for future adapters. It returns only immutable `InvoiceDecisionRule` objects:
+`DecisionRuleRepository` is the application port for read-only adapters. It returns only immutable `InvoiceDecisionRule` objects:
 
 ```text
 list_invoice_decision_rules(company_id=...) -> tuple[InvoiceDecisionRule, ...]
 ```
 
 The port does not persist, write, cache, evaluate, or return raw provider payloads.
+
+`OdooDecisionRuleRepository` is the production read-only Odoo adapter for this port. It reads the configured Studio model through `OdooReadOnlyAdapter.search_read_all`, maps rows into canonical Hub rule contracts, and fails closed on malformed configuration. It does not call Odoo `create`, `write`, `unlink`, or any ERP business operation.
+
+The repository query is company-scoped:
+
+```text
+active = true
+and (
+  company_id = requested company
+  or company_id is empty
+)
+```
+
+Company-specific and shared rules can therefore be read together, but rules for another company are never returned.
 
 ## Validation
 
@@ -125,24 +139,31 @@ Required validation:
 - Classification Code is trimmed, uppercased, and must match `[A-Z][A-Z0-9_]{0,63}`.
 - Company must be an exact ERP ID when supplied.
 - Vendor must be an exact ERP ID when supplied.
-- Currency must be selected by exact ERP ID when supplied.
+- Currency must be selected by exact `res.currency` Many2one ERP ID when supplied.
 - The canonical currency code used in `InvoiceDecisionRuleMatch.currency` must come from exact ERP reference validation, not an Odoo display label.
 - Provider Document Type is optional canonical deterministic text and is not inferred from vendor, currency, or invoice description.
 - Purchase Order Present must preserve tri-state semantics:
   - unset means do not care
   - true means PO evidence must exist
   - false means PO evidence must not exist
-- Odoo should model Purchase Order Present as a Selection such as `Any`, `Required`, and `Must Not Exist`, then map deterministically to `None`, `True`, and `False`. Do not use a normal Boolean if that collapses unset and false into the same value. If a deployment proves that nullable Odoo Boolean state is preserved safely end to end, document that deployment-specific choice.
-- Description terms must be immutable deterministic text, not fuzzy patterns.
+- Odoo should model Purchase Order Present as a Selection using stored values `any`, `required`, and `must_not_exist`, then map deterministically to `None`, `True`, and `False`. Display labels are not authoritative. Do not use a normal Boolean if that collapses unset and false into the same value. If a deployment proves that nullable Odoo Boolean state is preserved safely end to end, document that deployment-specific choice.
+- Description terms must be immutable deterministic text, not fuzzy patterns. The Odoo reader treats one non-empty line as one required term and does not split comma-separated prose.
 - Product Mapping must be an exact canonical mapping/reference ID when supplied. Odoo display names are not authoritative.
 - Missing required fields, invalid workflow, invalid classification, malformed priority, invalid IDs, and duplicate identities are rejected.
+
+Exact ERP reference semantics:
+
+- Company, Vendor, Currency, and Product Mapping are consumed by numeric ID only.
+- Many2one display names are ignored.
+- Currency IDs are resolved through the read-only `CurrencyReferenceRepository.find_currencies_by_ids(...)`.
+- Missing or inactive currencies fail closed.
+- Workflow uses the stored Odoo selection value and maps exactly to `WorkflowType`.
+- Rules are returned in deterministic domain ordering after validation.
 
 ## Boundaries
 
 This contract introduces no:
 
-- Odoo reader
-- Odoo API call
 - XML-RPC
 - JSON-RPC
 - Workbench change

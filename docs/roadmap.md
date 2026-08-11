@@ -35,6 +35,7 @@
 - Customer Invoice Stage 2 pinning and execution wiring for accepted billing evidence pinning, Stage 2 execution-only billing reads, draft customer invoice execution steps, and writer-gated duplicate recovery
 - Odoo Workbench Billing Authoring Capture for exact read-only Odoo billing rows, ERP reference validation, immutable Stage 1 billing evidence persistence, and no-inference Customer Invoice terms
 - Odoo Decision Rule authoring contracts for the Studio-owned `IPP Decision Rule` model, centralized field mapping, immutable Odoo-to-Hub rule mapping, and read-only canonical `DecisionRuleRepository` port
+- Read-only Odoo Decision Rule repository for active company/shared `x_ipp_decision_rule` rows with exact ERP ID validation, canonical rule DTO mapping, deterministic ordering, and no rule execution
 
 ## Next Milestones
 
@@ -91,7 +92,6 @@
 
 ### 9. Rule Engine and Decision Engine
 
-- read-only Odoo Decision Rule adapter for `x_ipp_decision_rule`
 - side-effect-free evaluation of Odoo-authored canonical `InvoiceDecisionRule` contracts
 - workflow recommendation
 - priority and conflict handling

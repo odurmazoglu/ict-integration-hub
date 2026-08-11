@@ -1,6 +1,6 @@
 # Invoice Decision Rules
 
-Invoice Decision Rules are immutable, deterministic contracts for future invoice classification and workflow selection. This slice defines the domain vocabulary only. It does not execute rules, classify invoices, read Odoo, write ERP records, modify runtime execution, or add a user interface.
+Invoice Decision Rules are immutable, deterministic contracts for future invoice classification and workflow selection. The domain vocabulary does not execute rules, classify invoices, write ERP records, modify runtime execution, or add a user interface.
 
 ## Boundary
 
@@ -12,7 +12,7 @@ Out of scope for these contracts:
 
 - rule execution
 - invoice classification
-- Odoo models, readers, writers, or UI
+- Odoo writers or UI
 - runtime planning or execution changes
 - migrations
 - ERP writes
@@ -107,3 +107,9 @@ The contracts contain no floating-point fields. Future rule engines must not int
 The existing `DeterministicRuleEngine` still performs the current direct Vendor Bill and Manual Review behavior. These new contracts do not change that engine, `DecisionEngine`, Workbench submission, execution planning, runtime persistence, Odoo adapters, or ERP writers.
 
 Future work may add a rule evaluator that consumes these contracts. That evaluator must remain ERP-independent, deterministic, side-effect free, and tested separately before it is connected to invoice import orchestration.
+
+## Odoo Configuration Source
+
+Odoo is the business-user authoring surface for these contracts. `OdooDecisionRuleRepository` is a read-only infrastructure adapter that reads active Studio-authored `IPP Decision Rule` rows for a requested company plus shared rows, validates exact ERP IDs and canonical stored values, and returns only immutable `InvoiceDecisionRule` objects through the application `DecisionRuleRepository` port.
+
+The adapter is configuration ingestion only. It does not evaluate rules, classify invoices, write Odoo, call providers, touch Workbench decisions, or change runtime execution.
