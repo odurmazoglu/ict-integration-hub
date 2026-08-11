@@ -137,6 +137,143 @@ def test_duplicate_same_billing_evidence_is_idempotent(session: Session) -> None
     assert session.query(WorkbenchReviewBillingEvidence).count() == 1
 
 
+def test_duplicate_same_multi_row_billing_evidence_is_idempotent(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    item = _review_item()
+    evidence = (
+        _billing_evidence(billing_key="bill:A", allocation_key="ALLOC-A"),
+        _billing_evidence(billing_key="bill:B", allocation_key="ALLOC-B"),
+    )
+
+    first = repository.create_review_item_with_billing_evidence(
+        item,
+        company_id=7,
+        idempotency_key="review-key-1",
+        billing_evidence=evidence,
+    )
+    second = repository.create_review_item_with_billing_evidence(
+        item,
+        company_id=7,
+        idempotency_key="review-key-1",
+        billing_evidence=evidence,
+    )
+
+    assert second == first
+    assert session.query(WorkbenchReviewItem).count() == 1
+    assert session.query(WorkbenchReviewBillingEvidence).count() == 2
+
+
+def test_duplicate_multi_row_billing_evidence_ordering_difference_is_idempotent(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    item = _review_item()
+    first_evidence = (
+        _billing_evidence(billing_key="bill:A", allocation_key="ALLOC-A"),
+        _billing_evidence(billing_key="bill:B", allocation_key="ALLOC-B"),
+    )
+    reordered_evidence = tuple(reversed(first_evidence))
+    repository.create_review_item_with_billing_evidence(
+        item,
+        company_id=7,
+        idempotency_key="review-key-1",
+        billing_evidence=first_evidence,
+    )
+
+    replayed = repository.create_review_item_with_billing_evidence(
+        item,
+        company_id=7,
+        idempotency_key="review-key-1",
+        billing_evidence=reordered_evidence,
+    )
+
+    assert replayed.review_id == item.review_id
+    assert session.query(WorkbenchReviewBillingEvidence).count() == 2
+
+
+def test_duplicate_billing_evidence_replay_removing_billing_key_conflicts(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    item = _review_item()
+    repository.create_review_item_with_billing_evidence(
+        item,
+        company_id=7,
+        idempotency_key="review-key-1",
+        billing_evidence=(
+            _billing_evidence(billing_key="bill:A", allocation_key="ALLOC-A"),
+            _billing_evidence(billing_key="bill:B", allocation_key="ALLOC-B"),
+        ),
+    )
+
+    with pytest.raises(ReviewIdempotencyConflictError):
+        repository.create_review_item_with_billing_evidence(
+            item,
+            company_id=7,
+            idempotency_key="review-key-1",
+            billing_evidence=(_billing_evidence(billing_key="bill:A", allocation_key="ALLOC-A"),),
+        )
+
+    assert session.query(WorkbenchReviewBillingEvidence).count() == 2
+
+
+def test_duplicate_billing_evidence_replay_adding_billing_key_conflicts(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    item = _review_item()
+    repository.create_review_item_with_billing_evidence(
+        item,
+        company_id=7,
+        idempotency_key="review-key-1",
+        billing_evidence=(_billing_evidence(billing_key="bill:A", allocation_key="ALLOC-A"),),
+    )
+
+    with pytest.raises(ReviewIdempotencyConflictError):
+        repository.create_review_item_with_billing_evidence(
+            item,
+            company_id=7,
+            idempotency_key="review-key-1",
+            billing_evidence=(
+                _billing_evidence(billing_key="bill:A", allocation_key="ALLOC-A"),
+                _billing_evidence(billing_key="bill:B", allocation_key="ALLOC-B"),
+            ),
+        )
+
+    assert session.query(WorkbenchReviewBillingEvidence).count() == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    (
+        ("customer", {"customer_id": 502}),
+        ("currency", {"currency": "USD"}),
+        ("product", {"product_id": 902}),
+        ("quantity", {"quantity": Decimal("2.000")}),
+        ("unit_price", {"unit_price": Decimal("151.00")}),
+        ("sales_tax_ids", {"sales_tax_ids": (1902,)}),
+        ("allocation linkage", {"allocation_key": "ALLOC-CHANGED"}),
+    ),
+)
+def test_duplicate_billing_evidence_replay_changed_instruction_conflicts(
+    session: Session,
+    field: str,
+    changed: dict[str, object],
+) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    item = _review_item()
+    repository.create_review_item_with_billing_evidence(
+        item,
+        company_id=7,
+        idempotency_key=f"review-key-{field}",
+        billing_evidence=(_billing_evidence(billing_key="bill:A", allocation_key="ALLOC-A"),),
+    )
+
+    with pytest.raises(ReviewIdempotencyConflictError):
+        repository.create_review_item_with_billing_evidence(
+            item,
+            company_id=7,
+            idempotency_key=f"review-key-{field}",
+            billing_evidence=(_billing_evidence(billing_key="bill:A", **changed),),
+        )
+
+    assert session.query(WorkbenchReviewBillingEvidence).count() == 1
+
+
 def test_duplicate_changed_billing_evidence_conflicts(session: Session) -> None:
     repository = SqlAlchemyReviewRepository(session)
     item = _review_item()
@@ -383,33 +520,55 @@ def _billing_evidence(
     review_id: str = "review-1",
     company_id: int = 7,
     review_version: int = 1,
+    billing_key: str = "bill:customer-501:alloc-1",
+    customer_id: int = 501,
+    currency: str = "try",
+    allocation_key: str = "ALLOC-1",
+    product_id: int = 901,
+    quantity: Decimal = Decimal("1.000"),
     unit_price: Decimal = Decimal("150.00"),
+    sales_tax_ids: tuple[int, ...] = (1901,),
 ) -> ReviewExecutionBillingEvidence:
     return ReviewExecutionBillingEvidence(
         review_id=review_id,
         company_id=company_id,
         review_version=review_version,
-        billing_instruction=_billing_instruction(unit_price=unit_price),
+        billing_instruction=_billing_instruction(
+            billing_key=billing_key,
+            customer_id=customer_id,
+            currency=currency,
+            allocation_key=allocation_key,
+            product_id=product_id,
+            quantity=quantity,
+            unit_price=unit_price,
+            sales_tax_ids=sales_tax_ids,
+        ),
     )
 
 
 def _billing_instruction(
     *,
+    billing_key: str = "bill:customer-501:alloc-1",
+    customer_id: int = 501,
+    currency: str = "try",
+    allocation_key: str = "ALLOC-1",
+    product_id: int = 901,
     quantity: Decimal = Decimal("1.000"),
     unit_price: Decimal = Decimal("150.00"),
+    sales_tax_ids: tuple[int, ...] = (1901,),
 ) -> CustomerInvoiceBillingInstruction:
     return CustomerInvoiceBillingInstruction(
-        billing_key="bill:customer-501:alloc-1",
-        customer_id=501,
-        currency="try",
+        billing_key=billing_key,
+        customer_id=customer_id,
+        currency=currency,
         lines=(
             CustomerInvoiceBillingLine(
-                allocation_key="ALLOC-1",
-                product_id=901,
+                allocation_key=allocation_key,
+                product_id=product_id,
                 description="Managed service recharge",
                 quantity=quantity,
                 unit_price=unit_price,
-                sales_tax_ids=(1901,),
+                sales_tax_ids=sales_tax_ids,
             ),
         ),
     )

@@ -582,18 +582,15 @@ class SqlAlchemyReviewRepository:
         self,
         billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
     ) -> tuple[ReviewExecutionBillingEvidence, ...]:
-        existing = tuple(
-            self._find_review_billing_evidence(
-                review_id=evidence.review_id,
-                company_id=evidence.company_id,
-                review_version=evidence.review_version,
-                billing_key=evidence.billing_instruction.billing_key,
-            )
-            for evidence in billing_evidence
+        review_id, company_id, review_version = _billing_evidence_identity(billing_evidence)
+        existing = self._find_all_review_billing_evidence(
+            review_id=review_id,
+            company_id=company_id,
+            review_version=review_version,
         )
-        if any(record is None for record in existing):
+        if not existing:
             raise ReviewDataIntegrityError("Review billing evidence is missing for existing review item.")
-        existing_evidence = tuple(_billing_evidence_from_model(record) for record in existing if record is not None)
+        existing_evidence = tuple(_billing_evidence_from_model(record) for record in existing)
         if _billing_evidence_fingerprint(existing_evidence) != _billing_evidence_fingerprint(billing_evidence):
             raise ReviewIdempotencyConflictError("Review billing evidence conflicts with existing review version.")
         return existing_evidence
@@ -613,20 +610,25 @@ class SqlAlchemyReviewRepository:
             )
         )
 
-    def _find_review_billing_evidence(
+    def _find_all_review_billing_evidence(
         self,
         *,
         review_id: str,
         company_id: int,
         review_version: int,
-        billing_key: str,
-    ) -> WorkbenchReviewBillingEvidence | None:
-        return self._session.scalar(
-            select(WorkbenchReviewBillingEvidence).where(
-                WorkbenchReviewBillingEvidence.review_id == review_id,
-                WorkbenchReviewBillingEvidence.company_id == company_id,
-                WorkbenchReviewBillingEvidence.review_version == review_version,
-                WorkbenchReviewBillingEvidence.billing_key == billing_key,
+    ) -> tuple[WorkbenchReviewBillingEvidence, ...]:
+        return tuple(
+            self._session.scalars(
+                select(WorkbenchReviewBillingEvidence)
+                .where(
+                    WorkbenchReviewBillingEvidence.review_id == review_id,
+                    WorkbenchReviewBillingEvidence.company_id == company_id,
+                    WorkbenchReviewBillingEvidence.review_version == review_version,
+                )
+                .order_by(
+                    WorkbenchReviewBillingEvidence.billing_key.asc(),
+                    WorkbenchReviewBillingEvidence.id.asc(),
+                )
             )
         )
 
@@ -1399,6 +1401,16 @@ def _billing_evidence_fingerprint(evidence: tuple[ReviewExecutionBillingEvidence
         for item in evidence
     )
     return tuple(sorted(payloads, key=lambda payload: str(payload[3]["billing_key"])))
+
+
+def _billing_evidence_identity(evidence: tuple[ReviewExecutionBillingEvidence, ...]) -> tuple[str, int, int]:
+    if not evidence:
+        raise WorkbenchContractError("Review billing evidence is required.")
+    first = evidence[0]
+    identity = (first.review_id, first.company_id, first.review_version)
+    if any((item.review_id, item.company_id, item.review_version) != identity for item in evidence):
+        raise WorkbenchContractError("Review billing evidence identity must be consistent.")
+    return identity
 
 
 def _decision_fingerprint(command: ReviewDecisionCommand) -> tuple[Any, ...]:
