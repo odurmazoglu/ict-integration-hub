@@ -8,7 +8,7 @@ The repository now provides application-layer contracts, durable review item per
 
 Inbound invoice classification is now available as application-layer evidence through `InvoiceDecisionRuleEngine`. Odoo-authored rules are read into canonical Hub contracts, evaluated against canonical invoice context, and returned as `InvoiceClassificationResult` evidence. That evidence may later be projected to Workbench, but classification by itself is not an accepted Workbench decision and does not execute ERP workflows.
 
-The current import integration carries classification evidence on `DecisionResult` and `ImportInvoiceResult` until a review is created. Review creation can now persist immutable `ReviewClassificationEvidence` into `workbench_review_classification_evidence`, keyed by exact `company_id`, `review_id`, and `review_version`. Odoo Studio projection fields remain future work.
+The current import integration carries classification evidence on `DecisionResult` and `ImportInvoiceResult` until a review is created. Review creation can now persist immutable `ReviewClassificationEvidence` into `workbench_review_classification_evidence`, keyed by exact `company_id`, `review_id`, and `review_version`. `WorkbenchClassificationProjectionService` exposes that pinned evidence as a read-only Workbench UI projection; Odoo Studio field publishing remains future adapter work.
 
 ## Purpose
 
@@ -83,6 +83,9 @@ Implemented contract types:
 - `ReviewDecisionAcknowledgement`: safe acknowledgement contract
 - `ReviewExecutionEvidence`: immutable pre-decision execution evidence pinned to the current review version
 - `ReviewExecutionBillingEvidence`: immutable pre-decision customer billing instructions pinned to the current review version
+- `ReviewClassificationEvidence`: immutable deterministic classification evidence pinned to the current review version
+- `WorkbenchClassificationProjection`: user-safe read-only UI projection of pinned classification evidence
+- `WorkbenchClassificationProjectionService`: application service that reads only `ReviewClassificationEvidenceReader`
 - `LineResolution` and `TaxResolution`: explicit selected ERP IDs for invoice lines and taxes
 - `BusinessContextDecision`: legacy single-context procurement traceability evidence retained for historical rows
 - `BusinessContextAllocationType`, `AllocationCompleteness`, `BusinessContextAllocation`, and `BusinessContextAllocationSet`: canonical multi-allocation business context contracts
@@ -142,6 +145,66 @@ The execution source evidence capture path runs only for `SELECT_WORKFLOW + VEND
 The execution source evidence readers reconstruct from persisted Hub evidence only. They do not reread Uyumsoft, reread Odoo, refresh current ERP master data, rematch suppliers, rematch products, remap taxes, parse Workbench display text, use fuzzy matching, use AI, or infer missing evidence. Missing, malformed, cross-company, unsupported-version, or conflicting evidence fails closed before an executable Vendor Bill decision is accepted. A Vendor Bill-capable review must not become decision-ready without successful pre-decision evidence persistence; the SQLAlchemy adapter persists review creation and Stage 1 evidence in one transaction for that path.
 
 Classification evidence follows the same historical replay principle. Odoo-authored rules are evaluated during import/review orchestration, then the resulting `ReviewClassificationEvidence` is persisted with the review version. Later Workbench projection, manual decision, or replay reads the pinned Hub evidence; it must not rerun classification against the latest Odoo Decision Rules for a historical review version. `NO_MATCH` is an explicit persisted status, not absence of a row. Identical replay is safe, while changed rule identity, workflow evidence, classification code, review flags, or conflict evidence is a conflict.
+
+## Classification Projection
+
+Workbench classification projection is read-only, historical, version-pinned, and deterministic. It uses:
+
+```text
+Review section
+  -> WorkbenchClassificationProjectionService
+  -> ReviewClassificationEvidenceReader
+  -> persisted ReviewClassificationEvidence
+  -> WorkbenchClassificationProjection
+```
+
+The projection service never calls `DecisionRuleRepository`, `InvoiceDecisionRuleEngine`, Odoo Decision Rule readers, Odoo, Uyumsoft, provider connectors, ERP writers, or runtime execution. Missing persisted evidence is projected as a safe unavailable placeholder. Malformed persisted evidence fails closed through the reader and is not repaired by rerunning classification.
+
+Recommended Odoo Workbench Review-section layout:
+
+```text
+Review
+  Status
+  Decision Status
+  Classification Status
+  Workflow
+  Classification
+  Matched Rule
+  Rule Version
+  Review Required
+  Business Context Required
+  Conflict
+
+Business Context
+Decision
+History
+```
+
+This intentionally does not add a separate Classification notebook page. The fields explain why Hub classified the invoice while keeping business decisions in the existing Review/Decision flow.
+
+Projected readonly fields:
+
+- `status`
+- `workflow_display`
+- `classification_code`
+- `matched_rule_name`
+- `matched_rule_code`
+- `matched_rule_version`
+- `require_review_label`
+- `require_business_context_label`
+- `conflict_label`
+- `conflict_summary`
+- `conflicting_rules_summary`
+
+Badge mapping uses standard Odoo-style decorations where the future adapter can map them to readonly badge widgets:
+
+- `MATCHED`: success / green
+- `REVIEW_REQUIRED`: warning / orange
+- `NO_MATCH`: muted / grey
+- `CONFLICT`: danger / red
+- business context required: info / blue
+
+Conflict projection shows only safe deterministic summaries: rule name, rule code, rule version, canonical workflow display, and canonical classification code. It does not expose internal fingerprints, serialized evidence, raw JSON, Odoo IDs, database IDs, provider payloads, or rule configuration rows.
 
 Billing evidence is authoritative customer pricing evidence, not vendor/source cost allocation. `BusinessContextAllocation` continues to represent vendor cost allocation and traceability only. Customer Invoice pricing, quantity, outgoing sales product, customer, currency, and sales tax IDs must come only from `CustomerInvoiceBillingInstruction` evidence, never from allocation amount/percentage, purchase tax mapping, current ERP prices, display fields, AI, fuzzy logic, or rematching.
 

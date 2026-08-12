@@ -64,6 +64,7 @@ Current implemented capabilities:
 - Application-layer deterministic Invoice Decision Rule classifier that evaluates canonical invoice context against canonical rules and returns classification evidence without ERP execution.
 - Inbound import classification integration that builds canonical classification context after deterministic matching, loads rules through `DecisionRuleRepository`, and carries `InvoiceClassificationResult` on import/decision results without changing ERP execution.
 - Durable Workbench review classification evidence persistence keyed by exact company, review, and review version so historical review classification is never recomputed from current Odoo Decision Rules.
+- Read-only Workbench classification projection service that displays pinned historical `ReviewClassificationEvidence` with safe labels, badges, matched rule details, and conflict summaries without rerunning rules.
 - Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.
