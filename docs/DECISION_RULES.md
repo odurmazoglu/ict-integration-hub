@@ -140,3 +140,9 @@ When a Workbench review version is created with classification evidence, Hub per
 `NO_MATCH` is persisted as explicit evidence. Missing evidence is not interpreted as `NO_MATCH`.
 
 Historical review classification is never recomputed from the latest Odoo Decision Rules. Replay and later projection must read the pinned review-version evidence from Hub persistence. Identical replay is idempotent; changed matched rule data, workflow, classification code, review flags, or conflict rule evidence fails closed and does not overwrite history.
+
+## Workbench Projection
+
+`WorkbenchClassificationProjectionService` presents pinned review classification evidence for the Odoo Import Workbench. It reads only `ReviewClassificationEvidenceReader` and does not evaluate rules, read live Odoo Decision Rule configuration, call Odoo, call Uyumsoft, or invoke runtime execution.
+
+The projection is explanatory UI evidence: "why did Hub classify this invoice this way?" It is read-only, version-pinned, deterministic, and safe for the existing Review section. It exposes canonical status, workflow display, classification code, matched rule name/code/version, review-required and business-context-required badge values, and deterministic conflict summaries. It never exposes raw serialized evidence, fingerprints, database ids, Odoo ids, or raw Odoo rule rows.

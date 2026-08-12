@@ -14,6 +14,7 @@ from app.application.workbench.billing_authoring import (
 )
 from app.application.workbench.billing_capture_use_cases import CaptureOdooWorkbenchBillingEvidenceUseCase
 from app.application.workbench.billing_reference_validation import WorkbenchBillingReferenceValidator
+from app.application.workbench.classification_projection import WorkbenchClassificationProjectionService
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.decision_use_cases import SubmitReviewDecisionUseCase
 from app.application.workbench.dto import (
@@ -95,6 +96,8 @@ from app.application.workbench.ports import (
 from app.application.workbench.projection import (
     OdooWorkbenchDecisionCandidate,
     ProjectionPublishResult,
+    WorkbenchClassificationConflictRuleProjection,
+    WorkbenchClassificationProjection,
     WorkbenchProjection,
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
@@ -171,6 +174,9 @@ __all__ = [
     "WorkbenchCandidateDataError",
     "WorkbenchCandidateNotFoundError",
     "WorkbenchCandidateReadError",
+    "WorkbenchClassificationConflictRuleProjection",
+    "WorkbenchClassificationProjection",
+    "WorkbenchClassificationProjectionService",
     "WorkbenchDecisionCandidateReader",
     "WorkbenchErpReferenceCompanyMismatchError",
     "WorkbenchErpReferenceNotFoundError",

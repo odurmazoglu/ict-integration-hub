@@ -105,6 +105,8 @@ Current foundation contracts:
 - `ExecutionSourceInvoiceReader`
 - `ReviewClassificationEvidence`
 - `ReviewClassificationEvidenceReader`
+- `WorkbenchClassificationProjection`
+- `WorkbenchClassificationProjectionService`
 - `ReviewExecutionBillingEvidence`
 - `ReviewBillingEvidenceReader`
 - `VendorBillExecutionStrategy`
@@ -212,7 +214,9 @@ The import/decision result path may still carry classification evidence in memor
 
 Historical review classification is never recomputed from the latest Odoo Decision Rules. `ReviewClassificationEvidenceReader` is an application port for exact review/company/version reads; `SqlAlchemyReviewClassificationEvidenceReader` implements it in persistence and does not call rule repositories, classifiers, Odoo, Uyumsoft, ERP writers, providers, or runtime execution.
 
-This slice stops at durable classification evidence. It does not call Odoo directly, call Uyumsoft again, project to Odoo, execute workflows from classification, create Vendor Bills from classification, create customer invoices, write ERP records, call runtime execution, use AI, or use fuzzy matching. The existing `DeterministicRuleEngine` remains the current `RuleEngine` port implementation for direct Vendor Bill and Manual Review behavior; `DecisionEngine` still resolves workflow strategy from the legacy rule result until a later explicit migration plan.
+`WorkbenchClassificationProjectionService` is the presentation service for this evidence. It depends only on `ReviewClassificationEvidenceReader`, transforms pinned evidence into immutable `WorkbenchClassificationProjection`, and exposes safe readonly fields for the existing Review section: classification status, workflow display, classification code, matched rule name/code/version, review-required badge, business-context-required badge, and deterministic conflict summaries. Missing evidence becomes a safe unavailable placeholder. Malformed evidence fails closed and is not recomputed.
+
+This slice stops at durable classification evidence and read-only projection. It does not call Odoo directly, call Uyumsoft again, publish Odoo Studio fields, execute workflows from classification, create Vendor Bills from classification, create customer invoices, write ERP records, call runtime execution, use AI, or use fuzzy matching. The existing `DeterministicRuleEngine` remains the current `RuleEngine` port implementation for direct Vendor Bill and Manual Review behavior; `DecisionEngine` still resolves workflow strategy from the legacy rule result until a later explicit migration plan.
 
 ## Odoo Workbench Decision Submission
 

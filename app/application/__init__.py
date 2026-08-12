@@ -88,6 +88,9 @@ from app.application.workbench import (
     ReviewStatus,
     SubmitReviewDecisionUseCase,
     TaxResolution,
+    WorkbenchClassificationConflictRuleProjection,
+    WorkbenchClassificationProjection,
+    WorkbenchClassificationProjectionService,
     WorkbenchContractError,
 )
 from app.application.workflow import (
@@ -184,6 +187,9 @@ __all__ = [
     "VendorBillStrategy",
     "VendorBillExecutionStrategy",
     "vendor_bill_write_idempotency_key",
+    "WorkbenchClassificationConflictRuleProjection",
+    "WorkbenchClassificationProjection",
+    "WorkbenchClassificationProjectionService",
     "WorkbenchContractError",
     "WorkflowDecision",
     "WorkflowStrategyResolver",
