@@ -180,6 +180,16 @@ The repository remains orchestration-focused: build the deterministic company/sh
 
 The adapter remains read-only configuration ingestion. It does not evaluate rules, classify invoices, call Workbench services, touch runtime execution, mutate Odoo, call providers, use SQLAlchemy, use AI, or use fuzzy matching.
 
+## Inbound Invoice Classification
+
+`InvoiceClassificationContext` is the canonical ERP-neutral input DTO for configurable invoice rule matching. It is not built from raw Uyumsoft or Odoo dictionaries and contains only deterministic evidence required by `InvoiceDecisionRuleMatch`: company, vendor partner, vendor tax ID, currency, provider document type, purchase order presence, canonical description corpus, and product mapping IDs.
+
+`InvoiceDecisionRuleEngine` is an application-layer classifier. It consumes only `InvoiceClassificationContext` and canonical `InvoiceDecisionRule` tuples, evaluates all enabled rules in the existing `order_invoice_decision_rules(...)` order, and returns `InvoiceClassificationResult` with `MATCHED`, `NO_MATCH`, `CONFLICT`, or `REVIEW_REQUIRED`.
+
+The classifier groups winning rules by the existing specificity and priority semantics. Equal-winning rules with equivalent action fingerprints produce one deterministic selected rule plus rule evidence; equal-winning rules with incompatible action fingerprints produce conflict evidence. A rule with `require_review=true` still produces deterministic classification evidence, but the result status is `REVIEW_REQUIRED`.
+
+This slice stops at classification evidence. It does not call Odoo, call Uyumsoft, use SQLAlchemy, read historical decisions, create Workbench records, project to Odoo, execute workflows, create Vendor Bills, create customer invoices, write ERP records, call runtime execution, use AI, or use fuzzy matching. The existing `DeterministicRuleEngine` remains the current `RuleEngine` port implementation for direct Vendor Bill and Manual Review behavior until a later explicit integration plan.
+
 ## Odoo Workbench Decision Submission
 
 `SubmitOdooWorkbenchCandidateUseCase` connects the read-only Odoo Workbench candidate reader port to the existing Hub decision submission use case:

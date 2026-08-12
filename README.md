@@ -61,6 +61,7 @@ Current implemented capabilities:
 - Immutable deterministic Invoice Decision Rule domain contracts for future rule configuration and classification work.
 - Odoo-backed Decision Rule authoring contracts for the Studio-owned `IPP Decision Rule` configuration model, centralized field mapping, and read-only canonical rule repository port.
 - Production read-only Odoo Decision Rule repository that maps active company/shared Studio rules into canonical immutable Hub contracts without rule evaluation or Odoo writes.
+- Application-layer deterministic Invoice Decision Rule classifier that evaluates canonical invoice context against canonical rules and returns classification evidence without ERP execution.
 - Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.

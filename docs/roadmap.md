@@ -36,6 +36,7 @@
 - Odoo Workbench Billing Authoring Capture for exact read-only Odoo billing rows, ERP reference validation, immutable Stage 1 billing evidence persistence, and no-inference Customer Invoice terms
 - Odoo Decision Rule authoring contracts for the Studio-owned `IPP Decision Rule` model, centralized field mapping, immutable Odoo-to-Hub rule mapping, and read-only canonical `DecisionRuleRepository` port
 - Read-only Odoo Decision Rule repository for active company/shared `x_ipp_decision_rule` rows with exact ERP ID validation, canonical rule DTO mapping, deterministic ordering, and no rule execution
+- Deterministic inbound Invoice Classification Engine for canonical invoice context, Odoo-authored canonical rules, exact match semantics, review-required status, and conflict evidence without ERP execution
 
 ## Next Milestones
 
@@ -92,7 +93,7 @@
 
 ### 9. Rule Engine and Decision Engine
 
-- side-effect-free evaluation of Odoo-authored canonical `InvoiceDecisionRule` contracts
+- explicit integration plan for configurable classification evidence into import orchestration and Workbench projection
 - workflow recommendation
 - priority and conflict handling
 - full audit trail

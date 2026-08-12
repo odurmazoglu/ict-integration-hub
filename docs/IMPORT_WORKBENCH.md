@@ -6,6 +6,8 @@ Odoo 19 Online cannot install custom Python modules. The accepted Odoo Online ar
 
 The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, explicit review decision submission persistence, authenticated REST API adapters for direct Hub clients, ERP-neutral projection contracts, and a read-only Odoo JSON-2 adapter that can read ready decision candidates plus allocation child rows from configured Odoo Studio models.
 
+Inbound invoice classification is now available as application-layer evidence through `InvoiceDecisionRuleEngine`. Odoo-authored rules are read into canonical Hub contracts, evaluated against canonical invoice context, and returned as `InvoiceClassificationResult` evidence. That evidence may later be projected to Workbench, but classification by itself is not an accepted Workbench decision and does not execute ERP workflows.
+
 ## Purpose
 
 The Import Workbench should give users a practical review surface for:
@@ -26,6 +28,7 @@ Odoo may display:
 
 - Import Session status
 - source invoice metadata
+- deterministic invoice classification evidence
 - matching results
 - structured Manual Review reasons, rule failures, and warnings
 - advisory AI explanations
@@ -36,6 +39,7 @@ Odoo may display:
 Odoo must not own:
 
 - workflow selection
+- invoice classification logic
 - strategy selection
 - rule execution
 - Manual Review reason creation

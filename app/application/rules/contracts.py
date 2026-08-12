@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from app.application.dto import ApplicationDTO
@@ -208,15 +209,74 @@ class InvoiceDecisionRuleConflict(ApplicationDTO):
             raise InvoiceDecisionRuleContractError("match_fingerprint must be canonical tuple data.")
 
 
+class InvoiceClassificationStatus(StrEnum):
+    MATCHED = "MATCHED"
+    NO_MATCH = "NO_MATCH"
+    CONFLICT = "CONFLICT"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+
+
+@dataclass(frozen=True, slots=True)
+class InvoiceClassificationRuleEvidence(ApplicationDTO):
+    rule_id: str
+    rule_code: str
+    rule_version: int
+    rule_name: str
+    workflow: WorkflowType | None
+    classification_code: str | None
+    require_review: bool
+    require_business_context: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "rule_id", _required_text(self.rule_id, "rule_id", max_length=MAX_RULE_CODE_LENGTH))
+        object.__setattr__(
+            self,
+            "rule_code",
+            _required_text(self.rule_code, "rule_code", max_length=MAX_RULE_CODE_LENGTH).upper(),
+        )
+        _require_positive_int(self.rule_version, "rule_version must be a positive integer.")
+        object.__setattr__(
+            self,
+            "rule_name",
+            _required_text(self.rule_name, "rule_name", max_length=MAX_RULE_NAME_LENGTH),
+        )
+        if self.workflow is not None and not isinstance(self.workflow, WorkflowType):
+            raise InvoiceDecisionRuleContractError("workflow must be a canonical WorkflowType when supplied.")
+        object.__setattr__(self, "classification_code", _optional_classification_code(self.classification_code))
+        _require_bool(self.require_review, "require_review must be boolean.")
+        _require_bool(self.require_business_context, "require_business_context must be boolean.")
+
+    @classmethod
+    def from_rule(cls, rule: InvoiceDecisionRule) -> InvoiceClassificationRuleEvidence:
+        if not isinstance(rule, InvoiceDecisionRule):
+            raise InvoiceDecisionRuleContractError("rule evidence requires an InvoiceDecisionRule.")
+        return cls(
+            rule_id=rule.rule_id,
+            rule_code=rule.rule_code,
+            rule_version=rule.rule_version,
+            rule_name=rule.name,
+            workflow=rule.action.workflow,
+            classification_code=rule.action.classification_code,
+            require_review=rule.action.require_review,
+            require_business_context=rule.action.require_business_context,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class InvoiceClassificationResult(ApplicationDTO):
-    """Future rule-classification output contract; no evaluator is implemented here."""
+    """Deterministic invoice rule-classification result."""
 
+    status: InvoiceClassificationStatus = InvoiceClassificationStatus.NO_MATCH
     matched_rules: tuple[InvoiceDecisionRule, ...] = field(default_factory=tuple)
     selected_rule: InvoiceDecisionRule | None = None
     conflicts: tuple[InvoiceDecisionRuleConflict, ...] = field(default_factory=tuple)
+    matched_rule_evidence: tuple[InvoiceClassificationRuleEvidence, ...] = field(default_factory=tuple)
+    conflict_rule_evidence: tuple[InvoiceClassificationRuleEvidence, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
+        status = self.status
+        if not isinstance(status, InvoiceClassificationStatus):
+            raise InvoiceDecisionRuleContractError("classification status must be an InvoiceClassificationStatus.")
         matched_rules = tuple(self.matched_rules)
         for rule in matched_rules:
             if not isinstance(rule, InvoiceDecisionRule):
@@ -231,14 +291,65 @@ class InvoiceClassificationResult(ApplicationDTO):
             raise InvoiceDecisionRuleContractError("selected_rule must be included in matched_rules.")
         if conflicts and self.selected_rule is not None:
             raise InvoiceDecisionRuleContractError("conflicting classification results must not select a rule.")
+        if status is InvoiceClassificationStatus.NO_MATCH and self.selected_rule is not None:
+            status = (
+                InvoiceClassificationStatus.REVIEW_REQUIRED
+                if self.selected_rule.action.require_review
+                else InvoiceClassificationStatus.MATCHED
+            )
+        matched_rule_evidence = tuple(self.matched_rule_evidence)
+        for evidence in matched_rule_evidence:
+            if not isinstance(evidence, InvoiceClassificationRuleEvidence):
+                raise InvoiceDecisionRuleContractError(
+                    "matched_rule_evidence must contain InvoiceClassificationRuleEvidence values."
+                )
+        conflict_rule_evidence = tuple(self.conflict_rule_evidence)
+        for evidence in conflict_rule_evidence:
+            if not isinstance(evidence, InvoiceClassificationRuleEvidence):
+                raise InvoiceDecisionRuleContractError(
+                    "conflict_rule_evidence must contain InvoiceClassificationRuleEvidence values."
+                )
+        if status is InvoiceClassificationStatus.NO_MATCH and (matched_rules or self.selected_rule or conflicts):
+            raise InvoiceDecisionRuleContractError("NO_MATCH results must not include matched or conflict rules.")
+        if status in {InvoiceClassificationStatus.MATCHED, InvoiceClassificationStatus.REVIEW_REQUIRED}:
+            if self.selected_rule is None:
+                raise InvoiceDecisionRuleContractError("matched classification results must select a rule.")
+            if conflicts or conflict_rule_evidence:
+                raise InvoiceDecisionRuleContractError("matched classification results must not include conflicts.")
+        if status is InvoiceClassificationStatus.CONFLICT:
+            if not matched_rules or not conflict_rule_evidence:
+                raise InvoiceDecisionRuleContractError("conflicting classification results require conflict evidence.")
+            if self.selected_rule is not None:
+                raise InvoiceDecisionRuleContractError("conflicting classification results must not select a rule.")
+        object.__setattr__(self, "status", status)
         object.__setattr__(self, "matched_rules", matched_rules)
         object.__setattr__(self, "conflicts", conflicts)
+        object.__setattr__(self, "matched_rule_evidence", matched_rule_evidence)
+        object.__setattr__(self, "conflict_rule_evidence", conflict_rule_evidence)
 
     @property
     def classification_code(self) -> str | None:
         if self.selected_rule is None:
             return None
         return self.selected_rule.action.classification_code
+
+    @property
+    def workflow(self) -> WorkflowType | None:
+        if self.selected_rule is None:
+            return None
+        return self.selected_rule.action.workflow
+
+    @property
+    def require_review(self) -> bool:
+        if self.selected_rule is None:
+            return False
+        return self.selected_rule.action.require_review
+
+    @property
+    def require_business_context(self) -> bool:
+        if self.selected_rule is None:
+            return False
+        return self.selected_rule.action.require_business_context
 
 
 def order_invoice_decision_rules(rules: tuple[InvoiceDecisionRule, ...]) -> tuple[InvoiceDecisionRule, ...]:

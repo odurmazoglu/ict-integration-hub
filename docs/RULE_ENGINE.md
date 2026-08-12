@@ -4,6 +4,8 @@ The Rule Engine is the deterministic policy execution layer for ICT IPP. It live
 
 The current implementation provides the `RuleEngine` application port consumed by `DecisionEngine` and the first concrete implementation: `DeterministicRuleEngine`.
 
+The configurable invoice decision-rule classifier is implemented separately as `InvoiceDecisionRuleEngine`. It consumes canonical `InvoiceClassificationContext` evidence plus Odoo-authored canonical `InvoiceDecisionRule` values and returns `InvoiceClassificationResult`. It does not implement the existing `RuleEngine` port and is not yet wired into `DecisionEngine`.
+
 ## Purpose
 
 The Rule Engine answers questions that must be resolved by explicit business policy:
@@ -32,6 +34,7 @@ AI may comment on these results after the Rule Engine runs. AI must not replace 
 | Vendor bill build validation | `app/billing/builder.py` | Require matched partner, product, tax, invoice header, and valid quantities/prices |
 | Direct Vendor Bill rule | `app/application/rules/deterministic.py` | Select `WorkflowType.VENDOR_BILL` only when supplier, product, and tax results are deterministic and complete |
 | Manual Review rule | `app/application/rules/deterministic.py` | Select `WorkflowType.MANUAL_REVIEW` with structured review reasons for deterministic business mismatches |
+| Configurable invoice classification | `app/application/rules/classification.py` | Evaluate canonical invoice evidence against Odoo-authored `InvoiceDecisionRule` values and return classification evidence only |
 
 ## Implemented Rule: RULE-DIRECT-VENDOR-BILL-001
 
@@ -64,6 +67,25 @@ Current deterministic dependencies:
 - tax mapping: `TaxMappingEngine`, preserving exact company, type, and `Decimal` rate matching
 
 The rule engine coordinates these components through injected dependencies. It does not instantiate Odoo adapters, call ERP APIs, persist records, build Vendor Bills, execute strategies, perform duplicate detection, use AI, or perform fuzzy matching.
+
+## Configurable Invoice Classification
+
+`InvoiceDecisionRuleEngine` is the first configurable rule-evaluation slice. The flow is:
+
+```text
+Odoo authors rules
+  -> Hub reads canonical rules
+  -> deterministic classifier evaluates canonical invoice context
+  -> InvoiceClassificationResult evidence
+```
+
+The classifier supports only deterministic match conditions from `InvoiceDecisionRuleMatch`: exact company, vendor partner, vendor tax ID, currency, provider document type, purchase order presence, product mapping ID presence, and line-description corpus matching.
+
+Description matching uses a case-normalized substring check against the canonical description corpus. All configured terms must be present. The classifier does not use token similarity, stemming, synonyms, AI, embeddings, historical decisions, or display text inference.
+
+Winner selection evaluates all enabled rules, orders them with `order_invoice_decision_rules(...)`, and groups matching rules by the winning specificity plus priority tier/rank. No match returns `NO_MATCH`. Equal-winning rules with equivalent action fingerprints return `MATCHED` or `REVIEW_REQUIRED`. Equal-winning rules with incompatible action fingerprints return `CONFLICT` with immutable rule evidence.
+
+Classification does not itself perform ERP execution, create Workbench records, write Odoo, call providers, or alter runtime execution.
 
 ## Implemented Rule: RULE-MANUAL-REVIEW-001
 
@@ -166,6 +188,7 @@ Current implementation:
 
 - `RuleEngine` is a port under `app/application/ports`.
 - `DeterministicRuleEngine` implements that port under `app/application/rules`.
+- `InvoiceDecisionRuleEngine` is a separate side-effect-free classifier and does not replace the current `RuleEngine` port.
 - `DecisionEngine` calls that port and receives a `RuleEvaluationResult`.
 - `DecisionEngine` resolves the workflow from that result through `WorkflowStrategyResolver`.
 - This repository currently implements `VendorBillStrategy` and the non-writing `ManualReviewStrategy`.
