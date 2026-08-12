@@ -87,6 +87,7 @@ def _result_from_decision(
         vendor_bill_id=decision_result.vendor_bill_id,
         review_required=decision_result.review_required,
         review_reasons=decision_result.review_reasons,
+        classification_result=decision_result.classification_result,
         warnings=decision_result.warnings,
         errors=decision_result.errors,
         duration=duration,

@@ -28,6 +28,7 @@ class ImportInvoiceResult(ApplicationDTO):
     vendor_bill_id: int | None = None
     review_required: bool = False
     review_reasons: tuple[ManualReviewReason, ...] = field(default_factory=tuple)
+    classification_result: object | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     duration: float = 0.0

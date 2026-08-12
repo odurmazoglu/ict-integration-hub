@@ -186,9 +186,28 @@ The adapter remains read-only configuration ingestion. It does not evaluate rule
 
 `InvoiceDecisionRuleEngine` is an application-layer classifier. It consumes only `InvoiceClassificationContext` and canonical `InvoiceDecisionRule` tuples, evaluates all enabled rules in the existing `order_invoice_decision_rules(...)` order, and returns `InvoiceClassificationResult` with `MATCHED`, `NO_MATCH`, `CONFLICT`, or `REVIEW_REQUIRED`.
 
+The current inbound integration point is inside `DecisionEngine` after the legacy `RuleEngine.evaluate(...)` call and before workflow strategy resolution. At that point the Hub has the canonical `InternalInvoice`, requested `company_id`, deterministic partner match result, and deterministic product match result. `build_invoice_classification_context(...)` builds context only from that already-available evidence:
+
+```text
+Uyumsoft read-only ingestion
+  -> UBL parser
+  -> InternalInvoice
+  -> ImportInvoiceUseCase
+  -> DeterministicRuleEngine matching/tax evidence
+  -> build_invoice_classification_context(...)
+  -> DecisionRuleRepository.list_invoice_decision_rules(company_id=...)
+  -> InvoiceDecisionRuleEngine
+  -> InvoiceClassificationResult
+  -> DecisionResult / ImportInvoiceResult evidence
+```
+
+Unavailable optional evidence remains absent. Purchase-order presence is not inferred in this slice, and rules requiring unavailable evidence do not match.
+
 The classifier groups winning rules by the existing specificity and priority semantics. Equal-winning rules with equivalent action fingerprints produce one deterministic selected rule plus rule evidence; equal-winning rules with incompatible action fingerprints produce conflict evidence. A rule with `require_review=true` still produces deterministic classification evidence, but the result status is `REVIEW_REQUIRED`.
 
-This slice stops at classification evidence. It does not call Odoo, call Uyumsoft, use SQLAlchemy, read historical decisions, create Workbench records, project to Odoo, execute workflows, create Vendor Bills, create customer invoices, write ERP records, call runtime execution, use AI, or use fuzzy matching. The existing `DeterministicRuleEngine` remains the current `RuleEngine` port implementation for direct Vendor Bill and Manual Review behavior until a later explicit integration plan.
+This slice carries classification evidence through the existing in-memory import/decision result path. It does not add durable Workbench classification persistence because the current `ImportInvoiceUseCase -> DecisionEngine` path does not create a persisted `ReviewItem`; Workbench persistence remains in separate review creation/submission ports. A later projection/persistence slice must pin the exact classification snapshot before treating it as replayable Workbench evidence.
+
+This slice stops at classification evidence. It does not call Odoo directly, call Uyumsoft again, use SQLAlchemy, read historical decisions, create Workbench records, project to Odoo, execute workflows from classification, create Vendor Bills from classification, create customer invoices, write ERP records, call runtime execution, use AI, or use fuzzy matching. The existing `DeterministicRuleEngine` remains the current `RuleEngine` port implementation for direct Vendor Bill and Manual Review behavior; `DecisionEngine` still resolves workflow strategy from the legacy rule result until a later explicit migration plan.
 
 ## Odoo Workbench Decision Submission
 

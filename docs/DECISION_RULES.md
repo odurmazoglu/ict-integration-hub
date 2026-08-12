@@ -126,3 +126,9 @@ Future work may connect classification evidence into import orchestration or Wor
 Odoo is the business-user authoring surface for these contracts. `OdooDecisionRuleRepository` is a read-only infrastructure adapter that reads active Studio-authored `IPP Decision Rule` rows for a requested company plus shared rows, validates exact ERP IDs and canonical stored values, and returns only immutable `InvoiceDecisionRule` objects through the application `DecisionRuleRepository` port.
 
 The adapter is configuration ingestion only. It does not evaluate rules, classify invoices, write Odoo, call providers, touch Workbench decisions, or change runtime execution. The application classifier consumes only canonical rules and context; it has no Odoo dependency.
+
+## Inbound Import Integration
+
+Inbound import classification is integrated after the existing deterministic `RuleEngine` produces canonical match evidence and before `DecisionEngine` resolves the current workflow strategy. The classifier loads rules through the `DecisionRuleRepository` port by exact `company_id`; application orchestration does not instantiate `OdooDecisionRuleRepository`.
+
+The classification result is carried as immutable evidence on `DecisionResult` and `ImportInvoiceResult`. `NO_MATCH` and `CONFLICT` remain safe review evidence; they do not cause the Hub to guess a workflow. `MATCHED` and `REVIEW_REQUIRED` preserve matched rule identity, workflow evidence, classification code, review flag, and business-context flag. Classification evidence does not execute ERP business processes.

@@ -81,11 +81,13 @@ Odoo authors rules
 
 The classifier supports only deterministic match conditions from `InvoiceDecisionRuleMatch`: exact company, vendor partner, vendor tax ID, currency, provider document type, purchase order presence, product mapping ID presence, and line-description corpus matching.
 
+The current import integration builds classification context after `DeterministicRuleEngine` has produced canonical partner and product match evidence. It uses `InternalInvoice`, requested company scope, matched partner ID when deterministic, matched product IDs when deterministic, invoice currency, provider document metadata from the invoice header, supplier tax ID, and line descriptions. Purchase-order evidence is left absent because the current import path does not provide it authoritatively at that point.
+
 Description matching uses a case-normalized substring check against the canonical description corpus. All configured terms must be present. The classifier does not use token similarity, stemming, synonyms, AI, embeddings, historical decisions, or display text inference.
 
 Winner selection evaluates all enabled rules, orders them with `order_invoice_decision_rules(...)`, and groups matching rules by the winning specificity plus priority tier/rank. No match returns `NO_MATCH`. Equal-winning rules with equivalent action fingerprints return `MATCHED` or `REVIEW_REQUIRED`. Equal-winning rules with incompatible action fingerprints return `CONFLICT` with immutable rule evidence.
 
-Classification does not itself perform ERP execution, create Workbench records, write Odoo, call providers, or alter runtime execution.
+Classification does not itself perform ERP execution, create Workbench records, write Odoo, call providers, or alter runtime execution. `DecisionEngine` currently carries `InvoiceClassificationResult` on `DecisionResult` while continuing to resolve the executable workflow from the existing `RuleEngine` result.
 
 ## Implemented Rule: RULE-MANUAL-REVIEW-001
 

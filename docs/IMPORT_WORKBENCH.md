@@ -8,6 +8,8 @@ The repository now provides application-layer contracts, durable review item per
 
 Inbound invoice classification is now available as application-layer evidence through `InvoiceDecisionRuleEngine`. Odoo-authored rules are read into canonical Hub contracts, evaluated against canonical invoice context, and returned as `InvoiceClassificationResult` evidence. That evidence may later be projected to Workbench, but classification by itself is not an accepted Workbench decision and does not execute ERP workflows.
 
+The current import integration carries classification evidence on `DecisionResult` and `ImportInvoiceResult` only. It does not persist that evidence into `workbench_review_items` or publish it to Odoo Studio yet, because the current `ImportInvoiceUseCase -> DecisionEngine` path does not create persisted review items. A future Workbench projection/persistence slice must store the exact classification snapshot before replay or projection depends on it.
+
 ## Purpose
 
 The Import Workbench should give users a practical review surface for:

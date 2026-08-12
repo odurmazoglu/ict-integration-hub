@@ -55,6 +55,20 @@ flowchart TB
 
 The current codebase contains the first centralized `DecisionEngine` implementation. It delegates rule evaluation to the `RuleEngine` port and executes the selected workflow through `WorkflowStrategyResolver`.
 
+Configurable invoice classification now runs as evidence inside the inbound import path:
+
+```text
+Uyumsoft
+  -> InternalInvoice
+  -> canonical matching evidence
+  -> Odoo-authored canonical rules
+  -> deterministic classification
+  -> DecisionResult / ImportInvoiceResult evidence
+  -> later Workbench/ERP execution slices
+```
+
+Classification evidence does not replace workflow selection in this slice. `DecisionEngine` still uses the existing `RuleEngine` workflow result to resolve the executable strategy. Classification itself does not create Vendor Bills, write ERP records, start runtime execution, or create Workbench projections.
+
 The current Rule Engine implementation contains one concrete workflow rule:
 
 - `RULE-DIRECT-VENDOR-BILL-001`: selects `WorkflowType.VENDOR_BILL` when supplier partner matching, product matching, and tax mapping all succeed deterministically and completely

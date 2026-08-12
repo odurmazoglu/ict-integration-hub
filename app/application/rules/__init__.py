@@ -1,6 +1,7 @@
 """Deterministic rule evaluation implementations."""
 
 from app.application.rules.classification import InvoiceClassificationContext, InvoiceDecisionRuleEngine
+from app.application.rules.classification_context import build_invoice_classification_context
 from app.application.rules.contracts import (
     InvoiceClassificationResult,
     InvoiceClassificationRuleEvidence,
@@ -56,6 +57,7 @@ __all__ = [
     "RuleEvaluationError",
     "TaxRuleEvaluationError",
     "find_invoice_decision_rule_conflicts",
+    "build_invoice_classification_context",
     "odoo_workflow_to_workflow_type",
     "order_invoice_decision_rules",
     "validate_unique_odoo_decision_rule_identities",
