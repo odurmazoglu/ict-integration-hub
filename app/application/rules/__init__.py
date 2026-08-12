@@ -1,7 +1,10 @@
 """Deterministic rule evaluation implementations."""
 
+from app.application.rules.classification import InvoiceClassificationContext, InvoiceDecisionRuleEngine
 from app.application.rules.contracts import (
     InvoiceClassificationResult,
+    InvoiceClassificationRuleEvidence,
+    InvoiceClassificationStatus,
     InvoiceDecisionRule,
     InvoiceDecisionRuleAction,
     InvoiceDecisionRuleConflict,
@@ -33,6 +36,10 @@ __all__ = [
     "DIRECT_VENDOR_BILL_RULE_ID",
     "DeterministicRuleEngine",
     "InvoiceClassificationResult",
+    "InvoiceClassificationRuleEvidence",
+    "InvoiceClassificationStatus",
+    "InvoiceClassificationContext",
+    "InvoiceDecisionRuleEngine",
     "InvoiceDecisionRule",
     "InvoiceDecisionRuleAction",
     "InvoiceDecisionRuleConflict",

@@ -1,6 +1,6 @@
 # Invoice Decision Rules
 
-Invoice Decision Rules are immutable, deterministic contracts for future invoice classification and workflow selection. The domain vocabulary does not execute rules, classify invoices, write ERP records, modify runtime execution, or add a user interface.
+Invoice Decision Rules are immutable, deterministic contracts for invoice classification and workflow selection. The contracts and classifier do not write ERP records, modify runtime execution, or add a user interface.
 
 ## Boundary
 
@@ -8,10 +8,8 @@ ICT Integration Hub owns decision rules and deterministic orchestration. Odoo ow
 
 Rules may decide ERP-neutral outcomes such as workflow, business classification, review requirement, and default accounting context. Rules must not create, update, post, pay, reconcile, or delete ERP records.
 
-Out of scope for these contracts:
+Out of scope for these contracts and the deterministic classifier:
 
-- rule execution
-- invoice classification
 - Odoo writers or UI
 - runtime planning or execution changes
 - migrations
@@ -69,7 +67,18 @@ Classification alone never implies ERP execution capability. Only workflow descr
 
 `InvoiceDecisionRulePriority` defines deterministic priority as `tier` plus `rank`. Lower values sort earlier after specificity.
 
-`InvoiceClassificationResult` is a future output DTO for carrying matched rules, a selected rule, or conflicts. This PR does not provide an evaluator that produces it from invoices.
+`InvoiceClassificationContext` is the canonical ERP-neutral input evidence for configurable rule matching. It contains only supported match facts: company, vendor partner, vendor tax ID, currency, provider document type, purchase order presence, a canonical description corpus, and product mapping IDs.
+
+`InvoiceDecisionRuleEngine` evaluates canonical `InvoiceDecisionRule` values against `InvoiceClassificationContext` and returns `InvoiceClassificationResult`.
+
+`InvoiceClassificationResult` carries a closed status:
+
+- `MATCHED`
+- `NO_MATCH`
+- `CONFLICT`
+- `REVIEW_REQUIRED`
+
+The result includes immutable rule evidence for matched or conflicting winning rules. Classification does not itself perform ERP execution.
 
 ## Precedence
 
@@ -84,7 +93,9 @@ Exact company, vendor, and tax rules therefore outrank generic rules because the
 
 ## Conflicts
 
-Rules with the same enabled match fingerprint and same priority but different actions are conflicts. Conflicts must fail closed in future evaluators. The contract helper `find_invoice_decision_rule_conflicts(...)` detects these definitions without evaluating invoice facts.
+Rules with the same enabled match fingerprint and same priority but different actions are conflicts. The contract helper `find_invoice_decision_rule_conflicts(...)` detects those definitions without evaluating invoice facts.
+
+During invoice classification, all enabled rules are evaluated. If no rule matches, the result is `NO_MATCH`. If rules match, the engine considers the highest effective precedence level using the existing specificity and priority semantics from `order_invoice_decision_rules(...)`. Equal-winning rules with the same action fingerprint produce one deterministic `MATCHED` or `REVIEW_REQUIRED` result. Equal-winning rules with incompatible action fingerprints produce `CONFLICT` with safe immutable rule evidence.
 
 Behaviorally equivalent rules have the same match fingerprint and action fingerprint. Equivalent rules are stable and do not conflict merely because they have different rule identities.
 
@@ -102,14 +113,16 @@ Contracts reject malformed values at construction time:
 
 The contracts contain no floating-point fields. Future rule engines must not introduce fuzzy matching, AI scoring, embeddings, similarity scoring, or display-text authority into deterministic invoice decision rules.
 
+Description matching is a case-normalized substring check against the canonical description corpus. Every configured `description_contains` term must be present. There is no token similarity, stemming, synonym expansion, locale inference, or hidden delimiter guessing.
+
 ## Relationship To Existing Rule Engine
 
-The existing `DeterministicRuleEngine` still performs the current direct Vendor Bill and Manual Review behavior. These new contracts do not change that engine, `DecisionEngine`, Workbench submission, execution planning, runtime persistence, Odoo adapters, or ERP writers.
+The existing `DeterministicRuleEngine` still performs the current direct Vendor Bill and Manual Review behavior. `InvoiceDecisionRuleEngine` is a separate configurable-rule classifier in this slice. It does not change `DeterministicRuleEngine`, `DecisionEngine`, Workbench submission, execution planning, runtime persistence, Odoo adapters, or ERP writers.
 
-Future work may add a rule evaluator that consumes these contracts. That evaluator must remain ERP-independent, deterministic, side-effect free, and tested separately before it is connected to invoice import orchestration.
+Future work may connect classification evidence into import orchestration or Workbench projection with an explicit migration plan. This slice stops at deterministic classification evidence.
 
 ## Odoo Configuration Source
 
 Odoo is the business-user authoring surface for these contracts. `OdooDecisionRuleRepository` is a read-only infrastructure adapter that reads active Studio-authored `IPP Decision Rule` rows for a requested company plus shared rows, validates exact ERP IDs and canonical stored values, and returns only immutable `InvoiceDecisionRule` objects through the application `DecisionRuleRepository` port.
 
-The adapter is configuration ingestion only. It does not evaluate rules, classify invoices, write Odoo, call providers, touch Workbench decisions, or change runtime execution.
+The adapter is configuration ingestion only. It does not evaluate rules, classify invoices, write Odoo, call providers, touch Workbench decisions, or change runtime execution. The application classifier consumes only canonical rules and context; it has no Odoo dependency.
