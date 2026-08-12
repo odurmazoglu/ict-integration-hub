@@ -8,6 +8,8 @@ The repository now provides application-layer contracts, durable review item per
 
 Inbound invoice classification is now available as application-layer evidence through `InvoiceDecisionRuleEngine`. Odoo-authored rules are read into canonical Hub contracts, evaluated against canonical invoice context, and returned as `InvoiceClassificationResult` evidence. That evidence may later be projected to Workbench, but classification by itself is not an accepted Workbench decision and does not execute ERP workflows.
 
+The current import integration carries classification evidence on `DecisionResult` and `ImportInvoiceResult` until a review is created. Review creation can now persist immutable `ReviewClassificationEvidence` into `workbench_review_classification_evidence`, keyed by exact `company_id`, `review_id`, and `review_version`. Odoo Studio projection fields remain future work.
+
 ## Purpose
 
 The Import Workbench should give users a practical review surface for:
@@ -101,7 +103,7 @@ Implemented contract types:
 
 ## Current Persistence Foundation
 
-The persistence foundation stores Workbench review items in `workbench_review_items`, pre-decision execution evidence in `workbench_review_execution_evidence`, pre-decision customer billing evidence in `workbench_review_billing_evidence`, accepted customer billing evidence in `execution_customer_billing_evidence`, and append-only user decisions in `workbench_review_decisions`.
+The persistence foundation stores Workbench review items in `workbench_review_items`, pre-decision execution evidence in `workbench_review_execution_evidence`, pre-decision customer billing evidence in `workbench_review_billing_evidence`, review-version classification evidence in `workbench_review_classification_evidence`, accepted customer billing evidence in `execution_customer_billing_evidence`, and append-only user decisions in `workbench_review_decisions`.
 
 Implemented behavior:
 
@@ -138,6 +140,8 @@ The two-stage evidence model is deliberate. Stage 1 pre-decision evidence is the
 The execution source evidence capture path runs only for `SELECT_WORKFLOW + VENDOR_BILL`, the only currently executable Vendor Bill decision rule. `DISMISS`, non-Vendor-Bill workflows, and workflows not executable by the current Vendor Bill strategy persist decision evidence only and do not create Stage 2 execution source evidence.
 
 The execution source evidence readers reconstruct from persisted Hub evidence only. They do not reread Uyumsoft, reread Odoo, refresh current ERP master data, rematch suppliers, rematch products, remap taxes, parse Workbench display text, use fuzzy matching, use AI, or infer missing evidence. Missing, malformed, cross-company, unsupported-version, or conflicting evidence fails closed before an executable Vendor Bill decision is accepted. A Vendor Bill-capable review must not become decision-ready without successful pre-decision evidence persistence; the SQLAlchemy adapter persists review creation and Stage 1 evidence in one transaction for that path.
+
+Classification evidence follows the same historical replay principle. Odoo-authored rules are evaluated during import/review orchestration, then the resulting `ReviewClassificationEvidence` is persisted with the review version. Later Workbench projection, manual decision, or replay reads the pinned Hub evidence; it must not rerun classification against the latest Odoo Decision Rules for a historical review version. `NO_MATCH` is an explicit persisted status, not absence of a row. Identical replay is safe, while changed rule identity, workflow evidence, classification code, review flags, or conflict evidence is a conflict.
 
 Billing evidence is authoritative customer pricing evidence, not vendor/source cost allocation. `BusinessContextAllocation` continues to represent vendor cost allocation and traceability only. Customer Invoice pricing, quantity, outgoing sales product, customer, currency, and sales tax IDs must come only from `CustomerInvoiceBillingInstruction` evidence, never from allocation amount/percentage, purchase tax mapping, current ERP prices, display fields, AI, fuzzy logic, or rematching.
 

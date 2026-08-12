@@ -8,7 +8,11 @@ from app.application.workbench.billing_authoring import (
 )
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewItem, ReviewQueueResult
-from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
+from app.application.workbench.evidence import (
+    ReviewClassificationEvidence,
+    ReviewExecutionBillingEvidence,
+    ReviewExecutionEvidence,
+)
 from app.application.workbench.projection import (
     OdooWorkbenchDecisionCandidate,
     ProjectionPublishResult,
@@ -44,6 +48,17 @@ class ReviewItemWriter(Protocol):
         company_id: int,
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
+        classification_evidence: ReviewClassificationEvidence | None = None,
+    ) -> ReviewItem:
+        pass
+
+    def create_review_item_with_classification_evidence(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        classification_evidence: ReviewClassificationEvidence,
     ) -> ReviewItem:
         pass
 
@@ -54,6 +69,7 @@ class ReviewItemWriter(Protocol):
         company_id: int,
         idempotency_key: str,
         billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+        classification_evidence: ReviewClassificationEvidence | None = None,
     ) -> ReviewItem:
         pass
 
@@ -65,6 +81,7 @@ class ReviewItemWriter(Protocol):
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
         billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+        classification_evidence: ReviewClassificationEvidence | None = None,
     ) -> ReviewItem:
         pass
 
@@ -114,6 +131,19 @@ class ReviewBillingEvidenceReader(Protocol):
         company_id: int,
         review_version: int,
     ) -> tuple[CustomerInvoiceBillingInstruction, ...]:
+        pass
+
+
+class ReviewClassificationEvidenceReader(Protocol):
+    """Read-only port for immutable classification evidence pinned to a review version."""
+
+    def get_classification_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> ReviewClassificationEvidence:
         pass
 
 

@@ -7,6 +7,7 @@ from app.models.provider import Provider
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
+from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
@@ -18,6 +19,7 @@ __all__ = [
     "ExecutionSourceInvoiceEvidence",
     "WorkbenchReviewExecutionEvidence",
     "WorkbenchReviewBillingEvidence",
+    "WorkbenchReviewClassificationEvidence",
     "InvoiceDocument",
     "OdooDraftInvoice",
     "Provider",

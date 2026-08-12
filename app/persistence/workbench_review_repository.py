@@ -29,7 +29,11 @@ from app.application.workbench.dto import (
     ReviewStatus,
     TaxResolution,
 )
-from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
+from app.application.workbench.evidence import (
+    ReviewClassificationEvidence,
+    ReviewExecutionBillingEvidence,
+    ReviewExecutionEvidence,
+)
 from app.application.workbench.exceptions import (
     ReviewDataIntegrityError,
     ReviewDecisionDataIntegrityError,
@@ -48,6 +52,7 @@ from app.billing.dto import CustomerInvoiceBillingInstruction
 from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
+from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
@@ -60,6 +65,10 @@ from app.persistence.review_billing_evidence_reader import (
     REVIEW_BILLING_EVIDENCE_SCHEMA_VERSION,
     deserialize_billing_instruction_payload,
     serialize_billing_instruction_payload,
+)
+from app.persistence.review_classification_evidence_reader import (
+    classification_evidence_from_record,
+    classification_evidence_payload,
 )
 
 SAFE_PERSISTENCE_ERROR = "Review persistence operation failed."
@@ -106,22 +115,36 @@ class SqlAlchemyReviewRepository:
         company_id: int,
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
+        classification_evidence: ReviewClassificationEvidence | None = None,
     ) -> ReviewItem:
         _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
         _validate_review_evidence_linkage(item=item, company_id=company_id, evidence=evidence)
+        if classification_evidence is not None:
+            _validate_review_classification_evidence_linkage(
+                item=item,
+                company_id=company_id,
+                classification_evidence=classification_evidence,
+            )
         try:
             existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
             if existing is not None:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
                 self._return_existing_review_evidence_or_raise_conflict(evidence)
+                if classification_evidence is not None:
+                    self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
                 return existing_item
 
             record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
             evidence_record = _evidence_model_from_review_evidence(evidence)
+            classification_record = (
+                _classification_evidence_model(classification_evidence) if classification_evidence is not None else None
+            )
             with self._session.begin_nested():
                 self._session.add(record)
                 self._session.flush()
                 self._session.add(evidence_record)
+                if classification_record is not None:
+                    self._session.add(classification_record)
                 self._session.flush()
                 self._session.refresh(record)
             return _review_item_from_model(record)
@@ -131,6 +154,50 @@ class SqlAlchemyReviewRepository:
                 company_id=company_id,
                 idempotency_key=idempotency_key,
                 evidence=evidence,
+                classification_evidence=classification_evidence,
+                exc=exc,
+            )
+        except ReviewPersistenceError:
+            raise
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def create_review_item_with_classification_evidence(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        classification_evidence: ReviewClassificationEvidence,
+    ) -> ReviewItem:
+        _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
+        _validate_review_classification_evidence_linkage(
+            item=item,
+            company_id=company_id,
+            classification_evidence=classification_evidence,
+        )
+        try:
+            existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
+            if existing is not None:
+                existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
+                return existing_item
+
+            record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
+            classification_record = _classification_evidence_model(classification_evidence)
+            with self._session.begin_nested():
+                self._session.add(record)
+                self._session.flush()
+                self._session.add(classification_record)
+                self._session.flush()
+                self._session.refresh(record)
+            return _review_item_from_model(record)
+        except IntegrityError as exc:
+            return self._handle_create_with_classification_evidence_integrity_error(
+                item,
+                company_id=company_id,
+                idempotency_key=idempotency_key,
+                classification_evidence=classification_evidence,
                 exc=exc,
             )
         except ReviewPersistenceError:
@@ -145,22 +212,36 @@ class SqlAlchemyReviewRepository:
         company_id: int,
         idempotency_key: str,
         billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+        classification_evidence: ReviewClassificationEvidence | None = None,
     ) -> ReviewItem:
         _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
         _validate_review_billing_evidence_linkage(item=item, company_id=company_id, billing_evidence=billing_evidence)
+        if classification_evidence is not None:
+            _validate_review_classification_evidence_linkage(
+                item=item,
+                company_id=company_id,
+                classification_evidence=classification_evidence,
+            )
         try:
             existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
             if existing is not None:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
                 self._return_existing_review_billing_evidence_or_raise_conflict(billing_evidence)
+                if classification_evidence is not None:
+                    self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
                 return existing_item
 
             record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
             billing_records = tuple(_billing_evidence_model(evidence) for evidence in billing_evidence)
+            classification_record = (
+                _classification_evidence_model(classification_evidence) if classification_evidence is not None else None
+            )
             with self._session.begin_nested():
                 self._session.add(record)
                 self._session.flush()
                 self._session.add_all(billing_records)
+                if classification_record is not None:
+                    self._session.add(classification_record)
                 self._session.flush()
                 self._session.refresh(record)
             return _review_item_from_model(record)
@@ -170,6 +251,7 @@ class SqlAlchemyReviewRepository:
                 company_id=company_id,
                 idempotency_key=idempotency_key,
                 billing_evidence=billing_evidence,
+                classification_evidence=classification_evidence,
                 exc=exc,
             )
         except ReviewPersistenceError:
@@ -185,26 +267,40 @@ class SqlAlchemyReviewRepository:
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
         billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+        classification_evidence: ReviewClassificationEvidence | None = None,
     ) -> ReviewItem:
         _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
         _validate_review_evidence_linkage(item=item, company_id=company_id, evidence=evidence)
         _validate_review_billing_evidence_linkage(item=item, company_id=company_id, billing_evidence=billing_evidence)
+        if classification_evidence is not None:
+            _validate_review_classification_evidence_linkage(
+                item=item,
+                company_id=company_id,
+                classification_evidence=classification_evidence,
+            )
         try:
             existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
             if existing is not None:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
                 self._return_existing_review_evidence_or_raise_conflict(evidence)
                 self._return_existing_review_billing_evidence_or_raise_conflict(billing_evidence)
+                if classification_evidence is not None:
+                    self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
                 return existing_item
 
             record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
             evidence_record = _evidence_model_from_review_evidence(evidence)
             billing_records = tuple(_billing_evidence_model(billing) for billing in billing_evidence)
+            classification_record = (
+                _classification_evidence_model(classification_evidence) if classification_evidence is not None else None
+            )
             with self._session.begin_nested():
                 self._session.add(record)
                 self._session.flush()
                 self._session.add(evidence_record)
                 self._session.add_all(billing_records)
+                if classification_record is not None:
+                    self._session.add(classification_record)
                 self._session.flush()
                 self._session.refresh(record)
             return _review_item_from_model(record)
@@ -214,10 +310,44 @@ class SqlAlchemyReviewRepository:
                 company_id=company_id,
                 idempotency_key=idempotency_key,
                 billing_evidence=billing_evidence,
+                classification_evidence=classification_evidence,
                 exc=exc,
             )
         except ReviewPersistenceError:
             raise
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def get_review_classification_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> ReviewClassificationEvidence:
+        _validate_evidence_query(review_id=review_id, company_id=company_id, review_version=review_version)
+        try:
+            records = tuple(
+                self._session.scalars(
+                    select(WorkbenchReviewClassificationEvidence)
+                    .where(
+                        WorkbenchReviewClassificationEvidence.review_id == review_id,
+                        WorkbenchReviewClassificationEvidence.company_id == company_id,
+                        WorkbenchReviewClassificationEvidence.review_version == review_version,
+                    )
+                    .order_by(WorkbenchReviewClassificationEvidence.id.asc())
+                    .limit(2)
+                )
+            )
+            if not records:
+                raise ReviewNotFoundError("Review classification evidence was not found.")
+            if len(records) > 1:
+                raise ReviewDataIntegrityError("Review classification evidence is ambiguous.")
+            return classification_evidence_from_record(records[0])
+        except ApplicationError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ReviewDataIntegrityError("Review classification evidence is invalid.") from exc
         except SQLAlchemyError as exc:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
@@ -641,6 +771,7 @@ class SqlAlchemyReviewRepository:
         company_id: int,
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
+        classification_evidence: ReviewClassificationEvidence | None = None,
         exc: IntegrityError,
     ) -> ReviewItem:
         try:
@@ -651,6 +782,30 @@ class SqlAlchemyReviewRepository:
             try:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
                 self._return_existing_review_evidence_or_raise_conflict(evidence)
+                if classification_evidence is not None:
+                    self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
+                return existing_item
+            except ReviewPersistenceError as conflict_exc:
+                raise conflict_exc from exc
+        raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def _handle_create_with_classification_evidence_integrity_error(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        classification_evidence: ReviewClassificationEvidence,
+        exc: IntegrityError,
+    ) -> ReviewItem:
+        try:
+            existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
+        except SQLAlchemyError as lookup_exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from lookup_exc
+        if existing is not None:
+            try:
+                existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
                 return existing_item
             except ReviewPersistenceError as conflict_exc:
                 raise conflict_exc from exc
@@ -663,6 +818,7 @@ class SqlAlchemyReviewRepository:
         company_id: int,
         idempotency_key: str,
         billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
+        classification_evidence: ReviewClassificationEvidence | None = None,
         exc: IntegrityError,
     ) -> ReviewItem:
         try:
@@ -673,6 +829,8 @@ class SqlAlchemyReviewRepository:
             try:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
                 self._return_existing_review_billing_evidence_or_raise_conflict(billing_evidence)
+                if classification_evidence is not None:
+                    self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
                 return existing_item
             except ReviewPersistenceError as conflict_exc:
                 raise conflict_exc from exc
@@ -711,6 +869,26 @@ class SqlAlchemyReviewRepository:
             raise ReviewIdempotencyConflictError("Review billing evidence conflicts with existing review version.")
         return existing_evidence
 
+    def _return_existing_review_classification_evidence_or_raise_conflict(
+        self,
+        classification_evidence: ReviewClassificationEvidence,
+    ) -> ReviewClassificationEvidence:
+        existing = self._find_review_classification_evidence(
+            review_id=classification_evidence.review_id,
+            company_id=classification_evidence.company_id,
+            review_version=classification_evidence.review_version,
+        )
+        if existing is None:
+            raise ReviewDataIntegrityError("Review classification evidence is missing for existing review item.")
+        existing_evidence = classification_evidence_from_record(existing)
+        if _classification_evidence_fingerprint(existing_evidence) != _classification_evidence_fingerprint(
+            classification_evidence
+        ):
+            raise ReviewIdempotencyConflictError(
+                "Review classification evidence conflicts with existing review version."
+            )
+        return existing_evidence
+
     def _find_review_execution_evidence(
         self,
         *,
@@ -745,6 +923,21 @@ class SqlAlchemyReviewRepository:
                     WorkbenchReviewBillingEvidence.billing_key.asc(),
                     WorkbenchReviewBillingEvidence.id.asc(),
                 )
+            )
+        )
+
+    def _find_review_classification_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> WorkbenchReviewClassificationEvidence | None:
+        return self._session.scalar(
+            select(WorkbenchReviewClassificationEvidence).where(
+                WorkbenchReviewClassificationEvidence.review_id == review_id,
+                WorkbenchReviewClassificationEvidence.company_id == company_id,
+                WorkbenchReviewClassificationEvidence.review_version == review_version,
             )
         )
 
@@ -1030,6 +1223,22 @@ def _validate_review_billing_evidence_linkage(
         raise WorkbenchContractError("Billing evidence billing_key values must be unique per review version.")
 
 
+def _validate_review_classification_evidence_linkage(
+    *,
+    item: ReviewItem,
+    company_id: int,
+    classification_evidence: ReviewClassificationEvidence,
+) -> None:
+    if not isinstance(classification_evidence, ReviewClassificationEvidence):
+        raise WorkbenchContractError("ReviewClassificationEvidence DTO is required.")
+    if classification_evidence.review_id != item.review_id:
+        raise WorkbenchContractError("Classification evidence review_id must match review item.")
+    if classification_evidence.company_id != company_id:
+        raise WorkbenchContractError("Classification evidence company_id must match review item company.")
+    if classification_evidence.review_version != item.version:
+        raise WorkbenchContractError("Classification evidence review_version must match review item version.")
+
+
 def _validate_execution_evidence_for_command(
     command: ReviewDecisionCommand,
     evidence: ExecutionSourceInvoice,
@@ -1179,6 +1388,28 @@ def _billing_evidence_from_model(record: WorkbenchReviewBillingEvidence) -> Revi
         company_id=record.company_id,
         review_version=record.review_version,
         billing_instruction=instruction,
+    )
+
+
+def _classification_evidence_model(
+    evidence: ReviewClassificationEvidence,
+) -> WorkbenchReviewClassificationEvidence:
+    payload = classification_evidence_payload(evidence)
+    return WorkbenchReviewClassificationEvidence(
+        review_id=evidence.review_id,
+        company_id=evidence.company_id,
+        review_version=evidence.review_version,
+        schema_version=evidence.schema_version,
+        status=evidence.status.value,
+        matched_rule_id=evidence.matched_rule_id,
+        matched_rule_code=evidence.matched_rule_code,
+        matched_rule_version=evidence.matched_rule_version,
+        matched_rule_name=evidence.matched_rule_name,
+        workflow=payload["workflow"],
+        classification_code=evidence.classification_code,
+        require_review=evidence.require_review,
+        require_business_context=evidence.require_business_context,
+        conflicting_rules=payload["conflicting_rules"],
     )
 
 
@@ -1609,6 +1840,10 @@ def _billing_evidence_fingerprint(evidence: tuple[ReviewExecutionBillingEvidence
         for item in evidence
     )
     return tuple(sorted(payloads, key=lambda payload: str(payload[3]["billing_key"])))
+
+
+def _classification_evidence_fingerprint(evidence: ReviewClassificationEvidence) -> Any:
+    return _canonical_mapping_fingerprint(classification_evidence_payload(evidence))
 
 
 def _accepted_billing_evidence_fingerprint(

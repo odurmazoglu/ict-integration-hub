@@ -16,6 +16,7 @@ class RuleEvaluationResult(ApplicationDTO):
     partner_match: PartnerMatchResult | None = None
     product_match: InvoiceProductMatchResult | None = None
     tax_match: InvoiceTaxMappingResult | None = None
+    classification_result: object | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
 
@@ -44,6 +45,7 @@ class DecisionResult(ApplicationDTO):
     vendor_bill_id: int | None = None
     review_required: bool = False
     review_reasons: tuple[ManualReviewReason, ...] = field(default_factory=tuple)
+    classification_result: object | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     duration: float = 0.0

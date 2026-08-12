@@ -37,6 +37,8 @@
 - Odoo Decision Rule authoring contracts for the Studio-owned `IPP Decision Rule` model, centralized field mapping, immutable Odoo-to-Hub rule mapping, and read-only canonical `DecisionRuleRepository` port
 - Read-only Odoo Decision Rule repository for active company/shared `x_ipp_decision_rule` rows with exact ERP ID validation, canonical rule DTO mapping, deterministic ordering, and no rule execution
 - Deterministic inbound Invoice Classification Engine for canonical invoice context, Odoo-authored canonical rules, exact match semantics, review-required status, and conflict evidence without ERP execution
+- Inbound import classification integration from `InternalInvoice` plus deterministic match evidence through `DecisionRuleRepository` and `InvoiceDecisionRuleEngine` into immutable import/decision result evidence, without ERP execution changes
+- Durable Workbench review classification evidence pinning for exact company/review/version replay, explicit `NO_MATCH`, conflict evidence, and no historical reclassification from current Odoo rules
 
 ## Next Milestones
 
@@ -93,7 +95,7 @@
 
 ### 9. Rule Engine and Decision Engine
 
-- explicit integration plan for configurable classification evidence into import orchestration and Workbench projection
+- Odoo projection of pinned Workbench classification evidence
 - workflow recommendation
 - priority and conflict handling
 - full audit trail

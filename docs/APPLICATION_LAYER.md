@@ -103,6 +103,8 @@ Current foundation contracts:
 - `ExecutionApproval`
 - `ExecutionSourceInvoice`
 - `ExecutionSourceInvoiceReader`
+- `ReviewClassificationEvidence`
+- `ReviewClassificationEvidenceReader`
 - `ReviewExecutionBillingEvidence`
 - `ReviewBillingEvidenceReader`
 - `VendorBillExecutionStrategy`
@@ -186,9 +188,31 @@ The adapter remains read-only configuration ingestion. It does not evaluate rule
 
 `InvoiceDecisionRuleEngine` is an application-layer classifier. It consumes only `InvoiceClassificationContext` and canonical `InvoiceDecisionRule` tuples, evaluates all enabled rules in the existing `order_invoice_decision_rules(...)` order, and returns `InvoiceClassificationResult` with `MATCHED`, `NO_MATCH`, `CONFLICT`, or `REVIEW_REQUIRED`.
 
+The current inbound integration point is inside `DecisionEngine` after the legacy `RuleEngine.evaluate(...)` call and before workflow strategy resolution. At that point the Hub has the canonical `InternalInvoice`, requested `company_id`, deterministic partner match result, and deterministic product match result. `build_invoice_classification_context(...)` builds context only from that already-available evidence:
+
+```text
+Uyumsoft read-only ingestion
+  -> UBL parser
+  -> InternalInvoice
+  -> ImportInvoiceUseCase
+  -> DeterministicRuleEngine matching/tax evidence
+  -> build_invoice_classification_context(...)
+  -> DecisionRuleRepository.list_invoice_decision_rules(company_id=...)
+  -> InvoiceDecisionRuleEngine
+  -> InvoiceClassificationResult
+  -> DecisionResult / ImportInvoiceResult evidence
+  -> ReviewClassificationEvidence at review creation
+```
+
+Unavailable optional evidence remains absent. Purchase-order presence is not inferred in this slice, and rules requiring unavailable evidence do not match.
+
 The classifier groups winning rules by the existing specificity and priority semantics. Equal-winning rules with equivalent action fingerprints produce one deterministic selected rule plus rule evidence; equal-winning rules with incompatible action fingerprints produce conflict evidence. A rule with `require_review=true` still produces deterministic classification evidence, but the result status is `REVIEW_REQUIRED`.
 
-This slice stops at classification evidence. It does not call Odoo, call Uyumsoft, use SQLAlchemy, read historical decisions, create Workbench records, project to Odoo, execute workflows, create Vendor Bills, create customer invoices, write ERP records, call runtime execution, use AI, or use fuzzy matching. The existing `DeterministicRuleEngine` remains the current `RuleEngine` port implementation for direct Vendor Bill and Manual Review behavior until a later explicit integration plan.
+The import/decision result path may still carry classification evidence in memory until a review is created. At review creation, `ReviewClassificationEvidence` pins the exact classification result to `company_id`, `review_id`, and `review_version` in Hub persistence. Creation replay is idempotent only when the incoming classification evidence has the same canonical fingerprint as the persisted review-version evidence. Changed evidence fails closed and never overwrites historical evidence.
+
+Historical review classification is never recomputed from the latest Odoo Decision Rules. `ReviewClassificationEvidenceReader` is an application port for exact review/company/version reads; `SqlAlchemyReviewClassificationEvidenceReader` implements it in persistence and does not call rule repositories, classifiers, Odoo, Uyumsoft, ERP writers, providers, or runtime execution.
+
+This slice stops at durable classification evidence. It does not call Odoo directly, call Uyumsoft again, project to Odoo, execute workflows from classification, create Vendor Bills from classification, create customer invoices, write ERP records, call runtime execution, use AI, or use fuzzy matching. The existing `DeterministicRuleEngine` remains the current `RuleEngine` port implementation for direct Vendor Bill and Manual Review behavior; `DecisionEngine` still resolves workflow strategy from the legacy rule result until a later explicit migration plan.
 
 ## Odoo Workbench Decision Submission
 

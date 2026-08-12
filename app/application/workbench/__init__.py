@@ -51,7 +51,11 @@ from app.application.workbench.erp_references import (
     SalesTaxReference,
     SalesTaxReferenceRepository,
 )
-from app.application.workbench.evidence import ReviewExecutionBillingEvidence, ReviewExecutionEvidence
+from app.application.workbench.evidence import (
+    ReviewClassificationEvidence,
+    ReviewExecutionBillingEvidence,
+    ReviewExecutionEvidence,
+)
 from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateDataError,
@@ -76,6 +80,7 @@ from app.application.workbench.odoo_submission_use_cases import (
 from app.application.workbench.ports import (
     ReviewBillingEvidenceReader,
     ReviewBillingEvidenceWriter,
+    ReviewClassificationEvidenceReader,
     ReviewDecisionWriter,
     ReviewExecutionEvidenceReader,
     ReviewItemWriter,
@@ -134,6 +139,8 @@ __all__ = [
     "ReviewDecisionWriter",
     "ReviewBillingEvidenceReader",
     "ReviewBillingEvidenceWriter",
+    "ReviewClassificationEvidence",
+    "ReviewClassificationEvidenceReader",
     "ReviewExecutionBillingEvidence",
     "ReviewExecutionEvidence",
     "ReviewExecutionEvidenceReader",
