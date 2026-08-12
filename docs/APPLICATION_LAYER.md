@@ -164,6 +164,22 @@ list_invoice_decision_rules(company_id=...) -> tuple[InvoiceDecisionRule, ...]
 
 The port returns only canonical immutable rule contracts. It does not persist, write, cache, evaluate, expose Odoo payloads, or depend on SQLAlchemy, Odoo transport, XML-RPC, JSON-RPC, AI, fuzzy matching, or rule execution.
 
+`OdooDecisionRuleRepository` implements this port in infrastructure. It reads active `IPP Decision Rule` rows for the requested company plus shared rows with no company, consumes Many2one values by exact ERP ID, resolves currency codes through read-only ERP reference data, maps workflow from stored selection values into closed `WorkflowType`, rejects duplicate rule code/version pairs, and returns deterministically ordered `InvoiceDecisionRule` contracts. It ignores Odoo display labels and never exposes raw Odoo dictionaries to the application layer.
+
+The infrastructure adapter boundary is:
+
+```text
+Odoo read
+  -> raw adapter data
+  -> Odoo mapper
+  -> OdooDecisionRuleAuthoringRecord
+  -> InvoiceDecisionRule
+```
+
+The repository remains orchestration-focused: build the deterministic company/shared Odoo domain, call the read-only adapter, delegate mapping, validate duplicate identities, and order the canonical rules. Raw row parsing and currency resolution stay inside the Odoo infrastructure mapper, not in application/domain contracts.
+
+The adapter remains read-only configuration ingestion. It does not evaluate rules, classify invoices, call Workbench services, touch runtime execution, mutate Odoo, call providers, use SQLAlchemy, use AI, or use fuzzy matching.
+
 ## Odoo Workbench Decision Submission
 
 `SubmitOdooWorkbenchCandidateUseCase` connects the read-only Odoo Workbench candidate reader port to the existing Hub decision submission use case:
