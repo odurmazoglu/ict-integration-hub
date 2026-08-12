@@ -70,6 +70,8 @@ from app.application.use_cases import ImportInvoiceUseCase, ImportSession, UseCa
 from app.application.workbench import (
     BusinessContextDecision,
     LineResolution,
+    ReviewClassificationEvidence,
+    ReviewClassificationEvidenceReader,
     ReviewDecisionAcknowledgement,
     ReviewDecisionCommand,
     ReviewDecisionType,
@@ -162,6 +164,8 @@ __all__ = [
     "ReviewDecisionCommand",
     "ReviewDecisionType",
     "ReviewDecisionWriter",
+    "ReviewClassificationEvidence",
+    "ReviewClassificationEvidenceReader",
     "ReviewExecutionEvidence",
     "ReviewExecutionEvidenceReader",
     "ReviewDetailQuery",

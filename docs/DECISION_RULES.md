@@ -119,7 +119,7 @@ Description matching is a case-normalized substring check against the canonical 
 
 The existing `DeterministicRuleEngine` still performs the current direct Vendor Bill and Manual Review behavior. `InvoiceDecisionRuleEngine` is a separate configurable-rule classifier in this slice. It does not change `DeterministicRuleEngine`, `DecisionEngine`, Workbench submission, execution planning, runtime persistence, Odoo adapters, or ERP writers.
 
-Future work may connect classification evidence into import orchestration or Workbench projection with an explicit migration plan. This slice stops at deterministic classification evidence.
+Decision classification remains separate from ERP execution. It can be carried through import orchestration and pinned to a Workbench review version, but it does not make workflow execution decisions final by itself.
 
 ## Odoo Configuration Source
 
@@ -132,3 +132,11 @@ The adapter is configuration ingestion only. It does not evaluate rules, classif
 Inbound import classification is integrated after the existing deterministic `RuleEngine` produces canonical match evidence and before `DecisionEngine` resolves the current workflow strategy. The classifier loads rules through the `DecisionRuleRepository` port by exact `company_id`; application orchestration does not instantiate `OdooDecisionRuleRepository`.
 
 The classification result is carried as immutable evidence on `DecisionResult` and `ImportInvoiceResult`. `NO_MATCH` and `CONFLICT` remain safe review evidence; they do not cause the Hub to guess a workflow. `MATCHED` and `REVIEW_REQUIRED` preserve matched rule identity, workflow evidence, classification code, review flag, and business-context flag. Classification evidence does not execute ERP business processes.
+
+## Review-Version Evidence
+
+When a Workbench review version is created with classification evidence, Hub persists `ReviewClassificationEvidence` in `workbench_review_classification_evidence` in the same repository-owned transaction as review creation. The row is keyed by exact `company_id`, `review_id`, and `review_version` and stores schema version, classification status, matched rule identity when present, canonical workflow evidence, canonical classification code, review/business-context flags, and deterministic conflict rule evidence.
+
+`NO_MATCH` is persisted as explicit evidence. Missing evidence is not interpreted as `NO_MATCH`.
+
+Historical review classification is never recomputed from the latest Odoo Decision Rules. Replay and later projection must read the pinned review-version evidence from Hub persistence. Identical replay is idempotent; changed matched rule data, workflow, classification code, review flags, or conflict rule evidence fails closed and does not overwrite history.

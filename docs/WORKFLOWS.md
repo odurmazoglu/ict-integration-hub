@@ -64,10 +64,13 @@ Uyumsoft
   -> Odoo-authored canonical rules
   -> deterministic classification
   -> DecisionResult / ImportInvoiceResult evidence
-  -> later Workbench/ERP execution slices
+  -> ReviewClassificationEvidence persisted with review version
+  -> later Workbench projection/manual decision/execution slices
 ```
 
 Classification evidence does not replace workflow selection in this slice. `DecisionEngine` still uses the existing `RuleEngine` workflow result to resolve the executable strategy. Classification itself does not create Vendor Bills, write ERP records, start runtime execution, or create Workbench projections.
+
+The persisted review-version evidence is the historical source of truth for classification. Later rule configuration changes in Odoo must not alter the classification attached to an existing review version; replay and projection read `workbench_review_classification_evidence` instead of rerunning the classifier.
 
 The current Rule Engine implementation contains one concrete workflow rule:
 

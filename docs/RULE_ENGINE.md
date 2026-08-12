@@ -89,6 +89,8 @@ Winner selection evaluates all enabled rules, orders them with `order_invoice_de
 
 Classification does not itself perform ERP execution, create Workbench records, write Odoo, call providers, or alter runtime execution. `DecisionEngine` currently carries `InvoiceClassificationResult` on `DecisionResult` while continuing to resolve the executable workflow from the existing `RuleEngine` result.
 
+When orchestration creates a Workbench review, the already-computed classification result can be transformed into `ReviewClassificationEvidence` and persisted in `workbench_review_classification_evidence` with the review version. Historical review classification is read from that pinned evidence and is never recomputed from the latest Odoo Decision Rules. Missing persisted evidence and a valid `NO_MATCH` result are distinct states.
+
 ## Implemented Rule: RULE-MANUAL-REVIEW-001
 
 `RULE-MANUAL-REVIEW-001` selects `WorkflowType.MANUAL_REVIEW` when deterministic matching or mapping completes safely but finds business data that requires human review.
