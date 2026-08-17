@@ -124,3 +124,63 @@ async def test_search_read_rejects_non_allowlisted_model() -> None:
 
     with pytest.raises(ConnectorError):
         await client.search_read(model="account.payment", domain=[], fields=["id"])
+
+
+async def test_create_studio_record_uses_configured_studio_model() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/x_ipp_import_workbench/create"
+        assert b"x_studio_review_id" in request.content
+        return httpx.Response(200, json=42)
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    assert (
+        await client.create_studio_record(
+            model="x_ipp_import_workbench",
+            values={"x_studio_review_id": "review-1"},
+        )
+        == 42
+    )
+
+
+async def test_write_studio_record_uses_configured_studio_model_and_id_payload() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/x_ipp_import_workbench/write"
+        assert b'"ids":[42]' in request.content
+        assert b'"values":{"x_studio_review_version":2}' in request.content
+        return httpx.Response(200, json=True)
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    assert await client.write_studio_record(
+        model="x_ipp_import_workbench",
+        record_id=42,
+        values={"x_studio_review_version": 2},
+    )
+
+
+async def test_studio_writes_reject_non_studio_models() -> None:
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=True))),
+    )
+
+    with pytest.raises(ConnectorError):
+        await client.create_studio_record(model="account.move", values={"name": "unsafe"})
+    with pytest.raises(ConnectorError):
+        await client.write_studio_record(model="res.partner", record_id=1, values={"name": "unsafe"})

@@ -99,7 +99,7 @@ Implemented contract types:
 - `WorkbenchProjection`: ERP-neutral projection of one Hub-owned review item for a future UI projection store
 - `OdooWorkbenchDecisionCandidate`: candidate decision read from the future Odoo Studio projection before Hub acceptance
 - `ProjectionPublishResult`: safe result for future projection publish or acknowledgement writes
-- `WorkbenchProjectionPublisher`: application port for future projection publishing and acknowledgement
+- `WorkbenchProjectionPublisher`: application port for Odoo Workbench projection publishing and acknowledgement
 - `WorkbenchDecisionCandidateReader`: application port for future candidate decision reads
 
 `ReviewDecisionCommand`, the authenticated Workbench decision API, decision persistence, idempotency comparison, and `OdooWorkbenchDecisionCandidate` use `business_context_allocations: BusinessContextAllocationSet | None`. The active write path no longer accepts legacy `business_context`, and it does not accept both fields. Existing historical decision rows with legacy `business_context` are not rewritten; the legacy object remains legacy evidence because lossless allocation conversion would require amounts that were never captured.
@@ -427,6 +427,14 @@ Mapping is deployment configuration, not application contract. `OdooWorkbenchFie
 Monetary and percentage values are parsed into `Decimal` without float arithmetic. Equivalent textual forms such as `259.2000` and `259.20` remain the same business value inside the immutable allocation contract; invalid, infinite, or boolean numeric values are rejected with safe errors. The reader does not infer allocation completeness from totals: completeness must come from an explicit mapped parent field or a configured fixed completeness value.
 
 `customer_invoice_id` is optional, non-unique evidence for an existing outgoing customer invoice or refund. If its field mapping is absent, the reader sets it to `None`. If it is present, the value is parsed from a Many2one or integer identifier only; the reader does not validate move type and does not create customer invoices. Multiple allocations and multiple accepted decisions may reference the same customer invoice.
+
+## Odoo Projection Publisher
+
+`OdooWorkbenchProjectionPublisher` implements the publisher port for the configured Odoo Studio parent model. It uses exact company-scoped lookup by `review_id` and `company_id`, creates a projection row when none exists, updates one existing row when exactly one exists, and rejects duplicates as ambiguity. Refresh payloads contain Hub-owned display fields only and preserve Odoo-authored decision fields, selected workflow, comments, readiness, audit fields, idempotency key, and allocation children.
+
+The publisher projects persisted classification evidence through `WorkbenchClassificationProjectionService` when supplied. It does not re-run decision rules. `x_studio_invoice_total` is the canonical invoice total mapping; legacy `x_studio_total_amount` is display-only and not used for allocation reconciliation.
+
+Odoo standard Sales/Invoicing remains the preferred business surface for customer billing. The Workbench allocation model remains supported because it captures supplier-invoice integration and traceability context, not because Hub owns a replacement Odoo billing workflow.
 
 See [Odoo Workbench Projection](ODOO_WORKBENCH_PROJECTION.md) and [ADR-0011](adr/ADR-0011-odoo-online-import-workbench-projection.md).
 

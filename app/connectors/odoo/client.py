@@ -78,6 +78,26 @@ class OdooJson2Client:
             return int(result["id"])
         raise ConnectorError("Odoo account.move create returned an unexpected response.")
 
+    async def create_studio_record(self, *, model: str, values: dict[str, Any]) -> int:
+        if not _is_studio_model_allowed(model):
+            raise ConnectorError("Odoo Studio write model is not allowed.")
+        result = await self._post_json(f"/json/2/{model}/create", values)
+        if isinstance(result, int):
+            return result
+        if isinstance(result, dict) and isinstance(result.get("id"), int):
+            return int(result["id"])
+        raise ConnectorError("Odoo Studio create returned an unexpected response.")
+
+    async def write_studio_record(self, *, model: str, record_id: int, values: dict[str, Any]) -> bool:
+        if not _is_studio_model_allowed(model):
+            raise ConnectorError("Odoo Studio write model is not allowed.")
+        if type(record_id) is not int or record_id <= 0:
+            raise ConnectorError("Odoo Studio record id is invalid.")
+        result = await self._post_json(f"/json/2/{model}/write", {"ids": [record_id], "values": values})
+        if isinstance(result, bool):
+            return result
+        raise ConnectorError("Odoo Studio write returned an unexpected response.")
+
     async def search_read(
         self,
         *,
@@ -141,3 +161,7 @@ class OdooJson2Client:
 
 def _is_read_only_model_allowed(model: str) -> bool:
     return model in READ_ONLY_MODELS or model.startswith(("x_", "x_studio_"))
+
+
+def _is_studio_model_allowed(model: str) -> bool:
+    return model.startswith(("x_", "x_studio_"))

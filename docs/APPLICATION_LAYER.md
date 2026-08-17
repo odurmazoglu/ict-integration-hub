@@ -520,7 +520,7 @@ Current contracts:
 - `WorkbenchProjection`: ERP-neutral projection of one Hub-owned review item for future Odoo Studio display
 - `OdooWorkbenchDecisionCandidate`: candidate decision read from the future Odoo Studio projection before Hub acceptance
 - `ProjectionPublishResult`: immutable result for future projection publish and acknowledgement operations
-- `WorkbenchProjectionPublisher`: port for future projection publishing and acknowledgement writes
+- `WorkbenchProjectionPublisher`: port for projection publishing and acknowledgement writes
 - `WorkbenchDecisionCandidateReader`: port for ready-decision reads from an ERP UI projection surface
 - `OdooWorkbenchDecisionCandidateReader`: read-only Odoo JSON-2 adapter for configured Studio projection candidate and allocation child models
 
@@ -565,7 +565,11 @@ Decision idempotency is scoped by `(company_id, idempotency_key)`. An identical 
 
 The current API adapter exposes authenticated FastAPI routes for listing review items, retrieving one review item, and submitting explicit user decisions. These routes only construct existing application queries and commands from trusted `RequestContext` identity and HTTP boundary schemas. They do not execute workflows, write ERP records, create Vendor Bills, create rules, call AI, or perform fuzzy matching.
 
-The Odoo Online projection contracts exist because Odoo 19 Online cannot install custom Python modules. The current Odoo adapter implements read-only candidate ingestion behind `WorkbenchDecisionCandidateReader`: it reads a configured parent Studio projection model by exact `review_id` and `company_id`, reads allocation child rows by parent Odoo record id, and maps them into immutable `OdooWorkbenchDecisionCandidate` and `BusinessContextAllocationSet` values. It treats decision-ready `false` as no ready candidate, rejects malformed readiness as data error, detects duplicate parent records with `limit=2`, parses Decimal values without float arithmetic, and requires allocation completeness from an explicit mapped field or configured fixed value. It does not publish projections, acknowledge Hub processing results, persist accepted decisions, execute workflows, or write Odoo records. Future projection publishing and acknowledgement writes must remain behind `WorkbenchProjectionPublisher`.
+The Odoo Online projection contracts exist because Odoo 19 Online cannot install custom Python modules. The current Odoo adapter implements Hub-owned projection publishing behind `WorkbenchProjectionPublisher`: it looks up configured Studio parent rows by exact `review_id` and `company_id`, creates one row when none exists, updates only Hub-owned projection fields when exactly one exists, rejects duplicates with `limit=2`, and can project acknowledgement-owned status/version fields. Projection refresh preserves Odoo-authored decision fields and allocation child rows.
+
+The same adapter layer implements read-only candidate ingestion behind `WorkbenchDecisionCandidateReader`: it reads a configured parent Studio projection model by exact `review_id` and `company_id`, reads allocation child rows by parent Odoo record id, and maps them into immutable `OdooWorkbenchDecisionCandidate` and `BusinessContextAllocationSet` values. It treats decision-ready `false` as no ready candidate, rejects malformed readiness as data error, detects duplicate parent records with `limit=2`, parses Decimal values without float arithmetic, and requires allocation completeness from an explicit mapped field or configured fixed value. It maps current Odoo labels explicitly and rejects unsupported values such as `Request Investigation`. It does not persist accepted decisions, execute workflows, create ERP documents, change Odoo Studio schema, call providers, use AI, or perform fuzzy matching.
+
+Odoo standard Sales/Invoicing remains the preferred surface for customer billing. Hub Business Context allocation captures integration and traceability context for incoming supplier invoices; it is not a replacement billing workflow.
 
 The API response envelope is consistent across Workbench routes:
 
