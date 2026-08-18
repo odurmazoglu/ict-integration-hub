@@ -57,6 +57,52 @@ def test_app_has_no_unwired_import_invoice_use_case_construction_paths() -> None
     assert construction_sites == ["app/composition/imports.py"]
 
 
+def test_no_external_import_trigger_invokes_import_invoice_composition_yet() -> None:
+    runtime_paths = [
+        Path("app/main.py"),
+        *Path("app/api").rglob("*.py"),
+        *Path("app/services").rglob("*.py"),
+        *Path("app/connectors").rglob("*.py"),
+        *Path("scripts").rglob("*.py"),
+    ]
+
+    matches: list[str] = []
+    for path in runtime_paths:
+        if "__pycache__" in path.parts:
+            continue
+        source = path.read_text()
+        if "build_import_invoice_use_case" in source:
+            matches.append(path.as_posix())
+
+    assert matches == []
+
+
+def test_docs_state_external_import_trigger_wiring_remains_follow_up() -> None:
+    docs_paths = [
+        Path("docs/IMPORT_WORKBENCH.md"),
+        Path("docs/APPLICATION_LAYER.md"),
+        Path("docs/ODOO_WORKBENCH_PROJECTION.md"),
+    ]
+    if not all(path.exists() for path in docs_paths):
+        pytest.skip("Documentation files are not copied into the runtime Docker image.")
+
+    import_workbench = docs_paths[0].read_text()
+    application_layer = docs_paths[1].read_text()
+    projection = docs_paths[2].read_text()
+    readme = Path("README.md").read_text()
+
+    assert (
+        "no externally reachable HTTP route, CLI command, scheduled job, bootstrap path, or Uyumsoft inbound handler"
+        in import_workbench
+    )
+    assert "production-ready composition and runtime-capable wiring, but it does not yet attach" in import_workbench
+    assert "attaching it to an external normalized invoice import trigger remains follow-up" in application_layer
+    assert "No externally reachable import trigger currently calls that composed use case" in projection
+    assert (
+        "Externally reachable production import trigger attachment for `build_import_invoice_use_case(...)`" in readme
+    )
+
+
 class FakeSession:
     def commit(self) -> None:
         pass
