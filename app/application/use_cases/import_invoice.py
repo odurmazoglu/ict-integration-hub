@@ -16,12 +16,20 @@ from app.application.workbench import (
     ReviewItem,
     ReviewItemCreationService,
     ReviewStatus,
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchCandidateReadError,
     WorkbenchProjection,
     WorkbenchProjectionPublisher,
+    WorkbenchProjectionPublishError,
 )
 from app.domain.invoice import InternalInvoice
 
 WORKBENCH_PROJECTION_FAILURE_WARNING = "Odoo Workbench projection publish failed; Hub review remains authoritative."
+_BEST_EFFORT_PROJECTION_EXCEPTIONS = (
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchCandidateReadError,
+    WorkbenchProjectionPublishError,
+)
 
 
 class ImportInvoiceValidationError(ApplicationError):
@@ -149,7 +157,7 @@ def _persist_and_publish_review_if_required(
         review_item_creation_service=review_item_creation_service,
     )
     if unit_of_work is not None:
-        unit_of_work.commit()
+        _translate_infrastructure(unit_of_work.commit, "Workbench review persistence commit failed.")
     if workbench_projection_publisher is None:
         return persisted, ()
     return persisted, _publish_workbench_projection(
@@ -232,7 +240,7 @@ def _publish_workbench_projection(
 ) -> tuple[str, ...]:
     try:
         result = publisher.publish_projection(_projection_from_review_item(item, company_id=company_id))
-    except Exception:
+    except _BEST_EFFORT_PROJECTION_EXCEPTIONS:
         return (WORKBENCH_PROJECTION_FAILURE_WARNING,)
     return result.warnings
 

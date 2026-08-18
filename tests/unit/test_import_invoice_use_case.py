@@ -25,6 +25,11 @@ from app.application.use_cases import (
     ImportInvoiceValidationError,
 )
 from app.application.workbench import ReviewClassificationEvidence, ReviewItem
+from app.application.workbench.exceptions import (
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchCandidateReadError,
+    WorkbenchProjectionPublishError,
+)
 from app.application.workbench.projection import ProjectionPublishResult, WorkbenchProjection
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party
@@ -200,11 +205,22 @@ async def test_review_required_import_persists_review_before_projection_publish(
 
 
 @pytest.mark.asyncio
-async def test_projection_failure_is_observable_without_rolling_back_persisted_review() -> None:
+@pytest.mark.parametrize(
+    "projection_error",
+    (
+        WorkbenchCandidateReadError("Odoo Workbench projection lookup failed."),
+        WorkbenchProjectionPublishError("Odoo Workbench projection publish failed."),
+        WorkbenchCandidateAmbiguityError("Odoo Workbench projection lookup returned multiple records."),
+    ),
+)
+@pytest.mark.asyncio
+async def test_expected_projection_failures_are_observable_without_rolling_back_persisted_review(
+    projection_error: Exception,
+) -> None:
     order: list[str] = []
     review_service = RecordingReviewItemCreationService(order=order)
     unit_of_work = RecordingUnitOfWork(order=order)
-    publisher = RecordingProjectionPublisher(order=order, exc=SafeInfrastructureError("Odoo unavailable."))
+    publisher = RecordingProjectionPublisher(order=order, exc=projection_error)
     use_case = _use_case(
         decision_engine=FakeDecisionEngine(_review_required_decision(classification_result=_matched_classification())),
         review_item_creation_service=review_service,
@@ -221,6 +237,47 @@ async def test_projection_failure_is_observable_without_rolling_back_persisted_r
     assert result.status == "review_required"
     assert result.review_id == review_service.created_item.review_id
     assert result.warnings == ("Manual review required.", WORKBENCH_PROJECTION_FAILURE_WARNING)
+
+
+@pytest.mark.parametrize("projection_error", (RuntimeError("bug"), TypeError("wrong shape")))
+@pytest.mark.asyncio
+async def test_unexpected_projection_errors_are_not_swallowed(projection_error: Exception) -> None:
+    order: list[str] = []
+    review_service = RecordingReviewItemCreationService(order=order)
+    unit_of_work = RecordingUnitOfWork(order=order)
+    publisher = RecordingProjectionPublisher(order=order, exc=projection_error)
+    use_case = _use_case(
+        decision_engine=FakeDecisionEngine(_review_required_decision(classification_result=_matched_classification())),
+        review_item_creation_service=review_service,
+        workbench_projection_publisher=publisher,
+        unit_of_work=unit_of_work,
+    )
+
+    with pytest.raises(type(projection_error)):
+        await use_case.execute(ImportInvoiceCommand(invoice=_invoice(), idempotency_key="ettn:INV-ETTN", company_id=7))
+
+    assert order == ["persist", "commit", "publish"]
+
+
+@pytest.mark.asyncio
+async def test_commit_failure_is_translated_and_skips_projection_publish() -> None:
+    order: list[str] = []
+    review_service = RecordingReviewItemCreationService(order=order)
+    unit_of_work = RecordingUnitOfWork(order=order, commit_exc=SafeInfrastructureError("Database commit failed."))
+    publisher = RecordingProjectionPublisher(order=order)
+    use_case = _use_case(
+        decision_engine=FakeDecisionEngine(_review_required_decision(classification_result=_matched_classification())),
+        review_item_creation_service=review_service,
+        workbench_projection_publisher=publisher,
+        unit_of_work=unit_of_work,
+    )
+
+    with pytest.raises(ImportInvoiceInfrastructureError) as exc_info:
+        await use_case.execute(ImportInvoiceCommand(invoice=_invoice(), idempotency_key="ettn:INV-ETTN", company_id=7))
+
+    assert exc_info.value.safe_message == "Database commit failed."
+    assert order == ["persist", "commit"]
+    assert publisher.projections == []
 
 
 @pytest.mark.asyncio
@@ -358,14 +415,17 @@ class RecordingReviewItemCreationService:
 
 
 class RecordingUnitOfWork:
-    def __init__(self, *, order: list[str] | None = None) -> None:
+    def __init__(self, *, order: list[str] | None = None, commit_exc: Exception | None = None) -> None:
         self.order = order
+        self.commit_exc = commit_exc
         self.commits = 0
         self.rollbacks = 0
 
     def commit(self) -> None:
         self.order.append("commit") if self.order is not None else None
         self.commits += 1
+        if self.commit_exc is not None:
+            raise self.commit_exc
 
     def rollback(self) -> None:
         self.order.append("rollback") if self.order is not None else None

@@ -484,7 +484,7 @@ Projection refresh does not overwrite Odoo-authored decision input fields, selec
 
 The publisher can use `WorkbenchClassificationProjectionService` to read persisted `ReviewClassificationEvidence` for the review version being projected. It does not evaluate current rules and does not derive a fake matched rule for `NO_MATCH`, `REVIEW_REQUIRED`, or `CONFLICT` states.
 
-Runtime import composition enables publishing only when `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=true`. The Hub review and classification evidence are committed first, then `publish_projection(...)` runs. Odoo unavailable, timeout, repository, duplicate projection, or mapping-data failures return a safe import warning and leave the Hub review authoritative for later manual reconciliation. No background retry queue or scheduler exists yet.
+Runtime import composition enables publishing only when `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=true`. The Hub review and classification evidence are committed first, then `publish_projection(...)` runs. Odoo lookup/read failures, repository create/write failures translated by the adapter, and duplicate projection ambiguity return a safe import warning and leave the Hub review authoritative for later manual reconciliation. Unexpected publisher bugs and Hub contract/data-integrity failures are not swallowed. No background retry queue or scheduler exists yet.
 
 Review reasons and warnings remain structured in application DTOs. The Odoo adapter renders the current HTML Studio fields with escaped dynamic text and deterministic badge markup only.
 

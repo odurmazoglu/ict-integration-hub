@@ -93,6 +93,12 @@ class WorkbenchCandidateAmbiguityError(WorkbenchCandidateReadError):
     error_category = "workbench_candidate_ambiguity"
 
 
+class WorkbenchProjectionPublishError(ApplicationError):
+    """Safe error raised when publishing a Workbench projection to an ERP UI fails."""
+
+    error_category = "workbench_projection_publish_error"
+
+
 class WorkbenchSubmissionOrchestrationError(ApplicationError):
     """Safe base error for Odoo Workbench decision submission orchestration failures."""
 

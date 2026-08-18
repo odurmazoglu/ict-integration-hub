@@ -13,6 +13,7 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateReadError,
     WorkbenchContractError,
+    WorkbenchProjectionPublishError,
 )
 from app.application.workbench.projection import (
     ProjectionPublishResult,
@@ -231,11 +232,17 @@ class OdooWorkbenchProjectionPublisher:
         records = self._lookup(review_id=projection.review_id, company_id=projection.company_id)
         payload = self._projection_payload(projection)
         if not records:
-            record_id = self._adapter.create(
-                model=self._mapping.model,
-                values={self._mapping.review_id: projection.review_id, self._mapping.company_id: projection.company_id}
-                | payload,
-            )
+            try:
+                record_id = self._adapter.create(
+                    model=self._mapping.model,
+                    values={
+                        self._mapping.review_id: projection.review_id,
+                        self._mapping.company_id: projection.company_id,
+                    }
+                    | payload,
+                )
+            except ErpRepositoryError as exc:
+                raise WorkbenchProjectionPublishError(SAFE_PROJECTION_WRITE_ERROR) from exc
             return ProjectionPublishResult(
                 review_id=projection.review_id,
                 odoo_record_id=record_id,
@@ -245,7 +252,10 @@ class OdooWorkbenchProjectionPublisher:
             )
 
         record_id = _required_record_id(records[0])
-        self._adapter.write(model=self._mapping.model, record_id=record_id, values=payload)
+        try:
+            self._adapter.write(model=self._mapping.model, record_id=record_id, values=payload)
+        except ErpRepositoryError as exc:
+            raise WorkbenchProjectionPublishError(SAFE_PROJECTION_WRITE_ERROR) from exc
         return ProjectionPublishResult(
             review_id=projection.review_id,
             odoo_record_id=record_id,
@@ -268,7 +278,10 @@ class OdooWorkbenchProjectionPublisher:
             self._mapping.review_version: acknowledgement.version,
         }
         _put_optional(values, self._mapping.trace_id, trace_id)
-        self._adapter.write(model=self._mapping.model, record_id=odoo_record_id, values=values)
+        try:
+            self._adapter.write(model=self._mapping.model, record_id=odoo_record_id, values=values)
+        except ErpRepositoryError as exc:
+            raise WorkbenchProjectionPublishError(SAFE_PROJECTION_WRITE_ERROR) from exc
         return ProjectionPublishResult(
             review_id=acknowledgement.review_id,
             odoo_record_id=odoo_record_id,
