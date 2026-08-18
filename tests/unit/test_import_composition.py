@@ -9,7 +9,7 @@ from app.application.use_cases import ImportInvoiceUseCase
 from app.application.workbench import ReviewItemCreationService
 from app.application.workbench.classification_projection import WorkbenchClassificationProjectionService
 from app.application.workflow import WorkflowType
-from app.composition import build_import_invoice_use_case
+from app.composition import build_import_invoice_use_case, build_uyumsoft_canonical_invoice_importer
 from app.core.config import Settings
 from app.erp.odoo import OdooWorkbenchProjectionPublisher
 from app.persistence import SqlAlchemyUnitOfWork
@@ -57,27 +57,16 @@ def test_app_has_no_unwired_import_invoice_use_case_construction_paths() -> None
     assert construction_sites == ["app/composition/imports.py"]
 
 
-def test_no_external_import_trigger_invokes_import_invoice_composition_yet() -> None:
-    runtime_paths = [
-        Path("app/main.py"),
-        *Path("app/api").rglob("*.py"),
-        *Path("app/services").rglob("*.py"),
-        *Path("app/connectors").rglob("*.py"),
-        *Path("scripts").rglob("*.py"),
-    ]
+def test_uyumsoft_sync_route_uses_canonical_importer_dependency() -> None:
+    route_source = Path("app/api/routers/uyumsoft_sync.py").read_text()
+    dependency_source = Path("app/api/dependencies.py").read_text()
 
-    matches: list[str] = []
-    for path in runtime_paths:
-        if "__pycache__" in path.parts:
-            continue
-        source = path.read_text()
-        if "build_import_invoice_use_case" in source:
-            matches.append(path.as_posix())
-
-    assert matches == []
+    assert "UyumsoftCanonicalImporterDep" in route_source
+    assert "canonical_importer=canonical_importer" in route_source
+    assert "build_uyumsoft_canonical_invoice_importer" in dependency_source
 
 
-def test_docs_state_external_import_trigger_wiring_remains_follow_up() -> None:
+def test_docs_state_uyumsoft_external_import_trigger_is_live() -> None:
     docs_paths = [
         Path("docs/IMPORT_WORKBENCH.md"),
         Path("docs/APPLICATION_LAYER.md"),
@@ -91,16 +80,41 @@ def test_docs_state_external_import_trigger_wiring_remains_follow_up() -> None:
     projection = docs_paths[2].read_text()
     readme = Path("README.md").read_text()
 
-    assert (
-        "no externally reachable HTTP route, CLI command, scheduled job, bootstrap path, or Uyumsoft inbound handler"
-        in import_workbench
+    assert "Uyumsoft inbound sync endpoint" in import_workbench
+    assert "build_import_invoice_use_case(...)" in import_workbench
+    assert "ImportInvoiceUseCase.execute(...)" in application_layer
+    assert "live Uyumsoft inbound import attachment" in projection
+    assert "Uyumsoft inbound sync now continues through the canonical import pipeline" in readme
+
+
+def test_uyumsoft_importer_composition_preserves_workbench_feature_flag_false() -> None:
+    importer = build_uyumsoft_canonical_invoice_importer(
+        session=FakeSession(),
+        settings=Settings(odoo_workbench_projection_publish_enabled=False),
+        uyumsoft_client=FakeUyumsoftClient(),
+        storage=FakeStorage(),
+        odoo_client=FakeOdooClient(),
     )
-    assert "production-ready composition and runtime-capable wiring, but it does not yet attach" in import_workbench
-    assert "attaching it to an external normalized invoice import trigger remains follow-up" in application_layer
-    assert "No externally reachable import trigger currently calls that composed use case" in projection
-    assert (
-        "Externally reachable production import trigger attachment for `build_import_invoice_use_case(...)`" in readme
+
+    use_case = importer._import_use_case_factory()  # noqa: SLF001
+
+    assert isinstance(use_case, ImportInvoiceUseCase)
+    assert use_case._workbench_projection_publisher is None
+
+
+def test_uyumsoft_importer_composition_preserves_workbench_feature_flag_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    _configure_projection_mapping(monkeypatch)
+    importer = build_uyumsoft_canonical_invoice_importer(
+        session=FakeSession(),
+        settings=Settings(odoo_workbench_projection_publish_enabled=True),
+        uyumsoft_client=FakeUyumsoftClient(),
+        storage=FakeStorage(),
+        odoo_client=FakeOdooClient(),
     )
+
+    use_case = importer._import_use_case_factory()  # noqa: SLF001
+
+    assert isinstance(use_case._workbench_projection_publisher, OdooWorkbenchProjectionPublisher)
 
 
 class FakeSession:
@@ -129,6 +143,23 @@ class FakeDecisionEngine:
 
 class FakeOdooClient:
     pass
+
+
+class FakeUyumsoftClient:
+    pass
+
+
+class FakeStorage:
+    backend_name = "fake"
+
+    def read(self, storage_key: str) -> bytes:
+        return b""
+
+    def write(self, storage_key: str, content: bytes) -> None:
+        pass
+
+    def delete(self, storage_key: str) -> None:
+        pass
 
 
 def _configure_projection_mapping(monkeypatch: pytest.MonkeyPatch) -> None:

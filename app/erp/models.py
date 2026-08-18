@@ -46,3 +46,4 @@ class Currency:
 class Company:
     id: int
     name: str | None
+    tax_number: str | None = None

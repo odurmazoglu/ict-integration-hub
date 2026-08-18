@@ -9,5 +9,8 @@ class CompanyRepository(Protocol):
     def find_by_id(self, company_id: int) -> Company | None:
         pass
 
+    def find_by_tax_number(self, tax_number: str) -> tuple[Company, ...]:
+        pass
+
     def find_default(self) -> Company | None:
         pass
