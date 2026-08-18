@@ -9,6 +9,10 @@ from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
 from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceListRequest
 from app.services.invoice_persistence import InvoicePersistenceResult, InvoicePersistenceService
+from app.services.uyumsoft_canonical_import import (
+    UyumsoftCanonicalImportBatchResult,
+    UyumsoftCanonicalInvoiceImporter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,12 @@ class DirectionSyncSummary:
     created: int
     updated: int
     skipped: int
+    imported_count: int = 0
+    review_count: int = 0
+    already_imported_count: int = 0
+    failed_import_count: int = 0
+    skipped_import_count: int = 0
+    import_outcomes: tuple[dict[str, Any], ...] = ()
     status: str = SYNC_STATUS_COMPLETED
     failure_message: str | None = None
 
@@ -62,6 +72,26 @@ class UyumsoftInvoiceSyncResult:
     def skipped(self) -> int:
         return sum(direction.skipped for direction in self.directions)
 
+    @property
+    def imported_count(self) -> int:
+        return sum(direction.imported_count for direction in self.directions)
+
+    @property
+    def review_count(self) -> int:
+        return sum(direction.review_count for direction in self.directions)
+
+    @property
+    def already_imported_count(self) -> int:
+        return sum(direction.already_imported_count for direction in self.directions)
+
+    @property
+    def failed_import_count(self) -> int:
+        return sum(direction.failed_import_count for direction in self.directions)
+
+    @property
+    def skipped_import_count(self) -> int:
+        return sum(direction.skipped_import_count for direction in self.directions)
+
 
 class UyumsoftInvoiceSyncWorkflow:
     def __init__(
@@ -70,10 +100,12 @@ class UyumsoftInvoiceSyncWorkflow:
         client: UyumsoftSoapClient,
         persistence: InvoicePersistenceService,
         run_repository: "SyncRunRepository | None" = None,
+        canonical_importer: UyumsoftCanonicalInvoiceImporter | None = None,
     ) -> None:
         self._client = client
         self._persistence = persistence
         self._run_repository = run_repository
+        self._canonical_importer = canonical_importer
 
     def run(self, request: UyumsoftInvoiceSyncRequest) -> UyumsoftInvoiceSyncResult:
         _validate_request(request)
@@ -125,6 +157,7 @@ class UyumsoftInvoiceSyncWorkflow:
         pages_fetched = 0
         invoices_seen = 0
         persistence_result = InvoicePersistenceResult()
+        import_result = UyumsoftCanonicalImportBatchResult()
         try:
             for page in range(1, request.max_pages + 1):
                 if self._run_repository is not None and sync_run is not None:
@@ -143,6 +176,10 @@ class UyumsoftInvoiceSyncWorkflow:
                 pages_fetched += 1
                 invoices_seen += len(response.invoices)
                 persistence_result = persistence_result.add(self._persistence.persist_invoices(response.invoices))
+                import_result = _merge_import_results(
+                    import_result,
+                    self._import_page(response.invoices),
+                )
                 summary = DirectionSyncSummary(
                     direction=direction,
                     pages_fetched=pages_fetched,
@@ -150,6 +187,12 @@ class UyumsoftInvoiceSyncWorkflow:
                     created=persistence_result.created,
                     updated=persistence_result.updated,
                     skipped=persistence_result.skipped,
+                    imported_count=import_result.imported_count,
+                    review_count=import_result.review_count,
+                    already_imported_count=import_result.already_imported_count,
+                    failed_import_count=import_result.failed_import_count,
+                    skipped_import_count=import_result.skipped_import_count,
+                    import_outcomes=_safe_import_outcomes(import_result),
                 )
                 if self._run_repository is not None and sync_run is not None:
                     self._run_repository.mark_page_completed(sync_run, summary)
@@ -163,6 +206,7 @@ class UyumsoftInvoiceSyncWorkflow:
                 pages_fetched=pages_fetched,
                 invoices_seen=invoices_seen,
                 persistence_result=persistence_result,
+                import_result=import_result,
                 exc=exc,
             )
             raise SyncDirectionError(summary) from exc
@@ -173,7 +217,24 @@ class UyumsoftInvoiceSyncWorkflow:
             created=persistence_result.created,
             updated=persistence_result.updated,
             skipped=persistence_result.skipped,
+            imported_count=import_result.imported_count,
+            review_count=import_result.review_count,
+            already_imported_count=import_result.already_imported_count,
+            failed_import_count=import_result.failed_import_count,
+            skipped_import_count=import_result.skipped_import_count,
+            import_outcomes=_safe_import_outcomes(import_result),
         )
+
+    def _import_page(self, invoices: list[Any]) -> UyumsoftCanonicalImportBatchResult:
+        if self._canonical_importer is None or not invoices:
+            return UyumsoftCanonicalImportBatchResult()
+        persisted_records = {
+            identity: record
+            for invoice in invoices
+            if (record := self._persistence.find_invoice_metadata(invoice)) is not None
+            for identity in (record.identity_key,)
+        }
+        return self._canonical_importer.import_invoices(invoices, persisted_records=persisted_records)
 
     @staticmethod
     def _failed_direction_summary(
@@ -182,6 +243,7 @@ class UyumsoftInvoiceSyncWorkflow:
         pages_fetched: int,
         invoices_seen: int,
         persistence_result: InvoicePersistenceResult,
+        import_result: UyumsoftCanonicalImportBatchResult,
         exc: Exception,
     ) -> DirectionSyncSummary:
         return DirectionSyncSummary(
@@ -191,6 +253,12 @@ class UyumsoftInvoiceSyncWorkflow:
             created=persistence_result.created,
             updated=persistence_result.updated,
             skipped=persistence_result.skipped,
+            imported_count=import_result.imported_count,
+            review_count=import_result.review_count,
+            already_imported_count=import_result.already_imported_count,
+            failed_import_count=import_result.failed_import_count,
+            skipped_import_count=import_result.skipped_import_count,
+            import_outcomes=_safe_import_outcomes(import_result),
             status=SYNC_STATUS_FAILED,
             failure_message=_safe_failure_message(exc),
         )
@@ -269,6 +337,11 @@ class SyncRunRepository:
                 "created": summary.created,
                 "updated": summary.updated,
                 "skipped": summary.skipped,
+                "imported_count": summary.imported_count,
+                "review_count": summary.review_count,
+                "already_imported_count": summary.already_imported_count,
+                "failed_import_count": summary.failed_import_count,
+                "skipped_import_count": summary.skipped_import_count,
                 "status": summary.status,
             },
         }
@@ -338,6 +411,11 @@ def _cursor_state(summaries: list[DirectionSyncSummary]) -> dict[str, Any]:
             "created": summary.created,
             "updated": summary.updated,
             "skipped": summary.skipped,
+            "imported_count": summary.imported_count,
+            "review_count": summary.review_count,
+            "already_imported_count": summary.already_imported_count,
+            "failed_import_count": summary.failed_import_count,
+            "skipped_import_count": summary.skipped_import_count,
             "status": summary.status,
         }
         for summary in summaries
@@ -351,6 +429,11 @@ def _result_summary(result: UyumsoftInvoiceSyncResult) -> dict[str, Any]:
         "created": result.created,
         "updated": result.updated,
         "skipped": result.skipped,
+        "imported_count": result.imported_count,
+        "review_count": result.review_count,
+        "already_imported_count": result.already_imported_count,
+        "failed_import_count": result.failed_import_count,
+        "skipped_import_count": result.skipped_import_count,
         "directions": [
             {
                 "direction": summary.direction,
@@ -360,6 +443,12 @@ def _result_summary(result: UyumsoftInvoiceSyncResult) -> dict[str, Any]:
                 "created": summary.created,
                 "updated": summary.updated,
                 "skipped": summary.skipped,
+                "imported_count": summary.imported_count,
+                "review_count": summary.review_count,
+                "already_imported_count": summary.already_imported_count,
+                "failed_import_count": summary.failed_import_count,
+                "skipped_import_count": summary.skipped_import_count,
+                "import_outcomes": list(summary.import_outcomes),
             }
             for summary in result.directions
         ],
@@ -371,9 +460,14 @@ def _log_extra(result: UyumsoftInvoiceSyncResult) -> dict[str, Any]:
         "provider": result.provider,
         "run_id": result.run_id,
         "status": result.status,
-        "created": result.created,
-        "updated": result.updated,
-        "skipped": result.skipped,
+        "sync_created_count": result.created,
+        "sync_updated_count": result.updated,
+        "sync_skipped_count": result.skipped,
+        "canonical_imported_count": result.imported_count,
+        "canonical_review_count": result.review_count,
+        "canonical_already_imported_count": result.already_imported_count,
+        "canonical_failed_import_count": result.failed_import_count,
+        "canonical_skipped_import_count": result.skipped_import_count,
         "directions": [summary.direction for summary in result.directions],
     }
 
@@ -389,3 +483,27 @@ def _direction_seen(sync_run: UyumsoftSyncRun, direction: InvoiceDirection) -> i
 
 def _direction_count(sync_run: UyumsoftSyncRun, direction: InvoiceDirection, key: str) -> int:
     return int((sync_run.cursor_state or {}).get(direction, {}).get(key, 0))
+
+
+def _merge_import_results(
+    left: UyumsoftCanonicalImportBatchResult,
+    right: UyumsoftCanonicalImportBatchResult,
+) -> UyumsoftCanonicalImportBatchResult:
+    return UyumsoftCanonicalImportBatchResult(outcomes=left.outcomes + right.outcomes)
+
+
+def _safe_import_outcomes(result: UyumsoftCanonicalImportBatchResult) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        {
+            "direction": outcome.direction,
+            "invoice_identity": outcome.invoice_identity,
+            "status": outcome.status,
+            "company_id": outcome.company_id,
+            "import_status": outcome.import_status,
+            "imported_invoice_id": outcome.imported_invoice_id,
+            "review_id": outcome.review_id,
+            "warning_count": outcome.warning_count,
+            "safe_message": outcome.safe_message,
+        }
+        for outcome in result.outcomes
+    )

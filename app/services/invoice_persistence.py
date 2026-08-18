@@ -124,6 +124,9 @@ class InvoicePersistenceService:
             return InvoicePersistenceResult(updated=1)
         return InvoicePersistenceResult(skipped=1)
 
+    def find_invoice_metadata(self, invoice: UyumsoftInvoiceSummary) -> UyumsoftInvoiceMetadata | None:
+        return self._find_existing(invoice, build_invoice_identity(invoice))
+
 
 def build_invoice_identity(invoice: UyumsoftInvoiceSummary) -> InvoiceIdentity:
     ettn = _normalized_text(invoice.ettn)

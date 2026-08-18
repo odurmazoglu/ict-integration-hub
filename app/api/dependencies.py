@@ -20,7 +20,7 @@ from app.application.workbench import (
     ReviewQueueReader,
     SubmitReviewDecisionUseCase,
 )
-from app.composition import build_vendor_bill_execution_use_case
+from app.composition import build_uyumsoft_canonical_invoice_importer, build_vendor_bill_execution_use_case
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
@@ -29,6 +29,7 @@ from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBilli
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
 from app.services.document_storage import DocumentStorage, LocalDocumentStorage
+from app.services.uyumsoft_canonical_import import UyumsoftCanonicalInvoiceImporter
 
 
 def get_db_session() -> Generator:
@@ -79,6 +80,28 @@ def get_document_storage(settings: SettingsDep) -> DocumentStorage:
 OdooClientDep = Annotated[OdooJson2Client, Depends(get_odoo_client)]
 UyumsoftClientDep = Annotated[UyumsoftSoapClient, Depends(get_uyumsoft_client)]
 DocumentStorageDep = Annotated[DocumentStorage, Depends(get_document_storage)]
+
+
+def get_uyumsoft_canonical_importer(
+    session: DbSessionDep,
+    settings: SettingsDep,
+    client: UyumsoftClientDep,
+    storage: DocumentStorageDep,
+    odoo_client: OdooClientDep,
+) -> UyumsoftCanonicalInvoiceImporter:
+    return build_uyumsoft_canonical_invoice_importer(
+        session=session,
+        settings=settings,
+        uyumsoft_client=client,
+        storage=storage,
+        odoo_client=odoo_client,
+    )
+
+
+UyumsoftCanonicalImporterDep = Annotated[
+    UyumsoftCanonicalInvoiceImporter,
+    Depends(get_uyumsoft_canonical_importer),
+]
 
 
 def get_review_repository(session: DbSessionDep) -> SqlAlchemyReviewRepository:

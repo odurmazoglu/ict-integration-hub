@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.dependencies import get_db_session, get_uyumsoft_client
+from app.api.dependencies import get_db_session, get_uyumsoft_canonical_importer, get_uyumsoft_client
 from app.connectors.exceptions import ConnectorError
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
@@ -19,6 +19,11 @@ from app.schemas.uyumsoft_invoices import (
     UyumsoftInvoiceListRequest,
     UyumsoftInvoiceListResponse,
     UyumsoftInvoiceSummary,
+)
+from app.services.uyumsoft_canonical_import import (
+    IMPORT_STATUS_REVIEW_CREATED,
+    UyumsoftCanonicalImportBatchResult,
+    UyumsoftCanonicalImportOutcome,
 )
 
 
@@ -36,6 +41,43 @@ class FakeSyncUyumsoftClient(UyumsoftSoapClient):
 class FailingOutboxSyncUyumsoftClient(FakeSyncUyumsoftClient):
     def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
         raise ConnectorError("Outbox transport failed")
+
+
+class NoopCanonicalImporter:
+    def import_invoices(
+        self,
+        invoices: list[UyumsoftInvoiceSummary],
+        *,
+        persisted_records: dict[str, object],
+    ) -> UyumsoftCanonicalImportBatchResult:
+        return UyumsoftCanonicalImportBatchResult()
+
+
+class RecordingCanonicalImporter:
+    def __init__(self) -> None:
+        self.calls: list[list[UyumsoftInvoiceSummary]] = []
+
+    def import_invoices(
+        self,
+        invoices: list[UyumsoftInvoiceSummary],
+        *,
+        persisted_records: dict[str, object],
+    ) -> UyumsoftCanonicalImportBatchResult:
+        self.calls.append(invoices)
+        return UyumsoftCanonicalImportBatchResult(
+            outcomes=tuple(
+                UyumsoftCanonicalImportOutcome(
+                    direction=invoice.direction,
+                    invoice_identity=invoice.ettn or "missing",
+                    status=IMPORT_STATUS_REVIEW_CREATED,
+                    company_id=7,
+                    import_status="review_required",
+                    imported_invoice_id=invoice.ettn,
+                    review_id="review-1",
+                )
+                for invoice in invoices
+            )
+        )
 
 
 async def test_sync_endpoint_requires_read_only_confirmation(api_client: AsyncClient) -> None:
@@ -78,6 +120,7 @@ async def test_sync_endpoint_persists_read_only_summary(api_client: AsyncClient)
 
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: NoopCanonicalImporter()
     try:
         response = await api_client.post(
             "/api/v1/sync/uyumsoft/invoices",
@@ -119,6 +162,7 @@ async def test_sync_endpoint_records_failed_run_on_connector_error(api_client: A
 
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FailingOutboxSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: NoopCanonicalImporter()
     try:
         response = await api_client.post(
             "/api/v1/sync/uyumsoft/invoices",
@@ -143,6 +187,40 @@ async def test_sync_endpoint_records_failed_run_on_connector_error(api_client: A
     assert sync_run.cursor_state["Inbox"]["status"] == "completed"
     assert sync_run.cursor_state["Outbox"]["status"] == "failed"
     assert {record.direction for record in records} == {"Inbox"}
+
+
+async def test_sync_endpoint_reaches_canonical_importer(api_client: AsyncClient) -> None:
+    session_factory = _session_factory()
+    importer = RecordingCanonicalImporter()
+
+    def db_override() -> Generator[Session]:
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: importer
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+                "direction": "Inbox",
+                "page_size": "10",
+                "max_pages": "1",
+                "confirm_read_only": "true",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert len(importer.calls) == 1
+    assert importer.calls[0][0].direction == "Inbox"
+    body = response.json()
+    assert body["review_count"] == 1
+    assert body["directions"][0]["import_outcomes"][0]["status"] == IMPORT_STATUS_REVIEW_CREATED
 
 
 def _session_factory() -> sessionmaker[Session]:

@@ -228,9 +228,14 @@ def test_sync_workflow_logs_only_safe_summary(monkeypatch: pytest.MonkeyPatch, s
         "provider": "uyumsoft",
         "run_id": 1,
         "status": "completed",
-        "created": 2,
-        "updated": 0,
-        "skipped": 0,
+        "sync_created_count": 2,
+        "sync_updated_count": 0,
+        "sync_skipped_count": 0,
+        "canonical_imported_count": 0,
+        "canonical_review_count": 0,
+        "canonical_already_imported_count": 0,
+        "canonical_failed_import_count": 0,
+        "canonical_skipped_import_count": 0,
         "directions": ["Inbox", "Outbox"],
     }
     assert "inbox-ettn" not in str(log_calls)

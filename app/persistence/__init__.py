@@ -3,6 +3,7 @@
 from app.persistence.accepted_billing_evidence_reader import SqlAlchemyAcceptedBillingEvidenceReader
 from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRuntimeRepository
 from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
+from app.persistence.import_history import SqlAlchemyImportHistory
 from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBillingEvidenceReader
 from app.persistence.review_classification_evidence_reader import SqlAlchemyReviewClassificationEvidenceReader
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
@@ -13,6 +14,7 @@ __all__ = [
     "SqlAlchemyAcceptedBillingEvidenceReader",
     "SqlAlchemyExecutionRuntimeRepository",
     "SqlAlchemyExecutionSourceInvoiceReader",
+    "SqlAlchemyImportHistory",
     "SqlAlchemyReviewBillingEvidenceReader",
     "SqlAlchemyReviewClassificationEvidenceReader",
     "SqlAlchemyReviewExecutionEvidenceReader",

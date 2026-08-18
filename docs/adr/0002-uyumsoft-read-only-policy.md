@@ -7,7 +7,7 @@
 
 The current priority is to pull incoming and outgoing e-Fatura data from the Uyumsoft test environment and store it safely in Integration Hub. Uyumsoft exposes operations that can list, retrieve, download, acknowledge, send, cancel, retry, or otherwise change provider-side document state.
 
-The project has deliberately implemented read-only listing, identity/system probes, WSDL discovery, and UBL XML document retrieval. It has not implemented status-changing provider operations.
+The project has deliberately implemented read-only listing, identity/system probes, WSDL discovery, and UBL XML document retrieval. The inbound sync endpoint can now continue eligible Inbox supplier invoices through the canonical Hub import pipeline after provider metadata/document evidence is preserved. It has not implemented status-changing provider operations.
 
 ## Decision
 
@@ -33,6 +33,7 @@ The integration must never silently change provider-side document status. Produc
 
 - Uyumsoft test and production access can be granted with lower operational risk.
 - Invoice metadata and UBL documents can be collected without changing provider-side workflow state.
+- Eligible incoming supplier invoices can be normalized through the existing UBL parser into `InternalInvoice` and submitted to the canonical `ImportInvoiceUseCase` without adding provider-side mutation.
 - Provider-side accounting or legal document status remains under explicit human or provider-system control.
 - Tests can enforce that forbidden operation names are not used by workflows.
 
@@ -55,6 +56,7 @@ These alternatives were rejected because they risk silent provider-side state ch
 - Provider smoke tests must remain explicit, opt-in, and read-only.
 - Production Uyumsoft permissions should include invoice listing, invoice detail retrieval, and UBL download only.
 - SOAP faults and provider errors must be surfaced as safe connector errors, not swallowed.
+- Canonical import after sync is limited to Inbox supplier invoices. Outbox documents remain synchronized as provider evidence but are not imported as supplier invoices.
 
 ## Related Components
 
