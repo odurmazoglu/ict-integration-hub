@@ -156,6 +156,69 @@ def test_parent_fields_and_many2one_ids_are_parsed() -> None:
         candidate.review_id = "changed"  # type: ignore[misc]
 
 
+def test_existing_purchase_order_selected_workflow_requires_explicit_allocation_intent() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="Existing Purchase Order")],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_existing_purchase_order_intent_is_preserved_by_canonical_allocation_type() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="Existing Purchase Order")],
+            allocation_records=_existing_purchase_order_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    candidate = reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    assert candidate.selected_workflow is WorkflowType.VENDOR_BILL
+    assert candidate.business_context_allocations is not None
+    assert candidate.business_context_allocations.allocations[0].allocation_type is (
+        BusinessContextAllocationType.EXISTING_PURCHASE_ORDER
+    )
+    assert candidate.business_context_allocations.allocations[0].purchase_order_id == 501
+
+
+def test_direct_vendor_bill_rejects_purchase_order_intent_collision() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="Direct Vendor Bill")],
+            allocation_records=_existing_purchase_order_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_new_rfq_purchase_selected_workflow_requires_matching_allocation_intent() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="New RFQ + Purchase Order")],
+            allocation_records=_new_rfq_purchase_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    candidate = reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    assert candidate.selected_workflow is WorkflowType.RFQ
+    assert candidate.business_context_allocations is not None
+    assert candidate.business_context_allocations.allocations[0].allocation_type is (
+        BusinessContextAllocationType.NEW_RFQ_PURCHASE
+    )
+
+
 def test_malformed_parent_values_are_rejected_safely() -> None:
     cases = [
         {"x_decision": "not-real"},
@@ -570,6 +633,37 @@ def _allocation_records() -> list[dict[str, Any]]:
             "x_percentage": "60",
             "x_currency": "TRY",
         },
+    ]
+
+
+def _existing_purchase_order_allocation_records() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": 100,
+            "x_import_review_id": [42, "review-1"],
+            "x_allocation_key": "ALLOC-PO",
+            "x_allocation_type": "Existing Purchase Order",
+            "x_source_line_number": "1",
+            "x_amount": "100000.000000",
+            "x_percentage": "100",
+            "x_currency": "TRY",
+            "x_purchase_order_id": [501, "PO501"],
+        }
+    ]
+
+
+def _new_rfq_purchase_allocation_records() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": 100,
+            "x_import_review_id": [42, "review-1"],
+            "x_allocation_key": "ALLOC-RFQ",
+            "x_allocation_type": "New RFQ + Purchase",
+            "x_source_line_number": "1",
+            "x_amount": "100000.000000",
+            "x_percentage": "100",
+            "x_currency": "TRY",
+        }
     ]
 
 

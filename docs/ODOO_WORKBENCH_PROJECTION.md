@@ -400,7 +400,20 @@ child:  [[parent_many2one_field, "=", parent_odoo_record_id]]
 
 The parent lookup uses `limit=2` so ambiguity is explicit. A missing parent or a parent with decision-ready `false` is reported as no ready candidate. Missing, malformed, or non-boolean decision-ready values are data errors.
 
-The reader maps current Odoo Studio labels explicitly. `Submit Decision` maps to canonical `select_workflow`, and `Dismiss` maps to canonical `dismiss`. `Request Investigation` is intentionally unsupported because it is not a canonical Hub `ReviewDecisionType`; a decision-ready record containing it fails closed. Selected Workflow values are also exact label mappings: `Existing Purchase Order` and `Direct Vendor Bill` map to `vendor_bill`, `New RFQ + Purchase Order` maps to `rfq`, `Operating Expense` maps to `expense`, `Fixed Asset` maps to `asset`, and `Subscription / Service` maps to `subscription`.
+The reader maps current Odoo Studio labels explicitly. `Submit Decision` maps to canonical `select_workflow`, and `Dismiss` maps to canonical `dismiss`. `Request Investigation` is intentionally unsupported because it is not a canonical Hub `ReviewDecisionType`; a decision-ready record containing it fails closed.
+
+`WorkflowType` is the high-level review decision vocabulary. Detailed execution intent lives in canonical `BusinessContextAllocationType` evidence and later becomes `ExecutionStepType` in the planner. The reader therefore must not collapse materially different Odoo Selected Workflow labels unless the allocation rows also preserve that intent explicitly:
+
+| Odoo Selected Workflow | Canonical selected workflow | Required canonical allocation evidence |
+| --- | --- | --- |
+| Existing Purchase Order | `vendor_bill` | at least one `existing_purchase_order` allocation |
+| New RFQ + Purchase Order | `rfq` | at least one `new_rfq_purchase` allocation |
+| Direct Vendor Bill | `vendor_bill` | no `existing_purchase_order` or `new_rfq_purchase` allocation |
+| Operating Expense | `expense` | at least one `operating_expense` allocation |
+| Fixed Asset | `asset` | at least one `fixed_asset` allocation |
+| Subscription / Service | `subscription` | at least one `subscription_service` allocation |
+
+If the required allocation evidence is missing or contradictory, the reader fails closed instead of inferring intent from descriptions, Odoo state, history, or heuristics.
 
 ### Reader Mapping Configuration
 

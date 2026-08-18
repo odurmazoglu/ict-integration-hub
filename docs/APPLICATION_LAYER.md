@@ -262,7 +262,7 @@ Policy:
 
 Workflow execution starts from an accepted Hub Workbench decision, never from a raw Odoo candidate. The foundation introduces immutable execution identity, execution plans, execution-step results, strategy contracts, deterministic idempotency, durable runtime state, checkpoints, and append-only events.
 
-The execution foundation is separate from import-time `DecisionEngine` strategy selection. `WorkflowType` remains the review-level decision vocabulary; `BusinessContextAllocationType` maps to per-allocation execution purposes.
+The execution foundation is separate from import-time `DecisionEngine` strategy selection. `WorkflowType` remains the review-level decision vocabulary; `BusinessContextAllocationType` maps to per-allocation execution purposes. Odoo-selected intents such as Existing Purchase Order and Direct Vendor Bill must not be made indistinguishable in accepted decision evidence: Direct Vendor Bill is represented by `WorkflowType.VENDOR_BILL`, while purchase-order and RFQ-specific intent is preserved explicitly in `BusinessContextAllocationType.EXISTING_PURCHASE_ORDER` or `BusinessContextAllocationType.NEW_RFQ_PURCHASE`.
 
 The planner performs no repository calls, provider calls, persistence, or writes. It creates stable ordered `ExecutionStep` values and adds a separate `VENDOR_BILL` step when `selected_workflow == WorkflowType.VENDOR_BILL`. Real `VendorBillWriter` invocation is deferred.
 

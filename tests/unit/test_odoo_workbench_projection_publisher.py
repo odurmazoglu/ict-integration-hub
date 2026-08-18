@@ -17,11 +17,13 @@ from app.application.workbench import (
     WorkbenchProjection,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
+from app.erp.exceptions import ErpRepositoryError
 from app.erp.odoo.workbench_projection_publisher import (
     ODOO_BUSINESS_CONTEXT_REQUIRED_BY_CANONICAL,
     ODOO_REVIEW_REQUIRED_BY_CANONICAL,
     ODOO_REVIEW_STATUS_BY_CANONICAL,
     ODOO_WORKFLOW_BY_CANONICAL,
+    OdooWorkbenchJson2ProjectionAdapter,
     OdooWorkbenchProjectionFieldMapping,
     OdooWorkbenchProjectionPublisher,
 )
@@ -205,6 +207,13 @@ def test_idempotent_repeat_publish_updates_existing_row_without_duplicate_create
     assert adapter.write_values == first_payload
 
 
+async def test_json2_projection_adapter_rejects_sync_call_inside_running_event_loop() -> None:
+    adapter = OdooWorkbenchJson2ProjectionAdapter(client=AsyncFakeOdooClient())
+
+    with pytest.raises(ErpRepositoryError, match="cannot run a synchronous request inside an active event loop"):
+        adapter.search_read(model="x_ipp_import_workbench", domain=[], fields=["id"], limit=1)
+
+
 def test_no_domain_or_application_imports_odoo_field_names() -> None:
     source = "\n".join(
         Path(path).read_text(encoding="utf-8")
@@ -285,6 +294,20 @@ class RecordingProjectionAdapter:
         self.calls.append({"method": "write", "model": model, "record_id": record_id, "values": values})
         self.write_record_id = record_id
         self.write_values = values
+
+
+class AsyncFakeOdooClient:
+    async def search_read(
+        self,
+        *,
+        model: str,
+        domain: list[Any],
+        fields: list[str],
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        del model, domain, fields, limit, offset
+        return []
 
 
 def _mapping() -> OdooWorkbenchProjectionFieldMapping:

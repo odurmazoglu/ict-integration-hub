@@ -37,15 +37,6 @@ ODOO_DECISION_TO_CANONICAL: dict[str, ReviewDecisionType] = {
     "Dismiss": ReviewDecisionType.DISMISS,
 }
 
-ODOO_SELECTED_WORKFLOW_TO_CANONICAL: dict[str, WorkflowType] = {
-    "Existing Purchase Order": WorkflowType.VENDOR_BILL,
-    "New RFQ + Purchase Order": WorkflowType.RFQ,
-    "Direct Vendor Bill": WorkflowType.VENDOR_BILL,
-    "Operating Expense": WorkflowType.EXPENSE,
-    "Fixed Asset": WorkflowType.ASSET,
-    "Subscription / Service": WorkflowType.SUBSCRIPTION,
-}
-
 ODOO_ALLOCATION_TYPE_TO_CANONICAL: dict[str, BusinessContextAllocationType] = {
     "Sales Order Cost": BusinessContextAllocationType.SALES_ORDER_COST,
     "Customer Recharge": BusinessContextAllocationType.CUSTOMER_RECHARGE,
@@ -57,6 +48,30 @@ ODOO_ALLOCATION_TYPE_TO_CANONICAL: dict[str, BusinessContextAllocationType] = {
     "Subscription / Service": BusinessContextAllocationType.SUBSCRIPTION_SERVICE,
     "Internal Cost": BusinessContextAllocationType.INTERNAL_COST,
 }
+
+ODOO_SELECTED_WORKFLOW_TO_CANONICAL: dict[str, WorkflowType] = {
+    "Existing Purchase Order": WorkflowType.VENDOR_BILL,
+    "New RFQ + Purchase Order": WorkflowType.RFQ,
+    "Direct Vendor Bill": WorkflowType.VENDOR_BILL,
+    "Operating Expense": WorkflowType.EXPENSE,
+    "Fixed Asset": WorkflowType.ASSET,
+    "Subscription / Service": WorkflowType.SUBSCRIPTION,
+}
+
+ODOO_SELECTED_WORKFLOW_REQUIRED_ALLOCATION: dict[str, BusinessContextAllocationType] = {
+    "Existing Purchase Order": BusinessContextAllocationType.EXISTING_PURCHASE_ORDER,
+    "New RFQ + Purchase Order": BusinessContextAllocationType.NEW_RFQ_PURCHASE,
+    "Operating Expense": BusinessContextAllocationType.OPERATING_EXPENSE,
+    "Fixed Asset": BusinessContextAllocationType.FIXED_ASSET,
+    "Subscription / Service": BusinessContextAllocationType.SUBSCRIPTION_SERVICE,
+}
+
+DIRECT_VENDOR_BILL_CONFLICTING_ALLOCATION_TYPES = frozenset(
+    {
+        BusinessContextAllocationType.EXISTING_PURCHASE_ORDER,
+        BusinessContextAllocationType.NEW_RFQ_PURCHASE,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +295,10 @@ class OdooWorkbenchDecisionCandidateReader:
             if company_id != requested_company_id:
                 raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
             allocations = self._allocation_set(parent_record=record, parent_id=parent_id)
+            selected_workflow = _selected_workflow(
+                record.get(self._mapping.parent.selected_workflow),
+                allocations,
+            )
             return OdooWorkbenchDecisionCandidate(
                 odoo_record_id=parent_id,
                 review_id=_required_text_value(record.get(self._mapping.parent.review_id)),
@@ -293,10 +312,7 @@ class OdooWorkbenchDecisionCandidateReader:
                 decided_by_odoo_user_id=_required_many2one_id(record.get(self._mapping.parent.decided_by)),
                 decided_at=_required_aware_datetime(record.get(self._mapping.parent.decided_at)),
                 decision_ready=True,
-                selected_workflow=_optional_mapped_value(
-                    record.get(self._mapping.parent.selected_workflow),
-                    ODOO_SELECTED_WORKFLOW_TO_CANONICAL,
-                ),
+                selected_workflow=selected_workflow,
                 selected_partner_id=_optional_many2one_id(
                     _field(record, self._mapping.parent.selected_partner),
                 ),
@@ -494,10 +510,32 @@ def _required_mapped_value[T](value: Any, mapping: dict[str, T]) -> T:
         raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR) from exc
 
 
-def _optional_mapped_value[T](value: Any, mapping: dict[str, T]) -> T | None:
+def _selected_workflow(
+    value: Any,
+    allocations: BusinessContextAllocationSet | None,
+) -> WorkflowType | None:
     if _is_empty_optional(value):
         return None
-    return _required_mapped_value(value, mapping)
+    if not isinstance(value, str) or not value.strip():
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+    try:
+        workflow = ODOO_SELECTED_WORKFLOW_TO_CANONICAL[value]
+    except KeyError as exc:
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR) from exc
+
+    allocation_types = _allocation_types(allocations)
+    required_allocation = ODOO_SELECTED_WORKFLOW_REQUIRED_ALLOCATION.get(value)
+    if required_allocation is not None and required_allocation not in allocation_types:
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+    if value == "Direct Vendor Bill" and allocation_types & DIRECT_VENDOR_BILL_CONFLICTING_ALLOCATION_TYPES:
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+    return workflow
+
+
+def _allocation_types(allocations: BusinessContextAllocationSet | None) -> set[BusinessContextAllocationType]:
+    if allocations is None:
+        return set()
+    return {allocation.allocation_type for allocation in allocations.allocations}
 
 
 def _required_bool(value: Any) -> bool:
