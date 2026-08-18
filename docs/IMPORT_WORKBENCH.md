@@ -14,6 +14,8 @@ Projection publishing is recoverable but not transactional with Hub persistence.
 
 Provider metadata and sync-run state are flushed during the request and committed by the sync API after the workflow returns. Review-required imports deliberately commit their Hub review/evidence before Odoo projection so projection failure cannot erase authoritative Hub state. Non-review technical receipts are flushed on the shared request session and committed by the sync API. Expected per-item canonical or company-resolution failures are recorded in the sync result without corrupting sibling provider persistence; unexpected programming errors still propagate and the API rolls back uncommitted request work.
 
+The historical `202607170015` Workbench classification-evidence migration is immutable. PostgreSQL stores overlength identifiers from that migration by truncating them to its 63-byte identifier limit, for example `ck_workbench_review_classification_evidence_review_version_positive` becomes `ck_workbench_review_classification_evidence_review_version_posi`, and `uq_workbench_review_classification_evidence_company_review_version` becomes `uq_workbench_review_classification_evidence_company_review_vers`. The `202607170016` import-receipts migration does not depend on those names and performs no forward rename; Alembic is configured to allow the restored historical identifiers to reach PostgreSQL during migration execution.
+
 ## Purpose
 
 The Import Workbench should give users a practical review surface for:

@@ -33,10 +33,15 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = get_url()
+    engine_options = {
+        "poolclass": pool.NullPool,
+    }
+    if get_url().startswith(("postgresql://", "postgresql+")):
+        engine_options["max_identifier_length"] = 128
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
+        **engine_options,
     )
 
     with connectable.connect() as connection:

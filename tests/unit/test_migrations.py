@@ -1,5 +1,7 @@
+import subprocess
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
@@ -14,6 +16,14 @@ from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
 from app.models.workflow_execution import WorkflowExecution
+
+
+def test_workbench_classification_migration_matches_main_branch() -> None:
+    if not Path(".git").exists():
+        pytest.skip("Git metadata is not copied into the runtime Docker image.")
+    path = "alembic/versions/202607170015_workbench_review_classification_evidence.py"
+    main_content = subprocess.check_output(["git", "show", f"origin/main:{path}"])
+    assert Path(path).read_bytes() == main_content
 
 
 def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
@@ -332,15 +342,18 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         index["name"] for index in inspector.get_indexes("workbench_review_classification_evidence")
     }
     assert {
-        "ix_wbrce_company_review_version",
-        "ix_wbrce_status",
-        "ix_wbrce_rule_code",
+        "ix_workbench_review_classification_evidence_company_review_version",
+        "ix_workbench_review_classification_evidence_status",
+        "ix_workbench_review_classification_evidence_rule_code",
     }.issubset(classification_evidence_indexes)
     classification_evidence_unique_constraints = {
         constraint["name"]
         for constraint in inspector.get_unique_constraints("workbench_review_classification_evidence")
     }
-    assert "uq_wbrce_company_review_version" in classification_evidence_unique_constraints
+    assert (
+        "uq_workbench_review_classification_evidence_company_review_version"
+        in classification_evidence_unique_constraints
+    )
     assert WorkbenchReviewClassificationEvidence.__table__.c.conflicting_rules.nullable is False
     import_receipt_columns = {column["name"] for column in inspector.get_columns("import_receipts")}
     assert {

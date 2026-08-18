@@ -13,6 +13,7 @@ from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
 from app.db.base import Base
 from app.main import app
+from app.models.import_receipt import ImportReceipt
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
 from app.schemas.uyumsoft_invoices import (
@@ -21,6 +22,7 @@ from app.schemas.uyumsoft_invoices import (
     UyumsoftInvoiceSummary,
 )
 from app.services.uyumsoft_canonical_import import (
+    IMPORT_STATUS_ACCEPTED,
     IMPORT_STATUS_REVIEW_CREATED,
     UyumsoftCanonicalImportBatchResult,
     UyumsoftCanonicalImportOutcome,
@@ -76,6 +78,41 @@ class RecordingCanonicalImporter:
                     review_id="review-1",
                 )
                 for invoice in invoices
+            )
+        )
+
+
+class ReceiptWritingCanonicalImporter:
+    def __init__(self, session_holder: list[Session]) -> None:
+        self._session_holder = session_holder
+
+    def import_invoices(
+        self,
+        invoices: list[UyumsoftInvoiceSummary],
+        *,
+        persisted_records: dict[str, object],
+    ) -> UyumsoftCanonicalImportBatchResult:
+        invoice = invoices[0]
+        receipt = ImportReceipt(
+            company_id=7,
+            idempotency_key=f"uyumsoft:company:7:{invoice.direction.lower()}:ettn:{invoice.ettn}",
+            invoice_id=invoice.ettn or "missing",
+            status="dry_run",
+            vendor_bill_id=None,
+            review_id=None,
+        )
+        self._session_holder[0].add(receipt)
+        self._session_holder[0].flush()
+        return UyumsoftCanonicalImportBatchResult(
+            outcomes=(
+                UyumsoftCanonicalImportOutcome(
+                    direction=invoice.direction,
+                    invoice_identity=invoice.ettn or "missing",
+                    status=IMPORT_STATUS_ACCEPTED,
+                    company_id=7,
+                    import_status="dry_run",
+                    imported_invoice_id=invoice.ettn,
+                ),
             )
         )
 
@@ -223,14 +260,93 @@ async def test_sync_endpoint_reaches_canonical_importer(api_client: AsyncClient)
     assert body["directions"][0]["import_outcomes"][0]["status"] == IMPORT_STATUS_REVIEW_CREATED
 
 
-def _session_factory() -> sessionmaker[Session]:
+async def test_sync_endpoint_commits_non_review_receipt_with_request_transaction(api_client: AsyncClient) -> None:
+    session_factory = _session_factory()
+    session_holder: list[Session] = []
+
+    def db_override() -> Generator[Session]:
+        with session_factory() as session:
+            session_holder[:] = [session]
+            yield session
+
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: ReceiptWritingCanonicalImporter(session_holder)
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+                "direction": "Inbox",
+                "page_size": "10",
+                "max_pages": "1",
+                "confirm_read_only": "true",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["directions"][0]["import_outcomes"][0]["status"] == IMPORT_STATUS_ACCEPTED
+    with session_factory() as session:
+        receipts = session.scalars(select(ImportReceipt)).all()
+    assert len(receipts) == 1
+    assert receipts[0].idempotency_key == "uyumsoft:company:7:inbox:ettn:inbox-ettn"
+
+
+async def test_sync_endpoint_does_not_return_accepted_when_receipt_commit_fails(
+    api_client: AsyncClient,
+) -> None:
+    session_factory = _session_factory(session_cls=FailingCommitSession)
+    session_holder: list[Session] = []
+
+    def db_override() -> Generator[Session]:
+        with session_factory() as session:
+            session_holder[:] = [session]
+            yield session
+
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: ReceiptWritingCanonicalImporter(session_holder)
+    try:
+        try:
+            await api_client.post(
+                "/api/v1/sync/uyumsoft/invoices",
+                params={
+                    "from": "2026-07-16T00:00:00+00:00",
+                    "to": "2026-07-17T00:00:00+00:00",
+                    "direction": "Inbox",
+                    "page_size": "10",
+                    "max_pages": "1",
+                    "confirm_read_only": "true",
+                },
+            )
+        except RuntimeError as exc:
+            assert str(exc) == "commit failed"
+        else:
+            raise AssertionError("commit failure must propagate instead of returning an accepted response")
+    finally:
+        app.dependency_overrides.clear()
+
+    with session_factory() as session:
+        receipts = session.scalars(select(ImportReceipt)).all()
+    assert receipts == []
+
+
+def _session_factory(*, session_cls: type[Session] = Session) -> sessionmaker[Session]:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    return sessionmaker(bind=engine)
+    return sessionmaker(bind=engine, class_=session_cls)
+
+
+class FailingCommitSession(Session):
+    def commit(self) -> None:
+        raise RuntimeError("commit failed")
 
 
 def _response(

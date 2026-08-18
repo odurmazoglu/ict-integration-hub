@@ -14,34 +14,34 @@ class WorkbenchReviewClassificationEvidence(Base):
         ForeignKeyConstraint(
             ["review_id"],
             ["workbench_review_items.review_id"],
-            name="fk_wbrce_review_id",
+            name="fk_workbench_review_classification_evidence_review_id",
         ),
         CheckConstraint(
             "company_id > 0",
-            name="ck_wbrce_company_id_positive",
+            name="ck_workbench_review_classification_evidence_company_id_positive",
         ),
         CheckConstraint(
             "review_version > 0",
-            name="ck_wbrce_review_version_positive",
+            name="ck_workbench_review_classification_evidence_review_version_positive",
         ),
         CheckConstraint(
             "schema_version > 0",
-            name="ck_wbrce_schema_version_positive",
+            name="ck_workbench_review_classification_evidence_schema_version_positive",
         ),
         UniqueConstraint(
             "company_id",
             "review_id",
             "review_version",
-            name="uq_wbrce_company_review_version",
+            name="uq_workbench_review_classification_evidence_company_review_version",
         ),
         Index(
-            "ix_wbrce_company_review_version",
+            "ix_workbench_review_classification_evidence_company_review_version",
             "company_id",
             "review_id",
             "review_version",
         ),
-        Index("ix_wbrce_status", "status"),
-        Index("ix_wbrce_rule_code", "matched_rule_code"),
+        Index("ix_workbench_review_classification_evidence_status", "status"),
+        Index("ix_workbench_review_classification_evidence_rule_code", "matched_rule_code"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

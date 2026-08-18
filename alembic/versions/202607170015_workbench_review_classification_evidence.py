@@ -38,41 +38,41 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint(
             "company_id > 0",
-            name="ck_wbrce_company_id_positive",
+            name="ck_workbench_review_classification_evidence_company_id_positive",
         ),
         sa.CheckConstraint(
             "review_version > 0",
-            name="ck_wbrce_review_version_positive",
+            name="ck_workbench_review_classification_evidence_review_version_positive",
         ),
         sa.CheckConstraint(
             "schema_version > 0",
-            name="ck_wbrce_schema_version_positive",
+            name="ck_workbench_review_classification_evidence_schema_version_positive",
         ),
         sa.ForeignKeyConstraint(
             ["review_id"],
             ["workbench_review_items.review_id"],
-            name="fk_wbrce_review_id",
+            name="fk_workbench_review_classification_evidence_review_id",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "company_id",
             "review_id",
             "review_version",
-            name="uq_wbrce_company_review_version",
+            name="uq_workbench_review_classification_evidence_company_review_version",
         ),
     )
     op.create_index(
-        "ix_wbrce_company_review_version",
+        "ix_workbench_review_classification_evidence_company_review_version",
         "workbench_review_classification_evidence",
         ["company_id", "review_id", "review_version"],
     )
     op.create_index(
-        "ix_wbrce_status",
+        "ix_workbench_review_classification_evidence_status",
         "workbench_review_classification_evidence",
         ["status"],
     )
     op.create_index(
-        "ix_wbrce_rule_code",
+        "ix_workbench_review_classification_evidence_rule_code",
         "workbench_review_classification_evidence",
         ["matched_rule_code"],
     )
@@ -80,15 +80,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        "ix_wbrce_rule_code",
+        "ix_workbench_review_classification_evidence_rule_code",
         table_name="workbench_review_classification_evidence",
     )
     op.drop_index(
-        "ix_wbrce_status",
+        "ix_workbench_review_classification_evidence_status",
         table_name="workbench_review_classification_evidence",
     )
     op.drop_index(
-        "ix_wbrce_company_review_version",
+        "ix_workbench_review_classification_evidence_company_review_version",
         table_name="workbench_review_classification_evidence",
     )
     op.drop_table("workbench_review_classification_evidence")

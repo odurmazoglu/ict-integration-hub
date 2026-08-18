@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.application.commands import ImportInvoiceCommand
@@ -57,6 +58,19 @@ async def test_import_receipt_idempotency_is_company_scoped(session: Session) ->
         (7, "uyumsoft:company:7:inbox:ettn:INV-ETTN"),
         (8, "uyumsoft:company:8:inbox:ettn:INV-ETTN"),
     ]
+
+
+def test_duplicate_receipt_race_returns_concurrent_import_without_unrelated_500() -> None:
+    history = SqlAlchemyImportHistory(RacingReceiptSession())
+
+    existing = history.record_import_result(
+        company_id=7,
+        idempotency_key="uyumsoft:company:7:inbox:ettn:INV-ETTN",
+        result=_dry_run_import_result(),
+    )
+
+    assert existing.invoice_id == "INV-ETTN"
+    assert existing.status == "already_imported"
 
 
 @pytest.mark.asyncio
@@ -131,6 +145,12 @@ def _dry_run_decision() -> DecisionResult:
     )
 
 
+def _dry_run_import_result():
+    from app.application.dto import ImportInvoiceResult
+
+    return ImportInvoiceResult(success=True, invoice_id="INV-ETTN", status="dry_run")
+
+
 def _review_required_decision() -> DecisionResult:
     return DecisionResult(
         success=False,
@@ -159,3 +179,35 @@ def session() -> Session:
         yield db
     finally:
         db.close()
+
+
+class RacingReceiptSession:
+    def __init__(self) -> None:
+        self.scalar_calls = 0
+        self.receipt = ImportReceipt(
+            company_id=7,
+            idempotency_key="uyumsoft:company:7:inbox:ettn:INV-ETTN",
+            invoice_id="INV-ETTN",
+            status="dry_run",
+            vendor_bill_id=None,
+            review_id=None,
+        )
+
+    def scalar(self, statement):
+        self.scalar_calls += 1
+        return None if self.scalar_calls == 1 else self.receipt
+
+    def begin_nested(self):
+        return self
+
+    def add(self, record) -> None:
+        pass
+
+    def flush(self) -> None:
+        raise IntegrityError("insert", {}, Exception("duplicate"))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        return False
