@@ -65,6 +65,7 @@ Current implemented capabilities:
 - Inbound import classification integration that builds canonical classification context after deterministic matching, loads rules through `DecisionRuleRepository`, and carries `InvoiceClassificationResult` on import/decision results without changing ERP execution.
 - Durable Workbench review classification evidence persistence keyed by exact company, review, and review version so historical review classification is never recomputed from current Odoo Decision Rules.
 - Read-only Workbench classification projection service that displays pinned historical `ReviewClassificationEvidence` with safe labels, badges, matched rule details, and conflict summaries without rerunning rules.
+- Review-required import composition wiring that commits Hub Workbench review/evidence first, then best-effort publishes the Odoo Workbench projection when explicitly enabled by a future external import trigger.
 - Shared Workflow Model with canonical `WorkflowType`, immutable `WorkflowDecision`, and structured Manual Review reason contracts.
 - Manual Review workflow foundation for deterministic business mismatches without ERP writes.
 - Import Workbench application contracts for future review queue, review detail, user decision, and acknowledgement adapters.
@@ -73,7 +74,7 @@ Current implemented capabilities:
 - Import Workbench review query use cases for listing the review queue and retrieving one review item through `ReviewQueueReader`.
 - Import Workbench review decision submission use case for optimistic, idempotent `SELECT_WORKFLOW` and `DISMISS` decisions without workflow execution.
 - Authenticated Import Workbench REST API for queue, detail, and decision submission through `RequestContext` permissions.
-- Odoo Online Workbench projection contract for future Odoo Studio review display and explicit decision capture.
+- Odoo Online Workbench projection contract and publisher for configured Odoo Studio review display and explicit decision capture.
 - Business Context Allocation contracts and Workbench decision submission evidence for multi-Sales-Order, customer recharge, affiliate, project, and internal cost traceability.
 - Immutable Workbench review billing evidence persistence for authoritative customer recharge billing instructions, fully separated from vendor cost allocation evidence.
 - Production-safe read-only Odoo Workbench decision candidate reader for configured Studio parent projection and allocation child models.
@@ -100,7 +101,8 @@ Not implemented or not allowed by default:
 - Odoo `action_post`, unlink, payment registration, reconciliation, or automatic master-data creation.
 - Business decision logic inside Odoo.
 - Custom Odoo Python addons for Odoo Online.
-- Odoo Studio projection publishing, acknowledgement writes, model/view setup, or workflow execution.
+- Odoo Studio model/view setup, acknowledgement runtime trigger, retry scheduler, or workflow execution.
+- Externally reachable production import trigger attachment for `build_import_invoice_use_case(...)`.
 - Customer invoice posting, recharge settlement, collections, allocation profitability posting, or analytic writes.
 - Customer Invoice creation from the normal production Workbench/import flow until an authoritative Stage 1 billing instruction capture or Workbench authoring source exists.
 - Customer Invoice `EXECUTE` without explicit, version-pinned billing instructions for customer, currency, product, quantity, unit price, and sales taxes. Customer Invoice pricing comes only from immutable billing evidence, never from `BusinessContextAllocation` amount/percentage, purchase tax mapping, display fields, current ERP prices, AI, or fuzzy logic.

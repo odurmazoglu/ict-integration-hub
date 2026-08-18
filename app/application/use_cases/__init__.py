@@ -2,6 +2,7 @@
 
 from app.application.use_cases.base import UseCase
 from app.application.use_cases.import_invoice import (
+    WORKBENCH_PROJECTION_FAILURE_WARNING,
     ImportInvoiceInfrastructureError,
     ImportInvoiceUseCase,
     ImportInvoiceValidationError,
@@ -13,5 +14,6 @@ __all__ = [
     "ImportSession",
     "ImportInvoiceUseCase",
     "ImportInvoiceValidationError",
+    "WORKBENCH_PROJECTION_FAILURE_WARNING",
     "UseCase",
 ]

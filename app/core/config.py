@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     odoo_timeout_seconds: float = 10
     odoo_purchase_journal_id: int | None = None
     odoo_purchase_journal_code: str | None = None
+    odoo_workbench_projection_publish_enabled: bool = False
 
     uyumsoft_environment: UyumsoftEnvironment = "test"
     uyumsoft_test_wsdl_url: AnyHttpUrl = Field(default="https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl")

@@ -43,6 +43,7 @@ class DecisionResult(ApplicationDTO):
     strategy: str
     status: str
     vendor_bill_id: int | None = None
+    review_id: str | None = None
     review_required: bool = False
     review_reasons: tuple[ManualReviewReason, ...] = field(default_factory=tuple)
     classification_result: object | None = None

@@ -69,6 +69,7 @@ from app.application.workbench.exceptions import (
     WorkbenchErpReferenceTypeError,
     WorkbenchErpReferenceUnsupportedError,
     WorkbenchErpReferenceValidationError,
+    WorkbenchProjectionPublishError,
     WorkbenchSubmissionCompanyMismatchError,
     WorkbenchSubmissionOrchestrationError,
 )
@@ -178,6 +179,7 @@ __all__ = [
     "WorkbenchClassificationProjection",
     "WorkbenchClassificationProjectionService",
     "WorkbenchDecisionCandidateReader",
+    "WorkbenchProjectionPublishError",
     "WorkbenchErpReferenceCompanyMismatchError",
     "WorkbenchErpReferenceNotFoundError",
     "WorkbenchErpReferenceRelationshipError",

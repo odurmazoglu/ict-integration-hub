@@ -15,6 +15,7 @@ from app.application.workbench import (
     WorkbenchClassificationConflictRuleProjection,
     WorkbenchClassificationProjection,
     WorkbenchProjection,
+    WorkbenchProjectionPublishError,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.erp.exceptions import ErpRepositoryError
@@ -111,6 +112,29 @@ def test_duplicate_parent_projection_rows_fail_closed() -> None:
     )
 
     with pytest.raises(WorkbenchCandidateAmbiguityError):
+        publisher.publish_projection(_projection())
+
+
+def test_create_repository_failure_maps_to_projection_publish_error() -> None:
+    publisher = OdooWorkbenchProjectionPublisher(
+        adapter=RecordingProjectionAdapter(search_records=[], create_exc=ErpRepositoryError("Odoo create failed.")),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchProjectionPublishError, match="Odoo Workbench projection publish failed."):
+        publisher.publish_projection(_projection())
+
+
+def test_write_repository_failure_maps_to_projection_publish_error() -> None:
+    publisher = OdooWorkbenchProjectionPublisher(
+        adapter=RecordingProjectionAdapter(
+            search_records=[{"id": 42}],
+            write_exc=ErpRepositoryError("Odoo write failed."),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchProjectionPublishError, match="Odoo Workbench projection publish failed."):
         publisher.publish_projection(_projection())
 
 
@@ -252,9 +276,18 @@ class StaticClassificationService:
 
 
 class RecordingProjectionAdapter:
-    def __init__(self, *, search_records: list[dict[str, Any]], created_id: int = 42) -> None:
+    def __init__(
+        self,
+        *,
+        search_records: list[dict[str, Any]],
+        created_id: int = 42,
+        create_exc: Exception | None = None,
+        write_exc: Exception | None = None,
+    ) -> None:
         self.search_records = search_records
         self.created_id = created_id
+        self.create_exc = create_exc
+        self.write_exc = write_exc
         self.calls: list[dict[str, Any]] = []
         self.create_values: dict[str, Any] = {}
         self.write_values: dict[str, Any] = {}
@@ -287,6 +320,8 @@ class RecordingProjectionAdapter:
         self.create_calls += 1
         self.calls.append({"method": "create", "model": model, "values": values})
         self.create_values = values
+        if self.create_exc is not None:
+            raise self.create_exc
         return self.created_id
 
     def write(self, *, model: str, record_id: int, values: dict[str, Any]) -> None:
@@ -294,6 +329,8 @@ class RecordingProjectionAdapter:
         self.calls.append({"method": "write", "model": model, "record_id": record_id, "values": values})
         self.write_record_id = record_id
         self.write_values = values
+        if self.write_exc is not None:
+            raise self.write_exc
 
 
 class AsyncFakeOdooClient:

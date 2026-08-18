@@ -1,5 +1,10 @@
 """Production composition roots for application use cases."""
 
 from app.composition.execution import build_vendor_bill_execution_use_case
+from app.composition.imports import build_import_invoice_use_case, build_odoo_workbench_projection_publisher
 
-__all__ = ["build_vendor_bill_execution_use_case"]
+__all__ = [
+    "build_import_invoice_use_case",
+    "build_odoo_workbench_projection_publisher",
+    "build_vendor_bill_execution_use_case",
+]
