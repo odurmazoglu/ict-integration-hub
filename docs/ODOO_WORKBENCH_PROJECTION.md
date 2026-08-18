@@ -2,7 +2,7 @@
 
 This document defines the architecture and contract for presenting Hub-owned Import Workbench reviews inside Odoo 19 Online through Odoo Studio projection models.
 
-This slice includes the Odoo JSON-2 projection publisher for Hub-owned Workbench fields and the read-only candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. It also defines the Odoo Workbench billing authoring contract and capture path for Customer Invoice creation terms. Odoo standard Sales/Invoicing remains the preferred surface for customer billing; Hub Workbench does not recreate standard Odoo billing workflows. The Studio models, Studio views, ACLs, scheduler, decision persistence trigger, and workflow execution are not implemented in this slice.
+This slice includes the Odoo JSON-2 projection publisher for Hub-owned Workbench fields and the read-only candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. It also wires projection publishing into review-required import runtime after Hub review/evidence persistence. Odoo standard Sales/Invoicing remains the preferred surface for customer billing; Hub Workbench does not recreate standard Odoo billing workflows. The Studio models, Studio views, ACLs, scheduler, automatic retry worker, acknowledgement runtime trigger, and workflow execution are not implemented in this slice.
 
 ## Architecture
 
@@ -34,14 +34,15 @@ flowchart TB
 
 The synchronization flow is Hub-controlled:
 
-1. Hub creates or updates a review item in PostgreSQL.
-2. Hub publishes an immutable `WorkbenchProjection` to Odoo.
-3. Odoo users review Hub-owned fields and enter explicit decision fields.
-4. Hub reads only records where the configured decision-ready field is explicitly true.
-5. Hub validates the candidate through existing Workbench command rules.
-6. Hub persists an accepted decision with optimistic concurrency and idempotency.
-7. Hub writes acknowledgement fields back to the projection.
-8. Later focused workflow PRs may execute accepted decisions.
+1. Hub creates or loads the pending review item and pinned classification evidence in PostgreSQL.
+2. Hub commits the review/evidence transaction.
+3. Hub publishes an immutable `WorkbenchProjection` to Odoo as a best-effort second step.
+4. Odoo users review Hub-owned fields and enter explicit decision fields.
+5. Hub reads only records where the configured decision-ready field is explicitly true.
+6. Hub validates the candidate through existing Workbench command rules.
+7. Hub persists an accepted decision with optimistic concurrency and idempotency.
+8. Hub writes acknowledgement fields back to the projection in a later runtime slice.
+9. Later focused workflow PRs may execute accepted decisions.
 
 ## Proposed Studio Model
 
@@ -482,6 +483,8 @@ Publish behavior:
 Projection refresh does not overwrite Odoo-authored decision input fields, selected workflow, decision comments, ready-for-Hub flag, decision audit fields, idempotency key, or allocation child rows. Acknowledgement projection is narrower still: it updates only acknowledgement-owned status/version fields and trace id when supplied.
 
 The publisher can use `WorkbenchClassificationProjectionService` to read persisted `ReviewClassificationEvidence` for the review version being projected. It does not evaluate current rules and does not derive a fake matched rule for `NO_MATCH`, `REVIEW_REQUIRED`, or `CONFLICT` states.
+
+Runtime import composition enables publishing only when `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=true`. The Hub review and classification evidence are committed first, then `publish_projection(...)` runs. Odoo unavailable, timeout, repository, duplicate projection, or mapping-data failures return a safe import warning and leave the Hub review authoritative for later manual reconciliation. No background retry queue or scheduler exists yet.
 
 Review reasons and warnings remain structured in application DTOs. The Odoo adapter renders the current HTML Studio fields with escaped dynamic text and deterministic badge markup only.
 

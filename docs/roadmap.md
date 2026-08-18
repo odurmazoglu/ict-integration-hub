@@ -65,7 +65,9 @@
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
 - Hub-to-Odoo JSON-2 projection publishing (implemented adapter boundary)
+- review-required import runtime publishing after durable Hub review/evidence persistence
 - Hub acknowledgement projection (implemented status/version projection boundary)
+- retry/reconciliation tooling for projection publish failures
 - no custom Odoo Python addon
 - no workflow execution
 

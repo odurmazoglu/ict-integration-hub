@@ -2,13 +2,15 @@
 
 Import Workbench is the accepted Odoo-side user interface for reviewing import sessions. It lives inside Odoo as UI only and does not contain business logic.
 
-Odoo 19 Online cannot install custom Python modules. The accepted Odoo Online architecture is an Odoo Studio projection model, synchronized by the Hub through JSON-2. This repository includes a production-safe, read-only Odoo candidate reader for configured Studio projection models. It does not create the Studio models, views, ACLs, scheduler, acknowledgement projection, or Odoo UI implementation.
+Odoo 19 Online cannot install custom Python modules. The accepted Odoo Online architecture is an Odoo Studio projection model, synchronized by the Hub through JSON-2. This repository includes a production-safe Odoo projection publisher for Hub-owned review fields and a read-only Odoo candidate reader for configured Studio projection models. It does not create the Studio models, views, ACLs, scheduler, acknowledgement runtime trigger, or Odoo UI implementation.
 
 The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, explicit review decision submission persistence, authenticated REST API adapters for direct Hub clients, ERP-neutral projection contracts, and a read-only Odoo JSON-2 adapter that can read ready decision candidates plus allocation child rows from configured Odoo Studio models.
 
 Inbound invoice classification is now available as application-layer evidence through `InvoiceDecisionRuleEngine`. Odoo-authored rules are read into canonical Hub contracts, evaluated against canonical invoice context, and returned as `InvoiceClassificationResult` evidence. That evidence may later be projected to Workbench, but classification by itself is not an accepted Workbench decision and does not execute ERP workflows.
 
-The current import integration carries classification evidence on `DecisionResult` and `ImportInvoiceResult` until a review is created. Review creation can now persist immutable `ReviewClassificationEvidence` into `workbench_review_classification_evidence`, keyed by exact `company_id`, `review_id`, and `review_version`. `WorkbenchClassificationProjectionService` exposes that pinned evidence as a read-only Workbench UI projection; Odoo Studio field publishing remains future adapter work.
+The import runtime now creates a pending Hub Workbench review for review-required results when the composition root supplies `ReviewItemCreationService`. Review creation persists immutable `ReviewClassificationEvidence` into `workbench_review_classification_evidence`, keyed by exact `company_id`, `review_id`, and `review_version`. When `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=true`, the composition root commits that Hub review/evidence first and then attempts best-effort Odoo projection publishing through `WorkbenchProjectionPublisher`.
+
+Projection publishing is recoverable but not transactional with Hub persistence. Odoo lookup, timeout, repository, ambiguity, or mapping-data failures add a safe import warning and leave the Hub review authoritative. The runtime does not re-run `InvoiceDecisionRuleEngine` for projection; `OdooWorkbenchProjectionPublisher` uses `WorkbenchClassificationProjectionService`, which reads the already persisted review-version evidence. There is no scheduler, queue worker, or automatic retry/reconciliation loop in this slice.
 
 ## Purpose
 
@@ -431,6 +433,8 @@ Monetary and percentage values are parsed into `Decimal` without float arithmeti
 ## Odoo Projection Publisher
 
 `OdooWorkbenchProjectionPublisher` implements the publisher port for the configured Odoo Studio parent model. It uses exact company-scoped lookup by `review_id` and `company_id`, creates a projection row when none exists, updates one existing row when exactly one exists, and rejects duplicates as ambiguity. Refresh payloads contain Hub-owned display fields only and preserve Odoo-authored decision fields, selected workflow, comments, readiness, audit fields, idempotency key, and allocation children.
+
+The import runtime wires this publisher after Hub review persistence when `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=true`. The ordering is Hub review plus classification evidence commit first, Odoo projection attempt second. A projection failure returns a safe warning on the import result and does not roll back, downgrade, or reclassify the Hub review.
 
 The publisher projects persisted classification evidence through `WorkbenchClassificationProjectionService` when supplied. It does not re-run decision rules. `x_studio_invoice_total` is the canonical invoice total mapping; legacy `x_studio_total_amount` is display-only and not used for allocation reconciliation.
 
