@@ -7,6 +7,7 @@ from alembic import command
 from app.core.config import get_settings
 from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
+from app.models.import_receipt import ImportReceipt
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
 from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
@@ -40,6 +41,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workbench_review_billing_evidence" in inspector.get_table_names()
     assert "execution_customer_billing_evidence" in inspector.get_table_names()
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
+    assert "import_receipts" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -330,19 +332,42 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         index["name"] for index in inspector.get_indexes("workbench_review_classification_evidence")
     }
     assert {
-        "ix_workbench_review_classification_evidence_company_review_version",
-        "ix_workbench_review_classification_evidence_status",
-        "ix_workbench_review_classification_evidence_rule_code",
+        "ix_wbrce_company_review_version",
+        "ix_wbrce_status",
+        "ix_wbrce_rule_code",
     }.issubset(classification_evidence_indexes)
     classification_evidence_unique_constraints = {
         constraint["name"]
         for constraint in inspector.get_unique_constraints("workbench_review_classification_evidence")
     }
-    assert (
-        "uq_workbench_review_classification_evidence_company_review_version"
-        in classification_evidence_unique_constraints
-    )
+    assert "uq_wbrce_company_review_version" in classification_evidence_unique_constraints
     assert WorkbenchReviewClassificationEvidence.__table__.c.conflicting_rules.nullable is False
+    import_receipt_columns = {column["name"] for column in inspector.get_columns("import_receipts")}
+    assert {
+        "company_id",
+        "idempotency_key",
+        "invoice_id",
+        "status",
+        "vendor_bill_id",
+        "review_id",
+        "created_at",
+    }.issubset(import_receipt_columns)
+    import_receipt_indexes = {index["name"] for index in inspector.get_indexes("import_receipts")}
+    assert {
+        "ix_import_receipts_idempotency_key",
+        "ix_import_receipts_company_status",
+    }.issubset(import_receipt_indexes)
+    import_receipt_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("import_receipts")
+    }
+    assert "uq_import_receipts_company_idempotency_key" in import_receipt_unique_constraints
+    assert ImportReceipt.__table__.c.company_id.nullable is False
+    assert ImportReceipt.__table__.c.idempotency_key.nullable is False
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "import_receipts" not in inspector.get_table_names()
+    assert "workbench_review_classification_evidence" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))

@@ -79,12 +79,14 @@ class ImportInvoiceUseCase:
         decision_result = await _translate_decision(
             self._decision_engine.decide(replace(command, idempotency_key=idempotency_key)),
         )
-        review_item, projection_warnings = _persist_and_publish_review_if_required(
+        review_item, projection_warnings = _persist_review_record_receipt_and_publish_if_required(
             command=replace(command, idempotency_key=idempotency_key),
             decision_result=decision_result,
+            import_history=self._import_history,
             review_item_creation_service=self._review_item_creation_service,
             workbench_projection_publisher=self._workbench_projection_publisher,
             unit_of_work=self._unit_of_work,
+            duration=_duration(started),
         )
         return _result_from_decision(
             invoice_id=invoice_id,
@@ -132,16 +134,54 @@ def _result_from_decision(
     )
 
 
-def _persist_and_publish_review_if_required(
+def _persist_review_record_receipt_and_publish_if_required(
     *,
     command: ImportInvoiceCommand,
     decision_result: DecisionResult,
+    import_history: InvoiceImportHistory,
     review_item_creation_service: ReviewItemCreationService | None,
     workbench_projection_publisher: WorkbenchProjectionPublisher | None,
     unit_of_work: UnitOfWork | None,
+    duration: float,
 ) -> tuple[ReviewItem | None, tuple[str, ...]]:
-    if not decision_result.review_required or review_item_creation_service is None:
+    if decision_result.review_required and review_item_creation_service is not None:
+        review_item = _persist_review_if_required(
+            command=command,
+            decision_result=decision_result,
+            review_item_creation_service=review_item_creation_service,
+        )
+    else:
+        review_item = None
+    result = _result_from_decision(
+        invoice_id=command.invoice.header.ettn or command.invoice.header.invoice_uuid,
+        decision_result=decision_result,
+        review_id=review_item.review_id if review_item is not None else decision_result.review_id,
+        duration=duration,
+    )
+    _record_successful_import_receipt_if_supported(
+        command=command,
+        result=result,
+        import_history=import_history,
+    )
+    if review_item is None:
         return None, ()
+    if unit_of_work is not None:
+        _translate_infrastructure(unit_of_work.commit, "Workbench review persistence commit failed.")
+    if workbench_projection_publisher is None:
+        return review_item, ()
+    return review_item, _publish_workbench_projection(
+        review_item,
+        company_id=_company_id(command),
+        publisher=workbench_projection_publisher,
+    )
+
+
+def _persist_review_if_required(
+    *,
+    command: ImportInvoiceCommand,
+    decision_result: DecisionResult,
+    review_item_creation_service: ReviewItemCreationService,
+) -> ReviewItem:
     company_id = _company_id(command)
     item = _review_item_from_import(command=command, decision_result=decision_result, company_id=company_id)
     classification_evidence = _classification_evidence(
@@ -156,14 +196,27 @@ def _persist_and_publish_review_if_required(
         classification_evidence=classification_evidence,
         review_item_creation_service=review_item_creation_service,
     )
-    if unit_of_work is not None:
-        _translate_infrastructure(unit_of_work.commit, "Workbench review persistence commit failed.")
-    if workbench_projection_publisher is None:
-        return persisted, ()
-    return persisted, _publish_workbench_projection(
-        persisted,
-        company_id=company_id,
-        publisher=workbench_projection_publisher,
+    return persisted
+
+
+def _record_successful_import_receipt_if_supported(
+    *,
+    command: ImportInvoiceCommand,
+    result: ImportInvoiceResult,
+    import_history: InvoiceImportHistory,
+) -> None:
+    if not result.success or result.status == "already_imported":
+        return
+    recorder = getattr(import_history, "record_import_result", None)
+    if recorder is None:
+        return
+    _translate_infrastructure(
+        lambda: recorder(
+            company_id=_company_id(command),
+            idempotency_key=command.idempotency_key,
+            result=result,
+        ),
+        "Canonical import receipt persistence failed.",
     )
 
 

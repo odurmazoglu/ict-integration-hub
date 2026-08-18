@@ -40,7 +40,7 @@
 - Inbound import classification integration from `InternalInvoice` plus deterministic match evidence through `DecisionRuleRepository` and `InvoiceDecisionRuleEngine` into immutable import/decision result evidence, without ERP execution changes
 - Durable Workbench review classification evidence pinning for exact company/review/version replay, explicit `NO_MATCH`, conflict evidence, and no historical reclassification from current Odoo rules
 - Read-only Workbench classification projection service for pinned historical review evidence, safe badges, matched rule details, and deterministic conflict summaries without rule re-evaluation
-- Uyumsoft inbound sync attachment to the canonical import pipeline for Inbox supplier invoices: provider list/download/persistence, existing UBL parser, `InternalInvoice`, exact company resolution, `ImportInvoiceCommand`, `ImportInvoiceUseCase`, Hub review/evidence, and optional Odoo Workbench projection
+- Uyumsoft inbound sync attachment to the canonical import pipeline for Inbox supplier invoices: provider list/download/persistence, existing UBL parser, `InternalInvoice`, exact company resolution, `ImportInvoiceCommand`, `ImportInvoiceUseCase`, Hub review/evidence or technical import receipt idempotency, and optional Odoo Workbench projection
 
 ## Next Milestones
 

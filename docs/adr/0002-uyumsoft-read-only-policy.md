@@ -57,6 +57,7 @@ These alternatives were rejected because they risk silent provider-side state ch
 - Production Uyumsoft permissions should include invoice listing, invoice detail retrieval, and UBL download only.
 - SOAP faults and provider errors must be surfaced as safe connector errors, not swallowed.
 - Canonical import after sync is limited to Inbox supplier invoices. Outbox documents remain synchronized as provider evidence but are not imported as supplier invoices.
+- The Uyumsoft-triggered canonical command remains `dry_run=True`; successful non-review outcomes are canonical acceptance/evaluation only and are deduplicated by ERP-neutral Hub import receipts.
 
 ## Related Components
 

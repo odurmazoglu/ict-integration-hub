@@ -5,18 +5,23 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from app.application.commands import ImportInvoiceCommand
 from app.application.dto import ImportInvoiceResult
+from app.application.exceptions import ApplicationError
+from app.application.use_cases import ImportInvoiceInfrastructureError, ImportInvoiceValidationError
 from app.domain.invoice import InternalInvoice
+from app.erp.exceptions import ErpRepositoryTimeoutError
 from app.erp.models import Company
 from app.schemas.uyumsoft_invoices import UyumsoftInvoiceSummary
 from app.services.document_service import DocumentDownloadItem, DocumentDownloadResult, DocumentValidationError
 from app.services.document_storage import DocumentStorageError
 from app.services.uyumsoft_canonical_import import (
+    IMPORT_STATUS_ACCEPTED,
     IMPORT_STATUS_ALREADY_IMPORTED,
     IMPORT_STATUS_CANONICAL_IMPORT_FAILED,
     IMPORT_STATUS_COMPANY_RESOLUTION_FAILED,
-    IMPORT_STATUS_IMPORTED,
     IMPORT_STATUS_NORMALIZATION_FAILED,
     IMPORT_STATUS_PROVIDER_DOWNLOAD_FAILED,
     IMPORT_STATUS_REVIEW_CREATED,
@@ -87,12 +92,12 @@ def test_already_imported_canonical_result_is_reported_idempotently() -> None:
     assert outcome.imported_invoice_id == "same-ettn"
 
 
-def test_successful_non_review_import_is_counted_as_imported() -> None:
+def test_successful_non_review_dry_run_import_is_reported_as_accepted() -> None:
     importer = _importer(use_case=RecordingImportUseCase(_success_result()))
 
     outcome = importer.import_invoice(_invoice(), persisted_record=_record())
 
-    assert outcome.status == IMPORT_STATUS_IMPORTED
+    assert outcome.status == IMPORT_STATUS_ACCEPTED
     assert outcome.import_status == "dry_run"
 
 
@@ -131,7 +136,7 @@ def test_batch_continues_when_one_invoice_fails_normalization() -> None:
     )
 
     assert [outcome.status for outcome in result.outcomes] == [
-        IMPORT_STATUS_IMPORTED,
+        IMPORT_STATUS_ACCEPTED,
         IMPORT_STATUS_NORMALIZATION_FAILED,
     ]
     assert len(use_case.commands) == 1
@@ -147,13 +152,92 @@ def test_outbox_invoice_is_not_imported_as_supplier_invoice() -> None:
     assert use_case.commands == []
 
 
-def test_canonical_import_failure_uses_safe_error_surface() -> None:
-    importer = _importer(use_case=FailingImportUseCase())
+def test_expected_import_infrastructure_failure_uses_safe_error_surface() -> None:
+    importer = _importer(use_case=FailingImportUseCase(ImportInvoiceInfrastructureError("safe infra failure")))
 
     outcome = importer.import_invoice(_invoice(), persisted_record=_record())
 
     assert outcome.status == IMPORT_STATUS_CANONICAL_IMPORT_FAILED
-    assert outcome.safe_message == "Canonical invoice import failed."
+    assert outcome.safe_message == "safe infra failure"
+
+
+def test_expected_import_validation_failure_uses_safe_error_surface() -> None:
+    importer = _importer(use_case=FailingImportUseCase(ImportInvoiceValidationError("safe validation failure")))
+
+    outcome = importer.import_invoice(_invoice(), persisted_record=_record())
+
+    assert outcome.status == IMPORT_STATUS_CANONICAL_IMPORT_FAILED
+    assert outcome.safe_message == "safe validation failure"
+
+
+def test_expected_application_import_failure_uses_safe_error_surface() -> None:
+    importer = _importer(use_case=FailingImportUseCase(ApplicationError("safe application failure")))
+
+    outcome = importer.import_invoice(_invoice(), persisted_record=_record())
+
+    assert outcome.status == IMPORT_STATUS_CANONICAL_IMPORT_FAILED
+    assert outcome.safe_message == "safe application failure"
+
+
+@pytest.mark.parametrize("exc", [TypeError("bug"), RuntimeError("bug")])
+def test_unexpected_canonical_import_error_is_not_swallowed(exc: Exception) -> None:
+    importer = _importer(use_case=FailingImportUseCase(exc))
+
+    with pytest.raises(type(exc)):
+        importer.import_invoice(_invoice(), persisted_record=_record())
+
+
+def test_ambiguous_company_resolution_fails_closed_without_calling_import_use_case() -> None:
+    use_case = RecordingImportUseCase(_success_result())
+    importer = _importer(
+        use_case=use_case,
+        companies=(
+            Company(id=7, name="ICT", tax_number="2222222222"),
+            Company(id=8, name="Other", tax_number="2222222222"),
+        ),
+    )
+
+    outcome = importer.import_invoice(_invoice(), persisted_record=_record())
+
+    assert outcome.status == IMPORT_STATUS_COMPANY_RESOLUTION_FAILED
+    assert use_case.commands == []
+
+
+def test_expected_company_lookup_infrastructure_failure_is_safe() -> None:
+    use_case = RecordingImportUseCase(_success_result())
+    importer = _importer(
+        use_case=use_case,
+        company_repository=FailingCompanyRepository(ErpRepositoryTimeoutError("Odoo company lookup timed out.")),
+    )
+
+    outcome = importer.import_invoice(_invoice(), persisted_record=_record())
+
+    assert outcome.status == IMPORT_STATUS_COMPANY_RESOLUTION_FAILED
+    assert outcome.safe_message == "Odoo company lookup timed out."
+    assert use_case.commands == []
+
+
+def test_unexpected_company_lookup_error_is_not_swallowed() -> None:
+    importer = _importer(
+        use_case=RecordingImportUseCase(_success_result()),
+        company_repository=FailingCompanyRepository(TypeError("bug")),
+    )
+
+    with pytest.raises(TypeError):
+        importer.import_invoice(_invoice(), persisted_record=_record())
+
+
+@pytest.mark.parametrize("items", [[], ["first", "second"]])
+def test_document_download_must_return_exactly_one_ubl_item(items: list[str]) -> None:
+    importer = _importer(
+        use_case=RecordingImportUseCase(_success_result()),
+        document_service=CardinalityDocumentService(items),
+    )
+
+    outcome = importer.import_invoice(_invoice(), persisted_record=_record())
+
+    assert outcome.status == IMPORT_STATUS_PROVIDER_DOWNLOAD_FAILED
+    assert outcome.safe_message == "Document download failed."
 
 
 def test_no_duplicate_parser_or_projection_logic_in_uyumsoft_layer() -> None:
@@ -178,11 +262,12 @@ def _importer(
     content: bytes | None = None,
     storage: object | None = None,
     document_service: object | None = None,
+    company_repository: object | None = None,
 ) -> UyumsoftCanonicalInvoiceImporter:
     return UyumsoftCanonicalInvoiceImporter(
         document_service=document_service or FakeDocumentService(),
         storage=storage or FakeStorage(content or _valid_ubl()),
-        company_resolver=ExactCompanyResolver(FakeCompanyRepository(companies)),
+        company_resolver=ExactCompanyResolver(company_repository or FakeCompanyRepository(companies)),
         import_use_case_factory=lambda: use_case,  # type: ignore[arg-type]
     )
 
@@ -239,8 +324,11 @@ class RecordingImportUseCase:
 
 
 class FailingImportUseCase:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
     async def execute(self, command: ImportInvoiceCommand) -> ImportInvoiceResult:
-        raise RuntimeError("provider payload hidden")
+        raise self.exc
 
 
 class FakeCompanyRepository:
@@ -251,6 +339,20 @@ class FakeCompanyRepository:
     def find_by_tax_number(self, tax_number: str) -> tuple[Company, ...]:
         self.tax_number_calls.append(tax_number)
         return self.companies
+
+    def find_by_id(self, company_id: int) -> Company | None:
+        return None
+
+    def find_default(self) -> Company | None:
+        return None
+
+
+class FailingCompanyRepository:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    def find_by_tax_number(self, tax_number: str) -> tuple[Company, ...]:
+        raise self.exc
 
     def find_by_id(self, company_id: int) -> Company | None:
         return None
@@ -272,6 +374,30 @@ class SequentialDocumentService:
 class FailingDocumentService:
     def download_documents(self, *, invoice_ids: list[int], document_type: str) -> DocumentDownloadResult:
         raise DocumentValidationError("Downloaded document is empty or invalid.")
+
+
+class CardinalityDocumentService:
+    def __init__(self, storage_keys: list[str]) -> None:
+        self.storage_keys = storage_keys
+
+    def download_documents(self, *, invoice_ids: list[int], document_type: str) -> DocumentDownloadResult:
+        return DocumentDownloadResult(
+            provider="uyumsoft",
+            document_type="UBL_XML",
+            items=[
+                DocumentDownloadItem(
+                    invoice_id=invoice_ids[0],
+                    document_id=index + 1,
+                    status="existing",
+                    document_type="UBL_XML",
+                    storage_backend="memory",
+                    storage_key=storage_key,
+                    content_hash_sha256="0" * 64,
+                    content_size_bytes=10,
+                )
+                for index, storage_key in enumerate(self.storage_keys)
+            ],
+        )
 
 
 class FakeStorage:

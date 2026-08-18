@@ -7,11 +7,13 @@ from typing import Protocol
 
 from app.application.commands import ImportInvoiceCommand
 from app.application.dto import ImportInvoiceResult
+from app.application.exceptions import ApplicationError
 from app.application.use_cases import ImportInvoiceUseCase
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.domain.invoice import InternalInvoice
 from app.domain.invoice.exceptions import InvoiceDomainError
 from app.domain.invoice.parser import parse_ubl_invoice
+from app.erp.exceptions import ErpRepositoryError
 from app.erp.repositories import CompanyRepository
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceSummary
@@ -19,7 +21,8 @@ from app.services.document_service import DOCUMENT_TYPE_UBL_XML, DocumentDownloa
 from app.services.document_storage import DocumentStorage, DocumentStorageError
 from app.services.invoice_persistence import build_invoice_identity
 
-IMPORT_STATUS_IMPORTED = "imported"
+IMPORT_STATUS_ACCEPTED = "accepted"
+IMPORT_STATUS_IMPORTED = IMPORT_STATUS_ACCEPTED
 IMPORT_STATUS_REVIEW_CREATED = "review_created"
 IMPORT_STATUS_ALREADY_IMPORTED = "already_imported"
 IMPORT_STATUS_SKIPPED_DIRECTION = "skipped_direction"
@@ -155,7 +158,15 @@ class UyumsoftCanonicalInvoiceImporter:
         if isinstance(parsed, UyumsoftCanonicalImportOutcome):
             return parsed
 
-        company_id = self._company_resolver.resolve_company_id(parsed)
+        try:
+            company_id = self._company_resolver.resolve_company_id(parsed)
+        except ErpRepositoryError as exc:
+            return UyumsoftCanonicalImportOutcome(
+                direction=invoice.direction,
+                invoice_identity=identity,
+                status=IMPORT_STATUS_COMPANY_RESOLUTION_FAILED,
+                safe_message=_safe_message(exc, "Exact company resolution failed."),
+            )
         if company_id is None:
             return UyumsoftCanonicalImportOutcome(
                 direction=invoice.direction,
@@ -176,7 +187,7 @@ class UyumsoftCanonicalInvoiceImporter:
                     )
                 )
             )
-        except Exception as exc:
+        except ApplicationError as exc:
             return UyumsoftCanonicalImportOutcome(
                 direction=invoice.direction,
                 invoice_identity=identity,
@@ -200,6 +211,8 @@ class UyumsoftCanonicalInvoiceImporter:
                 invoice_ids=[persisted_record.id],
                 document_type=DOCUMENT_TYPE_UBL_XML,
             )
+            if len(download.items) != 1:
+                raise DocumentDownloadError("Exactly one UBL document is required for canonical import.")
             item = download.items[0]
             return self._storage.read(item.storage_key)
         except (ConnectorError, ConnectorTimeoutError, DocumentDownloadError) as exc:
