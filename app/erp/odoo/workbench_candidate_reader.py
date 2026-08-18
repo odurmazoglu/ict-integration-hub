@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from enum import Enum
 from typing import Any
 
 from app.application.workbench.allocations import (
@@ -32,6 +31,47 @@ SAFE_CANDIDATE_READ_ERROR = "Odoo Workbench decision candidate read failed."
 SAFE_CANDIDATE_DATA_ERROR = "Odoo Workbench decision candidate data is invalid."
 SAFE_CANDIDATE_AMBIGUITY_ERROR = "Odoo Workbench decision candidate lookup returned multiple records."
 SAFE_CANDIDATE_NOT_FOUND = "Odoo Workbench decision candidate was not found."
+
+ODOO_DECISION_TO_CANONICAL: dict[str, ReviewDecisionType] = {
+    "Submit Decision": ReviewDecisionType.SELECT_WORKFLOW,
+    "Dismiss": ReviewDecisionType.DISMISS,
+}
+
+ODOO_ALLOCATION_TYPE_TO_CANONICAL: dict[str, BusinessContextAllocationType] = {
+    "Sales Order Cost": BusinessContextAllocationType.SALES_ORDER_COST,
+    "Customer Recharge": BusinessContextAllocationType.CUSTOMER_RECHARGE,
+    "Existing Purchase Order": BusinessContextAllocationType.EXISTING_PURCHASE_ORDER,
+    "New RFQ + Purchase": BusinessContextAllocationType.NEW_RFQ_PURCHASE,
+    "Project Cost": BusinessContextAllocationType.PROJECT_COST,
+    "Operating Expense": BusinessContextAllocationType.OPERATING_EXPENSE,
+    "Fixed Asset": BusinessContextAllocationType.FIXED_ASSET,
+    "Subscription / Service": BusinessContextAllocationType.SUBSCRIPTION_SERVICE,
+    "Internal Cost": BusinessContextAllocationType.INTERNAL_COST,
+}
+
+ODOO_SELECTED_WORKFLOW_TO_CANONICAL: dict[str, WorkflowType] = {
+    "Existing Purchase Order": WorkflowType.VENDOR_BILL,
+    "New RFQ + Purchase Order": WorkflowType.RFQ,
+    "Direct Vendor Bill": WorkflowType.VENDOR_BILL,
+    "Operating Expense": WorkflowType.EXPENSE,
+    "Fixed Asset": WorkflowType.ASSET,
+    "Subscription / Service": WorkflowType.SUBSCRIPTION,
+}
+
+ODOO_SELECTED_WORKFLOW_REQUIRED_ALLOCATION: dict[str, BusinessContextAllocationType] = {
+    "Existing Purchase Order": BusinessContextAllocationType.EXISTING_PURCHASE_ORDER,
+    "New RFQ + Purchase Order": BusinessContextAllocationType.NEW_RFQ_PURCHASE,
+    "Operating Expense": BusinessContextAllocationType.OPERATING_EXPENSE,
+    "Fixed Asset": BusinessContextAllocationType.FIXED_ASSET,
+    "Subscription / Service": BusinessContextAllocationType.SUBSCRIPTION_SERVICE,
+}
+
+DIRECT_VENDOR_BILL_CONFLICTING_ALLOCATION_TYPES = frozenset(
+    {
+        BusinessContextAllocationType.EXISTING_PURCHASE_ORDER,
+        BusinessContextAllocationType.NEW_RFQ_PURCHASE,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,20 +295,24 @@ class OdooWorkbenchDecisionCandidateReader:
             if company_id != requested_company_id:
                 raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
             allocations = self._allocation_set(parent_record=record, parent_id=parent_id)
+            selected_workflow = _selected_workflow(
+                record.get(self._mapping.parent.selected_workflow),
+                allocations,
+            )
             return OdooWorkbenchDecisionCandidate(
                 odoo_record_id=parent_id,
                 review_id=_required_text_value(record.get(self._mapping.parent.review_id)),
                 company_id=company_id,
                 expected_version=_required_positive_int(record.get(self._mapping.parent.expected_version)),
-                decision=ReviewDecisionType(_required_text_value(record.get(self._mapping.parent.decision))),
+                decision=_required_mapped_value(
+                    record.get(self._mapping.parent.decision),
+                    ODOO_DECISION_TO_CANONICAL,
+                ),
                 idempotency_key=_required_text_value(record.get(self._mapping.parent.idempotency_key)),
                 decided_by_odoo_user_id=_required_many2one_id(record.get(self._mapping.parent.decided_by)),
                 decided_at=_required_aware_datetime(record.get(self._mapping.parent.decided_at)),
                 decision_ready=True,
-                selected_workflow=_optional_enum(
-                    record.get(self._mapping.parent.selected_workflow),
-                    WorkflowType,
-                ),
+                selected_workflow=selected_workflow,
                 selected_partner_id=_optional_many2one_id(
                     _field(record, self._mapping.parent.selected_partner),
                 ),
@@ -377,7 +421,10 @@ class OdooWorkbenchDecisionCandidateReader:
 def _allocation(record: dict[str, Any], mapping: OdooWorkbenchAllocationFieldMapping) -> BusinessContextAllocation:
     return BusinessContextAllocation(
         allocation_key=_required_text_value(record.get(mapping.allocation_key)),
-        allocation_type=BusinessContextAllocationType(_required_text_value(record.get(mapping.allocation_type))),
+        allocation_type=_required_mapped_value(
+            record.get(mapping.allocation_type),
+            ODOO_ALLOCATION_TYPE_TO_CANONICAL,
+        ),
         source_line_number=_optional_text_value(_field(record, mapping.source_line_number)),
         description=_optional_text_value(_field(record, mapping.description)),
         amount=_optional_decimal(record.get(mapping.amount)),
@@ -453,10 +500,42 @@ def _field(record: dict[str, Any], field_name: str | None) -> Any:
     return record.get(field_name)
 
 
-def _optional_enum[T: Enum](value: Any, enum_type: type[T]) -> T | None:
+def _required_mapped_value[T](value: Any, mapping: dict[str, T]) -> T:
+    if not isinstance(value, str) or not value.strip():
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+    label = value
+    try:
+        return mapping[label]
+    except KeyError as exc:
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR) from exc
+
+
+def _selected_workflow(
+    value: Any,
+    allocations: BusinessContextAllocationSet | None,
+) -> WorkflowType | None:
     if _is_empty_optional(value):
         return None
-    return enum_type(_required_text_value(value))
+    if not isinstance(value, str) or not value.strip():
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+    try:
+        workflow = ODOO_SELECTED_WORKFLOW_TO_CANONICAL[value]
+    except KeyError as exc:
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR) from exc
+
+    allocation_types = _allocation_types(allocations)
+    required_allocation = ODOO_SELECTED_WORKFLOW_REQUIRED_ALLOCATION.get(value)
+    if required_allocation is not None and required_allocation not in allocation_types:
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+    if value == "Direct Vendor Bill" and allocation_types & DIRECT_VENDOR_BILL_CONFLICTING_ALLOCATION_TYPES:
+        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+    return workflow
+
+
+def _allocation_types(allocations: BusinessContextAllocationSet | None) -> set[BusinessContextAllocationType]:
+    if allocations is None:
+        return set()
+    return {allocation.allocation_type for allocation in allocations.allocations}
 
 
 def _required_bool(value: Any) -> bool:

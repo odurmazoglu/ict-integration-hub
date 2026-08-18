@@ -2,7 +2,7 @@
 
 This document defines the architecture and contract for presenting Hub-owned Import Workbench reviews inside Odoo 19 Online through Odoo Studio projection models.
 
-This slice includes the read-only Odoo JSON-2 candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. It also defines the Odoo Workbench billing authoring contract and capture path for Customer Invoice creation terms. The Studio models, Studio views, ACLs, projection publishing, scheduler, decision persistence trigger, acknowledgement projection, and workflow execution are not implemented in this slice.
+This slice includes the Odoo JSON-2 projection publisher for Hub-owned Workbench fields and the read-only candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. It also defines the Odoo Workbench billing authoring contract and capture path for Customer Invoice creation terms. Odoo standard Sales/Invoicing remains the preferred surface for customer billing; Hub Workbench does not recreate standard Odoo billing workflows. The Studio models, Studio views, ACLs, scheduler, decision persistence trigger, and workflow execution are not implemented in this slice.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ flowchart TB
 
     Hub --> Publisher
     Publisher --> OdooAdapter
-    OdooAdapter -->|future JSON-2 publish| Studio
+    OdooAdapter -->|JSON-2 create/write projection| Studio
     User -->|reviews and submits explicit decision| Studio
     Studio -->|read-only JSON-2 search_read| OdooAdapter
     OdooAdapter --> Reader
@@ -32,7 +32,7 @@ flowchart TB
     Store --> FutureExecution
 ```
 
-The future synchronization flow is Hub-controlled:
+The synchronization flow is Hub-controlled:
 
 1. Hub creates or updates a review item in PostgreSQL.
 2. Hub publishes an immutable `WorkbenchProjection` to Odoo.
@@ -75,6 +75,48 @@ x_ipp_review_allocatio
 ```
 
 Those deployment names are adapter configuration, not application vocabulary. The Hub reads them through `OdooWorkbenchFieldMapping`.
+
+Current Odoo Online deployment display names:
+
+- parent model: `IPP Import Workbench`
+- allocation child model: `IPP Review Allocation`
+
+Current parent Studio fields used by the publisher and reader are deployment mapping values, not application vocabulary:
+
+| Display label | Technical field | Owner |
+| --- | --- | --- |
+| Invoice Number | `x_studio_invoice_number` | Hub projection |
+| Supplier | `x_studio_supplier` | Hub projection |
+| Supplier Tax Number | `x_studio_supplier_tax_number` | Hub projection |
+| Invoice Date | `x_studio_invoice_date` | Hub projection |
+| Currency | `x_studio_currency` | Hub projection |
+| Header Total Amount | `x_studio_total_amount` | Legacy display only |
+| Canonical Invoice Total | `x_studio_invoice_total` | Hub projection |
+| Review Status | `x_studio_review_status` | Hub projection |
+| Workflow | `x_studio_workflow` | Hub projection |
+| Classification | `x_studio_classification` | Hub projection |
+| Matched Rule | `x_studio_matched_rule` | Hub projection |
+| Rule Version | `x_studio_rule_version` | Hub projection |
+| Review Required | `x_studio_review_required` | Hub projection |
+| Business Context Required | `x_studio_business_context_required` | Hub projection |
+| Conflict | `x_studio_conflict` | Hub projection |
+| Review Version | `x_studio_review_version` | Hub projection |
+| Last Sync At | `x_studio_last_sync_at` | Hub projection |
+| Trace ID | `x_studio_trace_id` | Hub projection |
+| Review Findings | `x_studio_review_reasons` | Hub projection HTML |
+| Warnings | `x_studio_warnings` | Hub projection HTML |
+| Decision | `x_studio_decision` | Odoo user input |
+| Selected Workflow | `x_studio_selected_workflow` | Odoo user input |
+| Decision Comment | `x_studio_decision_comment` | Odoo user input |
+| Ready for Hub Processing | `x_studio_ready_for_hub_processing` | Odoo user input |
+| Review ID | `x_studio_review_id` | Hub identity |
+| Company | `x_studio_company` | Hub identity |
+| Decided At | `x_studio_decided_at` | Odoo audit |
+| Decided By | `x_studio_decided_by` | Odoo audit |
+| Decision Idempotency Key | `x_studio_decision_idempotency_key` | Odoo input |
+| Allocation list | `x_studio_allocation_list` | Odoo child rows |
+
+Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 
 ## Source Of Truth
 
@@ -358,6 +400,21 @@ child:  [[parent_many2one_field, "=", parent_odoo_record_id]]
 
 The parent lookup uses `limit=2` so ambiguity is explicit. A missing parent or a parent with decision-ready `false` is reported as no ready candidate. Missing, malformed, or non-boolean decision-ready values are data errors.
 
+The reader maps current Odoo Studio labels explicitly. `Submit Decision` maps to canonical `select_workflow`, and `Dismiss` maps to canonical `dismiss`. `Request Investigation` is intentionally unsupported because it is not a canonical Hub `ReviewDecisionType`; a decision-ready record containing it fails closed.
+
+`WorkflowType` is the high-level review decision vocabulary. Detailed execution intent lives in canonical `BusinessContextAllocationType` evidence and later becomes `ExecutionStepType` in the planner. The reader therefore must not collapse materially different Odoo Selected Workflow labels unless the allocation rows also preserve that intent explicitly:
+
+| Odoo Selected Workflow | Canonical selected workflow | Required canonical allocation evidence |
+| --- | --- | --- |
+| Existing Purchase Order | `vendor_bill` | at least one `existing_purchase_order` allocation |
+| New RFQ + Purchase Order | `rfq` | at least one `new_rfq_purchase` allocation |
+| Direct Vendor Bill | `vendor_bill` | no `existing_purchase_order` or `new_rfq_purchase` allocation |
+| Operating Expense | `expense` | at least one `operating_expense` allocation |
+| Fixed Asset | `asset` | at least one `fixed_asset` allocation |
+| Subscription / Service | `subscription` | at least one `subscription_service` allocation |
+
+If the required allocation evidence is missing or contradictory, the reader fails closed instead of inferring intent from descriptions, Odoo state, history, or heuristics.
+
 ### Reader Mapping Configuration
 
 Studio technical field names are deployment-specific. The reader uses `OdooWorkbenchFieldMapping` rather than hard-coded field names.
@@ -410,6 +467,52 @@ Allocation completeness is explicit. The reader uses either the mapped parent co
 `customer_invoice_id` is optional evidence for an existing outgoing customer invoice or refund. When the mapping is absent, it is `None`. When present, the value must be an integer or Many2one identifier. The reader does not create customer invoices and does not validate outgoing-invoice move type in this slice.
 
 Department fields are ignored. Department is not part of the accepted allocation contract.
+
+## Projection Publisher
+
+`OdooWorkbenchProjectionPublisher` implements `WorkbenchProjectionPublisher` for the configured parent Studio model. It performs an exact company-scoped lookup by configured `review_id` and `company_id` fields with `limit=2`.
+
+Publish behavior:
+
+- zero matching rows creates one projection row
+- one matching row updates Hub-owned projection fields only
+- multiple matching rows fail closed as ambiguous
+- repeat publishing the same review identity updates the existing row and does not create a duplicate
+
+Projection refresh does not overwrite Odoo-authored decision input fields, selected workflow, decision comments, ready-for-Hub flag, decision audit fields, idempotency key, or allocation child rows. Acknowledgement projection is narrower still: it updates only acknowledgement-owned status/version fields and trace id when supplied.
+
+The publisher can use `WorkbenchClassificationProjectionService` to read persisted `ReviewClassificationEvidence` for the review version being projected. It does not evaluate current rules and does not derive a fake matched rule for `NO_MATCH`, `REVIEW_REQUIRED`, or `CONFLICT` states.
+
+Review reasons and warnings remain structured in application DTOs. The Odoo adapter renders the current HTML Studio fields with escaped dynamic text and deterministic badge markup only.
+
+Current publisher mapping keys use `OdooWorkbenchProjectionFieldMapping`:
+
+| Logical value | Configuration key |
+| --- | --- |
+| Parent model | `ODOO_WORKBENCH_PUBLISHER_PARENT_MODEL` |
+| Review id | `ODOO_WORKBENCH_PUBLISHER_REVIEW_ID_FIELD` |
+| Company | `ODOO_WORKBENCH_PUBLISHER_COMPANY_ID_FIELD` |
+| Invoice number | `ODOO_WORKBENCH_PUBLISHER_INVOICE_NUMBER_FIELD` |
+| Supplier | `ODOO_WORKBENCH_PUBLISHER_SUPPLIER_FIELD` |
+| Supplier tax number | `ODOO_WORKBENCH_PUBLISHER_SUPPLIER_TAX_NUMBER_FIELD` |
+| Invoice date | `ODOO_WORKBENCH_PUBLISHER_INVOICE_DATE_FIELD` |
+| Currency | `ODOO_WORKBENCH_PUBLISHER_CURRENCY_FIELD` |
+| Canonical invoice total | `ODOO_WORKBENCH_PUBLISHER_INVOICE_TOTAL_FIELD` |
+| Review status | `ODOO_WORKBENCH_PUBLISHER_REVIEW_STATUS_FIELD` |
+| Workflow | `ODOO_WORKBENCH_PUBLISHER_WORKFLOW_FIELD` |
+| Review version | `ODOO_WORKBENCH_PUBLISHER_REVIEW_VERSION_FIELD` |
+| Last sync at | `ODOO_WORKBENCH_PUBLISHER_LAST_SYNC_AT_FIELD` |
+| Classification | optional `ODOO_WORKBENCH_PUBLISHER_CLASSIFICATION_FIELD` |
+| Matched rule | optional `ODOO_WORKBENCH_PUBLISHER_MATCHED_RULE_FIELD` |
+| Rule version | optional `ODOO_WORKBENCH_PUBLISHER_RULE_VERSION_FIELD` |
+| Review required | optional `ODOO_WORKBENCH_PUBLISHER_REVIEW_REQUIRED_FIELD` |
+| Business context required | optional `ODOO_WORKBENCH_PUBLISHER_BUSINESS_CONTEXT_REQUIRED_FIELD` |
+| Conflict | optional `ODOO_WORKBENCH_PUBLISHER_CONFLICT_FIELD` |
+| Trace id | optional `ODOO_WORKBENCH_PUBLISHER_TRACE_ID_FIELD` |
+| Review findings HTML | optional `ODOO_WORKBENCH_PUBLISHER_REVIEW_REASONS_FIELD` |
+| Warnings HTML | optional `ODOO_WORKBENCH_PUBLISHER_WARNINGS_FIELD` |
+
+The legacy duplicate display total `x_studio_total_amount` is not used as the canonical invoice total. Publisher mapping should point canonical invoice total to `x_studio_invoice_total`. The current Odoo Studio `Invoice Date` field is Char; the adapter serializes the date as ISO text at the boundary. A Date field is recommended as a follow-up Studio change.
 
 ## Mapping Rules
 
@@ -467,14 +570,14 @@ Allocation mapping rules for the application contract:
 
 ## Idempotency And Concurrency
 
-Projection publishing rules for future implementation:
+Projection publishing rules:
 
 - `review_id` is the natural projection identity.
 - Repeated identical projection publish is idempotent.
 - Stale Hub projections must not overwrite a newer Hub projection version.
 - Duplicate Odoo projection records for the same `review_id` are an error requiring safe handling.
 
-Decision ingestion rules for future implementation:
+Decision ingestion rules:
 
 - Hub uses existing `ReviewDecisionCommand.expected_version`.
 - Odoo candidate expected version must match the Hub review version displayed to the user.
@@ -484,7 +587,7 @@ Decision ingestion rules for future implementation:
 - User decisions from another company must never be accepted.
 - `decision_ready` must not be cleared before Hub acknowledgement is safely persisted and projected.
 
-Allocation ingestion rules for future Odoo adapter implementation:
+Allocation ingestion rules:
 
 - candidate allocation lines are untrusted until Hub validation
 - Hub validates company isolation and selected ERP IDs through repositories
@@ -503,7 +606,7 @@ Allocation ingestion rules for future Odoo adapter implementation:
 - Odoo user identity is audit evidence, not sufficient authorization by itself.
 - recharge recipient and target company values are business context only; they do not grant authorization
 - allocation records must not contain browser credentials, API keys, bearer tokens, or client secrets
-- Future ingestion requires a Hub-controlled scheduler or service.
+- Runtime ingestion requires a Hub-controlled scheduler or service.
 
 ## Keycloak Boundary
 
@@ -561,7 +664,7 @@ No view XML or Odoo UI implementation is included in this PR.
 
 ## Failure And Reconciliation Scenarios
 
-Future implementations must safely handle:
+Implementations must safely handle:
 
 - Odoo unavailable during projection publish
 - duplicate Odoo projection record
@@ -596,13 +699,9 @@ Future controlled Odoo Studio setup should:
 - Odoo Studio allocation child model creation
 - Odoo views
 - Odoo ACL configuration
-- Odoo JSON-2 adapter implementation
 - live Odoo calls
-- projection persistence in Odoo
 - scheduler or polling
 - webhooks
-- decision ingestion
-- acknowledgement projection
 - Odoo allocation synchronization
 - workflow execution
 - Vendor Bill, RFQ, PO, expense, asset, or subscription execution

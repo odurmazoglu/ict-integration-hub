@@ -21,6 +21,11 @@ from app.erp.odoo.workbench_candidate_reader import (
     OdooWorkbenchFieldMapping,
     OdooWorkbenchParentFieldMapping,
 )
+from app.erp.odoo.workbench_projection_publisher import (
+    OdooWorkbenchJson2ProjectionAdapter,
+    OdooWorkbenchProjectionFieldMapping,
+    OdooWorkbenchProjectionPublisher,
+)
 from app.erp.odoo.workbench_reference_repositories import (
     OdooAnalyticAccountReferenceRepository,
     OdooCompanyReferenceRepository,
@@ -63,5 +68,8 @@ __all__ = [
     "OdooWorkbenchAllocationFieldMapping",
     "OdooWorkbenchDecisionCandidateReader",
     "OdooWorkbenchFieldMapping",
+    "OdooWorkbenchJson2ProjectionAdapter",
     "OdooWorkbenchParentFieldMapping",
+    "OdooWorkbenchProjectionFieldMapping",
+    "OdooWorkbenchProjectionPublisher",
 ]

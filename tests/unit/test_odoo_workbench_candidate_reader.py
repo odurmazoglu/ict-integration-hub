@@ -156,9 +156,73 @@ def test_parent_fields_and_many2one_ids_are_parsed() -> None:
         candidate.review_id = "changed"  # type: ignore[misc]
 
 
+def test_existing_purchase_order_selected_workflow_requires_explicit_allocation_intent() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="Existing Purchase Order")],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_existing_purchase_order_intent_is_preserved_by_canonical_allocation_type() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="Existing Purchase Order")],
+            allocation_records=_existing_purchase_order_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    candidate = reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    assert candidate.selected_workflow is WorkflowType.VENDOR_BILL
+    assert candidate.business_context_allocations is not None
+    assert candidate.business_context_allocations.allocations[0].allocation_type is (
+        BusinessContextAllocationType.EXISTING_PURCHASE_ORDER
+    )
+    assert candidate.business_context_allocations.allocations[0].purchase_order_id == 501
+
+
+def test_direct_vendor_bill_rejects_purchase_order_intent_collision() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="Direct Vendor Bill")],
+            allocation_records=_existing_purchase_order_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_new_rfq_purchase_selected_workflow_requires_matching_allocation_intent() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_selected_workflow="New RFQ + Purchase Order")],
+            allocation_records=_new_rfq_purchase_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    candidate = reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    assert candidate.selected_workflow is WorkflowType.RFQ
+    assert candidate.business_context_allocations is not None
+    assert candidate.business_context_allocations.allocations[0].allocation_type is (
+        BusinessContextAllocationType.NEW_RFQ_PURCHASE
+    )
+
+
 def test_malformed_parent_values_are_rejected_safely() -> None:
     cases = [
         {"x_decision": "not-real"},
+        {"x_decision": "Request Investigation"},
         {"x_selected_workflow": "not-real"},
         {"x_selected_partner": True},
         {"x_version": True},
@@ -232,6 +296,18 @@ def test_allocation_fields_are_parsed_without_using_display_names_as_identity() 
     assert first.internal_note == "note"
     with pytest.raises(FrozenInstanceError):
         allocation_set.allocations = ()  # type: ignore[misc]
+
+
+def test_allocation_type_mapping_is_explicit_and_exact() -> None:
+    records = _allocation_records()
+    records[0]["x_allocation_type"] = "Sales Order Cost "
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(parent_records=[_parent_record()], allocation_records=records),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
 
 
 def test_optional_false_values_are_empty_but_true_numeric_values_are_rejected() -> None:
@@ -510,8 +586,8 @@ def _parent_record(**overrides: Any) -> dict[str, Any]:
         "x_review_id": "review-1",
         "x_company_id": [7, "ICT"],
         "x_version": 4,
-        "x_decision": "select_workflow",
-        "x_selected_workflow": "vendor_bill",
+        "x_decision": "Submit Decision",
+        "x_selected_workflow": "Direct Vendor Bill",
         "x_selected_partner": [700, "Supplier"],
         "x_comment": "Reviewed in Odoo.",
         "x_decision_ready": True,
@@ -535,7 +611,7 @@ def _allocation_records() -> list[dict[str, Any]]:
             "id": 100,
             "x_import_review_id": [42, "review-1"],
             "x_allocation_key": "ALLOC-001",
-            "x_allocation_type": "sales_order_cost",
+            "x_allocation_type": "Sales Order Cost",
             "x_source_line_number": "1",
             "x_description": "Customer A share",
             "x_amount": 40000.0,
@@ -551,12 +627,43 @@ def _allocation_records() -> list[dict[str, Any]]:
             "id": 101,
             "x_import_review_id": [42, "review-1"],
             "x_allocation_key": "ALLOC-002",
-            "x_allocation_type": "internal_cost",
+            "x_allocation_type": "Internal Cost",
             "x_source_line_number": "1",
             "x_amount": "60000.000000",
             "x_percentage": "60",
             "x_currency": "TRY",
         },
+    ]
+
+
+def _existing_purchase_order_allocation_records() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": 100,
+            "x_import_review_id": [42, "review-1"],
+            "x_allocation_key": "ALLOC-PO",
+            "x_allocation_type": "Existing Purchase Order",
+            "x_source_line_number": "1",
+            "x_amount": "100000.000000",
+            "x_percentage": "100",
+            "x_currency": "TRY",
+            "x_purchase_order_id": [501, "PO501"],
+        }
+    ]
+
+
+def _new_rfq_purchase_allocation_records() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": 100,
+            "x_import_review_id": [42, "review-1"],
+            "x_allocation_key": "ALLOC-RFQ",
+            "x_allocation_type": "New RFQ + Purchase",
+            "x_source_line_number": "1",
+            "x_amount": "100000.000000",
+            "x_percentage": "100",
+            "x_currency": "TRY",
+        }
     ]
 
 

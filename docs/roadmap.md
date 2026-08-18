@@ -64,8 +64,8 @@
 ### 4. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
-- Hub-to-Odoo JSON-2 projection publishing
-- Hub acknowledgement projection
+- Hub-to-Odoo JSON-2 projection publishing (implemented adapter boundary)
+- Hub acknowledgement projection (implemented status/version projection boundary)
 - no custom Odoo Python addon
 - no workflow execution
 
