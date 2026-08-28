@@ -22,7 +22,21 @@ def test_workbench_classification_migration_matches_main_branch() -> None:
     if not Path(".git").exists():
         pytest.skip("Git metadata is not copied into the runtime Docker image.")
     path = "alembic/versions/202607170015_workbench_review_classification_evidence.py"
-    main_content = subprocess.check_output(["git", "show", f"origin/main:{path}"])
+    main_ref = "origin/main"
+    if (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", f"{main_ref}^{{commit}}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        != 0
+    ):
+        merge_parents = subprocess.check_output(["git", "rev-list", "--parents", "-n", "1", "HEAD"]).split()
+        if len(merge_parents) < 3:
+            pytest.skip("origin/main is unavailable outside a pull request merge checkout.")
+        main_ref = "HEAD^1"
+    main_content = subprocess.check_output(["git", "show", f"{main_ref}:{path}"])
     assert Path(path).read_bytes() == main_content
 
 
