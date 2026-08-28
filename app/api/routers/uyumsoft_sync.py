@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from app.api.dependencies import DbSessionDep, SettingsDep, UyumsoftClientDep
+from app.api.dependencies import DbSessionDep, SettingsDep, UyumsoftCanonicalImporterDep, UyumsoftClientDep
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.schemas.invoice_sync import SyncDirection, UyumsoftInvoiceSyncResponse
 from app.schemas.uyumsoft_invoices import InvoiceDirection
@@ -29,6 +29,7 @@ SyncConfirmQuery = Annotated[bool, Query(description="Must be true to explicitly
 def sync_uyumsoft_invoices(
     settings: SettingsDep,
     client: UyumsoftClientDep,
+    canonical_importer: UyumsoftCanonicalImporterDep,
     session: DbSessionDep,
     from_date: SyncFromQuery,
     to_date: SyncToQuery,
@@ -57,6 +58,7 @@ def sync_uyumsoft_invoices(
             client=client,
             persistence=InvoicePersistenceService(session),
             run_repository=SyncRunRepository(session),
+            canonical_importer=canonical_importer,
         )
         result = workflow.run(
             UyumsoftInvoiceSyncRequest(
@@ -92,6 +94,11 @@ def _response_from_result(result: UyumsoftInvoiceSyncResult) -> UyumsoftInvoiceS
         created=result.created,
         updated=result.updated,
         skipped=result.skipped,
+        imported_count=result.imported_count,
+        review_count=result.review_count,
+        already_imported_count=result.already_imported_count,
+        failed_import_count=result.failed_import_count,
+        skipped_import_count=result.skipped_import_count,
         cursor_state=result.cursor_state,
         failure_message=result.failure_message,
         directions=[
@@ -102,6 +109,12 @@ def _response_from_result(result: UyumsoftInvoiceSyncResult) -> UyumsoftInvoiceS
                 "created": summary.created,
                 "updated": summary.updated,
                 "skipped": summary.skipped,
+                "imported_count": summary.imported_count,
+                "review_count": summary.review_count,
+                "already_imported_count": summary.already_imported_count,
+                "failed_import_count": summary.failed_import_count,
+                "skipped_import_count": summary.skipped_import_count,
+                "import_outcomes": list(summary.import_outcomes),
                 "status": summary.status,
                 "failure_message": summary.failure_message,
             }

@@ -1,5 +1,7 @@
+import subprocess
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 
@@ -7,12 +9,35 @@ from alembic import command
 from app.core.config import get_settings
 from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
+from app.models.import_receipt import ImportReceipt
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
 from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
 from app.models.workflow_execution import WorkflowExecution
+
+
+def test_workbench_classification_migration_matches_main_branch() -> None:
+    if not Path(".git").exists():
+        pytest.skip("Git metadata is not copied into the runtime Docker image.")
+    path = "alembic/versions/202607170015_workbench_review_classification_evidence.py"
+    main_ref = "origin/main"
+    if (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", f"{main_ref}^{{commit}}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        != 0
+    ):
+        merge_parents = subprocess.check_output(["git", "rev-list", "--parents", "-n", "1", "HEAD"]).split()
+        if len(merge_parents) < 3:
+            pytest.skip("origin/main is unavailable outside a pull request merge checkout.")
+        main_ref = "HEAD^1"
+    main_content = subprocess.check_output(["git", "show", f"{main_ref}:{path}"])
+    assert Path(path).read_bytes() == main_content
 
 
 def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
@@ -40,6 +65,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workbench_review_billing_evidence" in inspector.get_table_names()
     assert "execution_customer_billing_evidence" in inspector.get_table_names()
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
+    assert "import_receipts" in inspector.get_table_names()
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -343,6 +369,32 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         in classification_evidence_unique_constraints
     )
     assert WorkbenchReviewClassificationEvidence.__table__.c.conflicting_rules.nullable is False
+    import_receipt_columns = {column["name"] for column in inspector.get_columns("import_receipts")}
+    assert {
+        "company_id",
+        "idempotency_key",
+        "invoice_id",
+        "status",
+        "vendor_bill_id",
+        "review_id",
+        "created_at",
+    }.issubset(import_receipt_columns)
+    import_receipt_indexes = {index["name"] for index in inspector.get_indexes("import_receipts")}
+    assert {
+        "ix_import_receipts_idempotency_key",
+        "ix_import_receipts_company_status",
+    }.issubset(import_receipt_indexes)
+    import_receipt_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("import_receipts")
+    }
+    assert "uq_import_receipts_company_idempotency_key" in import_receipt_unique_constraints
+    assert ImportReceipt.__table__.c.company_id.nullable is False
+    assert ImportReceipt.__table__.c.idempotency_key.nullable is False
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "import_receipts" not in inspector.get_table_names()
+    assert "workbench_review_classification_evidence" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))

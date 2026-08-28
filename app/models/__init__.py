@@ -1,6 +1,7 @@
 from app.models.connector_event import ConnectorEvent
 from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
+from app.models.import_receipt import ImportReceipt
 from app.models.invoice_document import InvoiceDocument
 from app.models.odoo_draft_invoice import OdooDraftInvoice
 from app.models.provider import Provider
@@ -17,6 +18,7 @@ __all__ = [
     "ConnectorEvent",
     "ExecutionCustomerBillingEvidence",
     "ExecutionSourceInvoiceEvidence",
+    "ImportReceipt",
     "WorkbenchReviewExecutionEvidence",
     "WorkbenchReviewBillingEvidence",
     "WorkbenchReviewClassificationEvidence",
