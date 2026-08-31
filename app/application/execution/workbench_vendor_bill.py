@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import Protocol
 
 from app.application.dto import ApplicationDTO
 from app.application.execution.accepted_decision_use_cases import (
@@ -32,8 +33,18 @@ from app.application.execution.ports import (
 )
 from app.application.execution.runtime import ExecutionState
 from app.application.workbench.dto import ReviewDecisionType
-from app.application.workbench.exceptions import ReviewNotFoundError
+from app.application.workbench.exceptions import (
+    ReviewNotFoundError,
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchCandidateReadError,
+    WorkbenchProjectionPublishError,
+)
+from app.application.workbench.projection import ProjectionPublishResult
 from app.application.workflow import WorkflowType
+
+EXECUTION_PROJECTION_FAILURE_MESSAGE = (
+    "Odoo Workbench execution result projection failed; Hub execution remains authoritative."
+)
 
 
 class WorkbenchVendorBillExecutionStatus(StrEnum):
@@ -46,6 +57,16 @@ class WorkbenchVendorBillExecutionStatus(StrEnum):
     EXECUTION_DISABLED = "execution_disabled"
     MISSING_SOURCE_EVIDENCE = "missing_source_evidence"
     EXECUTION_FAILED = "execution_failed"
+
+
+class WorkbenchExecutionResultPublisher(Protocol):
+    def project_vendor_bill_execution_result(
+        self,
+        result: WorkbenchVendorBillExecutionResult,
+        *,
+        trace_id: str | None = None,
+    ) -> ProjectionPublishResult:
+        pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,11 +110,13 @@ class WorkbenchVendorBillExecutionWorkflow:
         source_invoice_reader: ExecutionSourceInvoiceReader,
         execution_use_case: RunAcceptedDecisionExecutionUseCase,
         runtime_repository: ExecutionRuntimeRepository,
+        execution_result_publisher: WorkbenchExecutionResultPublisher | None = None,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
         self._source_invoice_reader = source_invoice_reader
         self._execution_use_case = execution_use_case
         self._runtime_repository = runtime_repository
+        self._execution_result_publisher = execution_result_publisher
 
     def execute(
         self,
@@ -103,6 +126,7 @@ class WorkbenchVendorBillExecutionWorkflow:
         decision_version: int,
         mode: ExecutionMode = ExecutionMode.DRY_RUN,
         approval: ExecutionApproval | None = None,
+        trace_id: str | None = None,
     ) -> WorkbenchVendorBillExecutionResult:
         command = RunAcceptedDecisionExecutionCommand(
             review_id=review_id,
@@ -157,7 +181,7 @@ class WorkbenchVendorBillExecutionWorkflow:
             and existing_snapshot is not None
             and existing_snapshot.state is ExecutionState.COMPLETED
         ):
-            return _result(
+            replayed = _result(
                 command,
                 status=WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED,
                 execution_id=existing_snapshot.execution_id,
@@ -165,6 +189,7 @@ class WorkbenchVendorBillExecutionWorkflow:
                 artifacts=_artifacts(existing_snapshot),
                 message="Execution already completed for this accepted Vendor Bill decision.",
             )
+            return self._project_successful_execution(replayed, trace_id=trace_id)
 
         try:
             execution = self._execution_use_case.execute(command)
@@ -196,13 +221,35 @@ class WorkbenchVendorBillExecutionWorkflow:
             if execution.execution_id is not None
             else None
         )
-        return _result(
+        result = _result(
             command,
             status=_status_from_execution(execution.status),
             execution_id=execution.execution_id,
             runtime_state=execution.runtime_state,
             artifacts=_artifacts(snapshot),
         )
+        return self._project_successful_execution(result, trace_id=trace_id)
+
+    def _project_successful_execution(
+        self,
+        result: WorkbenchVendorBillExecutionResult,
+        *,
+        trace_id: str | None,
+    ) -> WorkbenchVendorBillExecutionResult:
+        if self._execution_result_publisher is None:
+            return result
+        if result.mode is not ExecutionMode.EXECUTE:
+            return result
+        if result.status not in {
+            WorkbenchVendorBillExecutionStatus.EXECUTED,
+            WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED,
+        }:
+            return result
+        try:
+            self._execution_result_publisher.project_vendor_bill_execution_result(result, trace_id=trace_id)
+        except (WorkbenchCandidateReadError, WorkbenchCandidateAmbiguityError, WorkbenchProjectionPublishError):
+            return replace(result, message=EXECUTION_PROJECTION_FAILURE_MESSAGE)
+        return result
 
 
 def _vendor_bill_eligibility_error(decision: AcceptedReviewDecision) -> str | None:

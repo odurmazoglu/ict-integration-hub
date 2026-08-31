@@ -106,6 +106,14 @@ Current parent Studio fields used by the publisher and reader are deployment map
 | Trace ID | `x_studio_trace_id` | Hub projection |
 | Review Findings | `x_studio_review_reasons` | Hub projection HTML |
 | Warnings | `x_studio_warnings` | Hub projection HTML |
+| Execution Status | `x_studio_execution_status` | Hub execution projection (optional) |
+| Execution ID | `x_studio_execution_id` | Hub execution projection (optional) |
+| Execution Mode | `x_studio_execution_mode` | Hub execution projection (optional) |
+| Execution Runtime State | `x_studio_execution_runtime_state` | Hub execution projection (optional) |
+| Vendor Bill ID | `x_studio_vendor_bill_id` | Hub execution projection (optional) |
+| Vendor Bill External Identity | `x_studio_vendor_bill_external_identity` | Hub execution projection (optional) |
+| Vendor Bill Created | `x_studio_vendor_bill_created` | Hub execution projection (optional) |
+| Execution Message | `x_studio_execution_message` | Hub execution projection (optional) |
 | Decision | `x_studio_decision` | Odoo user input |
 | Selected Workflow | `x_studio_selected_workflow` | Odoo user input |
 | Decision Comment | `x_studio_decision_comment` | Odoo user input |
@@ -197,6 +205,63 @@ The field list keeps only data justified by current Workbench contracts and sync
 | `x_ipp_hub_ack_version` | Integer | Hub | Hub review version after accepted decision. |
 | `x_ipp_hub_ack_message` | Text | Hub | Safe acknowledgement or reconciliation message. |
 | `x_ipp_hub_processed_at` | Datetime | Hub | Time the Hub processed the candidate. |
+
+### Workbench Execution Result Projection
+
+Direct Vendor Bill execution outcomes are projected back to the parent Odoo Workbench record through `OdooWorkbenchProjectionPublisher.project_vendor_bill_execution_result(...)`.
+
+#### End-to-End Lifecycle
+
+```text
+Classification
+→ Human Decision
+→ Decision Ingestion
+→ Execution Approval
+→ Vendor Bill Execution
+→ Workbench Execution Result Projection
+```
+
+1. **Classification**: Invoice is ingested and classified by the Rule Engine / Decision Engine; evidence is pinned to the Hub review.
+2. **Human Decision**: Odoo user enters decision details in Odoo Studio Workbench and flags `ready_for_hub_processing`.
+3. **Decision Ingestion**: Hub ingests the ready decision, validates evidence, creates an accepted decision record, advances review status to `Decision Submitted`, and acknowledges the Odoo projection.
+4. **Execution Approval**: For execute mode, explicit execution approval (`approved_by`) is required before runtime execution.
+5. **Vendor Bill Execution**: Hub durable runtime creates or recovers a draft Vendor Bill in Odoo via `VendorBillWriter` using pinned source evidence and deterministic idempotency.
+6. **Workbench Execution Result Projection**: Hub projects the execution outcome back to the configured Odoo Workbench projection record.
+
+#### Lifecycle Status Semantics
+
+- **Decision Submitted (`DECISION_SUBMITTED`)**: The review decision has been accepted and committed in Hub. It is ready for execution, but business execution has not yet run.
+- **Executed (`EXECUTED` / `ALREADY_EXECUTED`)**: Execution status indicating the draft Vendor Bill was successfully created or recovered. This is projected to `x_studio_execution_status` (`Executed` or `Already Executed`).
+- **Resolved (`RESOLVED`)**: Review lifecycle state when an item is fully closed by canonical Hub review resolution rules. Direct Vendor Bill execution projection does **not** mark the review status as `Resolved` unless existing canonical semantics explicitly justify it. Review status remains `Decision Submitted`.
+
+#### Projection Replay and Idempotency
+
+When an execution command is repeated for an already completed Vendor Bill decision, Hub loads the existing completed runtime snapshot (`ExecutionState.COMPLETED`), returns `ALREADY_EXECUTED`, and invokes the projection publisher with `status=ALREADY_EXECUTED`. This repairs or refreshes the Odoo projection record without re-running the runtime or creating a second Vendor Bill in Odoo.
+
+#### Projection Failure Resilience
+
+Hub execution persistence is the authority. If projecting the execution result back to Odoo fails (e.g. Odoo timeout, network error, adapter error):
+- Successful Vendor Bill execution remains authoritative and is not rolled back or invalidated.
+- The returned result retains `status=EXECUTED` or `status=ALREADY_EXECUTED`.
+- The message is set to `Odoo Workbench execution result projection failed; Hub execution remains authoritative.`
+- Subsequent replay can safely repair the Odoo projection without re-creating the bill.
+
+#### Studio Schema Limitation and Optional Dedicated Fields
+
+Hub does not create or mutate Odoo Studio models or fields. Dedicated execution-result fields are mapped through environment configuration (`ODOO_WORKBENCH_PUBLISHER_*`):
+
+| Field | Type expectation | Owner | Purpose |
+| --- | --- | --- | --- |
+| `x_ipp_execution_status` | Selection/Char | Hub | Projected execution status (`Executed`, `Already Executed`). |
+| `x_ipp_execution_id` | Char | Hub | Deterministic Hub runtime execution identifier. |
+| `x_ipp_execution_mode` | Char/Selection | Hub | Execution mode (`execute`). |
+| `x_ipp_execution_runtime_state` | Char/Selection | Hub | Runtime state (`completed`). |
+| `x_ipp_vendor_bill_id` | Char/Integer | Hub | Canonical Odoo `account.move` identifier of the created/recovered draft. |
+| `x_ipp_vendor_bill_external_identity` | Char | Hub | Deterministic writer idempotency key. |
+| `x_ipp_vendor_bill_created` | Boolean | Hub | `true` if draft bill was newly created, `false` if recovered existing draft. |
+| `x_ipp_execution_message` | Text | Hub | Safe execution status or failure message. |
+
+If an Odoo environment does not have these optional execution fields configured, the publisher safely updates only `last_sync_at` and `trace_id`, emitting warning `"No dedicated Odoo Workbench execution-result fields are configured."` without failing the execution workflow.
 
 ### Allocation Child Model
 

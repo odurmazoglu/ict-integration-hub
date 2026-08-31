@@ -8,6 +8,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
+from app.application.execution import (
+    ExecutionArtifact,
+    ExecutionArtifactType,
+    ExecutionMode,
+    WorkbenchVendorBillExecutionResult,
+    WorkbenchVendorBillExecutionStatus,
+)
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewStatus
 from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
@@ -54,6 +61,10 @@ ODOO_REVIEW_REQUIRED_BY_CANONICAL: dict[bool, str] = {
 ODOO_BUSINESS_CONTEXT_REQUIRED_BY_CANONICAL: dict[bool, str] = {
     True: "Required",
     False: "Not Required",
+}
+ODOO_EXECUTION_STATUS_BY_CANONICAL: dict[WorkbenchVendorBillExecutionStatus, str] = {
+    WorkbenchVendorBillExecutionStatus.EXECUTED: "Executed",
+    WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED: "Already Executed",
 }
 
 
@@ -113,6 +124,14 @@ class OdooWorkbenchProjectionFieldMapping:
     warnings: str | None = None
     decision_ready: str | None = None
     decision_idempotency_key: str | None = None
+    execution_status: str | None = None
+    execution_id: str | None = None
+    execution_mode: str | None = None
+    execution_runtime_state: str | None = None
+    vendor_bill_id: str | None = None
+    vendor_bill_external_identity: str | None = None
+    vendor_bill_created: str | None = None
+    execution_message: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -160,6 +179,14 @@ class OdooWorkbenchProjectionFieldMapping:
             warnings=_env_optional(prefix, "WARNINGS_FIELD"),
             decision_ready=_env_optional(prefix, "DECISION_READY_FIELD"),
             decision_idempotency_key=_env_optional(prefix, "DECISION_IDEMPOTENCY_KEY_FIELD"),
+            execution_status=_env_optional(prefix, "EXECUTION_STATUS_FIELD"),
+            execution_id=_env_optional(prefix, "EXECUTION_ID_FIELD"),
+            execution_mode=_env_optional(prefix, "EXECUTION_MODE_FIELD"),
+            execution_runtime_state=_env_optional(prefix, "EXECUTION_RUNTIME_STATE_FIELD"),
+            vendor_bill_id=_env_optional(prefix, "VENDOR_BILL_ID_FIELD"),
+            vendor_bill_external_identity=_env_optional(prefix, "VENDOR_BILL_EXTERNAL_IDENTITY_FIELD"),
+            vendor_bill_created=_env_optional(prefix, "VENDOR_BILL_CREATED_FIELD"),
+            execution_message=_env_optional(prefix, "EXECUTION_MESSAGE_FIELD"),
         )
 
 
@@ -305,6 +332,31 @@ class OdooWorkbenchProjectionPublisher:
             warnings=acknowledgement.warnings,
         )
 
+    def project_vendor_bill_execution_result(
+        self,
+        result: WorkbenchVendorBillExecutionResult,
+        *,
+        trace_id: str | None = None,
+    ) -> ProjectionPublishResult:
+        _validate_execution_projection_result(result)
+        records = self._lookup(review_id=result.review_id, company_id=result.company_id)
+        if not records:
+            raise WorkbenchProjectionPublishError(SAFE_PROJECTION_WRITE_ERROR)
+        record_id = _required_record_id(records[0])
+        payload = self._execution_result_payload(result, trace_id=trace_id)
+        try:
+            self._adapter.write(model=self._mapping.model, record_id=record_id, values=payload)
+        except ErpRepositoryError as exc:
+            raise WorkbenchProjectionPublishError(SAFE_PROJECTION_WRITE_ERROR) from exc
+        return ProjectionPublishResult(
+            review_id=result.review_id,
+            odoo_record_id=record_id,
+            created=False,
+            updated=True,
+            version=result.decision_version,
+            warnings=_execution_projection_warnings(self._mapping),
+        )
+
     def _lookup(self, *, review_id: str, company_id: int) -> tuple[dict[str, Any], ...]:
         try:
             records = self._adapter.search_read(
@@ -373,6 +425,31 @@ class OdooWorkbenchProjectionPublisher:
             review_version=projection.version,
         )
 
+    def _execution_result_payload(
+        self,
+        result: WorkbenchVendorBillExecutionResult,
+        *,
+        trace_id: str | None,
+    ) -> dict[str, Any]:
+        artifact = _single_vendor_bill_artifact(result)
+        values: dict[str, Any] = {
+            self._mapping.last_sync_at: _datetime_text(datetime.now(UTC)),
+        }
+        _put_optional(values, self._mapping.trace_id, trace_id)
+        _put_optional(values, self._mapping.execution_status, ODOO_EXECUTION_STATUS_BY_CANONICAL[result.status])
+        _put_optional(values, self._mapping.execution_id, result.execution_id)
+        _put_optional(values, self._mapping.execution_mode, result.mode.value)
+        _put_optional(
+            values,
+            self._mapping.execution_runtime_state,
+            result.runtime_state.value if result.runtime_state is not None else None,
+        )
+        _put_optional(values, self._mapping.vendor_bill_id, artifact.artifact_id)
+        _put_optional(values, self._mapping.vendor_bill_external_identity, artifact.external_identity)
+        _put_optional(values, self._mapping.vendor_bill_created, artifact.created)
+        _put_optional(values, self._mapping.execution_message, result.message)
+        return values
+
 
 def _review_status_to_odoo(status: ReviewStatus) -> str:
     try:
@@ -386,6 +463,45 @@ def _workflow_to_odoo(workflow: WorkflowType) -> str:
         return ODOO_WORKFLOW_BY_CANONICAL[workflow]
     except KeyError as exc:
         raise WorkbenchContractError("Unsupported canonical workflow for Odoo Workbench projection.") from exc
+
+
+def _validate_execution_projection_result(result: WorkbenchVendorBillExecutionResult) -> None:
+    if not isinstance(result, WorkbenchVendorBillExecutionResult):
+        raise WorkbenchContractError("Workbench Vendor Bill execution result is required.")
+    if result.mode is not ExecutionMode.EXECUTE:
+        raise WorkbenchContractError("Only execute-mode Vendor Bill results may be projected as executed.")
+    if result.status not in {
+        WorkbenchVendorBillExecutionStatus.EXECUTED,
+        WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED,
+    }:
+        raise WorkbenchContractError("Only successful Vendor Bill execution results may be projected.")
+
+
+def _single_vendor_bill_artifact(result: WorkbenchVendorBillExecutionResult) -> ExecutionArtifact:
+    artifacts = tuple(
+        artifact for artifact in result.artifacts if artifact.artifact_type is ExecutionArtifactType.VENDOR_BILL
+    )
+    if len(artifacts) != 1:
+        raise WorkbenchProjectionPublishError(SAFE_PROJECTION_WRITE_ERROR)
+    return artifacts[0]
+
+
+def _execution_projection_warnings(mapping: OdooWorkbenchProjectionFieldMapping) -> tuple[str, ...]:
+    if any(
+        getattr(mapping, field_name)
+        for field_name in (
+            "execution_status",
+            "execution_id",
+            "execution_mode",
+            "execution_runtime_state",
+            "vendor_bill_id",
+            "vendor_bill_external_identity",
+            "vendor_bill_created",
+            "execution_message",
+        )
+    ):
+        return ()
+    return ("No dedicated Odoo Workbench execution-result fields are configured.",)
 
 
 def _render_reason_badges(reasons: tuple[object, ...]) -> str:
