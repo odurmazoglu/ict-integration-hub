@@ -8,7 +8,10 @@ from app.application.rules import DeterministicRuleEngine, InvoiceDecisionRuleEn
 from app.application.use_cases import ImportInvoiceUseCase
 from app.application.workbench import (
     ReviewItemCreationService,
+    SubmitReviewDecisionUseCase,
     WorkbenchClassificationProjectionService,
+    WorkbenchDecisionIngestionWorkflow,
+    WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
 from app.billing import VendorBillBuilder
@@ -17,6 +20,8 @@ from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings
 from app.erp.odoo import (
     OdooDecisionRuleRepository,
+    OdooWorkbenchDecisionCandidateReader,
+    OdooWorkbenchFieldMapping,
     OdooWorkbenchJson2ProjectionAdapter,
     OdooWorkbenchProjectionFieldMapping,
     OdooWorkbenchProjectionPublisher,
@@ -27,12 +32,24 @@ from app.erp.odoo.currency_repository import OdooCurrencyRepository
 from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.tax_repository import OdooTaxRepository
+from app.erp.odoo.workbench_reference_repositories import (
+    OdooAnalyticAccountReferenceRepository,
+    OdooCompanyReferenceRepository,
+    OdooCustomerInvoiceReferenceRepository,
+    OdooOpportunityReferenceRepository,
+    OdooPartnerReferenceRepository,
+    OdooPurchaseOrderReferenceRepository,
+    OdooSalesOrderLineReferenceRepository,
+    OdooSalesOrderReferenceRepository,
+)
 from app.erp.provider import StaticRepositoryProvider
 from app.erp.write import AccountMoveRepository, OdooVendorBillWritePolicy, OdooVendorBillWriter
 from app.matching import PartnerMatchingEngine, ProductMatchingEngine
 from app.persistence import (
     SqlAlchemyImportHistory,
+    SqlAlchemyReviewBillingEvidenceReader,
     SqlAlchemyReviewClassificationEvidenceReader,
+    SqlAlchemyReviewExecutionEvidenceReader,
     SqlAlchemyReviewRepository,
     SqlAlchemyUnitOfWork,
 )
@@ -82,6 +99,48 @@ def build_odoo_workbench_projection_publisher(
         adapter=adapter,
         mapping=OdooWorkbenchProjectionFieldMapping.from_environment(),
         classification_service=classification_service,
+    )
+
+
+def build_odoo_workbench_decision_ingestion_workflow(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> WorkbenchDecisionIngestionWorkflow:
+    """Compose explicit Odoo Workbench decision ingestion without workflow execution."""
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    read_adapter = OdooReadOnlyAdapter(client=resolved_odoo_client)
+    projection_adapter = OdooWorkbenchJson2ProjectionAdapter(client=resolved_odoo_client)
+    return WorkbenchDecisionIngestionWorkflow(
+        candidate_reader=OdooWorkbenchDecisionCandidateReader(
+            adapter=read_adapter,
+            mapping=OdooWorkbenchFieldMapping.from_environment(),
+        ),
+        erp_reference_validator=WorkbenchErpReferenceValidator(
+            partner_repository=OdooPartnerReferenceRepository(adapter=read_adapter),
+            company_repository=OdooCompanyReferenceRepository(adapter=read_adapter),
+            sales_order_repository=OdooSalesOrderReferenceRepository(adapter=read_adapter),
+            sales_order_line_repository=OdooSalesOrderLineReferenceRepository(adapter=read_adapter),
+            purchase_order_repository=OdooPurchaseOrderReferenceRepository(adapter=read_adapter),
+            customer_invoice_repository=OdooCustomerInvoiceReferenceRepository(adapter=read_adapter),
+            opportunity_repository=OdooOpportunityReferenceRepository(adapter=read_adapter),
+            analytic_account_repository=OdooAnalyticAccountReferenceRepository(adapter=read_adapter),
+        ),
+        decision_submitter=SubmitReviewDecisionUseCase(
+            review_decision_writer=SqlAlchemyReviewRepository(session),
+            execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+            billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
+        ),
+        acknowledgement_publisher=OdooWorkbenchProjectionPublisher(
+            adapter=projection_adapter,
+            mapping=OdooWorkbenchProjectionFieldMapping.from_environment(),
+            classification_service=WorkbenchClassificationProjectionService(
+                SqlAlchemyReviewClassificationEvidenceReader(session)
+            ),
+        ),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
     )
 
 

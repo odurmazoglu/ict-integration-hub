@@ -102,7 +102,7 @@ See [Application Layer](APPLICATION_LAYER.md) for the package and port conventio
 
 ## Import Workbench Contract Flow
 
-The current repository defines application contracts and persistence boundaries for direct Hub API clients and future Odoo Online Studio projection synchronization. It does not implement Odoo Studio setup, projection JSON-2 synchronization, decision ingestion, user decision execution, ERP writes, or AI recommendations.
+The current repository defines application contracts and persistence boundaries for direct Hub API clients, Odoo Online Studio projection synchronization, and explicit Hub-triggered ingestion of Odoo Workbench rows marked ready for processing. It does not implement Odoo Studio setup, automatic decision polling, user decision execution, ERP writes, or AI recommendations.
 
 ```mermaid
 flowchart TB

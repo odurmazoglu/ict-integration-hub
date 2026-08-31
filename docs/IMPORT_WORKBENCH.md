@@ -2,9 +2,9 @@
 
 Import Workbench is the accepted Odoo-side user interface for reviewing import sessions. It lives inside Odoo as UI only and does not contain business logic.
 
-Odoo 19 Online cannot install custom Python modules. The accepted Odoo Online architecture is an Odoo Studio projection model, synchronized by the Hub through JSON-2. This repository includes a production-safe Odoo projection publisher for Hub-owned review fields and a read-only Odoo candidate reader for configured Studio projection models. It does not create the Studio models, views, ACLs, scheduler, acknowledgement runtime trigger, or Odoo UI implementation.
+Odoo 19 Online cannot install custom Python modules. The accepted Odoo Online architecture is an Odoo Studio projection model, synchronized by the Hub through JSON-2. This repository includes a production-safe Odoo projection publisher for Hub-owned review fields, a read-only Odoo candidate reader for configured Studio projection models, and an explicit Hub API trigger for ingesting decision-ready Odoo Workbench rows. It does not create the Studio models, views, ACLs, scheduler, or Odoo UI implementation.
 
-The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, explicit review decision submission persistence, authenticated REST API adapters for direct Hub clients, ERP-neutral projection contracts, and a read-only Odoo JSON-2 adapter that can read ready decision candidates plus allocation child rows from configured Odoo Studio models.
+The repository now provides application-layer contracts, durable review item persistence, queue/detail query use cases, explicit review decision submission persistence, authenticated REST API adapters for direct Hub clients, ERP-neutral projection contracts, a read-only Odoo JSON-2 adapter that can read ready decision candidates plus allocation child rows from configured Odoo Studio models, and a Hub-controlled decision ingestion workflow that submits accepted candidates through `SubmitReviewDecisionUseCase` before acknowledging Odoo.
 
 Inbound invoice classification is now available as application-layer evidence through `InvoiceDecisionRuleEngine`. Odoo-authored rules are read into canonical Hub contracts, evaluated against canonical invoice context, and returned as `InvoiceClassificationResult` evidence. That evidence may later be projected to Workbench, but classification by itself is not an accepted Workbench decision and does not execute ERP workflows.
 
@@ -69,8 +69,9 @@ sequenceDiagram
     User->>Projection: Review Hub-owned fields
     User->>Projection: Enter explicit decision and set decision_ready
     Hub->>Projection: Read ready OdooWorkbenchDecisionCandidate
-    Hub->>Hub: Validate version, idempotency, company, and workflow contract
-    Hub->>Projection: Project safe acknowledgement result
+    Hub->>Hub: Validate company, ERP references, version, idempotency, allocations, and workflow contract
+    Hub->>Hub: Persist canonical decision through SubmitReviewDecisionUseCase
+    Hub->>Projection: Project safe acknowledgement result and clear decision_ready
 ```
 
 ## Current Application Contracts
@@ -107,8 +108,11 @@ Implemented contract types:
 - `ProjectionPublishResult`: safe result for future projection publish or acknowledgement writes
 - `WorkbenchProjectionPublisher`: application port for Odoo Workbench projection publishing and acknowledgement
 - `WorkbenchDecisionCandidateReader`: application port for future candidate decision reads
+- `WorkbenchDecisionIngestionWorkflow`: explicit Hub service that scans ready Odoo candidates, validates exact ERP references, submits canonical decisions through `SubmitReviewDecisionUseCase`, commits Hub decision evidence, and then acknowledges Odoo
 
 `ReviewDecisionCommand`, the authenticated Workbench decision API, decision persistence, idempotency comparison, and `OdooWorkbenchDecisionCandidate` use `business_context_allocations: BusinessContextAllocationSet | None`. The active write path no longer accepts legacy `business_context`, and it does not accept both fields. Existing historical decision rows with legacy `business_context` are not rewritten; the legacy object remains legacy evidence because lossless allocation conversion would require amounts that were never captured.
+
+`POST /api/workbench/decisions/sync` is the explicit decision ingestion trigger. It uses the trusted `RequestContext.company_id`, requires `workbench_review_decide`, reads only records whose configured Odoo ready flag is true, and returns per-candidate safe statuses. It does not execute accepted decisions, create ERP records, send Uyumsoft messages, mutate Odoo Studio schema, or run AI/fuzzy matching. The Hub derives the decision idempotency key from canonical candidate content instead of trusting an Odoo-supplied key, so deterministic replay of the same Odoo decision is safe while conflicting content fails closed.
 
 ## Current Persistence Foundation
 

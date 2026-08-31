@@ -218,6 +218,56 @@ def test_acknowledge_decision_updates_only_acknowledgement_owned_fields() -> Non
     }
 
 
+def test_acknowledge_decision_can_clear_ready_and_project_hub_idempotency_key() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[])
+    acknowledgement = ReviewDecisionAcknowledgement(
+        accepted=True,
+        review_id="review-1",
+        status=ReviewStatus.DECISION_SUBMITTED,
+        version=5,
+        decision="select_workflow",
+        selected_workflow=WorkflowType.VENDOR_BILL,
+    )
+
+    OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping()).acknowledge_decision(
+        acknowledgement,
+        odoo_record_id=42,
+        trace_id="trace-ack",
+        idempotency_key="odoo-workbench-decision:abc",
+        clear_ready=True,
+    )
+
+    assert adapter.write_values == {
+        "x_studio_review_status": "Decision Submitted",
+        "x_studio_review_version": 5,
+        "x_studio_trace_id": "trace-ack",
+        "x_studio_decision_idempotency_key": "odoo-workbench-decision:abc",
+        "x_studio_ready_for_hub_processing": False,
+    }
+
+
+def test_acknowledge_decision_does_not_overwrite_odoo_author_provenance() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[])
+    acknowledgement = ReviewDecisionAcknowledgement(
+        accepted=True,
+        review_id="review-1",
+        status=ReviewStatus.DECISION_SUBMITTED,
+        version=5,
+        decision="select_workflow",
+        selected_workflow=WorkflowType.VENDOR_BILL,
+    )
+
+    OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping()).acknowledge_decision(
+        acknowledgement,
+        odoo_record_id=42,
+        idempotency_key="odoo-workbench-decision:abc",
+        clear_ready=True,
+    )
+
+    assert "x_studio_decided_by" not in adapter.write_values
+    assert "x_studio_decided_at" not in adapter.write_values
+
+
 def test_idempotent_repeat_publish_updates_existing_row_without_duplicate_create() -> None:
     adapter = RecordingProjectionAdapter(search_records=[{"id": 42}])
     publisher = OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping())
@@ -371,6 +421,8 @@ def _mapping() -> OdooWorkbenchProjectionFieldMapping:
         trace_id="x_studio_trace_id",
         review_reasons="x_studio_review_reasons",
         warnings="x_studio_warnings",
+        decision_ready="x_studio_ready_for_hub_processing",
+        decision_idempotency_key="x_studio_decision_idempotency_key",
     )
 
 

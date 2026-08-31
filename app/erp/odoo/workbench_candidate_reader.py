@@ -20,9 +20,13 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateDataError,
     WorkbenchCandidateNotFoundError,
     WorkbenchCandidateReadError,
+    WorkbenchCandidateUnsupportedDecisionError,
     WorkbenchContractError,
 )
-from app.application.workbench.projection import OdooWorkbenchDecisionCandidate
+from app.application.workbench.projection import (
+    OdooWorkbenchDecisionCandidate,
+    OdooWorkbenchDecisionCandidateReadFailure,
+)
 from app.application.workflow import WorkflowType
 from app.erp.exceptions import ErpRepositoryError
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -229,6 +233,18 @@ class OdooWorkbenchDecisionCandidateReader:
         self._mapping = mapping
 
     def list_ready_decisions(self, *, company_id: int, limit: int) -> tuple[OdooWorkbenchDecisionCandidate, ...]:
+        return tuple(
+            result
+            for result in self.list_ready_decision_results(company_id=company_id, limit=limit)
+            if isinstance(result, OdooWorkbenchDecisionCandidate)
+        )
+
+    def list_ready_decision_results(
+        self,
+        *,
+        company_id: int,
+        limit: int,
+    ) -> tuple[OdooWorkbenchDecisionCandidate | OdooWorkbenchDecisionCandidateReadFailure, ...]:
         if type(company_id) is not int or company_id <= 0:
             raise WorkbenchContractError("company_id must be positive.")
         if type(limit) is not int or limit <= 0:
@@ -244,14 +260,29 @@ class OdooWorkbenchDecisionCandidateReader:
                 limit=limit,
             )
             return tuple(
-                candidate
-                for record in records
-                if (candidate := self._candidate_from_parent(record, requested_company_id=company_id)) is not None
+                result
+                for record in _sorted_parent_records(records)
+                if (result := self._candidate_result_from_parent(record, requested_company_id=company_id)) is not None
             )
         except WorkbenchCandidateReadError:
             raise
         except ErpRepositoryError as exc:
             raise WorkbenchCandidateReadError(SAFE_CANDIDATE_READ_ERROR) from exc
+
+    def _candidate_result_from_parent(
+        self,
+        record: dict[str, Any],
+        *,
+        requested_company_id: int,
+    ) -> OdooWorkbenchDecisionCandidate | OdooWorkbenchDecisionCandidateReadFailure | None:
+        try:
+            return self._candidate_from_parent(record, requested_company_id=requested_company_id)
+        except WorkbenchCandidateDataError as exc:
+            return OdooWorkbenchDecisionCandidateReadFailure(
+                review_id=_optional_text_value(record.get(self._mapping.parent.review_id)),
+                odoo_record_id=_optional_positive_record_id(record.get("id")),
+                error=exc,
+            )
 
     def get_ready_decision(self, *, review_id: str, company_id: int) -> OdooWorkbenchDecisionCandidate:
         _required_text(review_id, "review_id is required.")
@@ -307,8 +338,9 @@ class OdooWorkbenchDecisionCandidateReader:
                 decision=_required_mapped_value(
                     record.get(self._mapping.parent.decision),
                     ODOO_DECISION_TO_CANONICAL,
+                    unsupported_error=WorkbenchCandidateUnsupportedDecisionError,
                 ),
-                idempotency_key=_required_text_value(record.get(self._mapping.parent.idempotency_key)),
+                idempotency_key=_optional_text_value(record.get(self._mapping.parent.idempotency_key)),
                 decided_by_odoo_user_id=_required_many2one_id(record.get(self._mapping.parent.decided_by)),
                 decided_at=_required_aware_datetime(record.get(self._mapping.parent.decided_at)),
                 decision_ready=True,
@@ -459,6 +491,12 @@ def _sort_id(record: dict[str, Any]) -> int:
     return _required_many2one_id(record.get("id"))
 
 
+def _optional_positive_record_id(value: Any) -> int | None:
+    if type(value) is int and value > 0:
+        return value
+    return None
+
+
 def _line_resolutions(value: Any) -> tuple[LineResolution, ...]:
     if _is_empty_optional(value):
         return ()
@@ -500,14 +538,23 @@ def _field(record: dict[str, Any], field_name: str | None) -> Any:
     return record.get(field_name)
 
 
-def _required_mapped_value[T](value: Any, mapping: dict[str, T]) -> T:
+def _sorted_parent_records(records: tuple[dict[str, Any], ...]) -> tuple[dict[str, Any], ...]:
+    return tuple(sorted(records, key=lambda record: _optional_positive_record_id(record.get("id")) or 0))
+
+
+def _required_mapped_value[T](
+    value: Any,
+    mapping: dict[str, T],
+    *,
+    unsupported_error: type[WorkbenchCandidateDataError] = WorkbenchCandidateDataError,
+) -> T:
     if not isinstance(value, str) or not value.strip():
         raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
     label = value
     try:
         return mapping[label]
     except KeyError as exc:
-        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR) from exc
+        raise unsupported_error(SAFE_CANDIDATE_DATA_ERROR) from exc
 
 
 def _selected_workflow(

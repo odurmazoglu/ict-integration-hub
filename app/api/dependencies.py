@@ -19,8 +19,13 @@ from app.application.workbench import (
     ReviewDecisionWriter,
     ReviewQueueReader,
     SubmitReviewDecisionUseCase,
+    WorkbenchDecisionIngestionWorkflow,
 )
-from app.composition import build_uyumsoft_canonical_invoice_importer, build_vendor_bill_execution_use_case
+from app.composition import (
+    build_odoo_workbench_decision_ingestion_workflow,
+    build_uyumsoft_canonical_invoice_importer,
+    build_vendor_bill_execution_use_case,
+)
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
@@ -147,6 +152,43 @@ GetReviewItemUseCaseDep = Annotated[GetReviewItemUseCase, Depends(get_review_ite
 SubmitReviewDecisionUseCaseDep = Annotated[
     SubmitReviewDecisionUseCase,
     Depends(get_submit_review_decision_use_case),
+]
+
+
+def get_workbench_decision_ingestion_workflow(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> WorkbenchDecisionIngestionWorkflow:
+    return _LazyWorkbenchDecisionIngestionWorkflow(session=session, settings=settings)
+
+
+class _LazyWorkbenchDecisionIngestionWorkflow:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._workflow: WorkbenchDecisionIngestionWorkflow | None = None
+
+    def sync_ready_decisions(
+        self,
+        *,
+        company_id: int,
+        limit: int = 50,
+        trace_id: str | None = None,
+    ):
+        return self._get_workflow().sync_ready_decisions(company_id=company_id, limit=limit, trace_id=trace_id)
+
+    def _get_workflow(self) -> WorkbenchDecisionIngestionWorkflow:
+        if self._workflow is None:
+            self._workflow = build_odoo_workbench_decision_ingestion_workflow(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._workflow
+
+
+WorkbenchDecisionIngestionWorkflowDep = Annotated[
+    WorkbenchDecisionIngestionWorkflow,
+    Depends(get_workbench_decision_ingestion_workflow),
 ]
 
 

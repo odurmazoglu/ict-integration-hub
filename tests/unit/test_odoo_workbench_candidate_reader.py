@@ -17,6 +17,7 @@ from app.application.workbench import (
     WorkbenchCandidateDataError,
     WorkbenchCandidateNotFoundError,
     WorkbenchCandidateReadError,
+    WorkbenchCandidateUnsupportedDecisionError,
     WorkbenchContractError,
 )
 from app.application.workflow import WorkflowType
@@ -222,7 +223,6 @@ def test_new_rfq_purchase_selected_workflow_requires_matching_allocation_intent(
 def test_malformed_parent_values_are_rejected_safely() -> None:
     cases = [
         {"x_decision": "not-real"},
-        {"x_decision": "Request Investigation"},
         {"x_selected_workflow": "not-real"},
         {"x_selected_partner": True},
         {"x_version": True},
@@ -240,6 +240,21 @@ def test_malformed_parent_values_are_rejected_safely() -> None:
 
         with pytest.raises(WorkbenchCandidateDataError):
             reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_request_investigation_is_rejected_without_canonical_enum_expansion() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_decision="Request Investigation")],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateUnsupportedDecisionError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    assert not any(member.value == "request_investigation" for member in ReviewDecisionType)
 
 
 def test_child_allocations_are_read_by_exact_parent_id_and_ordered_deterministically() -> None:
@@ -436,6 +451,35 @@ def test_list_ready_decisions_uses_company_and_ready_domain() -> None:
     assert len(candidates) == 1
     assert adapter.calls[0]["domain"] == [["x_company_id", "=", 7], ["x_decision_ready", "=", True]]
     assert adapter.calls[0]["limit"] == 5
+
+
+def test_list_ready_decisions_orders_candidates_by_odoo_record_id() -> None:
+    adapter = RecordingAdapter(
+        parent_records=[
+            _parent_record(id=43, x_review_id="review-2"),
+            _parent_record(id=42, x_review_id="review-1"),
+        ],
+        allocation_records=_allocation_records(),
+    )
+    reader = OdooWorkbenchDecisionCandidateReader(adapter=adapter, mapping=_mapping())
+
+    candidates = reader.list_ready_decisions(company_id=7, limit=5)
+
+    assert [candidate.odoo_record_id for candidate in candidates] == [42, 43]
+
+
+def test_hub_does_not_require_or_trust_odoo_idempotency_field_for_candidate_identity() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_idempotency_key=False)],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    candidate = reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    assert candidate.idempotency_key is None
 
 
 async def test_odoo_json2_client_allows_studio_custom_models_for_read_only_search_read() -> None:

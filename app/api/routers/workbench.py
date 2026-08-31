@@ -13,6 +13,7 @@ from app.api.dependencies import (
     ListReviewQueueUseCaseDep,
     RequestContextDep,
     SubmitReviewDecisionUseCaseDep,
+    WorkbenchDecisionIngestionWorkflowDep,
 )
 from app.api.error_handling import error_response_factory
 from app.api.security import Permission, PermissionDeniedError, require_permission
@@ -28,6 +29,7 @@ from app.application.workbench import (
     ReviewQueueResult,
     ReviewStatus,
     TaxResolution,
+    WorkbenchDecisionIngestionResult,
 )
 from app.application.workbench.exceptions import (
     ReviewDataIntegrityError,
@@ -56,6 +58,9 @@ from app.schemas.workbench import (
     ReviewQueueEnvelope,
     ReviewQueueResponse,
     TaxResolutionRequest,
+    WorkbenchDecisionIngestionCandidateResponse,
+    WorkbenchDecisionIngestionEnvelope,
+    WorkbenchDecisionIngestionResponse,
     decimal_to_api,
 )
 
@@ -141,6 +146,30 @@ def get_review_detail(
         context = require_permission(Permission.WORKBENCH_REVIEW_READ)(context)
         item = use_case.execute(ReviewDetailQuery(review_id=review_id, company_id=context.company_id))
         return _success(response, context.trace_id, _review_item_response(item), warnings=list(item.warnings))
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/decisions/sync",
+    response_model=WorkbenchDecisionIngestionEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Ingest ready Odoo Workbench decisions",
+    description=(
+        "Requires workbench_review_decide. Reads Odoo Workbench rows marked ready for Hub processing, persists "
+        "canonical Hub decision evidence, then acknowledges Odoo. It does not execute workflows or create ERP records."
+    ),
+)
+def sync_odoo_workbench_decisions(
+    response: Response,
+    context: RequestContextDep,
+    workflow: WorkbenchDecisionIngestionWorkflowDep,
+    limit: Annotated[int, Query()] = 50,
+) -> WorkbenchDecisionIngestionEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
+        result = workflow.sync_ready_decisions(company_id=context.company_id, limit=limit, trace_id=context.trace_id)
+        return _success(response, context.trace_id, _decision_ingestion_response(result), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -301,6 +330,29 @@ def _acknowledgement_response(
         version=acknowledgement.version,
         decision=acknowledgement.decision,
         selected_workflow=acknowledgement.selected_workflow,
+    )
+
+
+def _decision_ingestion_response(
+    result: WorkbenchDecisionIngestionResult,
+) -> WorkbenchDecisionIngestionResponse:
+    return WorkbenchDecisionIngestionResponse(
+        company_id=result.company_id,
+        processed_count=result.processed_count,
+        already_processed_count=result.already_processed_count,
+        acknowledgement_failed_count=result.acknowledgement_failed_count,
+        failed_count=result.failed_count,
+        results=[
+            WorkbenchDecisionIngestionCandidateResponse(
+                review_id=item.review_id,
+                odoo_record_id=item.odoo_record_id,
+                status=item.status,
+                acknowledged=item.acknowledged,
+                idempotency_key=item.idempotency_key,
+                message=item.message,
+            )
+            for item in result.results
+        ],
     )
 
 

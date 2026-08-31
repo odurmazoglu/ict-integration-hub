@@ -111,6 +111,8 @@ class OdooWorkbenchProjectionFieldMapping:
     trace_id: str | None = None
     review_reasons: str | None = None
     warnings: str | None = None
+    decision_ready: str | None = None
+    decision_idempotency_key: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -156,6 +158,8 @@ class OdooWorkbenchProjectionFieldMapping:
             trace_id=_env_optional(prefix, "TRACE_ID_FIELD"),
             review_reasons=_env_optional(prefix, "REVIEW_REASONS_FIELD"),
             warnings=_env_optional(prefix, "WARNINGS_FIELD"),
+            decision_ready=_env_optional(prefix, "DECISION_READY_FIELD"),
+            decision_idempotency_key=_env_optional(prefix, "DECISION_IDEMPOTENCY_KEY_FIELD"),
         )
 
 
@@ -270,14 +274,24 @@ class OdooWorkbenchProjectionPublisher:
         *,
         odoo_record_id: int,
         trace_id: str | None = None,
+        idempotency_key: str | None = None,
+        clear_ready: bool = False,
     ) -> ProjectionPublishResult:
         if type(odoo_record_id) is not int or odoo_record_id <= 0:
             raise WorkbenchContractError("odoo_record_id must be a positive ERP id.")
+        if idempotency_key is not None and not idempotency_key.strip():
+            raise WorkbenchContractError("idempotency_key must be non-empty when supplied.")
+        if type(clear_ready) is not bool:
+            raise WorkbenchContractError("clear_ready must be a boolean value.")
         values: dict[str, Any] = {
             self._mapping.review_status: _review_status_to_odoo(acknowledgement.status),
             self._mapping.review_version: acknowledgement.version,
         }
         _put_optional(values, self._mapping.trace_id, trace_id)
+        if idempotency_key is not None:
+            _put_optional(values, self._mapping.decision_idempotency_key, idempotency_key)
+        if clear_ready:
+            _put_optional(values, self._mapping.decision_ready, False)
         try:
             self._adapter.write(model=self._mapping.model, record_id=odoo_record_id, values=values)
         except ErpRepositoryError as exc:

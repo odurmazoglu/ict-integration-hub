@@ -101,13 +101,13 @@ Not implemented or not allowed by default:
 - Odoo `action_post`, unlink, payment registration, reconciliation, or automatic master-data creation.
 - Business decision logic inside Odoo.
 - Custom Odoo Python addons for Odoo Online.
-- Odoo Studio model/view setup, acknowledgement runtime trigger, retry scheduler, or workflow execution.
+- Odoo Studio model/view setup, retry scheduler, or workflow execution.
 - Customer invoice posting, recharge settlement, collections, allocation profitability posting, or analytic writes.
 - Customer Invoice creation from the normal production Workbench/import flow until an authoritative Stage 1 billing instruction capture or Workbench authoring source exists.
 - Customer Invoice `EXECUTE` without explicit, version-pinned billing instructions for customer, currency, product, quantity, unit price, and sales taxes. Customer Invoice pricing comes only from immutable billing evidence, never from `BusinessContextAllocation` amount/percentage, purchase tax mapping, display fields, current ERP prices, AI, or fuzzy logic.
 - `EXECUTE` mode by default; real execution additionally requires `EXECUTION_EXECUTE_ENABLED`, explicit `ExecutionApproval.approved_by`, `PRODUCTION_OPERATIONS_ENABLED`, the production approval acknowledgement, and per-writer gates such as `CUSTOMER_INVOICE_EXECUTE_ENABLED`.
 - `EXECUTE` mode for unsupported execution steps, background execution workers, retry scheduling, and ERP posting/payment/reconciliation.
-- Odoo decision polling, Uyumsoft outgoing invoice send, Workbench projection retry scheduling, and Odoo Studio schema mutation.
+- Automatic Odoo decision polling, Uyumsoft outgoing invoice send, Workbench projection retry scheduling, and Odoo Studio schema mutation.
 - Live execution source reconstruction from current ERP/provider state or regenerated matching results.
 - Execution source evidence capture for `DISMISS`, non-Vendor-Bill workflows, or decisions not executable by the current Vendor Bill strategy.
 - AI-driven automatic decisions.

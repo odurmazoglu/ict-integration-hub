@@ -41,6 +41,7 @@
 - Durable Workbench review classification evidence pinning for exact company/review/version replay, explicit `NO_MATCH`, conflict evidence, and no historical reclassification from current Odoo rules
 - Read-only Workbench classification projection service for pinned historical review evidence, safe badges, matched rule details, and deterministic conflict summaries without rule re-evaluation
 - Uyumsoft inbound sync attachment to the canonical import pipeline for Inbox supplier invoices: provider list/download/persistence, existing UBL parser, `InternalInvoice`, exact company resolution, `ImportInvoiceCommand`, `ImportInvoiceUseCase`, Hub review/evidence or technical import receipt idempotency, and optional Odoo Workbench projection
+- Explicit Odoo Workbench Decision Ingestion Runtime for `Ready=true` rows: Hub-triggered Odoo candidate read, canonical decision/allocation mapping, exact review/company/version validation, `SubmitReviewDecisionUseCase` persistence, Hub-derived idempotency, commit-before-acknowledgement ordering, replayable acknowledgement failure handling, and no workflow execution
 
 ## Next Milestones
 
@@ -56,18 +57,18 @@
 - dry-run support for each strategy
 - ERP write safety gates
 
-### 3. Odoo Projection Acknowledgement
+### 3. Odoo Decision Sync Operations
 
-- Hub-to-Odoo acknowledgement projection
-- decision-ready clearing only after Hub acceptance
-- safe projection status update boundaries
+- operator UX or automation around the explicit decision sync trigger
+- retry/reconciliation tooling for failed acknowledgement outcomes
+- monitoring for candidate failures and stale Workbench rows
 
 ### 4. Odoo Online Workbench Projection Synchronization
 
 - controlled Odoo Studio setup for `x_ipp_import_review`
 - Hub-to-Odoo JSON-2 projection publishing (implemented adapter boundary)
 - review-required import runtime publishing after durable Hub review/evidence persistence
-- Hub acknowledgement projection (implemented status/version projection boundary)
+- Hub acknowledgement projection for accepted decision ingestion
 - retry/reconciliation tooling for projection publish failures
 - no custom Odoo Python addon
 - no workflow execution

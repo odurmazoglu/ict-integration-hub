@@ -15,7 +15,7 @@ from app.application.workbench.dto import (
     ReviewStatus,
     TaxResolution,
 )
-from app.application.workbench.exceptions import WorkbenchContractError
+from app.application.workbench.exceptions import WorkbenchCandidateReadError, WorkbenchContractError
 from app.application.workflow import ManualReviewReason, WorkflowType
 
 CLASSIFICATION_STATUS_BADGES: dict[str, str] = {
@@ -186,10 +186,10 @@ class OdooWorkbenchDecisionCandidate(ApplicationDTO):
     company_id: int
     expected_version: int
     decision: ReviewDecisionType
-    idempotency_key: str
     decided_by_odoo_user_id: int
     decided_at: datetime
     decision_ready: bool
+    idempotency_key: str | None = None
     selected_workflow: WorkflowType | None = None
     selected_partner_id: int | None = None
     line_resolutions: tuple[LineResolution, ...] = field(default_factory=tuple)
@@ -206,7 +206,8 @@ class OdooWorkbenchDecisionCandidate(ApplicationDTO):
             "decided_by_odoo_user_id must be a positive ERP id.",
         )
         _require_text(self.review_id, "review_id is required.")
-        _require_text(self.idempotency_key, "idempotency_key is required.")
+        if self.idempotency_key is not None:
+            _require_text(self.idempotency_key, "idempotency_key must be non-empty when supplied.")
         _require_enum(self.decision, ReviewDecisionType, "decision must be a canonical ReviewDecisionType.")
         _require_aware_datetime(self.decided_at, "decided_at must be a timezone-aware datetime.")
         if self.selected_workflow is not None:
@@ -227,7 +228,7 @@ class OdooWorkbenchDecisionCandidate(ApplicationDTO):
             expected_version=self.expected_version,
             decision=self.decision,
             decided_by=f"odoo:{self.decided_by_odoo_user_id}",
-            idempotency_key=self.idempotency_key,
+            idempotency_key=self.idempotency_key or "candidate-validation-key",
             selected_workflow=self.selected_workflow,
             selected_partner_id=self.selected_partner_id,
             line_resolutions=line_resolutions,
@@ -235,6 +236,23 @@ class OdooWorkbenchDecisionCandidate(ApplicationDTO):
             business_context_allocations=self.business_context_allocations,
             comment=self.comment,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OdooWorkbenchDecisionCandidateReadFailure(ApplicationDTO):
+    """Safe per-row read failure for explicit Odoo Workbench decision scans."""
+
+    review_id: str | None
+    odoo_record_id: int | None
+    error: WorkbenchCandidateReadError
+
+    def __post_init__(self) -> None:
+        if self.review_id is not None:
+            _require_text(self.review_id, "review_id must be non-empty when supplied.")
+        if self.odoo_record_id is not None:
+            _require_positive_int(self.odoo_record_id, "odoo_record_id must be a positive ERP id when supplied.")
+        if not isinstance(self.error, WorkbenchCandidateReadError):
+            raise WorkbenchContractError("error must be a WorkbenchCandidateReadError.")
 
 
 @dataclass(frozen=True, slots=True)

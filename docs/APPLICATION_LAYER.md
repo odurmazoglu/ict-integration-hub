@@ -81,6 +81,10 @@ Current foundation contracts:
 - `SubmitOdooWorkbenchCandidateCommand`
 - `OdooWorkbenchSubmissionResult`
 - `OdooWorkbenchSubmissionStatus`
+- `WorkbenchDecisionIngestionStatus`
+- `WorkbenchDecisionIngestionCandidateResult`
+- `WorkbenchDecisionIngestionResult`
+- `WorkbenchDecisionIngestionWorkflow`
 - `WorkbenchErpReferenceValidator`
 - focused Workbench ERP reference DTOs and read-only repository ports
 - `ExecutionRequest`
@@ -120,6 +124,7 @@ Current foundation contracts:
 - `GetReviewItemUseCase`
 - `SubmitReviewDecisionUseCase`
 - `SubmitOdooWorkbenchCandidateUseCase`
+- `WorkbenchDecisionIngestionWorkflow`
 - `RunAcceptedDecisionExecutionUseCase`
 
 ## Use Case Convention
@@ -240,6 +245,23 @@ The requested `company_id` is the authoritative execution scope. A candidate who
 `WorkbenchCandidateNotFoundError` and not-ready candidates produce `OdooWorkbenchSubmissionStatus.NOT_READY_OR_NOT_FOUND` without submission. Stale versions, idempotency conflicts, malformed decisions, ambiguity, provider read failures, and submission failures are not retried by the orchestrator.
 
 This application service remains Odoo read -> ERP reference read validation -> Hub submit only. It does not acknowledge the projection, modify Odoo, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, post profitability, infer decisions, infer allocations, cache validation results, persist validation snapshots, or use AI/fuzzy matching.
+
+`WorkbenchDecisionIngestionWorkflow` is the explicit runtime boundary for the reverse Odoo-to-Hub decision leg:
+
+```text
+POST /api/workbench/decisions/sync
+  -> WorkbenchDecisionIngestionWorkflow
+  -> WorkbenchDecisionCandidateReader.list_ready_decision_results(company_id, limit)
+  -> OdooWorkbenchDecisionCandidate
+  -> WorkbenchErpReferenceValidator
+  -> SubmitReviewDecisionUseCase
+  -> Hub decision persistence commit
+  -> WorkbenchProjectionPublisher.acknowledge_decision(clear_ready=True)
+```
+
+The workflow scans only candidates whose configured Odoo ready flag is true, keeps `RequestContext.company_id` as the trusted scope, derives the Hub decision idempotency key from normalized canonical candidate content, and submits through the existing `ReviewDecisionCommand` path. It commits the Hub decision before writing acknowledgement fields to Odoo. If acknowledgement fails after commit, the candidate remains replayable: the next explicit sync reuses existing canonical idempotency evidence and retries only the acknowledgement side effect.
+
+Ingestion returns per-candidate safe statuses such as `processed`, `already_processed`, `unsupported_decision`, `review_not_found`, `company_mismatch`, `stale_review_version`, `invalid_allocation`, and `acknowledgement_failed`. `Request Investigation` remains unsupported because the canonical `ReviewDecisionType` enum still contains only the existing accepted decisions. The workflow does not execute accepted decisions, create ERP documents, call provider operations, run AI/fuzzy matching, schedule background work, or mutate Odoo Studio schema.
 
 ## Workbench ERP Reference Validation
 

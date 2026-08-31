@@ -16,6 +16,13 @@ from app.application.workbench.billing_capture_use_cases import CaptureOdooWorkb
 from app.application.workbench.billing_reference_validation import WorkbenchBillingReferenceValidator
 from app.application.workbench.classification_projection import WorkbenchClassificationProjectionService
 from app.application.workbench.commands import ReviewDecisionCommand
+from app.application.workbench.decision_ingestion import (
+    WorkbenchDecisionIngestionCandidateResult,
+    WorkbenchDecisionIngestionResult,
+    WorkbenchDecisionIngestionStatus,
+    WorkbenchDecisionIngestionWorkflow,
+    decision_idempotency_key,
+)
 from app.application.workbench.decision_use_cases import SubmitReviewDecisionUseCase
 from app.application.workbench.dto import (
     BusinessContextDecision,
@@ -62,6 +69,7 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateDataError,
     WorkbenchCandidateNotFoundError,
     WorkbenchCandidateReadError,
+    WorkbenchCandidateUnsupportedDecisionError,
     WorkbenchContractError,
     WorkbenchErpReferenceCompanyMismatchError,
     WorkbenchErpReferenceNotFoundError,
@@ -175,6 +183,7 @@ __all__ = [
     "WorkbenchCandidateDataError",
     "WorkbenchCandidateNotFoundError",
     "WorkbenchCandidateReadError",
+    "WorkbenchCandidateUnsupportedDecisionError",
     "WorkbenchClassificationConflictRuleProjection",
     "WorkbenchClassificationProjection",
     "WorkbenchClassificationProjectionService",
@@ -188,8 +197,13 @@ __all__ = [
     "WorkbenchErpReferenceValidationError",
     "WorkbenchErpReferenceValidator",
     "WorkbenchContractError",
+    "WorkbenchDecisionIngestionCandidateResult",
+    "WorkbenchDecisionIngestionResult",
+    "WorkbenchDecisionIngestionStatus",
+    "WorkbenchDecisionIngestionWorkflow",
     "WorkbenchProjection",
     "WorkbenchProjectionPublisher",
     "WorkbenchSubmissionCompanyMismatchError",
     "WorkbenchSubmissionOrchestrationError",
+    "decision_idempotency_key",
 ]

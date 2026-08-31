@@ -2,7 +2,7 @@
 
 This document defines the architecture and contract for presenting Hub-owned Import Workbench reviews inside Odoo 19 Online through Odoo Studio projection models.
 
-This slice includes the Odoo JSON-2 projection publisher for Hub-owned Workbench fields and the read-only candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs. It also wires projection publishing into the `ImportInvoiceUseCase` production composition path after Hub review/evidence persistence. The live Uyumsoft inbound import attachment reaches this publisher only through canonical import composition, not through direct Uyumsoft-to-Odoo calls; non-review `dry_run` acceptance is tracked by Hub technical import receipts and does not reach the Odoo Workbench publisher. Odoo standard Sales/Invoicing remains the preferred surface for customer billing; Hub Workbench does not recreate standard Odoo billing workflows. The Studio models, Studio views, ACLs, scheduler, automatic retry worker, acknowledgement runtime trigger, and workflow execution are not implemented in this slice.
+This slice includes the Odoo JSON-2 projection publisher for Hub-owned Workbench fields, the read-only candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs, and an explicit Hub API trigger that ingests ready Odoo decisions through the canonical Workbench decision use case before acknowledging Odoo. It also wires projection publishing into the `ImportInvoiceUseCase` production composition path after Hub review/evidence persistence. The live Uyumsoft inbound import attachment reaches this publisher only through canonical import composition, not through direct Uyumsoft-to-Odoo calls; non-review `dry_run` acceptance is tracked by Hub technical import receipts and does not reach the Odoo Workbench publisher. Odoo standard Sales/Invoicing remains the preferred surface for customer billing; Hub Workbench does not recreate standard Odoo billing workflows. The Studio models, Studio views, ACLs, scheduler, automatic retry worker, and workflow execution are not implemented in this slice.
 
 ## Architecture
 
@@ -41,7 +41,7 @@ The synchronization flow is Hub-controlled:
 5. Hub reads only records where the configured decision-ready field is explicitly true.
 6. Hub validates the candidate through existing Workbench command rules.
 7. Hub persists an accepted decision with optimistic concurrency and idempotency.
-8. Hub writes acknowledgement fields back to the projection in a later runtime slice.
+8. Hub writes acknowledgement fields back to the projection and clears the ready flag only after Hub decision evidence is committed.
 9. Later focused workflow PRs may execute accepted decisions.
 
 ## Proposed Studio Model
@@ -184,7 +184,7 @@ The field list keeps only data justified by current Workbench contracts and sync
 | `x_ipp_tax_resolutions_json` | Text | Odoo user | JSON array of tax resolutions matching `TaxResolution`. |
 | `x_ipp_business_context_json` | Text | Legacy only | Historical `BusinessContextDecision` shape; not an active authoritative input when allocation child lines exist. |
 | `x_ipp_comment` | Text | Odoo user | Optional comment, bounded by Hub contract. |
-| `x_ipp_decision_idempotency_key` | Char, required before submit | Odoo user/System | Stable key for Hub idempotent decision submission. |
+| `x_ipp_decision_idempotency_key` | Char | Hub acknowledgement | Hub-derived canonical idempotency key projected after accepted processing. |
 | `x_ipp_decided_by_odoo_user_id` | Integer | System-derived Odoo field | Odoo user id that submitted the candidate. |
 | `x_ipp_decided_at` | Timezone-aware Datetime | System-derived Odoo field | Candidate submission timestamp audit evidence. |
 | `x_ipp_decision_ready` | Boolean | Odoo user/System | Hub reads a candidate only when explicitly true. |
@@ -312,7 +312,7 @@ Rules:
 - Hub must process a decision only when `x_ipp_decision_ready` is explicitly true.
 - Hub acknowledgement must be written separately from user input.
 - Hub remains authoritative for accepted decision version and status.
-- `x_ipp_decision_ready` must not be cleared until Hub acknowledgement is safely persisted and, when implemented, projected back to Odoo.
+- `x_ipp_decision_ready` is cleared only after Hub decision evidence is committed and safe acknowledgement fields are projected back to Odoo.
 
 ## Application Contracts
 
@@ -324,10 +324,13 @@ The application layer defines immutable ERP-neutral application DTOs:
 - `CaptureOdooWorkbenchBillingEvidenceCommand`
 - `CaptureOdooWorkbenchBillingEvidenceResult`
 - `ProjectionPublishResult`
+- `WorkbenchDecisionIngestionResult`
+- `WorkbenchDecisionIngestionCandidateResult`
 
 It also introduces narrow application ports:
 
 - `WorkbenchProjectionPublisher`
+- `WorkbenchDecisionIngestionWorkflow`
 - `WorkbenchDecisionCandidateReader`
 - `WorkbenchBillingAuthoringReader`
 - `SubmitOdooWorkbenchCandidateUseCase`
@@ -584,11 +587,11 @@ Decision ingestion rules:
 
 - Hub uses existing `ReviewDecisionCommand.expected_version`.
 - Odoo candidate expected version must match the Hub review version displayed to the user.
-- Decision idempotency key is mandatory.
+- Hub derives the decision idempotency key from canonical Odoo candidate content instead of trusting the Odoo projection row.
 - Repeated identical decision submission is safe.
 - Conflicting idempotency-key reuse is rejected.
 - User decisions from another company must never be accepted.
-- `decision_ready` must not be cleared before Hub acknowledgement is safely persisted and projected.
+- `decision_ready` is cleared only after Hub decision evidence is committed and acknowledgement projection succeeds.
 
 Allocation ingestion rules:
 
