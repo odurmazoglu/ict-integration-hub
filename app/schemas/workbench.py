@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.application.execution import ExecutionArtifactType, ExecutionMode, WorkbenchVendorBillExecutionStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
@@ -201,10 +202,48 @@ class WorkbenchDecisionIngestionResponse(BaseModel):
     results: list[WorkbenchDecisionIngestionCandidateResponse]
 
 
+class ExecutionApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    approved_by: str
+
+
+class WorkbenchVendorBillExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision_version: int
+    mode: ExecutionMode = ExecutionMode.DRY_RUN
+    approval: ExecutionApprovalRequest | None = None
+
+
+class ExecutionArtifactResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    artifact_type: ExecutionArtifactType
+    artifact_id: str
+    external_identity: str
+    created: bool
+
+
+class WorkbenchVendorBillExecutionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    decision_version: int
+    mode: ExecutionMode
+    status: WorkbenchVendorBillExecutionStatus
+    execution_id: str | None = None
+    runtime_state: str | None = None
+    artifacts: list[ExecutionArtifactResponse]
+    message: str | None = None
+
+
 ReviewItemEnvelope = ApiEnvelope[ReviewItemResponse]
 ReviewQueueEnvelope = ApiEnvelope[ReviewQueueResponse]
 ReviewDecisionAcknowledgementEnvelope = ApiEnvelope[ReviewDecisionAcknowledgementResponse]
 WorkbenchDecisionIngestionEnvelope = ApiEnvelope[WorkbenchDecisionIngestionResponse]
+WorkbenchVendorBillExecutionEnvelope = ApiEnvelope[WorkbenchVendorBillExecutionResponse]
 ErrorEnvelope = ApiEnvelope[Any]
 
 

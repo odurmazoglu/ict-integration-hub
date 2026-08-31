@@ -168,6 +168,8 @@ For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evide
 
 Vendor Bill execution bridges the durable runtime to the existing Draft Vendor Bill writer. The strategy constructs a deterministic writer idempotency key from execution identity and the `VENDOR_BILL` step key, then delegates duplicate detection and production gates to `VendorBillWriter` and its concrete Odoo implementation.
 
+The Workbench API exposes this path through `POST /api/workbench/reviews/{review_id}/execute`. The endpoint is intentionally narrower than the general runtime: it supports only persisted accepted direct Vendor Bill decisions with no business-context allocations. It rejects `DISMISS`, RFQ, Purchase Order, Expense, Asset, Subscription, Customer Invoice, Customer Recharge, Project Cost, Internal Cost, Manual Review, and allocation-driven decisions before runtime planning. The request body cannot provide vendor, line, tax, product, amount, currency, purchase-order, Odoo `account.move`, or editable Odoo Workbench field data.
+
 The production composition root wires `SqlAlchemyExecutionSourceInvoiceReader -> ExecutionPlanner -> ExecutionRuntimeService/ExecutionRuntimeCoordinator -> VendorBillExecutionStrategy + CustomerRechargeExecutionRouter -> VendorBillWriter/CustomerInvoiceWriter -> Odoo writers`. Application services depend only on ports and do not instantiate SQLAlchemy, Odoo, or account.move adapters directly.
 
 On `created` or `existing` writer results, the step result contains exactly one `ExecutionArtifact`:
@@ -180,6 +182,8 @@ On `created` or `existing` writer results, the step result contains exactly one 
 The strategy itself does not call Odoo, SQLAlchemy, Uyumsoft, AI, fuzzy matching, provider clients, posting, payment, reconciliation, unlink, customer invoice creation, RFQ, Purchase Order creation, workers, or schedulers.
 
 Hub runtime persistence and the Odoo draft write are a distributed write boundary. They cannot be committed atomically in one database transaction. Recovery relies on runtime state, deterministic writer idempotency, and Odoo-side duplicate lookup before draft creation. `ExecutionArtifact` is retained for audit, operator visibility, and replay diagnostics; it is not the recovery mechanism itself. If an Odoo draft is created and the response is lost before Hub records the step result, retrying the same step uses the same writer idempotency key so the writer can return the existing draft instead of creating a duplicate, then the runtime can complete and persist the recovered `ExecutionArtifact`.
+
+If Odoo creates a draft Vendor Bill but Hub finalization persistence fails after the writer returns, this remains a distributed-write failure window. The current recovery model is an explicit replay using the same execution identity and writer idempotency key so Odoo duplicate lookup can recover the already-created draft. There is no scheduler, background worker, distributed transaction, or automatic reconciliation loop in this PR.
 
 Checkpoint consistency remains inside the Hub runtime boundary. Checkpoints are not independently writable; all checkpoint changes occur through `persist_transition`.
 

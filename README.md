@@ -88,6 +88,7 @@ Current implemented capabilities:
 - SQLAlchemy execution source invoice reader that loads version-pinned persisted Hub evidence for Vendor Bill execution without Odoo/Uyumsoft rereads or rematching.
 - Atomic execution source evidence capture for accepted executable Vendor Bill Workbench decisions, storing immutable schema-versioned invoice and deterministic match snapshots in the same Hub transaction as decision persistence.
 - Production Vendor Bill execution wiring that composes accepted decisions, the durable runtime, `VendorBillExecutionStrategy`, `VendorBillWriter`, and `OdooVendorBillWriter` for opt-in Draft Vendor Bill creation and duplicate-safe recovery.
+- Explicit Workbench Vendor Bill execution trigger at `POST /api/workbench/reviews/{review_id}/execute`, scoped to persisted accepted direct Vendor Bill decisions and pinned Hub execution source evidence.
 - No-write Customer Recharge execution for allocations that already reference validated existing outgoing customer invoices, producing `CUSTOMER_INVOICE` artifacts with `created=false`.
 - Customer Invoice Stage 2 pinning and execution wiring for `CUSTOMER_RECHARGE` allocations without `customer_invoice_id`, including one accepted billing instruction per draft customer invoice step, Stage 2 execution evidence reads only, builder/writer separation, and opt-in writer gates. Authoritative Stage 1 billing instruction capture source remains required.
 - Deterministic supplier partner matching, tax mapping, and product matching.
@@ -104,6 +105,7 @@ Not implemented or not allowed by default:
 - Odoo Studio model/view setup, retry scheduler, or workflow execution.
 - Customer invoice posting, recharge settlement, collections, allocation profitability posting, or analytic writes.
 - Customer Invoice creation from the normal production Workbench/import flow until an authoritative Stage 1 billing instruction capture or Workbench authoring source exists.
+- Workbench execution through the explicit `/execute` trigger for any decision other than direct Vendor Bill without business-context allocations. RFQ, Purchase Order, Expense, Asset, Subscription, Customer Invoice, Customer Recharge, Project Cost, Internal Cost, Dismiss, and Manual Review execution remain unsupported there.
 - Customer Invoice `EXECUTE` without explicit, version-pinned billing instructions for customer, currency, product, quantity, unit price, and sales taxes. Customer Invoice pricing comes only from immutable billing evidence, never from `BusinessContextAllocation` amount/percentage, purchase tax mapping, display fields, current ERP prices, AI, or fuzzy logic.
 - `EXECUTE` mode by default; real execution additionally requires `EXECUTION_EXECUTE_ENABLED`, explicit `ExecutionApproval.approved_by`, `PRODUCTION_OPERATIONS_ENABLED`, the production approval acknowledgement, and per-writer gates such as `CUSTOMER_INVOICE_EXECUTE_ENABLED`.
 - `EXECUTE` mode for unsupported execution steps, background execution workers, retry scheduling, and ERP posting/payment/reconciliation.

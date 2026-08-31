@@ -13,6 +13,7 @@ from app.api.dependencies import (
     get_review_item_use_case,
     get_submit_review_decision_use_case,
     get_workbench_decision_ingestion_workflow,
+    get_workbench_vendor_bill_execution_workflow,
 )
 from app.api.security import (
     AuthenticationMethod,
@@ -20,6 +21,15 @@ from app.api.security import (
     OidcProviderUnavailableError,
     Permission,
     RequestContext,
+)
+from app.application.execution import (
+    ExecutionApproval,
+    ExecutionArtifact,
+    ExecutionArtifactType,
+    ExecutionMode,
+    ExecutionState,
+    WorkbenchVendorBillExecutionResult,
+    WorkbenchVendorBillExecutionStatus,
 )
 from app.application.workbench import (
     ReviewDecisionAcknowledgement,
@@ -501,6 +511,114 @@ async def test_decide_permission_required_for_decision_ingestion_trigger(api_cli
     assert response.json()["errors"][0]["code"] == "permission_denied"
 
 
+async def test_explicit_workbench_vendor_bill_execution_trigger(api_client: AsyncClient) -> None:
+    workflow = FakeWorkbenchVendorBillExecutionWorkflow(
+        WorkbenchVendorBillExecutionResult(
+            review_id="review-from-path",
+            company_id=7,
+            decision_version=3,
+            mode=ExecutionMode.DRY_RUN,
+            status=WorkbenchVendorBillExecutionStatus.DRY_RUN_COMPLETED,
+            execution_id="execution-1",
+            runtime_state=ExecutionState.COMPLETED,
+            artifacts=(
+                ExecutionArtifact(
+                    artifact_type=ExecutionArtifactType.VENDOR_BILL,
+                    artifact_id="9001",
+                    external_identity="vendor-bill-write:key",
+                    created=False,
+                ),
+            ),
+        )
+    )
+
+    response = await _post_execute(
+        api_client,
+        "review-from-path",
+        context=_context(Permission.WORKBENCH_EXECUTE, company_id=7),
+        workflow=workflow,
+        json={"decision_version": 3, "mode": "dry_run"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["status"] == "dry_run_completed"
+    assert body["data"]["runtime_state"] == "completed"
+    assert body["data"]["artifacts"] == [
+        {
+            "artifact_type": "vendor_bill",
+            "artifact_id": "9001",
+            "external_identity": "vendor-bill-write:key",
+            "created": False,
+        }
+    ]
+    assert workflow.calls == [
+        {
+            "review_id": "review-from-path",
+            "company_id": 7,
+            "decision_version": 3,
+            "mode": ExecutionMode.DRY_RUN,
+            "approval": None,
+        }
+    ]
+
+
+async def test_workbench_vendor_bill_execute_reuses_execution_approval(api_client: AsyncClient) -> None:
+    workflow = FakeWorkbenchVendorBillExecutionWorkflow(
+        WorkbenchVendorBillExecutionResult(
+            review_id="review-1",
+            company_id=7,
+            decision_version=3,
+            mode=ExecutionMode.EXECUTE,
+            status=WorkbenchVendorBillExecutionStatus.EXECUTED,
+            execution_id="execution-1",
+            runtime_state=ExecutionState.COMPLETED,
+        )
+    )
+
+    response = await _post_execute(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_EXECUTE, company_id=7),
+        workflow=workflow,
+        json={"decision_version": 3, "mode": "execute", "approval": {"approved_by": "controller"}},
+    )
+
+    assert response.status_code == 200
+    approval = workflow.calls[0]["approval"]
+    assert isinstance(approval, ExecutionApproval)
+    assert approval.approved_by == "controller"
+
+
+async def test_workbench_execute_permission_required_before_runtime_execution(api_client: AsyncClient) -> None:
+    workflow = FakeWorkbenchVendorBillExecutionWorkflow(AssertionError("execution must not run"))
+
+    response = await _post_execute(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        workflow=workflow,
+        json={"decision_version": 3, "mode": "dry_run"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["errors"][0]["code"] == "permission_denied"
+    assert workflow.calls == []
+
+
+async def test_workbench_execute_body_cannot_supply_erp_payload(api_client: AsyncClient) -> None:
+    response = await _post_execute(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_EXECUTE),
+        json={"decision_version": 3, "mode": "dry_run", "invoice_lines": []},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0] == {"code": "request_validation_error", "message": "Request validation failed."}
+
+
 async def test_response_and_error_envelope_consistency(api_client: AsyncClient) -> None:
     success = await _get(
         api_client,
@@ -543,6 +661,7 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews",
         "/api/workbench/reviews/{review_id}",
         "/api/workbench/reviews/{review_id}/decision",
+        "/api/workbench/reviews/{review_id}/execute",
     }
     decision_schema = response.json()["components"]["schemas"]["ReviewDecisionRequest"]
     schema_text = str(decision_schema)
@@ -553,6 +672,10 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
     assert "business_context" not in decision_schema["properties"]
     assert "BusinessContextAllocationRequest" in response.json()["components"]["schemas"]
     assert "BusinessContextAllocationSetRequest" in response.json()["components"]["schemas"]
+    execution_schema = response.json()["components"]["schemas"]["WorkbenchVendorBillExecutionRequest"]
+    execution_schema_text = str(execution_schema)
+    for field in ("vendor", "invoice_lines", "tax", "product", "amount", "currency", "purchase_order"):
+        assert field not in execution_schema_text
     queue_params = workbench_paths["/api/workbench/reviews"]["get"]["parameters"]
     assert "company_id" not in {param["name"] for param in queue_params}
     assert workbench_paths["/api/workbench/reviews"]["get"]["security"] == [{"HTTPBearer": []}]
@@ -640,6 +763,34 @@ class FakeDecisionIngestionWorkflow:
         return self.result
 
 
+class FakeWorkbenchVendorBillExecutionWorkflow:
+    def __init__(self, result: WorkbenchVendorBillExecutionResult | Exception) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def execute(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+        mode: ExecutionMode,
+        approval: ExecutionApproval | None,
+    ) -> WorkbenchVendorBillExecutionResult:
+        self.calls.append(
+            {
+                "review_id": review_id,
+                "company_id": company_id,
+                "decision_version": decision_version,
+                "mode": mode,
+                "approval": approval,
+            }
+        )
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
 async def _get(
     api_client: AsyncClient,
     path: str,
@@ -689,6 +840,23 @@ async def _post_decision_sync(
         app.dependency_overrides[get_workbench_decision_ingestion_workflow] = lambda: workflow
     try:
         return await api_client.post("/api/workbench/decisions/sync", params=params)
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def _post_execute(
+    api_client: AsyncClient,
+    review_id: str,
+    *,
+    context: RequestContext,
+    json: dict[str, Any],
+    workflow: FakeWorkbenchVendorBillExecutionWorkflow | None = None,
+):
+    app.dependency_overrides[get_request_context] = lambda: context
+    if workflow is not None:
+        app.dependency_overrides[get_workbench_vendor_bill_execution_workflow] = lambda: workflow
+    try:
+        return await api_client.post(f"/api/workbench/reviews/{review_id}/execute", json=json)
     finally:
         app.dependency_overrides.clear()
 

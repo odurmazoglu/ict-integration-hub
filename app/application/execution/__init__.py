@@ -5,6 +5,7 @@ from app.application.execution.accepted_decision_use_cases import (
     AcceptedDecisionExecutionStatus,
     RunAcceptedDecisionExecutionCommand,
     RunAcceptedDecisionExecutionUseCase,
+    accepted_decision_execution_id,
 )
 from app.application.execution.contracts import (
     AcceptedReviewDecision,
@@ -94,6 +95,11 @@ from app.application.execution.vendor_bill_strategy import (
     VendorBillExecutionStrategy,
     vendor_bill_write_idempotency_key,
 )
+from app.application.execution.workbench_vendor_bill import (
+    WorkbenchVendorBillExecutionResult,
+    WorkbenchVendorBillExecutionStatus,
+    WorkbenchVendorBillExecutionWorkflow,
+)
 from app.billing.dto import CustomerInvoiceBillingInstruction, CustomerInvoiceBillingLine
 
 __all__ = [
@@ -104,6 +110,7 @@ __all__ = [
     "ExecutionArtifact",
     "ExecutionArtifactType",
     "AcceptedReviewDecisionReader",
+    "accepted_decision_execution_id",
     "CustomerInvoiceBillingInstruction",
     "CustomerInvoiceBillingLine",
     "CustomerInvoiceExecutionStrategy",
@@ -172,6 +179,9 @@ __all__ = [
     "RunAcceptedDecisionExecutionUseCase",
     "StaticRetryPolicyResolver",
     "VendorBillExecutionStrategy",
+    "WorkbenchVendorBillExecutionResult",
+    "WorkbenchVendorBillExecutionStatus",
+    "WorkbenchVendorBillExecutionWorkflow",
     "assert_legal_transition",
     "execution_idempotency_key",
     "customer_invoice_write_idempotency_key",
