@@ -20,6 +20,11 @@ from app.application.execution import (
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
+from app.erp.odoo.workbench_projection_publisher import (
+    OdooWorkbenchJson2ProjectionAdapter,
+    OdooWorkbenchProjectionFieldMapping,
+    OdooWorkbenchProjectionPublisher,
+)
 from app.erp.write import (
     AccountMoveRepository,
     OdooCustomerInvoiceWritePolicy,
@@ -109,13 +114,23 @@ def build_workbench_vendor_bill_execution_workflow(
     review_repository = SqlAlchemyReviewRepository(session)
     source_invoice_reader = SqlAlchemyExecutionSourceInvoiceReader(session)
     runtime_repository = SqlAlchemyExecutionRuntimeRepository(session)
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    execution_result_publisher = (
+        OdooWorkbenchProjectionPublisher(
+            adapter=OdooWorkbenchJson2ProjectionAdapter(client=resolved_odoo_client),
+            mapping=OdooWorkbenchProjectionFieldMapping.from_environment(),
+        )
+        if settings.odoo_workbench_projection_publish_enabled
+        else None
+    )
     return WorkbenchVendorBillExecutionWorkflow(
         accepted_decision_reader=review_repository,
         source_invoice_reader=source_invoice_reader,
         execution_use_case=build_vendor_bill_execution_use_case(
             session=session,
             settings=settings,
-            odoo_client=odoo_client,
+            odoo_client=resolved_odoo_client,
         ),
         runtime_repository=runtime_repository,
+        execution_result_publisher=execution_result_publisher,
     )

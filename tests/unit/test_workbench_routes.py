@@ -560,6 +560,7 @@ async def test_explicit_workbench_vendor_bill_execution_trigger(api_client: Asyn
             "decision_version": 3,
             "mode": ExecutionMode.DRY_RUN,
             "approval": None,
+            "trace_id": "trace-123",
         }
     ]
 
@@ -776,6 +777,7 @@ class FakeWorkbenchVendorBillExecutionWorkflow:
         decision_version: int,
         mode: ExecutionMode,
         approval: ExecutionApproval | None,
+        trace_id: str | None = None,
     ) -> WorkbenchVendorBillExecutionResult:
         self.calls.append(
             {
@@ -784,6 +786,7 @@ class FakeWorkbenchVendorBillExecutionWorkflow:
                 "decision_version": decision_version,
                 "mode": mode,
                 "approval": approval,
+                "trace_id": trace_id,
             }
         )
         if isinstance(self.result, Exception):

@@ -21,6 +21,7 @@ from app.application.execution import (
     ExecutionStepStatus,
     ExecutionStepType,
     RunAcceptedDecisionExecutionCommand,
+    WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
     WorkbenchVendorBillExecutionWorkflow,
     accepted_decision_execution_id,
@@ -32,7 +33,8 @@ from app.application.workbench import (
     BusinessContextAllocationType,
     ReviewDecisionType,
 )
-from app.application.workbench.exceptions import ReviewNotFoundError
+from app.application.workbench.exceptions import ReviewNotFoundError, WorkbenchProjectionPublishError
+from app.application.workbench.projection import ProjectionPublishResult
 from app.application.workflow import WorkflowType
 
 
@@ -69,6 +71,29 @@ def test_dry_run_uses_persisted_company_scoped_decision_and_source_evidence() ->
             mode=ExecutionMode.DRY_RUN,
         )
     ]
+
+
+def test_dry_run_does_not_project_business_execution_complete() -> None:
+    publisher = FakeExecutionResultPublisher()
+
+    result = _workflow(
+        FakeDecisionReader(_decision()),
+        FakeSourceReader(),
+        FakeExecutionUseCase(
+            AcceptedDecisionExecutionResult(
+                review_id="review-1",
+                company_id=7,
+                decision_version=3,
+                status=AcceptedDecisionExecutionStatus.DRY_RUN_COMPLETED,
+                execution_id="execution-1",
+                runtime_state=ExecutionState.COMPLETED,
+            )
+        ),
+        execution_result_publisher=publisher,
+    ).execute(review_id="review-1", company_id=7, decision_version=3, mode=ExecutionMode.DRY_RUN)
+
+    assert result.status is WorkbenchVendorBillExecutionStatus.DRY_RUN_COMPLETED
+    assert publisher.calls == []
 
 
 def test_execute_without_approval_is_rejected_before_source_or_runtime() -> None:
@@ -157,6 +182,142 @@ def test_completed_execute_replay_returns_existing_execution_without_second_runt
     assert result.artifacts[0].artifact_id == "9001"
     assert execution.commands == []
     assert runtime_repository.snapshot_reads == [existing_snapshot.execution_id]
+
+
+def test_successful_execute_projects_persisted_execution_artifact() -> None:
+    publisher = FakeExecutionResultPublisher()
+    runtime_repository = FakeRuntimeRepository(
+        snapshot=_completed_snapshot(
+            execution_id="execution-1",
+            artifact=_vendor_bill_artifact(created=True),
+        )
+    )
+
+    result = _workflow(
+        FakeDecisionReader(_decision()),
+        FakeSourceReader(),
+        FakeExecutionUseCase(
+            AcceptedDecisionExecutionResult(
+                review_id="review-1",
+                company_id=7,
+                decision_version=3,
+                status=AcceptedDecisionExecutionStatus.EXECUTED,
+                execution_id="execution-1",
+                runtime_state=ExecutionState.COMPLETED,
+            )
+        ),
+        runtime_repository=runtime_repository,
+        execution_result_publisher=publisher,
+    ).execute(
+        review_id="review-1",
+        company_id=7,
+        decision_version=3,
+        mode=ExecutionMode.EXECUTE,
+        approval=ExecutionApproval(approved_by="controller"),
+        trace_id="trace-exec",
+    )
+
+    assert result.status is WorkbenchVendorBillExecutionStatus.EXECUTED
+    assert result.artifacts == (_vendor_bill_artifact(created=True),)
+    assert publisher.calls == [{"result": result, "trace_id": "trace-exec"}]
+
+
+def test_already_executed_replay_repairs_projection_without_runtime_reexecution() -> None:
+    decision = _decision()
+    command = RunAcceptedDecisionExecutionCommand(
+        review_id="review-1",
+        company_id=7,
+        decision_version=3,
+        mode=ExecutionMode.EXECUTE,
+        approval=ExecutionApproval(approved_by="controller"),
+    )
+    existing_snapshot = _completed_snapshot(
+        execution_id=accepted_decision_execution_id(command, decision=decision),
+        artifact=_vendor_bill_artifact(created=False),
+    )
+    publisher = FakeExecutionResultPublisher()
+    execution = FakeExecutionUseCase(AssertionError("runtime must not be called"))
+
+    result = _workflow(
+        FakeDecisionReader(decision),
+        FakeSourceReader(),
+        execution,
+        runtime_repository=FakeRuntimeRepository(snapshot=existing_snapshot),
+        execution_result_publisher=publisher,
+    ).execute(
+        review_id="review-1",
+        company_id=7,
+        decision_version=3,
+        mode=ExecutionMode.EXECUTE,
+        approval=ExecutionApproval(approved_by="controller"),
+        trace_id="trace-repair",
+    )
+
+    assert result.status is WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED
+    assert result.artifacts == (_vendor_bill_artifact(created=False),)
+    assert execution.commands == []
+    assert publisher.calls == [{"result": result, "trace_id": "trace-repair"}]
+
+
+def test_projection_failure_does_not_invalidate_successful_execution_result() -> None:
+    publisher = FakeExecutionResultPublisher(WorkbenchProjectionPublishError("Projection failed."))
+    runtime_repository = FakeRuntimeRepository(
+        snapshot=_completed_snapshot(execution_id="execution-1", artifact=_vendor_bill_artifact(created=True))
+    )
+
+    result = _workflow(
+        FakeDecisionReader(_decision()),
+        FakeSourceReader(),
+        FakeExecutionUseCase(
+            AcceptedDecisionExecutionResult(
+                review_id="review-1",
+                company_id=7,
+                decision_version=3,
+                status=AcceptedDecisionExecutionStatus.EXECUTED,
+                execution_id="execution-1",
+                runtime_state=ExecutionState.COMPLETED,
+            )
+        ),
+        runtime_repository=runtime_repository,
+        execution_result_publisher=publisher,
+    ).execute(
+        review_id="review-1",
+        company_id=7,
+        decision_version=3,
+        mode=ExecutionMode.EXECUTE,
+        approval=ExecutionApproval(approved_by="controller"),
+    )
+
+    assert result.status is WorkbenchVendorBillExecutionStatus.EXECUTED
+    assert result.message == "Odoo Workbench execution result projection failed; Hub execution remains authoritative."
+
+
+def test_projection_programming_errors_propagate() -> None:
+    with pytest.raises(RuntimeError):
+        _workflow(
+            FakeDecisionReader(_decision()),
+            FakeSourceReader(),
+            FakeExecutionUseCase(
+                AcceptedDecisionExecutionResult(
+                    review_id="review-1",
+                    company_id=7,
+                    decision_version=3,
+                    status=AcceptedDecisionExecutionStatus.EXECUTED,
+                    execution_id="execution-1",
+                    runtime_state=ExecutionState.COMPLETED,
+                )
+            ),
+            runtime_repository=FakeRuntimeRepository(
+                snapshot=_completed_snapshot(execution_id="execution-1", artifact=_vendor_bill_artifact())
+            ),
+            execution_result_publisher=FakeExecutionResultPublisher(RuntimeError("bug")),
+        ).execute(
+            review_id="review-1",
+            company_id=7,
+            decision_version=3,
+            mode=ExecutionMode.EXECUTE,
+            approval=ExecutionApproval(approved_by="controller"),
+        )
 
 
 def test_missing_review_or_accepted_decision_fails_closed() -> None:
@@ -341,6 +502,29 @@ class FakeRuntimeRepository:
         return None
 
 
+class FakeExecutionResultPublisher:
+    def __init__(self, result: Exception | None = None) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def project_vendor_bill_execution_result(
+        self,
+        result: WorkbenchVendorBillExecutionResult,
+        *,
+        trace_id: str | None = None,
+    ) -> ProjectionPublishResult:
+        self.calls.append({"result": result, "trace_id": trace_id})
+        if self.result is not None:
+            raise self.result
+        return ProjectionPublishResult(
+            review_id=result.review_id,
+            odoo_record_id=42,
+            created=False,
+            updated=True,
+            version=result.decision_version,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class Step:
     last_result: ExecutionStepResult | None = None
@@ -359,12 +543,14 @@ def _workflow(
     execution: FakeExecutionUseCase,
     *,
     runtime_repository: FakeRuntimeRepository | None = None,
+    execution_result_publisher: FakeExecutionResultPublisher | None = None,
 ) -> WorkbenchVendorBillExecutionWorkflow:
     return WorkbenchVendorBillExecutionWorkflow(
         accepted_decision_reader=decision_reader,  # type: ignore[arg-type]
         source_invoice_reader=source_reader,  # type: ignore[arg-type]
         execution_use_case=execution,  # type: ignore[arg-type]
         runtime_repository=runtime_repository or FakeRuntimeRepository(),  # type: ignore[arg-type]
+        execution_result_publisher=execution_result_publisher,
     )
 
 
@@ -404,4 +590,31 @@ def _allocations(allocation_type: BusinessContextAllocationType) -> BusinessCont
         completeness=AllocationCompleteness.COMPLETE,
         invoice_total=Decimal("10.00"),
         currency="TRY",
+    )
+
+
+def _vendor_bill_artifact(*, created: bool = True) -> ExecutionArtifact:
+    return ExecutionArtifact(
+        artifact_type=ExecutionArtifactType.VENDOR_BILL,
+        artifact_id="9001",
+        external_identity="vendor-bill-write:key",
+        created=created,
+    )
+
+
+def _completed_snapshot(*, execution_id: str, artifact: ExecutionArtifact) -> Snapshot:
+    return Snapshot(
+        execution_id=execution_id,
+        state=ExecutionState.COMPLETED,
+        steps=(
+            Step(
+                last_result=ExecutionStepResult(
+                    step_key="vendor-bill",
+                    step_type=ExecutionStepType.VENDOR_BILL,
+                    status=ExecutionStepStatus.EXECUTED,
+                    dry_run=False,
+                    produced_artifacts=(artifact,),
+                )
+            ),
+        ),
     )

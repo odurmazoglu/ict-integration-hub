@@ -211,6 +211,7 @@ def execute_workbench_vendor_bill(
             decision_version=request_body.decision_version,
             mode=request_body.mode,
             approval=_execution_approval(request_body.approval),
+            trace_id=context.trace_id,
         )
         return _success(response, context.trace_id, _vendor_bill_execution_response(result), warnings=[])
     except Exception as exc:
