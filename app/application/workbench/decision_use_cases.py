@@ -70,6 +70,11 @@ class SubmitReviewDecisionUseCase:
             "Review decision submission failed.",
         )
 
+    def has_matching_decision(self, command: ReviewDecisionCommand) -> bool:
+        if not isinstance(command, ReviewDecisionCommand):
+            raise WorkbenchContractError("ReviewDecisionCommand is required.")
+        return self._review_decision_writer.has_matching_review_decision(command)
+
     def _billing_instructions(
         self,
         command: ReviewDecisionCommand,

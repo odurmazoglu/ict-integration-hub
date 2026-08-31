@@ -954,6 +954,15 @@ class SqlAlchemyReviewRepository:
             )
         )
 
+    def has_matching_review_decision(self, command: ReviewDecisionCommand) -> bool:
+        existing = self._find_decision_by_idempotency_key(
+            company_id=command.company_id,
+            idempotency_key=command.idempotency_key,
+        )
+        if existing is None:
+            return False
+        return _decision_fingerprint_from_model(existing) == _decision_fingerprint(command)
+
     def _return_existing_decision_or_raise_conflict(
         self,
         existing: WorkbenchReviewDecision,

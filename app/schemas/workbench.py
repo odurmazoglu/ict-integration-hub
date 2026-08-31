@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
+from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
 
@@ -178,9 +179,32 @@ class ReviewDecisionAcknowledgementResponse(BaseModel):
     selected_workflow: WorkflowType | None = None
 
 
+class WorkbenchDecisionIngestionCandidateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str | None
+    odoo_record_id: int | None
+    status: WorkbenchDecisionIngestionStatus
+    acknowledged: bool
+    idempotency_key: str | None = None
+    message: str | None = None
+
+
+class WorkbenchDecisionIngestionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    company_id: int
+    processed_count: int
+    already_processed_count: int
+    acknowledgement_failed_count: int
+    failed_count: int
+    results: list[WorkbenchDecisionIngestionCandidateResponse]
+
+
 ReviewItemEnvelope = ApiEnvelope[ReviewItemResponse]
 ReviewQueueEnvelope = ApiEnvelope[ReviewQueueResponse]
 ReviewDecisionAcknowledgementEnvelope = ApiEnvelope[ReviewDecisionAcknowledgementResponse]
+WorkbenchDecisionIngestionEnvelope = ApiEnvelope[WorkbenchDecisionIngestionResponse]
 ErrorEnvelope = ApiEnvelope[Any]
 
 

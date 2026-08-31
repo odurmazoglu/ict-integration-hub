@@ -12,6 +12,7 @@ from app.api.dependencies import (
     get_request_context,
     get_review_item_use_case,
     get_submit_review_decision_use_case,
+    get_workbench_decision_ingestion_workflow,
 )
 from app.api.security import (
     AuthenticationMethod,
@@ -27,6 +28,9 @@ from app.application.workbench import (
     ReviewItem,
     ReviewQueueResult,
     ReviewStatus,
+    WorkbenchDecisionIngestionCandidateResult,
+    WorkbenchDecisionIngestionResult,
+    WorkbenchDecisionIngestionStatus,
 )
 from app.application.workbench.exceptions import (
     ReviewDecisionError,
@@ -454,6 +458,49 @@ async def test_persistence_query_and_unexpected_failures_are_sanitized(api_clien
             assert response.json()["errors"][0] == {"code": "internal_error", "message": "Internal server error."}
 
 
+async def test_explicit_odoo_workbench_decision_ingestion_trigger(api_client: AsyncClient) -> None:
+    workflow = FakeDecisionIngestionWorkflow(
+        WorkbenchDecisionIngestionResult(
+            company_id=7,
+            processed_count=1,
+            already_processed_count=0,
+            acknowledgement_failed_count=0,
+            failed_count=0,
+            results=(
+                WorkbenchDecisionIngestionCandidateResult(
+                    review_id="review-1",
+                    odoo_record_id=42,
+                    status=WorkbenchDecisionIngestionStatus.PROCESSED,
+                    acknowledged=True,
+                    idempotency_key="odoo-workbench-decision:abc",
+                ),
+            ),
+        )
+    )
+
+    response = await _post_decision_sync(
+        api_client,
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE, company_id=7),
+        workflow=workflow,
+        params={"limit": "25"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["processed_count"] == 1
+    assert body["data"]["results"][0]["status"] == "processed"
+    assert body["data"]["results"][0]["acknowledged"] is True
+    assert workflow.calls == [{"company_id": 7, "limit": 25, "trace_id": "trace-123"}]
+
+
+async def test_decide_permission_required_for_decision_ingestion_trigger(api_client: AsyncClient) -> None:
+    response = await _post_decision_sync(api_client, context=_context(Permission.WORKBENCH_REVIEW_READ))
+
+    assert response.status_code == 403
+    assert response.json()["errors"][0]["code"] == "permission_denied"
+
+
 async def test_response_and_error_envelope_consistency(api_client: AsyncClient) -> None:
     success = await _get(
         api_client,
@@ -486,12 +533,13 @@ async def test_workbench_request_validation_uses_safe_error_envelope(api_client:
     assert body["trace_id"]
 
 
-async def test_openapi_contains_exactly_three_workbench_routes_and_no_identity_inputs(api_client: AsyncClient) -> None:
+async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs(api_client: AsyncClient) -> None:
     response = await api_client.get("/openapi.json")
 
     paths = response.json()["paths"]
     workbench_paths = {path: methods for path, methods in paths.items() if path.startswith("/api/workbench")}
     assert set(workbench_paths) == {
+        "/api/workbench/decisions/sync",
         "/api/workbench/reviews",
         "/api/workbench/reviews/{review_id}",
         "/api/workbench/reviews/{review_id}/decision",
@@ -574,6 +622,24 @@ class FakeSubmitUseCase:
         return self.result
 
 
+class FakeDecisionIngestionWorkflow:
+    def __init__(self, result: WorkbenchDecisionIngestionResult | Exception) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def sync_ready_decisions(
+        self,
+        *,
+        company_id: int,
+        limit: int,
+        trace_id: str | None = None,
+    ) -> WorkbenchDecisionIngestionResult:
+        self.calls.append({"company_id": company_id, "limit": limit, "trace_id": trace_id})
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
 async def _get(
     api_client: AsyncClient,
     path: str,
@@ -607,6 +673,22 @@ async def _post_decision(
         app.dependency_overrides[get_submit_review_decision_use_case] = lambda: submit_use_case
     try:
         return await api_client.post(f"/api/workbench/reviews/{review_id}/decision", json=json)
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def _post_decision_sync(
+    api_client: AsyncClient,
+    *,
+    context: RequestContext,
+    workflow: FakeDecisionIngestionWorkflow | None = None,
+    params: dict[str, str] | None = None,
+):
+    app.dependency_overrides[get_request_context] = lambda: context
+    if workflow is not None:
+        app.dependency_overrides[get_workbench_decision_ingestion_workflow] = lambda: workflow
+    try:
+        return await api_client.post("/api/workbench/decisions/sync", params=params)
     finally:
         app.dependency_overrides.clear()
 

@@ -87,6 +87,12 @@ class WorkbenchCandidateDataError(WorkbenchCandidateReadError):
     error_category = "workbench_candidate_data_error"
 
 
+class WorkbenchCandidateUnsupportedDecisionError(WorkbenchCandidateDataError):
+    """Safe error raised when Odoo carries a decision unsupported by canonical Hub contracts."""
+
+    error_category = "workbench_candidate_unsupported_decision"
+
+
 class WorkbenchCandidateAmbiguityError(WorkbenchCandidateReadError):
     """Safe error raised when more than one matching candidate projection exists."""
 

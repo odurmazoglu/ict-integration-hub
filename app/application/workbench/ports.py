@@ -89,6 +89,9 @@ class ReviewItemWriter(Protocol):
 class ReviewDecisionWriter(Protocol):
     """Write port for explicit user decision submission against a pending review item."""
 
+    def has_matching_review_decision(self, command: ReviewDecisionCommand) -> bool:
+        pass
+
     def submit_review_decision(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         pass
 
@@ -193,6 +196,8 @@ class WorkbenchProjectionPublisher(Protocol):
         *,
         odoo_record_id: int,
         trace_id: str | None = None,
+        idempotency_key: str | None = None,
+        clear_ready: bool = False,
     ) -> ProjectionPublishResult:
         pass
 

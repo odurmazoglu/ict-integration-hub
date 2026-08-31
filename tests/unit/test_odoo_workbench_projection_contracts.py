@@ -141,9 +141,13 @@ def test_decision_candidate_requires_positive_expected_version() -> None:
         _candidate(expected_version=0)
 
 
-def test_decision_candidate_requires_idempotency_key() -> None:
-    with pytest.raises(WorkbenchContractError, match="idempotency_key is required"):
+def test_decision_candidate_rejects_blank_idempotency_key_when_supplied() -> None:
+    with pytest.raises(WorkbenchContractError, match="idempotency_key must be non-empty when supplied"):
         _candidate(idempotency_key=" ")
+
+
+def test_decision_candidate_allows_missing_odoo_idempotency_key() -> None:
+    assert _candidate(idempotency_key=None).idempotency_key is None
 
 
 def test_decision_candidate_must_be_ready() -> None:
