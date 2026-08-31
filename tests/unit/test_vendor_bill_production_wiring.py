@@ -16,6 +16,7 @@ from app.application.execution import (
     ExecutionEventType,
     ExecutionMode,
     ExecutionModeNotEnabledError,
+    ExecutionPersistenceError,
     ExecutionRuntimeStepState,
     ExecutionSourceInvoice,
     ExecutionState,
@@ -141,6 +142,32 @@ def test_execute_enabled_creates_one_draft_vendor_bill_and_persists_artifact(ses
     assert artifact.created is True
     history = repository.history(execution_id=result.execution_id or "")
     assert history.events[-1].event_type is ExecutionEventType.EXECUTION_COMPLETED
+
+
+def test_odoo_create_success_then_hub_finalization_failure_does_not_retry_create(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _submit_vendor_bill_decision(session)
+    client = FakeOdooVendorBillClient(created_id=9001)
+    original_persist_transition = SqlAlchemyExecutionRuntimeRepository.persist_transition
+
+    def fail_after_writer_returns(
+        self: SqlAlchemyExecutionRuntimeRepository,
+        **kwargs: Any,
+    ):
+        events = kwargs["events"]
+        if any(event.event_type is ExecutionEventType.STEP_COMPLETED for event in events):
+            raise ExecutionPersistenceError("Execution runtime persistence failed.")
+        return original_persist_transition(self, **kwargs)
+
+    monkeypatch.setattr(SqlAlchemyExecutionRuntimeRepository, "persist_transition", fail_after_writer_returns)
+
+    with pytest.raises(ExecutionPersistenceError):
+        _use_case(session, client=client, settings=_execute_settings()).execute(_command(mode=ExecutionMode.EXECUTE))
+
+    assert len(client.search_calls) == 1
+    assert len(client.create_calls) == 1
 
 
 def test_transport_timeout_retry_recovers_existing_vendor_bill_without_duplicate(session: Session) -> None:

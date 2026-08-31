@@ -173,7 +173,7 @@ def _execution_request(
     decision: AcceptedReviewDecision,
     accepted_billing_instructions=(),
 ) -> ExecutionRequest:
-    execution_id = _execution_id(command, decision=decision)
+    execution_id = accepted_decision_execution_id(command, decision=decision)
     return ExecutionRequest(
         execution_id=execution_id,
         review_id=decision.review_id,
@@ -188,7 +188,11 @@ def _execution_request(
     )
 
 
-def _execution_id(command: RunAcceptedDecisionExecutionCommand, *, decision: AcceptedReviewDecision) -> str:
+def accepted_decision_execution_id(
+    command: RunAcceptedDecisionExecutionCommand,
+    *,
+    decision: AcceptedReviewDecision,
+) -> str:
     decision_identity = decision.decision_id or "decision-id-absent"
     identity = (
         f"accepted-decision-execution:{command.company_id}:"

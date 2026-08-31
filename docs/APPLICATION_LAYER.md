@@ -117,6 +117,9 @@ Current foundation contracts:
 - `RunAcceptedDecisionExecutionCommand`
 - `RunAcceptedDecisionExecutionUseCase`
 - `AcceptedDecisionExecutionResult`
+- `WorkbenchVendorBillExecutionWorkflow`
+- `WorkbenchVendorBillExecutionResult`
+- `WorkbenchVendorBillExecutionStatus`
 - runtime repository, event history, and retry policy ports
 - `ReviewQueueReader`
 - `ReviewDecisionWriter`
@@ -262,6 +265,21 @@ POST /api/workbench/decisions/sync
 The workflow scans only candidates whose configured Odoo ready flag is true, keeps `RequestContext.company_id` as the trusted scope, derives the Hub decision idempotency key from normalized canonical candidate content, and submits through the existing `ReviewDecisionCommand` path. It commits the Hub decision before writing acknowledgement fields to Odoo. If acknowledgement fails after commit, the candidate remains replayable: the next explicit sync reuses existing canonical idempotency evidence and retries only the acknowledgement side effect.
 
 Ingestion returns per-candidate safe statuses such as `processed`, `already_processed`, `unsupported_decision`, `review_not_found`, `company_mismatch`, `stale_review_version`, `invalid_allocation`, and `acknowledgement_failed`. `Request Investigation` remains unsupported because the canonical `ReviewDecisionType` enum still contains only the existing accepted decisions. The workflow does not execute accepted decisions, create ERP documents, call provider operations, run AI/fuzzy matching, schedule background work, or mutate Odoo Studio schema.
+
+`WorkbenchVendorBillExecutionWorkflow` is the explicit runtime boundary for approved direct Vendor Bill execution:
+
+```text
+POST /api/workbench/reviews/{review_id}/execute
+  -> WorkbenchVendorBillExecutionWorkflow
+  -> AcceptedReviewDecisionReader.get_accepted_decision(review_id, company_id, decision_version)
+  -> ExecutionSourceInvoiceReader.get_source_invoice(review_id, company_id, decision_version)
+  -> RunAcceptedDecisionExecutionUseCase
+  -> existing durable runtime and VendorBillExecutionStrategy
+```
+
+The workflow accepts only the path `review_id`, trusted `RequestContext.company_id`, an accepted decision version, execution mode, and optional `ExecutionApproval`. It rejects `DISMISS`, non-Vendor-Bill workflows, Manual Review, and any accepted decision with business-context allocations before the broader execution planner can create allocation-specific steps. That keeps RFQ, Purchase Order, Expense, Asset, Subscription, Customer Invoice, Customer Recharge, Project Cost, and Internal Cost execution out of this endpoint.
+
+Execution authority is the persisted canonical Hub decision plus Stage 2 pinned execution source evidence. The endpoint does not accept or reread vendor payloads, invoice lines, tax data, products, amounts, currency, purchase orders, Odoo editable Workbench fields, provider payloads, current rules, rematching output, AI output, or fuzzy reconstruction. `Decision Submitted` means the human decision has been accepted into Hub evidence; it does not mean `Executed` or `Resolved`.
 
 ## Workbench ERP Reference Validation
 

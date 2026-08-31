@@ -14,9 +14,16 @@ from app.api.dependencies import (
     RequestContextDep,
     SubmitReviewDecisionUseCaseDep,
     WorkbenchDecisionIngestionWorkflowDep,
+    WorkbenchVendorBillExecutionWorkflowDep,
 )
 from app.api.error_handling import error_response_factory
 from app.api.security import Permission, PermissionDeniedError, require_permission
+from app.application.execution import (
+    ExecutionApproval,
+    ExecutionArtifact,
+    ExecutionPlanningError,
+    WorkbenchVendorBillExecutionResult,
+)
 from app.application.workbench import (
     BusinessContextAllocation,
     BusinessContextAllocationSet,
@@ -48,6 +55,8 @@ from app.schemas.workbench import (
     ApiEnvelope,
     BusinessContextAllocationRequest,
     BusinessContextAllocationSetRequest,
+    ExecutionApprovalRequest,
+    ExecutionArtifactResponse,
     LineResolutionRequest,
     ManualReviewReasonResponse,
     ReviewDecisionAcknowledgementEnvelope,
@@ -61,6 +70,9 @@ from app.schemas.workbench import (
     WorkbenchDecisionIngestionCandidateResponse,
     WorkbenchDecisionIngestionEnvelope,
     WorkbenchDecisionIngestionResponse,
+    WorkbenchVendorBillExecutionEnvelope,
+    WorkbenchVendorBillExecutionRequest,
+    WorkbenchVendorBillExecutionResponse,
     decimal_to_api,
 )
 
@@ -170,6 +182,37 @@ def sync_odoo_workbench_decisions(
         context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
         result = workflow.sync_ready_decisions(company_id=context.company_id, limit=limit, trace_id=context.trace_id)
         return _success(response, context.trace_id, _decision_ingestion_response(result), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/reviews/{review_id}/execute",
+    response_model=WorkbenchVendorBillExecutionEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Execute accepted Vendor Bill Workbench decision",
+    description=(
+        "Requires workbench_execute. Executes only an already persisted canonical Vendor Bill decision using "
+        "pinned Hub evidence. The request cannot provide ERP document, line, tax, product, or vendor payloads."
+    ),
+)
+def execute_workbench_vendor_bill(
+    review_id: str,
+    request_body: WorkbenchVendorBillExecutionRequest,
+    response: Response,
+    context: RequestContextDep,
+    workflow: WorkbenchVendorBillExecutionWorkflowDep,
+) -> WorkbenchVendorBillExecutionEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        result = workflow.execute(
+            review_id=review_id,
+            company_id=context.company_id,
+            decision_version=request_body.decision_version,
+            mode=request_body.mode,
+            approval=_execution_approval(request_body.approval),
+        )
+        return _success(response, context.trace_id, _vendor_bill_execution_response(result), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -356,6 +399,37 @@ def _decision_ingestion_response(
     )
 
 
+def _execution_approval(value: ExecutionApprovalRequest | None) -> ExecutionApproval | None:
+    if value is None:
+        return None
+    return ExecutionApproval(approved_by=value.approved_by)
+
+
+def _vendor_bill_execution_response(
+    result: WorkbenchVendorBillExecutionResult,
+) -> WorkbenchVendorBillExecutionResponse:
+    return WorkbenchVendorBillExecutionResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        decision_version=result.decision_version,
+        mode=result.mode,
+        status=result.status,
+        execution_id=result.execution_id,
+        runtime_state=result.runtime_state.value if result.runtime_state is not None else None,
+        artifacts=[_artifact_response(artifact) for artifact in result.artifacts],
+        message=result.message,
+    )
+
+
+def _artifact_response(artifact: ExecutionArtifact) -> ExecutionArtifactResponse:
+    return ExecutionArtifactResponse(
+        artifact_type=artifact.artifact_type,
+        artifact_id=artifact.artifact_id,
+        external_identity=artifact.external_identity,
+        created=artifact.created,
+    )
+
+
 def _success[DataT](
     response: Response,
     trace_id: str,
@@ -387,6 +461,8 @@ def _raise_error(exc: Exception, *, trace_id: str) -> JSONResponse:
 
 def _status_code_for_exception(exc: Exception) -> int:
     if isinstance(exc, WorkbenchContractError):
+        return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, ExecutionPlanningError):
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, PermissionDeniedError):
         return HTTPStatus.FORBIDDEN

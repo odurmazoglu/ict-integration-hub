@@ -15,6 +15,7 @@ from app.application.execution import (
     RunAcceptedDecisionExecutionUseCase,
     StaticRetryPolicyResolver,
     VendorBillExecutionStrategy,
+    WorkbenchVendorBillExecutionWorkflow,
 )
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.connectors.odoo.client import OdooJson2Client
@@ -94,4 +95,27 @@ def build_vendor_bill_execution_use_case(
             },
         ),
         accepted_billing_evidence_reader=accepted_billing_reader,
+    )
+
+
+def build_workbench_vendor_bill_execution_workflow(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> WorkbenchVendorBillExecutionWorkflow:
+    """Compose persisted Workbench Vendor Bill decisions into the existing runtime."""
+
+    review_repository = SqlAlchemyReviewRepository(session)
+    source_invoice_reader = SqlAlchemyExecutionSourceInvoiceReader(session)
+    runtime_repository = SqlAlchemyExecutionRuntimeRepository(session)
+    return WorkbenchVendorBillExecutionWorkflow(
+        accepted_decision_reader=review_repository,
+        source_invoice_reader=source_invoice_reader,
+        execution_use_case=build_vendor_bill_execution_use_case(
+            session=session,
+            settings=settings,
+            odoo_client=odoo_client,
+        ),
+        runtime_repository=runtime_repository,
     )

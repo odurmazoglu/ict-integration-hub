@@ -23,6 +23,7 @@ class Permission(StrEnum):
 
     WORKBENCH_REVIEW_READ = "workbench_review_read"
     WORKBENCH_REVIEW_DECIDE = "workbench_review_decide"
+    WORKBENCH_EXECUTE = "workbench_execute"
 
 
 @dataclass(frozen=True, slots=True)

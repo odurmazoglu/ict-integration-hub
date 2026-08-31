@@ -71,6 +71,7 @@ def test_permission_vocabulary_is_canonical() -> None:
     assert {permission.value for permission in Permission} == {
         "workbench_review_read",
         "workbench_review_decide",
+        "workbench_execute",
     }
 
 

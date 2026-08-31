@@ -12,7 +12,7 @@ from app.api.security import (
     RequestContextResolver,
     RequestMetadata,
 )
-from app.application.execution import RunAcceptedDecisionExecutionUseCase
+from app.application.execution import RunAcceptedDecisionExecutionUseCase, WorkbenchVendorBillExecutionWorkflow
 from app.application.workbench import (
     GetReviewItemUseCase,
     ListReviewQueueUseCase,
@@ -25,6 +25,7 @@ from app.composition import (
     build_odoo_workbench_decision_ingestion_workflow,
     build_uyumsoft_canonical_invoice_importer,
     build_vendor_bill_execution_use_case,
+    build_workbench_vendor_bill_execution_workflow,
 )
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
@@ -202,4 +203,35 @@ def get_vendor_bill_execution_use_case(
 VendorBillExecutionUseCaseDep = Annotated[
     RunAcceptedDecisionExecutionUseCase,
     Depends(get_vendor_bill_execution_use_case),
+]
+
+
+def get_workbench_vendor_bill_execution_workflow(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> WorkbenchVendorBillExecutionWorkflow:
+    return _LazyWorkbenchVendorBillExecutionWorkflow(session=session, settings=settings)
+
+
+class _LazyWorkbenchVendorBillExecutionWorkflow:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._workflow: WorkbenchVendorBillExecutionWorkflow | None = None
+
+    def execute(self, **kwargs):
+        return self._get_workflow().execute(**kwargs)
+
+    def _get_workflow(self) -> WorkbenchVendorBillExecutionWorkflow:
+        if self._workflow is None:
+            self._workflow = build_workbench_vendor_bill_execution_workflow(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._workflow
+
+
+WorkbenchVendorBillExecutionWorkflowDep = Annotated[
+    WorkbenchVendorBillExecutionWorkflow,
+    Depends(get_workbench_vendor_bill_execution_workflow),
 ]

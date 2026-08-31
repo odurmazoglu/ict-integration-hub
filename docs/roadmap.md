@@ -42,6 +42,7 @@
 - Read-only Workbench classification projection service for pinned historical review evidence, safe badges, matched rule details, and deterministic conflict summaries without rule re-evaluation
 - Uyumsoft inbound sync attachment to the canonical import pipeline for Inbox supplier invoices: provider list/download/persistence, existing UBL parser, `InternalInvoice`, exact company resolution, `ImportInvoiceCommand`, `ImportInvoiceUseCase`, Hub review/evidence or technical import receipt idempotency, and optional Odoo Workbench projection
 - Explicit Odoo Workbench Decision Ingestion Runtime for `Ready=true` rows: Hub-triggered Odoo candidate read, canonical decision/allocation mapping, exact review/company/version validation, `SubmitReviewDecisionUseCase` persistence, Hub-derived idempotency, commit-before-acknowledgement ordering, replayable acknowledgement failure handling, and no workflow execution
+- Explicit Workbench Vendor Bill Execution Runtime for approved direct Vendor Bill decisions: Hub-triggered execution from persisted accepted decision plus pinned source evidence, existing durable runtime and writer reuse, dedicated execution permission, default dry-run behavior, and no unsupported workflow execution
 
 ## Next Milestones
 

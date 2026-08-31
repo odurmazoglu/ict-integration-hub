@@ -478,7 +478,7 @@ sequenceDiagram
     end
 ```
 
-`SELECT_WORKFLOW` stores the selected canonical workflow and any explicit partner, line, tax, or traceability choices. It moves the review item to `DECISION_SUBMITTED` and leaves execution to a future approved workflow slice.
+`SELECT_WORKFLOW` stores the selected canonical workflow and any explicit partner, line, tax, or traceability choices. It moves the review item to `DECISION_SUBMITTED`. `Decision Submitted` means Hub accepted immutable human decision evidence; it does not mean the decision has been executed, and it does not mean the Workbench item is resolved.
 
 Future `SELECT_WORKFLOW` decisions may carry `BusinessContextAllocationSet` evidence. Future `DISMISS` decisions must reject allocations. Allocation requirements will depend on selected workflow and future execution strategy.
 
@@ -505,7 +505,18 @@ ERP reference validation runs before Hub decision evidence is accepted. It prove
 
 This slice does not write acknowledgement fields to Odoo, clear readiness, update projection version, execute workflows, create Vendor Bills, create customer invoices, create RFQs or Purchase Orders, perform profitability posting, infer allocations, or use AI/fuzzy matching. Hub-to-Odoo acknowledgement projection remains a future focused slice.
 
-Accepted decisions may now be planned for workflow execution through the no-write execution foundation. Planning starts only after Hub decision acceptance and ERP reference validation. It produces deterministic dry-run execution plans and does not invoke writer ports or acknowledge Odoo projections.
+Accepted direct Vendor Bill decisions may now be triggered explicitly through `POST /api/workbench/reviews/{review_id}/execute`. The caller may provide only the accepted decision version, execution mode, and existing `ExecutionApproval` information. Vendor, invoice line, tax, product, amount, currency, purchase-order, Odoo `account.move`, and editable Workbench field payloads are not accepted by the API and are never execution authority.
+
+The execution lifecycle remains separated:
+
+1. Classification
+2. Human Decision
+3. Decision Ingestion
+4. Execution Approval
+5. Vendor Bill Execution
+6. Execution Evidence
+
+The execution trigger starts from the persisted canonical Hub decision and pinned Stage 2 execution source evidence. It rejects `DISMISS`, RFQ, Purchase Order, Expense, Asset, Subscription, Customer Invoice, Customer Recharge, Project Cost, Internal Cost, Manual Review, and allocation-driven decisions before the general runtime planner runs. It uses the existing durable runtime, `VendorBillExecutionStrategy`, and `OdooVendorBillWriter`; it does not acknowledge Odoo projections, change Odoo lifecycle state to resolved, call Uyumsoft outgoing operations, schedule work, or mutate Odoo Studio schema.
 
 ## ERP Reference Validation Policy
 
@@ -551,7 +562,7 @@ Future Workbench screens should support:
 - Current explicit decisions are `SELECT_WORKFLOW` and `DISMISS`.
 - `MANUAL_REVIEW` must not be submitted as a selected resolution workflow.
 - Procurement traceability fields must be explicit user choices, not inferred by Odoo UI logic.
-- The Hub must revalidate rules before execution.
+- The Hub must not re-evaluate historical rules as execution authority; execution reads pinned Hub evidence.
 - Workbench must display AI recommendations as advisory.
 - Workbench must not call Odoo posting, unlink, payment, or reconciliation actions as part of import automation.
 
