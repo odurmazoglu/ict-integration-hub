@@ -189,12 +189,8 @@ def _mapping() -> OdooWorkbenchProjectionFieldMapping:
         decision_ready="x_studio_ready_for_hub_processing",
         decision_idempotency_key="x_studio_decision_idempotency_key",
         execution_status="x_studio_execution_status",
-        execution_id="x_studio_execution_id",
-        execution_mode="x_studio_execution_mode",
-        execution_runtime_state="x_studio_execution_runtime_state",
-        vendor_bill_id="x_studio_vendor_bill_id",
+        vendor_bill="x_studio_vendor_bill",
         vendor_bill_external_identity="x_studio_vendor_bill_external_identity",
-        vendor_bill_created="x_studio_vendor_bill_created",
         execution_message="x_studio_execution_message",
     )
 
@@ -547,13 +543,13 @@ def test_project_vendor_bill_execution_result_updates_only_configured_hub_owned_
     assert result.version == 5
     assert adapter.write_record_id == 42
     assert adapter.write_values["x_studio_execution_status"] == "Executed"
-    assert adapter.write_values["x_studio_execution_id"] == "execution-1"
-    assert adapter.write_values["x_studio_execution_mode"] == "execute"
-    assert adapter.write_values["x_studio_execution_runtime_state"] == "completed"
-    assert adapter.write_values["x_studio_vendor_bill_id"] == "9001"
+    assert adapter.write_values["x_studio_vendor_bill"] == 9001
     assert adapter.write_values["x_studio_vendor_bill_external_identity"] == "vendor-bill-write:key"
-    assert adapter.write_values["x_studio_vendor_bill_created"] is True
     assert adapter.write_values["x_studio_trace_id"] == "trace-exec"
+    assert "x_studio_execution_id" not in adapter.write_values
+    assert "x_studio_execution_mode" not in adapter.write_values
+    assert "x_studio_execution_runtime_state" not in adapter.write_values
+    assert "x_studio_vendor_bill_created" not in adapter.write_values
     assert "x_studio_decision" not in adapter.write_values
     assert "x_studio_selected_workflow" not in adapter.write_values
     assert "x_studio_decision_comment" not in adapter.write_values
@@ -576,7 +572,7 @@ def test_project_already_executed_result_is_replay_safe_update_only() -> None:
     assert adapter.create_calls == 0
     assert adapter.write_calls == 2
     assert first_payload["x_studio_execution_status"] == "Already Executed"
-    assert adapter.write_values["x_studio_vendor_bill_created"] is False
+    assert "x_studio_vendor_bill_created" not in adapter.write_values
 
 
 def test_execution_projection_without_configured_result_fields_updates_only_sync_audit() -> None:

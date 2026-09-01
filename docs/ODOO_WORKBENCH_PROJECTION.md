@@ -82,7 +82,7 @@ Current Odoo Online deployment display names:
 - parent model: `IPP Import Workbench`
 - allocation child model: `IPP Review Allocation`
 
-Current parent Studio fields used by the publisher and reader are deployment mapping values, not application vocabulary:
+Current parent Studio fields used by the publisher and reader are deployment mapping values, not application vocabulary. Execution-result fields are intentionally minimal and curated; Hub never creates or mutates Odoo Studio schema.
 
 | Display label | Technical field | Owner |
 | --- | --- | --- |
@@ -106,14 +106,6 @@ Current parent Studio fields used by the publisher and reader are deployment map
 | Trace ID | `x_studio_trace_id` | Hub projection |
 | Review Findings | `x_studio_review_reasons` | Hub projection HTML |
 | Warnings | `x_studio_warnings` | Hub projection HTML |
-| Execution Status | `x_studio_execution_status` | Hub execution projection (optional) |
-| Execution ID | `x_studio_execution_id` | Hub execution projection (optional) |
-| Execution Mode | `x_studio_execution_mode` | Hub execution projection (optional) |
-| Execution Runtime State | `x_studio_execution_runtime_state` | Hub execution projection (optional) |
-| Vendor Bill ID | `x_studio_vendor_bill_id` | Hub execution projection (optional) |
-| Vendor Bill External Identity | `x_studio_vendor_bill_external_identity` | Hub execution projection (optional) |
-| Vendor Bill Created | `x_studio_vendor_bill_created` | Hub execution projection (optional) |
-| Execution Message | `x_studio_execution_message` | Hub execution projection (optional) |
 | Decision | `x_studio_decision` | Odoo user input |
 | Selected Workflow | `x_studio_selected_workflow` | Odoo user input |
 | Decision Comment | `x_studio_decision_comment` | Odoo user input |
@@ -124,6 +116,22 @@ Current parent Studio fields used by the publisher and reader are deployment map
 | Decided By | `x_studio_decided_by` | Odoo audit |
 | Decision Idempotency Key | `x_studio_decision_idempotency_key` | Odoo input |
 | Allocation list | `x_studio_allocation_list` | Odoo child rows |
+
+### Minimal Vendor Bill execution-result contract
+
+The approved execution-result schema is intentionally small. It exposes the user-facing outcome, the created/recovered Vendor Bill identity, and a safe message; it deliberately omits runtime internals that are not required by Odoo Workbench users or support staff.
+
+| Label | Technical Name | Odoo Type | Visible / Hidden | Ownership | Readonly | Environment Variable | Source / Meaning |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Execution Status | `x_studio_execution_status` | Selection | Visible | Hub-owned | Yes | `ODOO_WORKBENCH_PUBLISHER_EXECUTION_STATUS_FIELD` | Final direct Vendor Bill execution result: `Executed` or `Already Executed`. |
+| Vendor Bill | `x_studio_vendor_bill` | Many2one (`account.move`) | Visible | Hub-owned | Yes | `ODOO_WORKBENCH_PUBLISHER_VENDOR_BILL_FIELD` | The actual Odoo `account.move` record created or recovered for the accepted Vendor Bill execution. |
+| Execution Message | `x_studio_execution_message` | Text | Visible when non-empty | Hub-owned | Yes | `ODOO_WORKBENCH_PUBLISHER_EXECUTION_MESSAGE_FIELD` | Human-safe summary for success, recovery, or exceptional conditions. |
+
+These fields are created manually in Odoo Studio. Hub never creates or mutates Odoo Studio schema.
+
+`Vendor Bill External Identity` is not part of the required contract. Once the record-level Many2one link exists, the deterministic writer idempotency key is redundant for user-facing UX and for recovery tracking; it is only useful as optional hidden audit metadata when a deployment explicitly configures that field. The actual Odoo `account.move` database record ID is the canonical reference, and the Hub writes this value as a Many2one integer ID in the JSON-2 payload.
+
+Unused or intentionally redundant PR #102 execution mappings remain intentionally absent from the contract: `execution_id`, `execution_mode`, `execution_runtime_state`, and `vendor_bill_created`. They are runtime-support and audit details, not required for Workbench UX, and they would duplicate information already represented by `Execution Status`, `Vendor Bill`, and the trace / sync fields.
 
 Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 
@@ -246,22 +254,21 @@ Hub execution persistence is the authority. If projecting the execution result b
 - The message is set to `Odoo Workbench execution result projection failed; Hub execution remains authoritative.`
 - Subsequent replay can safely repair the Odoo projection without re-creating the bill.
 
-#### Studio Schema Limitation and Optional Dedicated Fields
+#### Studio Schema Limitation and Minimal Dedicated Fields
 
-Hub does not create or mutate Odoo Studio models or fields. Dedicated execution-result fields are mapped through environment configuration (`ODOO_WORKBENCH_PUBLISHER_*`):
+Hub does not create or mutate Odoo Studio models or fields. Dedicated execution-result fields are mapped through environment configuration (`ODOO_WORKBENCH_PUBLISHER_*`) and intentionally reduced to the smallest useful Workbench contract.
 
 | Field | Type expectation | Owner | Purpose |
 | --- | --- | --- | --- |
 | `x_ipp_execution_status` | Selection/Char | Hub | Projected execution status (`Executed`, `Already Executed`). |
-| `x_ipp_execution_id` | Char | Hub | Deterministic Hub runtime execution identifier. |
-| `x_ipp_execution_mode` | Char/Selection | Hub | Execution mode (`execute`). |
-| `x_ipp_execution_runtime_state` | Char/Selection | Hub | Runtime state (`completed`). |
-| `x_ipp_vendor_bill_id` | Char/Integer | Hub | Canonical Odoo `account.move` identifier of the created/recovered draft. |
-| `x_ipp_vendor_bill_external_identity` | Char | Hub | Deterministic writer idempotency key. |
-| `x_ipp_vendor_bill_created` | Boolean | Hub | `true` if draft bill was newly created, `false` if recovered existing draft. |
-| `x_ipp_execution_message` | Text | Hub | Safe execution status or failure message. |
+| `x_ipp_vendor_bill` | Many2one (`account.move`) | Hub | Actual Odoo Vendor Bill record created or recovered for this execution. |
+| `x_ipp_execution_message` | Text | Hub | Safe execution summary or exception message shown to the user. |
 
-If an Odoo environment does not have these optional execution fields configured, the publisher safely updates only `last_sync_at` and `trace_id`, emitting warning `"No dedicated Odoo Workbench execution-result fields are configured."` without failing the execution workflow.
+`x_ipp_vendor_bill_external_identity` is optional hidden audit metadata only when an environment chooses to retain it. The Many2one link to `account.move` is the canonical user-facing reference; the external identity is redundant once that record is present and is not required for the basic UX contract.
+
+Unused PR #102 execution mappings intentionally remain out of contract: `execution_id`, `execution_mode`, `execution_runtime_state`, and `vendor_bill_created`. They are runtime-support or audit details that are not necessary to help the Odoo user understand whether the Vendor Bill succeeded and which bill was created or recovered.
+
+If an Odoo environment does not have these dedicated execution fields configured, the publisher safely updates only `last_sync_at` and `trace_id`, emitting warning `"No dedicated Odoo Workbench execution-result fields are configured."` without failing the execution workflow.
 
 ### Allocation Child Model
 
