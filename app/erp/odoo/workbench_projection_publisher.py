@@ -125,12 +125,8 @@ class OdooWorkbenchProjectionFieldMapping:
     decision_ready: str | None = None
     decision_idempotency_key: str | None = None
     execution_status: str | None = None
-    execution_id: str | None = None
-    execution_mode: str | None = None
-    execution_runtime_state: str | None = None
-    vendor_bill_id: str | None = None
+    vendor_bill: str | None = None
     vendor_bill_external_identity: str | None = None
-    vendor_bill_created: str | None = None
     execution_message: str | None = None
 
     def __post_init__(self) -> None:
@@ -180,12 +176,8 @@ class OdooWorkbenchProjectionFieldMapping:
             decision_ready=_env_optional(prefix, "DECISION_READY_FIELD"),
             decision_idempotency_key=_env_optional(prefix, "DECISION_IDEMPOTENCY_KEY_FIELD"),
             execution_status=_env_optional(prefix, "EXECUTION_STATUS_FIELD"),
-            execution_id=_env_optional(prefix, "EXECUTION_ID_FIELD"),
-            execution_mode=_env_optional(prefix, "EXECUTION_MODE_FIELD"),
-            execution_runtime_state=_env_optional(prefix, "EXECUTION_RUNTIME_STATE_FIELD"),
-            vendor_bill_id=_env_optional(prefix, "VENDOR_BILL_ID_FIELD"),
+            vendor_bill=_env_optional(prefix, "VENDOR_BILL_FIELD"),
             vendor_bill_external_identity=_env_optional(prefix, "VENDOR_BILL_EXTERNAL_IDENTITY_FIELD"),
-            vendor_bill_created=_env_optional(prefix, "VENDOR_BILL_CREATED_FIELD"),
             execution_message=_env_optional(prefix, "EXECUTION_MESSAGE_FIELD"),
         )
 
@@ -437,16 +429,8 @@ class OdooWorkbenchProjectionPublisher:
         }
         _put_optional(values, self._mapping.trace_id, trace_id)
         _put_optional(values, self._mapping.execution_status, ODOO_EXECUTION_STATUS_BY_CANONICAL[result.status])
-        _put_optional(values, self._mapping.execution_id, result.execution_id)
-        _put_optional(values, self._mapping.execution_mode, result.mode.value)
-        _put_optional(
-            values,
-            self._mapping.execution_runtime_state,
-            result.runtime_state.value if result.runtime_state is not None else None,
-        )
-        _put_optional(values, self._mapping.vendor_bill_id, artifact.artifact_id)
+        _put_optional(values, self._mapping.vendor_bill, int(artifact.artifact_id))
         _put_optional(values, self._mapping.vendor_bill_external_identity, artifact.external_identity)
-        _put_optional(values, self._mapping.vendor_bill_created, artifact.created)
         _put_optional(values, self._mapping.execution_message, result.message)
         return values
 
@@ -491,12 +475,8 @@ def _execution_projection_warnings(mapping: OdooWorkbenchProjectionFieldMapping)
         getattr(mapping, field_name)
         for field_name in (
             "execution_status",
-            "execution_id",
-            "execution_mode",
-            "execution_runtime_state",
-            "vendor_bill_id",
+            "vendor_bill",
             "vendor_bill_external_identity",
-            "vendor_bill_created",
             "execution_message",
         )
     ):
