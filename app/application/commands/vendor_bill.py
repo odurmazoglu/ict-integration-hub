@@ -17,3 +17,4 @@ class VendorBillWriteCommand(Command):
     idempotency_key: str
     dry_run: bool = True
     approved_by: str | None = None
+    company_id: int | None = None

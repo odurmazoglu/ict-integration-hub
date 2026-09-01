@@ -66,12 +66,14 @@ class VendorBillExecutionStrategy:
                 source.partner_match,
                 source.product_match,
                 source.tax_match,
+                company_id=request.company_id,
             )
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,
                 command=VendorBillWriteCommand(
                     vendor_bill=vendor_bill,
                     idempotency_key=vendor_bill_write_idempotency_key(request),
+                    company_id=request.company_id,
                     dry_run=request.mode is ExecutionMode.DRY_RUN,
                     approved_by=request.approval.approved_by if request.approval is not None else None,
                 ),

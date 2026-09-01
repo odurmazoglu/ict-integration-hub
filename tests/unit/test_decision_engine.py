@@ -133,6 +133,7 @@ async def test_vendor_bill_strategy_delegates_to_builder_and_writer() -> None:
             idempotency_key="ettn:INV-ETTN",
             dry_run=True,
             approved_by=None,
+            company_id=7,
         )
     ]
     assert writer.commands[0].vendor_bill.invoice_number == "INV-1"

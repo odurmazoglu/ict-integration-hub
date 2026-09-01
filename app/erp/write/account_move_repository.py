@@ -75,17 +75,23 @@ class AccountMoveRepository:
         *,
         vendor_bill: VendorBill,
         idempotency_key: str,
+        company_id: int | None = None,
     ) -> AccountMoveDraft | None:
         _validate_idempotency_key(idempotency_key)
+        company_id = _validate_company_id(
+            company_id if company_id is not None else vendor_bill.company_id,
+            "Vendor Bill",
+        )
         records = await _translate_connector_errors(
             self._client.search_read(
                 model=ACCOUNT_MOVE_MODEL,
                 domain=[
                     ["move_type", "=", VENDOR_BILL_MOVE_TYPE],
                     [IDEMPOTENCY_FIELD, "=", idempotency_key],
+                    ["company_id", "=", company_id],
                     ["partner_id", "=", vendor_bill.supplier_id],
                 ],
-                fields=["id", "name", "move_type", IDEMPOTENCY_FIELD, "partner_id"],
+                fields=["id", "name", "move_type", IDEMPOTENCY_FIELD, "company_id", "partner_id"],
                 limit=2,
             )
         )
@@ -104,8 +110,13 @@ class AccountMoveRepository:
         *,
         vendor_bill: VendorBill,
         idempotency_key: str,
+        company_id: int | None = None,
     ) -> AccountMoveDraft:
-        payload = self._draft_payload(vendor_bill=vendor_bill, idempotency_key=idempotency_key)
+        payload = self._draft_payload(
+            vendor_bill=vendor_bill,
+            idempotency_key=idempotency_key,
+            company_id=company_id,
+        )
         move_id = await _translate_connector_errors(self._client.create_account_move(payload))
         return AccountMoveDraft(id=move_id)
 
@@ -152,9 +163,20 @@ class AccountMoveRepository:
         move_id = await _translate_customer_invoice_connector_errors(self._client.create_account_move(payload))
         return AccountMoveDraft(id=move_id)
 
-    def _draft_payload(self, *, vendor_bill: VendorBill, idempotency_key: str) -> dict[str, Any]:
+    def _draft_payload(
+        self,
+        *,
+        vendor_bill: VendorBill,
+        idempotency_key: str,
+        company_id: int | None = None,
+    ) -> dict[str, Any]:
         _validate_idempotency_key(idempotency_key)
+        company_id = _validate_company_id(
+            company_id if company_id is not None else vendor_bill.company_id,
+            "Vendor Bill",
+        )
         payload = to_odoo_account_move_payload(vendor_bill)
+        payload["company_id"] = company_id
         payload[IDEMPOTENCY_FIELD] = idempotency_key
         _validate_payload(payload)
         return payload
@@ -216,9 +238,17 @@ def _validate_customer_invoice_idempotency_key(idempotency_key: str) -> None:
         raise CustomerInvoiceWriteValidationError("Customer Invoice idempotency key is required.")
 
 
+def _validate_company_id(company_id: object, label: str) -> int:
+    if type(company_id) is not int or company_id <= 0:
+        raise VendorBillWriteValidationError(f"{label} company_id is required.")
+    return company_id
+
+
 def _validate_payload(payload: dict[str, Any]) -> None:
     if payload.get("move_type") != VENDOR_BILL_MOVE_TYPE:
         raise VendorBillWriteValidationError("Only draft Vendor Bill account.move payloads are allowed.")
+    if type(payload.get("company_id")) is not int or payload["company_id"] <= 0:
+        raise VendorBillWriteValidationError("Vendor Bill company_id is required.")
     if not isinstance(payload.get("partner_id"), int):
         raise VendorBillWriteValidationError("Vendor Bill partner_id is required.")
     if not payload.get("ref"):

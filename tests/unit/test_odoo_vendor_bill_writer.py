@@ -149,6 +149,7 @@ class FakeDraftVendorBillRepository:
         *,
         vendor_bill: VendorBill,
         idempotency_key: str,
+        company_id: int | None = None,
     ) -> AccountMoveDraft | None:
         self.find_calls.append((idempotency_key, vendor_bill.supplier_id))
         return self.existing
@@ -158,6 +159,7 @@ class FakeDraftVendorBillRepository:
         *,
         vendor_bill: VendorBill,
         idempotency_key: str,
+        company_id: int | None = None,
     ) -> AccountMoveDraft:
         self.create_calls.append((idempotency_key, vendor_bill.supplier_id))
         return self.created
@@ -178,6 +180,7 @@ def _vendor_bill() -> VendorBill:
         currency="TRY",
         external_uuid="uuid-1",
         reference="INV-1",
+        company_id=7,
         invoice_lines=(
             VendorBillLine(
                 product_id=501,
