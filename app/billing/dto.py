@@ -23,6 +23,7 @@ class VendorBill:
     currency: str
     external_uuid: str | None
     reference: str | None
+    company_id: int | None = None
     invoice_lines: tuple[VendorBillLine, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
 

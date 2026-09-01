@@ -24,8 +24,16 @@ class VendorBillBuilder:
         partner_match: PartnerMatchResult,
         product_match: InvoiceProductMatchResult,
         tax_match: InvoiceTaxMappingResult,
+        *,
+        company_id: int | None = None,
     ) -> VendorBill:
-        validation = validate_vendor_bill_inputs(invoice, partner_match, product_match, tax_match)
+        validation = validate_vendor_bill_inputs(
+            invoice,
+            partner_match,
+            product_match,
+            tax_match,
+            company_id=company_id,
+        )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
 
@@ -39,6 +47,7 @@ class VendorBillBuilder:
             currency=invoice.header.currency_code.strip(),
             external_uuid=invoice.header.invoice_uuid.strip() or invoice.header.ettn,
             reference=invoice.header.invoice_number.strip(),
+            company_id=company_id,
             invoice_lines=tuple(
                 _vendor_bill_line(line, product_by_line[line.line_number], tax_ids_by_line) for line in invoice.lines
             ),
@@ -117,8 +126,12 @@ def validate_vendor_bill_inputs(
     partner_match: object,
     product_match: object,
     tax_match: object,
+    *,
+    company_id: int | None = None,
 ) -> VendorBillValidationResult:
     errors: list[str] = []
+    if company_id is not None and (type(company_id) is not int or company_id <= 0):
+        errors.append("company_id must be a positive integer when provided.")
     if not isinstance(invoice, InternalInvoice):
         return validation_result(["InternalInvoice DTO is required."])
     if not isinstance(partner_match, PartnerMatchResult):
@@ -173,6 +186,8 @@ def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int | 
         "currency": vendor_bill.currency,
         "invoice_line_ids": tuple((0, 0, _line_payload(line)) for line in vendor_bill.invoice_lines),
     }
+    if vendor_bill.company_id is not None:
+        payload["company_id"] = vendor_bill.company_id
     if currency_id is not None:
         payload["currency_id"] = currency_id
     if vendor_bill.notes:

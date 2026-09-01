@@ -31,11 +31,13 @@ class VendorBillStrategy:
             rule_result.partner_match,
             rule_result.product_match,
             rule_result.tax_match,
+            company_id=command.company_id,
         )
         write_result = await self._vendor_bill_writer.write_vendor_bill(
             VendorBillWriteCommand(
                 vendor_bill=vendor_bill,
                 idempotency_key=command.idempotency_key,
+                company_id=command.company_id,
                 dry_run=command.dry_run,
                 approved_by=command.approved_by,
             )

@@ -38,6 +38,7 @@ async def test_account_move_repository_creates_draft_vendor_bill_payload() -> No
     assert client.create_calls == [
         {
             "move_type": "in_invoice",
+            "company_id": 7,
             "partner_id": 101,
             "invoice_date": "2026-07-30",
             "ref": "INV-1",
@@ -80,9 +81,10 @@ async def test_account_move_repository_finds_existing_vendor_bill_by_idempotency
             "domain": [
                 ["move_type", "=", "in_invoice"],
                 ["invoice_origin", "=", "ettn-1"],
+                ["company_id", "=", 7],
                 ["partner_id", "=", 101],
             ],
-            "fields": ["id", "name", "move_type", "invoice_origin", "partner_id"],
+            "fields": ["id", "name", "move_type", "invoice_origin", "company_id", "partner_id"],
             "limit": 2,
             "offset": 0,
         }
@@ -93,6 +95,50 @@ async def test_account_move_repository_returns_none_when_duplicate_not_found() -
     repository = AccountMoveRepository(client=FakeJson2Client(search_records=[]))
 
     assert await repository.find_existing_vendor_bill(vendor_bill=_vendor_bill(), idempotency_key="ettn-1") is None
+
+
+async def test_account_move_repository_scopes_vendor_bill_lookup_by_company_id() -> None:
+    client = FakeJson2Client(search_records=[{"id": 7001, "name": "BILL/2026/001"}])
+    repository = AccountMoveRepository(client=client)
+
+    await repository.find_existing_vendor_bill(
+        vendor_bill=_vendor_bill(),
+        idempotency_key="ettn-1",
+        company_id=9,
+    )
+
+    assert client.search_calls[0]["domain"] == [
+        ["move_type", "=", "in_invoice"],
+        ["invoice_origin", "=", "ettn-1"],
+        ["company_id", "=", 9],
+        ["partner_id", "=", 101],
+    ]
+
+
+async def test_account_move_repository_rejects_missing_company_for_vendor_bill_write() -> None:
+    repository = AccountMoveRepository(client=FakeJson2Client())
+    vendor_bill = VendorBill(
+        supplier_id=101,
+        invoice_number="INV-1",
+        invoice_date=date(2026, 7, 30),
+        currency="TRY",
+        external_uuid="uuid-1",
+        reference="INV-1",
+        company_id=None,
+        invoice_lines=(
+            VendorBillLine(
+                product_id=501,
+                quantity=Decimal("2"),
+                uom="NIU",
+                unit_price=Decimal("10.50"),
+                tax_ids=(401,),
+                description="Line 1",
+            ),
+        ),
+    )
+
+    with pytest.raises(VendorBillWriteValidationError):
+        await repository.create_draft_vendor_bill(vendor_bill=vendor_bill, idempotency_key="ettn-1")
 
 
 async def test_account_move_repository_rejects_multiple_existing_vendor_bills() -> None:
@@ -250,6 +296,7 @@ def _vendor_bill() -> VendorBill:
         currency="TRY",
         external_uuid="uuid-1",
         reference="INV-1",
+        company_id=7,
         invoice_lines=(
             VendorBillLine(
                 product_id=501,

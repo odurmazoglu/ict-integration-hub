@@ -21,6 +21,7 @@ class DraftVendorBillRepository(Protocol):
         *,
         vendor_bill: object,
         idempotency_key: str,
+        company_id: int | None = None,
     ) -> AccountMoveDraft | None:
         pass
 
@@ -29,6 +30,7 @@ class DraftVendorBillRepository(Protocol):
         *,
         vendor_bill: object,
         idempotency_key: str,
+        company_id: int | None = None,
     ) -> AccountMoveDraft:
         pass
 
@@ -74,9 +76,11 @@ class OdooVendorBillWriter(VendorBillWriter):
             )
 
         self._policy.ensure_real_write_allowed(approved_by=command.approved_by)
+        company_id = _company_id(command)
         existing = await self._repository.find_existing_vendor_bill(
             vendor_bill=command.vendor_bill,
             idempotency_key=idempotency_key,
+            company_id=company_id,
         )
         if existing is not None:
             return _existing_result(idempotency_key=idempotency_key, existing=existing)
@@ -84,6 +88,7 @@ class OdooVendorBillWriter(VendorBillWriter):
         created = await self._repository.create_draft_vendor_bill(
             vendor_bill=command.vendor_bill,
             idempotency_key=idempotency_key,
+            company_id=company_id,
         )
         return VendorBillWriteResult(
             status="created",
@@ -102,6 +107,15 @@ def _idempotency_key(command: VendorBillWriteCommand) -> str:
     if not idempotency_key:
         raise VendorBillWriteValidationError("Vendor Bill idempotency key is required.")
     return idempotency_key
+
+
+def _company_id(command: VendorBillWriteCommand) -> int:
+    candidate = command.company_id
+    if candidate is None:
+        candidate = command.vendor_bill.company_id
+    if type(candidate) is not int or candidate <= 0:
+        raise VendorBillWriteValidationError("Vendor Bill company_id is required for Odoo write operations.")
+    return candidate
 
 
 def _existing_result(*, idempotency_key: str, existing: AccountMoveDraft) -> VendorBillWriteResult:
