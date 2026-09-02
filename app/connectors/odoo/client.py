@@ -116,7 +116,7 @@ class OdooJson2Client:
             return result
         if isinstance(result, dict) and isinstance(result.get("id"), int):
             return int(result["id"])
-        raise ConnectorError("Odoo Studio create returned an unexpected response.")
+        raise ConnectorError(f"Odoo Studio create returned an unexpected response shape: {_response_shape(result)}.")
 
     async def write_studio_record(self, *, model: str, record_id: int, values: dict[str, Any]) -> bool:
         if not _is_studio_model_allowed(model):
@@ -202,6 +202,23 @@ def _is_read_only_model_allowed(model: str) -> bool:
 
 def _is_studio_model_allowed(model: str) -> bool:
     return model.startswith(("x_", "x_studio_"))
+
+
+def _response_shape(value: JsonValue) -> str:
+    if value is None:
+        return "type=null"
+    if isinstance(value, bool):
+        return "type=bool"
+    if isinstance(value, int):
+        return "type=int"
+    if isinstance(value, list):
+        element_types = sorted({type(element).__name__ for element in value})
+        return f"type=list,length={len(value)},element_types={element_types}"
+    if isinstance(value, dict):
+        return f"type=dict,keys={sorted(value)}"
+    if isinstance(value, str):
+        return "type=str"
+    return f"type={type(value).__name__}"
 
 
 MAX_SAFE_HTTP_ERROR_DETAIL_LENGTH = 300
