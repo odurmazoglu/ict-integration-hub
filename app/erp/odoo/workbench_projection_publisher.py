@@ -518,7 +518,9 @@ def _date_text(projection: WorkbenchProjection) -> str | None:
 
 
 def _datetime_text(value: datetime) -> str:
-    return value.isoformat()
+    if value.tzinfo is not None:
+        value = value.astimezone(UTC).replace(tzinfo=None)
+    return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _decimal_value(value: Decimal | None) -> float | None:
