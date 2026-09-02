@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -167,7 +169,7 @@ async def test_search_read_rejects_non_allowlisted_model() -> None:
 async def test_create_studio_record_uses_configured_studio_model() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/json/2/x_ipp_import_workbench/create"
-        assert b"x_studio_review_id" in request.content
+        assert json.loads(request.content) == {"vals_list": [{"x_studio_review_id": "review-1"}]}
         return httpx.Response(200, json=42)
 
     client = OdooJson2Client(
