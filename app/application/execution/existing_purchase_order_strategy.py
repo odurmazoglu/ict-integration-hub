@@ -82,27 +82,33 @@ class ExistingPurchaseOrderExecutionStrategy:
                     message="Dry run completed. No Odoo purchase-order billing was triggered.",
                 )
 
-            created = _run_writer(
-                self._purchase_order_vendor_bill_repository.create_vendor_bill_from_purchase_order,
+            write_result = _run_writer(
+                self._purchase_order_vendor_bill_repository.create_or_recover_vendor_bill_from_purchase_order,
                 purchase_order_id=purchase_order_id,
                 company_id=request.company_id,
                 partner_id=source.partner_match.partner_id,
-                idempotency_key=existing_purchase_order_write_idempotency_key(request),
+                idempotency_key=existing_purchase_order_write_idempotency_key(request, purchase_order_id),
                 invoice_reference=source.invoice.header.invoice_number,
                 invoice_date=source.invoice.header.issue_date,
             )
-            created_id = getattr(created, "id", None)
-            if created_id is None:
+            move = getattr(write_result, "move", None)
+            if move is None or getattr(move, "id", None) is None:
                 raise ExecutionSourceInvoiceError(
                     "Purchase Order Vendor Bill creation did not return a valid Odoo move."
                 )
+            created = bool(getattr(write_result, "created", True))
+            message = (
+                "Draft Vendor Bill recovered from the existing Odoo Purchase Order."
+                if not created
+                else "Draft Vendor Bill created from the existing Purchase Order in Odoo."
+            )
             return ExecutionStepResult(
                 step_key=request.step.step_key,
                 step_type=request.step.step_type,
                 status=ExecutionStepStatus.EXECUTED,
                 dry_run=False,
-                message="Draft Vendor Bill created from the existing Purchase Order in Odoo.",
-                produced_artifacts=(_produced_artifact(request=request, external_id=created_id, created=True),),
+                message=message,
+                produced_artifacts=(_produced_artifact(request=request, external_id=move.id, created=created),),
             )
         except ExecutionSourceInvoiceError as exc:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
@@ -110,11 +116,15 @@ class ExistingPurchaseOrderExecutionStrategy:
             return _failure_result(request, error_code=_writer_error_code(exc), message=exc.safe_message)
 
 
-def existing_purchase_order_write_idempotency_key(request: ExecutionStepRequest) -> str:
+def existing_purchase_order_write_idempotency_key(
+    request: ExecutionStepRequest,
+    purchase_order_id: int | None = None,
+) -> str:
     identity = {
         "company_id": request.company_id,
         "review_id": request.review_id,
         "decision_version": request.decision_version,
+        "purchase_order_id": purchase_order_id,
         "step_key": request.step.step_key,
         "step_type": request.step.step_type.value,
     }
@@ -189,10 +199,26 @@ def _writer_error_code(exc: ApplicationError) -> str:
     return "purchase_order_write_error"
 
 
-def _produced_artifact(*, request: ExecutionStepRequest, external_id: int | None, created: bool) -> ExecutionArtifact:
+def _produced_artifact(
+    *,
+    request: ExecutionStepRequest,
+    external_id: int | None,
+    created: bool,
+) -> ExecutionArtifact:
+    purchase_order_id = next(
+        (
+            allocation.purchase_order_id
+            for allocation in request.step.allocations
+            if allocation.purchase_order_id is not None
+        ),
+        None,
+    )
     return ExecutionArtifact(
         artifact_type=ExecutionArtifactType.VENDOR_BILL,
         artifact_id=str(external_id),
-        external_identity=existing_purchase_order_write_idempotency_key(request),
+        external_identity=existing_purchase_order_write_idempotency_key(
+            request,
+            purchase_order_id=purchase_order_id,
+        ),
         created=created,
     )

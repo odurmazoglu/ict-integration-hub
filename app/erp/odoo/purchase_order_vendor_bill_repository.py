@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Protocol
 
@@ -19,6 +20,14 @@ from app.erp.write.exceptions import (
     VendorBillWriteUnexpectedErpError,
     VendorBillWriteValidationError,
 )
+
+ALLOWED_BILLABLE_PURCHASE_ORDER_STATES = frozenset({"purchase"})
+
+
+@dataclass(frozen=True, slots=True)
+class PurchaseOrderVendorBillWriteResult:
+    move: AccountMoveDraft
+    created: bool
 
 
 class PurchaseOrderVendorBillClient(Protocol):
@@ -54,39 +63,100 @@ class PurchaseOrderVendorBillRepository:
     def __init__(self, *, client: PurchaseOrderVendorBillClient) -> None:
         self._client = client
 
+    async def read_billable_purchase_order(
+        self,
+        *,
+        purchase_order_id: int,
+        company_id: int,
+        partner_id: int,
+    ) -> dict[str, Any]:
+        _validate_company_id(company_id)
+        _validate_partner_id(partner_id)
+        _validate_purchase_order_id(purchase_order_id)
+        records = await _translate_connector_errors(
+            self._client.search_read(
+                model="purchase.order",
+                domain=[
+                    ["id", "=", purchase_order_id],
+                    ["company_id", "=", company_id],
+                    ["partner_id", "=", partner_id],
+                ],
+                fields=["id", "name", "state", "company_id", "partner_id"],
+                limit=1,
+            )
+        )
+        if not records:
+            raise VendorBillWriteValidationError(
+                "Purchase Order is missing or does not match the authoritative company and supplier."
+            )
+        record = records[0]
+        actual_company_id = _extract_many2one_id(record.get("company_id"))
+        actual_partner_id = _extract_many2one_id(record.get("partner_id"))
+        if actual_company_id != company_id:
+            raise VendorBillWriteValidationError("Purchase Order company mismatch detected before billing.")
+        if actual_partner_id != partner_id:
+            raise VendorBillWriteValidationError("Purchase Order supplier mismatch detected before billing.")
+
+        state = record.get("state")
+        if state not in ALLOWED_BILLABLE_PURCHASE_ORDER_STATES:
+            raise VendorBillWriteValidationError("Purchase Order is not in a billable state for standard Odoo billing.")
+        return record
+
     async def find_existing_vendor_bill(
         self,
         *,
         company_id: int,
         partner_id: int,
         idempotency_key: str,
+        purchase_order_id: int | None = None,
     ) -> AccountMoveDraft | None:
         _validate_company_id(company_id)
         _validate_partner_id(partner_id)
         _validate_idempotency_key(idempotency_key)
+        domain: list[Any]
+        if purchase_order_id is not None:
+            _validate_purchase_order_id(purchase_order_id)
+            domain = [
+                ["move_type", "=", "in_invoice"],
+                ["purchase_id", "=", purchase_order_id],
+                ["company_id", "=", company_id],
+                ["partner_id", "=", partner_id],
+            ]
+        else:
+            domain = [
+                ["move_type", "=", "in_invoice"],
+                ["invoice_origin", "=", idempotency_key],
+                ["company_id", "=", company_id],
+                ["partner_id", "=", partner_id],
+            ]
         records = await _translate_connector_errors(
             self._client.search_read(
                 model="account.move",
-                domain=[
-                    ["move_type", "=", "in_invoice"],
-                    ["invoice_origin", "=", idempotency_key],
-                    ["company_id", "=", company_id],
-                    ["partner_id", "=", partner_id],
+                domain=domain,
+                fields=[
+                    "id",
+                    "name",
+                    "move_type",
+                    "company_id",
+                    "partner_id",
+                    "purchase_id",
+                    "invoice_origin",
                 ],
-                fields=["id", "name", "move_type", "invoice_origin", "company_id", "partner_id"],
                 limit=2,
             )
         )
         if not records:
             return None
         if len(records) > 1:
-            raise VendorBillWriteDuplicateError("Multiple existing Odoo Vendor Bills were found.")
+            raise VendorBillWriteDuplicateError(
+                "Multiple existing Odoo Vendor Bills were found for the purchase order."
+            )
         move_id = records[0].get("id")
         if not isinstance(move_id, int) or isinstance(move_id, bool):
             raise VendorBillWriteUnexpectedErpError("Odoo returned an invalid account.move id.")
         return AccountMoveDraft(id=move_id, name=_optional_text(records[0].get("name")))
 
-    async def create_vendor_bill_from_purchase_order(
+    async def create_or_recover_vendor_bill_from_purchase_order(
         self,
         *,
         purchase_order_id: int,
@@ -95,18 +165,24 @@ class PurchaseOrderVendorBillRepository:
         idempotency_key: str,
         invoice_reference: str | None = None,
         invoice_date: date | None = None,
-    ) -> AccountMoveDraft:
+    ) -> PurchaseOrderVendorBillWriteResult:
         _validate_company_id(company_id)
         _validate_partner_id(partner_id)
         _validate_purchase_order_id(purchase_order_id)
         _validate_idempotency_key(idempotency_key)
+        await self.read_billable_purchase_order(
+            purchase_order_id=purchase_order_id,
+            company_id=company_id,
+            partner_id=partner_id,
+        )
         existing = await self.find_existing_vendor_bill(
             company_id=company_id,
             partner_id=partner_id,
             idempotency_key=idempotency_key,
+            purchase_order_id=purchase_order_id,
         )
         if existing is not None:
-            return existing
+            return PurchaseOrderVendorBillWriteResult(move=existing, created=False)
 
         result = await _translate_connector_errors(
             self._client.call_model_method(
@@ -116,7 +192,7 @@ class PurchaseOrderVendorBillRepository:
             )
         )
         move_id = _extract_move_id(result)
-        values: dict[str, Any] = {"invoice_origin": idempotency_key}
+        values: dict[str, Any] = {}
         if invoice_reference is not None and invoice_reference.strip():
             values["ref"] = invoice_reference.strip()
         if invoice_date is not None:
@@ -128,7 +204,27 @@ class PurchaseOrderVendorBillRepository:
                     values=values,
                 )
             )
-        return AccountMoveDraft(id=move_id)
+        return PurchaseOrderVendorBillWriteResult(move=AccountMoveDraft(id=move_id), created=True)
+
+    async def create_vendor_bill_from_purchase_order(
+        self,
+        *,
+        purchase_order_id: int,
+        company_id: int,
+        partner_id: int,
+        idempotency_key: str,
+        invoice_reference: str | None = None,
+        invoice_date: date | None = None,
+    ) -> AccountMoveDraft:
+        result = await self.create_or_recover_vendor_bill_from_purchase_order(
+            purchase_order_id=purchase_order_id,
+            company_id=company_id,
+            partner_id=partner_id,
+            idempotency_key=idempotency_key,
+            invoice_reference=invoice_reference,
+            invoice_date=invoice_date,
+        )
+        return result.move
 
 
 def _extract_move_id(result: Any) -> int:
@@ -139,10 +235,12 @@ def _extract_move_id(result: Any) -> int:
             value = result.get(key)
             if isinstance(value, int) and not isinstance(value, bool):
                 return value
+        if isinstance(result.get("result"), dict):
+            return _extract_move_id(result["result"])
+        if isinstance(result.get("result"), int) and not isinstance(result.get("result"), bool):
+            return int(result["result"])
     if isinstance(result, list) and result and isinstance(result[0], int) and not isinstance(result[0], bool):
         return result[0]
-    if isinstance(result, dict) and isinstance(result.get("result"), dict):
-        return _extract_move_id(result["result"])
     raise VendorBillWriteUnexpectedErpError(
         "Odoo purchase.order action_create_invoice returned an invalid Vendor Bill id."
     )
@@ -186,6 +284,14 @@ def _validate_purchase_order_id(purchase_order_id: object) -> int:
 def _validate_idempotency_key(idempotency_key: str) -> None:
     if not isinstance(idempotency_key, str) or not idempotency_key.strip():
         raise VendorBillWriteValidationError("Vendor Bill idempotency key is required.")
+
+
+def _extract_many2one_id(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, (list, tuple)) and len(value) >= 2 and isinstance(value[0], int):
+        return value[0]
+    return None
 
 
 def _optional_text(value: Any) -> str | None:

@@ -17,6 +17,7 @@ JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 READ_ONLY_MODELS = frozenset(
     {
         "account.move",
+        "purchase.order",
         "res.company",
         "res.partner",
         "product.product",
