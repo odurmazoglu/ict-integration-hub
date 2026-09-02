@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -343,6 +344,24 @@ def test_create_when_no_odoo_row_exists_and_uses_exact_company_lookup() -> None:
     assert adapter.create_values["x_studio_review_id"] == "review-1"
     assert adapter.create_values["x_name"] == "review-1"
     assert adapter.create_values["x_studio_company"] == 7
+
+
+def test_datetime_serialization_uses_utc_odoo_format() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[{"id": 42}])
+    projection = _projection(updated_at=datetime(2026, 9, 2, 14, 32, 29, 674805, tzinfo=UTC))
+
+    OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping()).publish_projection(projection)
+
+    assert adapter.write_values["x_studio_last_sync_at"] == "2026-09-02 14:32:29"
+
+
+def test_datetime_serialization_normalizes_non_utc_timezone_and_drops_microseconds() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[{"id": 42}])
+    projection = _projection(updated_at=datetime(2026, 9, 2, 17, 32, 29, 999999, tzinfo=ZoneInfo("Europe/Istanbul")))
+
+    OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping()).publish_projection(projection)
+
+    assert adapter.write_values["x_studio_last_sync_at"] == "2026-09-02 14:32:29"
 
 
 def test_update_when_exactly_one_row_exists_updates_only_hub_owned_fields() -> None:
