@@ -17,6 +17,7 @@ JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 READ_ONLY_MODELS = frozenset(
     {
         "account.move",
+        "purchase.order",
         "res.company",
         "res.partner",
         "product.product",
@@ -77,6 +78,35 @@ class OdooJson2Client:
         if isinstance(result, dict) and isinstance(result.get("id"), int):
             return int(result["id"])
         raise ConnectorError("Odoo account.move create returned an unexpected response.")
+
+    async def write_account_move(self, *, record_id: int, values: dict[str, Any]) -> bool:
+        if type(record_id) is not int or record_id <= 0:
+            raise ConnectorError("Odoo account.move record id is invalid.")
+        result = await self._post_json("/json/2/account.move/write", {"ids": [record_id], "values": values})
+        if isinstance(result, bool):
+            return result
+        raise ConnectorError("Odoo account.move write returned an unexpected response.")
+
+    async def call_model_method(
+        self,
+        *,
+        model: str,
+        method: str,
+        ids: list[int] | None = None,
+        args: list[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:
+        if model not in {"purchase.order", "account.move"}:
+            raise ConnectorError("Odoo method call is not allowed for this model.")
+        if not isinstance(method, str) or not method.strip():
+            raise ConnectorError("Odoo method name is required.")
+        payload = {
+            "ids": list(ids) if ids is not None else [],
+            "args": list(args) if args is not None else [],
+            "kwargs": dict(kwargs) if kwargs is not None else {},
+        }
+        result = await self._post_json(f"/json/2/{model}/{method}", payload)
+        return result
 
     async def create_studio_record(self, *, model: str, values: dict[str, Any]) -> int:
         if not _is_studio_model_allowed(model):

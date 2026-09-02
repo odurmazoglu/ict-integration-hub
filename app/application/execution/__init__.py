@@ -50,6 +50,10 @@ from app.application.execution.exceptions import (
     ExecutionStrategyResolutionError,
     ExecutionUnsupportedStepError,
 )
+from app.application.execution.existing_purchase_order_strategy import (
+    ExistingPurchaseOrderExecutionStrategy,
+    existing_purchase_order_write_idempotency_key,
+)
 from app.application.execution.planner import ExecutionPlanner, execution_idempotency_key
 from app.application.execution.ports import (
     AcceptedBillingEvidenceReader,
@@ -117,6 +121,7 @@ __all__ = [
     "CustomerRechargeExecutionRouter",
     "CustomerRechargeExecutionStrategy",
     "CustomerRechargeInvoiceCreationRequiredError",
+    "ExistingPurchaseOrderExecutionStrategy",
     "ExecutionApproval",
     "ExecutionApprovalError",
     "ExecutionCoordinator",
@@ -187,4 +192,5 @@ __all__ = [
     "customer_invoice_write_idempotency_key",
     "foundation_no_write_strategy_resolver",
     "vendor_bill_write_idempotency_key",
+    "existing_purchase_order_write_idempotency_key",
 ]
