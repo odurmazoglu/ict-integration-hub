@@ -101,6 +101,7 @@ class OdooWorkbenchProjectionAdapter(Protocol):
 @dataclass(frozen=True, slots=True)
 class OdooWorkbenchProjectionFieldMapping:
     model: str
+    name: str
     review_id: str
     company_id: str
     invoice_number: str
@@ -132,6 +133,7 @@ class OdooWorkbenchProjectionFieldMapping:
     def __post_init__(self) -> None:
         for field_name in (
             "model",
+            "name",
             "review_id",
             "company_id",
             "invoice_number",
@@ -152,6 +154,7 @@ class OdooWorkbenchProjectionFieldMapping:
     def from_environment(cls, *, prefix: str = "ODOO_WORKBENCH_PUBLISHER_") -> OdooWorkbenchProjectionFieldMapping:
         return cls(
             model=_env(prefix, "PARENT_MODEL"),
+            name=_env(prefix, "NAME_FIELD"),
             review_id=_env(prefix, "REVIEW_ID_FIELD"),
             company_id=_env(prefix, "COMPANY_ID_FIELD"),
             invoice_number=_env(prefix, "INVOICE_NUMBER_FIELD"),
@@ -259,6 +262,7 @@ class OdooWorkbenchProjectionPublisher:
                 record_id = self._adapter.create(
                     model=self._mapping.model,
                     values={
+                        self._mapping.name: projection.review_id,
                         self._mapping.review_id: projection.review_id,
                         self._mapping.company_id: projection.company_id,
                     }
@@ -369,6 +373,7 @@ class OdooWorkbenchProjectionPublisher:
     def _projection_payload(self, projection: WorkbenchProjection) -> dict[str, Any]:
         classification = self._classification(projection)
         values: dict[str, Any] = {
+            self._mapping.name: projection.review_id,
             self._mapping.invoice_number: projection.invoice_number,
             self._mapping.supplier: projection.supplier_name,
             self._mapping.supplier_tax_number: projection.supplier_tax_number,

@@ -129,6 +129,11 @@ The approved execution-result schema is intentionally small. It exposes the user
 
 These fields are created manually in Odoo Studio. Hub never creates or mutates Odoo Studio schema.
 
+The deployed Odoo Studio Workbench model requires its technical record name field.
+Configure `ODOO_WORKBENCH_PUBLISHER_NAME_FIELD=x_name`; the publisher populates it
+from the canonical `review_id` on create and refresh, keeping the technical identity
+deterministic and separate from business fields.
+
 `Vendor Bill External Identity` is not part of the required contract. Once the record-level Many2one link exists, the deterministic writer idempotency key is redundant for user-facing UX and for recovery tracking; it is only useful as optional hidden audit metadata when a deployment explicitly configures that field. The actual Odoo `account.move` database record ID is the canonical reference, and the Hub writes this value as a Many2one integer ID in the JSON-2 payload.
 
 Unused or intentionally redundant PR #102 execution mappings remain intentionally absent from the contract: `execution_id`, `execution_mode`, `execution_runtime_state`, and `vendor_bill_created`. They are runtime-support and audit details, not required for Workbench UX, and they would duplicate information already represented by `Execution Status`, `Vendor Bill`, and the trace / sync fields.
@@ -568,6 +573,7 @@ Current publisher mapping keys use `OdooWorkbenchProjectionFieldMapping`:
 | Logical value | Configuration key |
 | --- | --- |
 | Parent model | `ODOO_WORKBENCH_PUBLISHER_PARENT_MODEL` |
+| Technical record name | `ODOO_WORKBENCH_PUBLISHER_NAME_FIELD` |
 | Review id | `ODOO_WORKBENCH_PUBLISHER_REVIEW_ID_FIELD` |
 | Company | `ODOO_WORKBENCH_PUBLISHER_COMPANY_ID_FIELD` |
 | Invoice number | `ODOO_WORKBENCH_PUBLISHER_INVOICE_NUMBER_FIELD` |
