@@ -246,10 +246,45 @@ async def test_create_studio_record_uses_configured_studio_model() -> None:
     )
 
 
+async def test_create_studio_record_accepts_single_integer_id_list() -> None:
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[123])),
+            base_url="https://example.odoo.com",
+        ),
+    )
+
+    assert await client.create_studio_record(model="x_ipp_import_workbench", values={"x_name": "review-1"}) == 123
+
+
+@pytest.mark.parametrize(
+    "response_body",
+    [True, False, {"id": True}, {"id": False}, [], [1, 2], ["1"], [True], [{"id": 1}], {"ids": [1]}],
+)
+async def test_create_studio_record_rejects_unsupported_response_shapes(response_body: object) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response_body)
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    with pytest.raises(ConnectorError):
+        await client.create_studio_record(model="x_ipp_import_workbench", values={"x_name": "review-1"})
+
+
 @pytest.mark.parametrize(
     ("response_body", "expected_shape", "forbidden_text"),
     [
-        ([1], "type=list,length=1,element_types=['int']", None),
+        ([1, 2], "type=list,length=2,element_types=['int']", None),
         ({"ids": [1], "token": "secret-value"}, "type=dict,keys=['ids', 'token']", "secret-value"),
         ("secret-value", "type=str", "secret-value"),
     ],
