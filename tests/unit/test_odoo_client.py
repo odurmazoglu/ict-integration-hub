@@ -246,6 +246,40 @@ async def test_create_studio_record_uses_configured_studio_model() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("response_body", "expected_shape", "forbidden_text"),
+    [
+        ([1], "type=list,length=1,element_types=['int']", None),
+        ({"ids": [1], "token": "secret-value"}, "type=dict,keys=['ids', 'token']", "secret-value"),
+        ("secret-value", "type=str", "secret-value"),
+    ],
+)
+async def test_create_studio_record_reports_safe_unexpected_response_shape(
+    response_body: object,
+    expected_shape: str,
+    forbidden_text: str | None,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response_body)
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    with pytest.raises(ConnectorError) as exc_info:
+        await client.create_studio_record(model="x_ipp_import_workbench", values={"x_name": "review-1"})
+
+    assert exc_info.value.safe_message == (
+        f"Odoo Studio create returned an unexpected response shape: {expected_shape}."
+    )
+    if forbidden_text is not None:
+        assert forbidden_text not in exc_info.value.safe_message
+
+
 async def test_write_studio_record_uses_configured_studio_model_and_id_payload() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/json/2/x_ipp_import_workbench/write"
