@@ -125,7 +125,7 @@ class OdooJson2Client:
             raise ConnectorError("Odoo Studio write model is not allowed.")
         if type(record_id) is not int or record_id <= 0:
             raise ConnectorError("Odoo Studio record id is invalid.")
-        result = await self._post_json(f"/json/2/{model}/write", {"ids": [record_id], "values": values})
+        result = await self._post_json(f"/json/2/{model}/write", {"ids": [record_id], "vals": values})
         if isinstance(result, bool):
             return result
         raise ConnectorError("Odoo Studio write returned an unexpected response.")
