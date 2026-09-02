@@ -126,6 +126,8 @@ async def test_create_account_move_translates_http_status(
         ),
         (500, {"error": {"message": "Studio create failed."}}, "Odoo returned HTTP 500. Studio create failed."),
         (500, {"message": "Traceback: secret details", "debug": "api_key=secret"}, "Odoo returned HTTP 500."),
+        (500, {"message": "failure api_key=super-secret"}, "Odoo returned HTTP 500."),
+        (500, {"error": {"message": "Bearer abc123 rejected"}}, "Odoo returned HTTP 500."),
         (500, {"api_key": "secret", "token": "secret"}, "Odoo returned HTTP 500."),
         (500, "not-json-object", "Odoo returned HTTP 500."),
     ],

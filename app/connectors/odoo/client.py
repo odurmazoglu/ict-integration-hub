@@ -205,6 +205,17 @@ def _is_studio_model_allowed(model: str) -> bool:
 
 
 MAX_SAFE_HTTP_ERROR_DETAIL_LENGTH = 300
+UNSAFE_HTTP_ERROR_MARKERS = (
+    "api_key",
+    "api key",
+    "authorization",
+    "bearer",
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "cookie",
+)
 
 
 def _safe_http_error_detail(response: httpx.Response) -> str | None:
@@ -222,7 +233,13 @@ def _safe_http_error_detail(response: httpx.Response) -> str | None:
         if not isinstance(candidate, str):
             continue
         detail = " ".join(candidate.split())
-        if not detail or "traceback" in detail.lower() or "debug" in detail.lower():
+        lowered_detail = detail.lower()
+        if (
+            not detail
+            or "traceback" in lowered_detail
+            or "debug" in lowered_detail
+            or any(marker in lowered_detail for marker in UNSAFE_HTTP_ERROR_MARKERS)
+        ):
             continue
         return detail[:MAX_SAFE_HTTP_ERROR_DETAIL_LENGTH]
     return None
