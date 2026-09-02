@@ -112,9 +112,9 @@ class OdooJson2Client:
         if not _is_studio_model_allowed(model):
             raise ConnectorError("Odoo Studio write model is not allowed.")
         result = await self._post_json(f"/json/2/{model}/create", {"vals_list": [values]})
-        if isinstance(result, int):
+        if type(result) is int:
             return result
-        if isinstance(result, dict) and isinstance(result.get("id"), int):
+        if isinstance(result, dict) and type(result.get("id")) is int:
             return int(result["id"])
         if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
             return result[0]

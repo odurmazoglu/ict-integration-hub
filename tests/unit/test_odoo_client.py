@@ -261,7 +261,10 @@ async def test_create_studio_record_accepts_single_integer_id_list() -> None:
     assert await client.create_studio_record(model="x_ipp_import_workbench", values={"x_name": "review-1"}) == 123
 
 
-@pytest.mark.parametrize("response_body", [[], [1, 2], ["1"], [True], [{"id": 1}], {"ids": [1]}])
+@pytest.mark.parametrize(
+    "response_body",
+    [True, False, {"id": True}, {"id": False}, [], [1, 2], ["1"], [True], [{"id": 1}], {"ids": [1]}],
+)
 async def test_create_studio_record_rejects_unsupported_response_shapes(response_body: object) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=response_body)
