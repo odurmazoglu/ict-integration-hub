@@ -392,6 +392,40 @@ def test_create_repository_failure_maps_to_projection_publish_error() -> None:
         publisher.publish_projection(_projection())
 
 
+def test_create_repository_safe_message_is_preserved_without_raw_exception_text() -> None:
+    publisher = OdooWorkbenchProjectionPublisher(
+        adapter=RecordingProjectionAdapter(
+            search_records=[],
+            create_exc=ErpRepositoryError("Odoo returned HTTP 500. Some safe Odoo error."),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchProjectionPublishError) as exc_info:
+        publisher.publish_projection(_projection())
+
+    assert exc_info.value.safe_message == (
+        "Odoo Workbench projection publish failed. Odoo returned HTTP 500. Some safe Odoo error."
+    )
+    assert "Traceback" not in exc_info.value.safe_message
+    assert repr(exc_info.value) not in exc_info.value.safe_message
+
+
+def test_create_repository_without_safe_message_keeps_generic_fallback() -> None:
+    error = ErpRepositoryError.__new__(ErpRepositoryError)
+    Exception.__init__(error, "raw connector exception text")
+    publisher = OdooWorkbenchProjectionPublisher(
+        adapter=RecordingProjectionAdapter(search_records=[], create_exc=error),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchProjectionPublishError) as exc_info:
+        publisher.publish_projection(_projection())
+
+    assert exc_info.value.safe_message == "Odoo Workbench projection publish failed."
+    assert "raw connector exception text" not in exc_info.value.safe_message
+
+
 def test_write_repository_failure_maps_to_projection_publish_error() -> None:
     publisher = OdooWorkbenchProjectionPublisher(
         adapter=RecordingProjectionAdapter(
