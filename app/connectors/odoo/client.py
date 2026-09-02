@@ -116,6 +116,8 @@ class OdooJson2Client:
             return result
         if isinstance(result, dict) and isinstance(result.get("id"), int):
             return int(result["id"])
+        if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
+            return result[0]
         raise ConnectorError(f"Odoo Studio create returned an unexpected response shape: {_response_shape(result)}.")
 
     async def write_studio_record(self, *, model: str, record_id: int, values: dict[str, Any]) -> bool:
