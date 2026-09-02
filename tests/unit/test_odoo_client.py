@@ -116,6 +116,61 @@ async def test_create_account_move_translates_http_status(
     assert exc_info.value.safe_message == safe_message
 
 
+@pytest.mark.parametrize(
+    ("status_code", "body", "expected"),
+    [
+        (
+            500,
+            {"message": "Required field x_name is missing."},
+            "Odoo returned HTTP 500. Required field x_name is missing.",
+        ),
+        (500, {"error": {"message": "Studio create failed."}}, "Odoo returned HTTP 500. Studio create failed."),
+        (500, {"message": "Traceback: secret details", "debug": "api_key=secret"}, "Odoo returned HTTP 500."),
+        (500, {"api_key": "secret", "token": "secret"}, "Odoo returned HTTP 500."),
+        (500, "not-json-object", "Odoo returned HTTP 500."),
+    ],
+)
+async def test_http_error_detail_is_safe_and_bounded(
+    status_code: int,
+    body: object,
+    expected: str,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json=body)
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    with pytest.raises(ConnectorError) as exc_info:
+        await client.create_account_move({"move_type": "in_invoice", "api_key": "secret"})
+
+    assert exc_info.value.safe_message == expected
+    assert "secret" not in exc_info.value.safe_message
+
+
+async def test_validation_error_preserves_type_with_safe_detail() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "x_name is required."})
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    with pytest.raises(ConnectorValidationError) as exc_info:
+        await client.create_account_move({"move_type": "in_invoice"})
+
+    assert exc_info.value.safe_message == "Odoo rejected the request payload. x_name is required."
+
+
 async def test_search_read_uses_read_only_endpoint() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/json/2/res.partner/search_read"
