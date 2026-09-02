@@ -45,6 +45,44 @@ async def test_create_account_move_rejects_unexpected_response() -> None:
     assert exc_info.value.safe_message == "Odoo account.move create returned an unexpected response."
 
 
+async def test_call_model_method_uses_purchase_order_action_route() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/purchase.order/action_create_invoice"
+        assert b'"ids":[42]' in request.content
+        assert b'"kwargs":{}' in request.content
+        return httpx.Response(200, json={"res_id": 901})
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    assert await client.call_model_method(model="purchase.order", method="action_create_invoice", ids=[42]) == {
+        "res_id": 901
+    }
+
+
+async def test_write_account_move_uses_vendor_bill_write_route() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/account.move/write"
+        assert b'"ids":[901]' in request.content
+        assert b'"values":{"ref":"INV-1001"}' in request.content
+        return httpx.Response(200, json=True)
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    assert await client.write_account_move(record_id=901, values={"ref": "INV-1001"}) is True
+
+
 @pytest.mark.parametrize(
     ("status_code", "expected", "safe_message"),
     [

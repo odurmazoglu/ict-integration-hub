@@ -12,6 +12,7 @@ from app.application.execution import (
     ExecutionRuntimeCoordinator,
     ExecutionRuntimeService,
     ExecutionStrategyResolver,
+    ExistingPurchaseOrderExecutionStrategy,
     RunAcceptedDecisionExecutionUseCase,
     StaticRetryPolicyResolver,
     VendorBillExecutionStrategy,
@@ -20,6 +21,7 @@ from app.application.execution import (
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
+from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
 from app.erp.odoo.workbench_projection_publisher import (
     OdooWorkbenchJson2ProjectionAdapter,
     OdooWorkbenchProjectionFieldMapping,
@@ -68,6 +70,13 @@ def build_vendor_bill_execution_use_case(
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,
     )
+    purchase_order_vendor_bill_repository = PurchaseOrderVendorBillRepository(
+        client=odoo_client or OdooJson2Client.from_settings(settings),
+    )
+    purchase_order_strategy = ExistingPurchaseOrderExecutionStrategy(
+        source_invoice_reader=source_invoice_reader,
+        purchase_order_vendor_bill_repository=purchase_order_vendor_bill_repository,
+    )
     customer_recharge_strategy = CustomerRechargeExecutionRouter(
         (
             CustomerRechargeExecutionStrategy(),
@@ -88,7 +97,9 @@ def build_vendor_bill_execution_use_case(
         runtime_coordinator=ExecutionRuntimeCoordinator(
             runtime_repository=runtime_repository,
             event_repository=runtime_repository,
-            strategy_resolver=ExecutionStrategyResolver((strategy, customer_recharge_strategy)),
+            strategy_resolver=ExecutionStrategyResolver(
+                (strategy, purchase_order_strategy, customer_recharge_strategy)
+            ),
         ),
         runtime_repository=runtime_repository,
         retry_policy_resolver=StaticRetryPolicyResolver(ExecutionRetryPolicy.immediate(max_attempts=2)),
@@ -96,6 +107,7 @@ def build_vendor_bill_execution_use_case(
             production_execution_enabled=settings.execution_execute_enabled,
             real_write_gates={
                 strategy.supported_step_types[0]: vendor_bill_policy,
+                purchase_order_strategy.supported_step_types[0]: vendor_bill_policy,
                 customer_recharge_strategy.supported_step_types[0]: customer_invoice_policy,
             },
         ),
