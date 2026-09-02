@@ -180,9 +180,16 @@ class OdooJson2Client:
                 raise ConnectorAuthenticationError("Odoo authentication failed.") from exc
             if status_code == 403:
                 raise ConnectorAuthorizationError("Odoo authorization failed.") from exc
+            detail = _safe_http_error_detail(exc.response)
             if status_code in {400, 422}:
-                raise ConnectorValidationError("Odoo rejected the request payload.") from exc
-            raise ConnectorError(f"Odoo returned HTTP {status_code}.") from exc
+                message = "Odoo rejected the request payload."
+                if detail:
+                    message += f" {detail}"
+                raise ConnectorValidationError(message) from exc
+            message = f"Odoo returned HTTP {status_code}."
+            if detail:
+                message += f" {detail}"
+            raise ConnectorError(message) from exc
         except httpx.HTTPError as exc:
             raise ConnectorError("Odoo request failed.") from exc
 
@@ -195,3 +202,44 @@ def _is_read_only_model_allowed(model: str) -> bool:
 
 def _is_studio_model_allowed(model: str) -> bool:
     return model.startswith(("x_", "x_studio_"))
+
+
+MAX_SAFE_HTTP_ERROR_DETAIL_LENGTH = 300
+UNSAFE_HTTP_ERROR_MARKERS = (
+    "api_key",
+    "api key",
+    "authorization",
+    "bearer",
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "cookie",
+)
+
+
+def _safe_http_error_detail(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    candidates: list[Any] = [body.get("message")]
+    error = body.get("error")
+    if isinstance(error, dict):
+        candidates.append(error.get("message"))
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        detail = " ".join(candidate.split())
+        lowered_detail = detail.lower()
+        if (
+            not detail
+            or "traceback" in lowered_detail
+            or "debug" in lowered_detail
+            or any(marker in lowered_detail for marker in UNSAFE_HTTP_ERROR_MARKERS)
+        ):
+            continue
+        return detail[:MAX_SAFE_HTTP_ERROR_DETAIL_LENGTH]
+    return None
