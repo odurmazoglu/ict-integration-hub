@@ -165,6 +165,7 @@ class FakeStorage:
 def _configure_projection_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {
         "PARENT_MODEL": "x_ipp_import_review",
+        "NAME_FIELD": "x_name",
         "REVIEW_ID_FIELD": "x_review_id",
         "COMPANY_ID_FIELD": "x_company_id",
         "INVOICE_NUMBER_FIELD": "x_invoice_number",

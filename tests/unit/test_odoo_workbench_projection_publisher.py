@@ -165,6 +165,7 @@ class AsyncFakeOdooClient:
 def _mapping() -> OdooWorkbenchProjectionFieldMapping:
     return OdooWorkbenchProjectionFieldMapping(
         model="x_ipp_import_workbench",
+        name="x_name",
         review_id="x_studio_review_id",
         company_id="x_studio_company",
         invoice_number="x_studio_invoice_number",
@@ -199,6 +200,7 @@ def _mapping_without_execution_fields() -> OdooWorkbenchProjectionFieldMapping:
     mapping = _mapping()
     return OdooWorkbenchProjectionFieldMapping(
         model=mapping.model,
+        name=mapping.name,
         review_id=mapping.review_id,
         company_id=mapping.company_id,
         invoice_number=mapping.invoice_number,
@@ -339,6 +341,7 @@ def test_create_when_no_odoo_row_exists_and_uses_exact_company_lookup() -> None:
         "offset": 0,
     }
     assert adapter.create_values["x_studio_review_id"] == "review-1"
+    assert adapter.create_values["x_name"] == "review-1"
     assert adapter.create_values["x_studio_company"] == 7
 
 
@@ -352,6 +355,7 @@ def test_update_when_exactly_one_row_exists_updates_only_hub_owned_fields() -> N
 
     assert adapter.write_record_id == 42
     assert adapter.write_values["x_studio_invoice_number"] == "INV-1"
+    assert adapter.write_values["x_name"] == "review-1"
     assert adapter.write_values["x_studio_invoice_total"] == 259.2
     assert adapter.write_values["x_studio_review_status"] == "Pending Review"
     assert adapter.write_values["x_studio_workflow"] == "Manual Review"
