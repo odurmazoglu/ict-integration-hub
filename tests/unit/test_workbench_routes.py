@@ -13,6 +13,7 @@ from app.api.dependencies import (
     get_review_item_use_case,
     get_submit_review_decision_use_case,
     get_workbench_decision_ingestion_workflow,
+    get_workbench_quotation_scenario_evidence_workflow,
     get_workbench_vendor_bill_execution_workflow,
 )
 from app.api.security import (
@@ -30,6 +31,10 @@ from app.application.execution import (
     ExecutionState,
     WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
+)
+from app.application.quotation import (
+    WorkbenchQuotationScenarioEvidenceResult,
+    WorkbenchQuotationScenarioEvidenceStatus,
 )
 from app.application.workbench import (
     ReviewDecisionAcknowledgement,
@@ -565,6 +570,69 @@ async def test_explicit_workbench_vendor_bill_execution_trigger(api_client: Asyn
     ]
 
 
+async def test_explicit_workbench_quotation_scenario_evidence_trigger(api_client: AsyncClient) -> None:
+    workflow = FakeWorkbenchQuotationScenarioEvidenceWorkflow(
+        WorkbenchQuotationScenarioEvidenceResult(
+            review_id="review-from-path",
+            company_id=7,
+            decision_version=4,
+            status=WorkbenchQuotationScenarioEvidenceStatus.CAPTURED,
+            decision_id="decision-xyz",
+            persisted_scenario_ids=("scenario-a", "scenario-b"),
+        )
+    )
+
+    response = await _post_quotation_scenarios(
+        api_client,
+        "review-from-path",
+        context=_context(Permission.WORKBENCH_EXECUTE, company_id=7),
+        workflow=workflow,
+        json={"decision_version": 4},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["status"] == "captured"
+    assert body["data"]["persisted_scenario_ids"] == ["scenario-a", "scenario-b"]
+    assert body["data"]["decision_id"] == "decision-xyz"
+    assert workflow.calls == [
+        {
+            "review_id": "review-from-path",
+            "company_id": 7,
+            "decision_version": 4,
+            "trace_id": "trace-123",
+        }
+    ]
+
+
+async def test_workbench_quotation_scenarios_permission_required(api_client: AsyncClient) -> None:
+    workflow = FakeWorkbenchQuotationScenarioEvidenceWorkflow(AssertionError("capture must not run"))
+
+    response = await _post_quotation_scenarios(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_READ),
+        workflow=workflow,
+        json={"decision_version": 4},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["errors"][0]["code"] == "permission_denied"
+    assert workflow.calls == []
+
+
+async def test_workbench_quotation_scenarios_body_cannot_supply_scenario_ids(api_client: AsyncClient) -> None:
+    response = await _post_quotation_scenarios(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_EXECUTE),
+        json={"decision_version": 4, "selected_quotation_scenario_ids": ["scenario-a"]},
+    )
+
+    assert response.status_code == 400
+
+
 async def test_workbench_vendor_bill_execute_reuses_execution_approval(api_client: AsyncClient) -> None:
     workflow = FakeWorkbenchVendorBillExecutionWorkflow(
         WorkbenchVendorBillExecutionResult(
@@ -663,6 +731,7 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}",
         "/api/workbench/reviews/{review_id}/decision",
         "/api/workbench/reviews/{review_id}/execute",
+        "/api/workbench/reviews/{review_id}/quotation-scenarios",
     }
     decision_schema = response.json()["components"]["schemas"]["ReviewDecisionRequest"]
     schema_text = str(decision_schema)
@@ -792,6 +861,49 @@ class FakeWorkbenchVendorBillExecutionWorkflow:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+
+class FakeWorkbenchQuotationScenarioEvidenceWorkflow:
+    def __init__(self, result: WorkbenchQuotationScenarioEvidenceResult | Exception) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def capture(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+        trace_id: str | None = None,
+    ) -> WorkbenchQuotationScenarioEvidenceResult:
+        self.calls.append(
+            {
+                "review_id": review_id,
+                "company_id": company_id,
+                "decision_version": decision_version,
+                "trace_id": trace_id,
+            }
+        )
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+async def _post_quotation_scenarios(
+    api_client: AsyncClient,
+    review_id: str,
+    *,
+    context: RequestContext,
+    json: dict[str, Any],
+    workflow: FakeWorkbenchQuotationScenarioEvidenceWorkflow | None = None,
+):
+    app.dependency_overrides[get_request_context] = lambda: context
+    if workflow is not None:
+        app.dependency_overrides[get_workbench_quotation_scenario_evidence_workflow] = lambda: workflow
+    try:
+        return await api_client.post(f"/api/workbench/reviews/{review_id}/quotation-scenarios", json=json)
+    finally:
+        app.dependency_overrides.clear()
 
 
 async def _get(

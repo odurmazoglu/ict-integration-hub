@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.application.execution import ExecutionArtifactType, ExecutionMode, WorkbenchVendorBillExecutionStatus
+from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
@@ -165,6 +166,7 @@ class ReviewDecisionRequest(BaseModel):
     line_resolutions: list[LineResolutionRequest] = Field(default_factory=list)
     tax_resolutions: list[TaxResolutionRequest] = Field(default_factory=list)
     business_context_allocations: BusinessContextAllocationSetRequest | None = None
+    selected_quotation_scenario_ids: list[str] = Field(default_factory=list)
     comment: str | None = None
     idempotency_key: str
 
@@ -239,11 +241,30 @@ class WorkbenchVendorBillExecutionResponse(BaseModel):
     message: str | None = None
 
 
+class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision_version: int
+
+
+class WorkbenchQuotationScenarioEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    decision_version: int
+    status: WorkbenchQuotationScenarioEvidenceStatus
+    decision_id: str | None = None
+    persisted_scenario_ids: list[str]
+    message: str | None = None
+
+
 ReviewItemEnvelope = ApiEnvelope[ReviewItemResponse]
 ReviewQueueEnvelope = ApiEnvelope[ReviewQueueResponse]
 ReviewDecisionAcknowledgementEnvelope = ApiEnvelope[ReviewDecisionAcknowledgementResponse]
 WorkbenchDecisionIngestionEnvelope = ApiEnvelope[WorkbenchDecisionIngestionResponse]
 WorkbenchVendorBillExecutionEnvelope = ApiEnvelope[WorkbenchVendorBillExecutionResponse]
+WorkbenchQuotationScenarioEvidenceEnvelope = ApiEnvelope[WorkbenchQuotationScenarioEvidenceResponse]
 ErrorEnvelope = ApiEnvelope[Any]
 
 

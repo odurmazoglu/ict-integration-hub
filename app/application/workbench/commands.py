@@ -26,6 +26,7 @@ class ReviewDecisionCommand(Command):
     line_resolutions: tuple[LineResolution, ...] = field(default_factory=tuple)
     tax_resolutions: tuple[TaxResolution, ...] = field(default_factory=tuple)
     business_context_allocations: BusinessContextAllocationSet | None = None
+    selected_quotation_scenario_ids: tuple[str, ...] = field(default_factory=tuple)
     comment: str | None = None
 
     def __post_init__(self) -> None:
@@ -41,10 +42,13 @@ class ReviewDecisionCommand(Command):
 
         line_resolutions = tuple(self.line_resolutions)
         tax_resolutions = tuple(self.tax_resolutions)
+        selected_quotation_scenario_ids = tuple(self.selected_quotation_scenario_ids)
         object.__setattr__(self, "line_resolutions", line_resolutions)
         object.__setattr__(self, "tax_resolutions", tax_resolutions)
+        object.__setattr__(self, "selected_quotation_scenario_ids", selected_quotation_scenario_ids)
         _reject_duplicate_line_resolutions(line_resolutions)
         _reject_duplicate_tax_resolutions(tax_resolutions)
+        _validate_selected_quotation_scenario_ids(selected_quotation_scenario_ids)
         _validate_decision_combination(self)
 
 
@@ -54,6 +58,11 @@ def _validate_decision_combination(command: ReviewDecisionCommand) -> None:
             raise WorkbenchContractError("selected_workflow is required for SELECT_WORKFLOW.")
         if command.selected_workflow is WorkflowType.MANUAL_REVIEW:
             raise WorkbenchContractError("MANUAL_REVIEW cannot be selected as a resolution.")
+        if command.selected_workflow is WorkflowType.CUSTOMER_QUOTATION:
+            if not command.selected_quotation_scenario_ids:
+                raise WorkbenchContractError("selected_quotation_scenario_ids is required for CUSTOMER_QUOTATION.")
+        elif command.selected_quotation_scenario_ids:
+            raise WorkbenchContractError("selected_quotation_scenario_ids is only valid for CUSTOMER_QUOTATION.")
         return
 
     if command.decision is ReviewDecisionType.DISMISS:
@@ -63,11 +72,22 @@ def _validate_decision_combination(command: ReviewDecisionCommand) -> None:
             or command.line_resolutions
             or command.tax_resolutions
             or command.business_context_allocations is not None
+            or command.selected_quotation_scenario_ids
         ):
             raise WorkbenchContractError("DISMISS cannot include workflow-specific selections.")
         return
 
     raise WorkbenchContractError("Unsupported review decision.")
+
+
+def _validate_selected_quotation_scenario_ids(scenario_ids: tuple[str, ...]) -> None:
+    seen: set[str] = set()
+    for scenario_id in scenario_ids:
+        if not isinstance(scenario_id, str) or not scenario_id.strip():
+            raise WorkbenchContractError("selected_quotation_scenario_ids must be non-empty identifiers.")
+        if scenario_id in seen:
+            raise WorkbenchContractError("selected_quotation_scenario_ids must be unique.")
+        seen.add(scenario_id)
 
 
 def _reject_duplicate_line_resolutions(resolutions: tuple[LineResolution, ...]) -> None:

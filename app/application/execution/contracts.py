@@ -289,6 +289,7 @@ class AcceptedReviewDecision(ApplicationDTO):
     decision_id: str | None
     selected_workflow: WorkflowType | None
     business_context_allocations: BusinessContextAllocationSet | None = None
+    selected_quotation_scenario_ids: tuple[str, ...] = ()
     decision_type: ReviewDecisionType = ReviewDecisionType.SELECT_WORKFLOW
 
     def __post_init__(self) -> None:
@@ -303,6 +304,27 @@ class AcceptedReviewDecision(ApplicationDTO):
                 self.selected_workflow,
                 WorkflowType,
                 "selected_workflow must be a canonical WorkflowType.",
+            )
+        scenario_ids = tuple(self.selected_quotation_scenario_ids)
+        object.__setattr__(self, "selected_quotation_scenario_ids", scenario_ids)
+        seen: set[str] = set()
+        for scenario_id in scenario_ids:
+            if not isinstance(scenario_id, str) or not scenario_id.strip():
+                raise ExecutionPlanningError("selected_quotation_scenario_ids must be non-empty identifiers.")
+            if scenario_id in seen:
+                raise ExecutionPlanningError("selected_quotation_scenario_ids must be unique.")
+            seen.add(scenario_id)
+        is_customer_quotation = (
+            self.decision_type is ReviewDecisionType.SELECT_WORKFLOW
+            and self.selected_workflow is WorkflowType.CUSTOMER_QUOTATION
+        )
+        if scenario_ids and not is_customer_quotation:
+            raise ExecutionPlanningError(
+                "selected_quotation_scenario_ids is only valid for a CUSTOMER_QUOTATION workflow decision."
+            )
+        if is_customer_quotation and not scenario_ids:
+            raise ExecutionPlanningError(
+                "CUSTOMER_QUOTATION workflow decision requires selected_quotation_scenario_ids."
             )
 
 

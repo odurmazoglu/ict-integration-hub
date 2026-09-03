@@ -14,6 +14,7 @@ class WorkflowType(StrEnum):
     EXPENSE = "expense"
     ASSET = "asset"
     SUBSCRIPTION = "subscription"
+    CUSTOMER_QUOTATION = "customer_quotation"
     MANUAL_REVIEW = "manual_review"
 
 

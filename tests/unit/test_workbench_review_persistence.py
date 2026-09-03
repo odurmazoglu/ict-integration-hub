@@ -452,6 +452,106 @@ def test_repository_submits_select_workflow_decision_and_persists_explicit_conte
     assert record.submitted_at is not None
 
 
+def test_repository_persists_and_reconstructs_selected_quotation_scenario_ids(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", invoice_id="ETTN-1"), company_id=7, idempotency_key="rk-1")
+
+    repository.submit_review_decision(
+        _select_workflow_command(
+            selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+            selected_quotation_scenario_ids=("scenario-b", "scenario-a"),
+        )
+    )
+
+    record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert record is not None
+    assert record.selected_quotation_scenario_ids == ["scenario-b", "scenario-a"]
+
+    accepted = repository.get_accepted_decision(review_id="review-1", company_id=7, decision_version=2)
+    assert accepted.selected_workflow is WorkflowType.CUSTOMER_QUOTATION
+    assert accepted.selected_quotation_scenario_ids == ("scenario-b", "scenario-a")
+
+
+def test_repository_replays_identical_quotation_selection_idempotently(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", invoice_id="ETTN-1"), company_id=7, idempotency_key="rk-1")
+    command = _select_workflow_command(
+        selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+        selected_quotation_scenario_ids=("scenario-a", "scenario-b"),
+    )
+
+    first = repository.submit_review_decision(command)
+    second = repository.submit_review_decision(command)
+
+    assert second == first
+    assert session.query(WorkbenchReviewDecision).count() == 1
+
+
+def test_repository_rejects_changed_quotation_selection_under_same_idempotency_key(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", invoice_id="ETTN-1"), company_id=7, idempotency_key="rk-1")
+    repository.submit_review_decision(
+        _select_workflow_command(
+            selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+            selected_quotation_scenario_ids=("scenario-a", "scenario-b"),
+        )
+    )
+
+    with pytest.raises(ReviewDecisionIdempotencyConflictError):
+        repository.submit_review_decision(
+            _select_workflow_command(
+                selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+                selected_quotation_scenario_ids=("scenario-a", "scenario-c"),
+            )
+        )
+
+
+def test_repository_rejects_reordered_quotation_selection_under_same_idempotency_key(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", invoice_id="ETTN-1"), company_id=7, idempotency_key="rk-1")
+    repository.submit_review_decision(
+        _select_workflow_command(
+            selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+            selected_quotation_scenario_ids=("scenario-a", "scenario-b"),
+        )
+    )
+
+    with pytest.raises(ReviewDecisionIdempotencyConflictError):
+        repository.submit_review_decision(
+            _select_workflow_command(
+                selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+                selected_quotation_scenario_ids=("scenario-b", "scenario-a"),
+            )
+        )
+
+
+def test_repository_defaults_quotation_selection_to_empty_tuple(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", invoice_id="ETTN-1"), company_id=7, idempotency_key="rk-1")
+    repository.submit_review_decision(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
+
+    record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert record is not None
+    assert record.selected_quotation_scenario_ids is None
+
+    accepted = repository.get_accepted_decision(review_id="review-1", company_id=7, decision_version=2)
+    assert accepted.selected_quotation_scenario_ids == ()
+
+
+def test_repository_fails_closed_on_corrupted_workflow_selection_combination(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", invoice_id="ETTN-1"), company_id=7, idempotency_key="rk-1")
+    repository.submit_review_decision(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
+
+    record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert record is not None
+    record.selected_quotation_scenario_ids = ["scenario-a"]
+    session.flush()
+
+    with pytest.raises(ReviewDecisionDataIntegrityError):
+        repository.get_accepted_decision(review_id="review-1", company_id=7, decision_version=2)
+
+
 def test_repository_atomically_persists_vendor_bill_decision_with_execution_source_evidence(
     session: Session,
 ) -> None:
@@ -1376,6 +1476,7 @@ def _select_workflow_command(
     line_resolutions: tuple[LineResolution, ...] = (),
     tax_resolutions: tuple[TaxResolution, ...] = (),
     business_context_allocations: BusinessContextAllocationSet | None = None,
+    selected_quotation_scenario_ids: tuple[str, ...] = (),
     comment: str | None = None,
     decided_by: str = "finance.user",
     idempotency_key: str = "decision-key-1",
@@ -1390,6 +1491,7 @@ def _select_workflow_command(
         line_resolutions=line_resolutions,
         tax_resolutions=tax_resolutions,
         business_context_allocations=business_context_allocations,
+        selected_quotation_scenario_ids=selected_quotation_scenario_ids,
         comment=comment,
         decided_by=decided_by,
         idempotency_key=idempotency_key,

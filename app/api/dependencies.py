@@ -13,6 +13,7 @@ from app.api.security import (
     RequestMetadata,
 )
 from app.application.execution import RunAcceptedDecisionExecutionUseCase, WorkbenchVendorBillExecutionWorkflow
+from app.application.quotation import WorkbenchQuotationScenarioEvidenceWorkflow
 from app.application.workbench import (
     GetReviewItemUseCase,
     ListReviewQueueUseCase,
@@ -25,6 +26,7 @@ from app.composition import (
     build_odoo_workbench_decision_ingestion_workflow,
     build_uyumsoft_canonical_invoice_importer,
     build_vendor_bill_execution_use_case,
+    build_workbench_quotation_scenario_evidence_workflow,
     build_workbench_vendor_bill_execution_workflow,
 )
 from app.connectors.odoo.client import OdooJson2Client
@@ -234,4 +236,35 @@ class _LazyWorkbenchVendorBillExecutionWorkflow:
 WorkbenchVendorBillExecutionWorkflowDep = Annotated[
     WorkbenchVendorBillExecutionWorkflow,
     Depends(get_workbench_vendor_bill_execution_workflow),
+]
+
+
+def get_workbench_quotation_scenario_evidence_workflow(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> WorkbenchQuotationScenarioEvidenceWorkflow:
+    return _LazyWorkbenchQuotationScenarioEvidenceWorkflow(session=session, settings=settings)
+
+
+class _LazyWorkbenchQuotationScenarioEvidenceWorkflow:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._workflow: WorkbenchQuotationScenarioEvidenceWorkflow | None = None
+
+    def capture(self, **kwargs):
+        return self._get_workflow().capture(**kwargs)
+
+    def _get_workflow(self) -> WorkbenchQuotationScenarioEvidenceWorkflow:
+        if self._workflow is None:
+            self._workflow = build_workbench_quotation_scenario_evidence_workflow(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._workflow
+
+
+WorkbenchQuotationScenarioEvidenceWorkflowDep = Annotated[
+    WorkbenchQuotationScenarioEvidenceWorkflow,
+    Depends(get_workbench_quotation_scenario_evidence_workflow),
 ]
