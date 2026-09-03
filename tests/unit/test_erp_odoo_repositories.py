@@ -140,6 +140,27 @@ class PagingClient:
         return records[offset : offset + limit]
 
 
+class FieldMetadataClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def search_read(
+        self,
+        *,
+        model: str,
+        domain: list[Any],
+        fields: list[str],
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        del model, domain, fields, limit, offset
+        return []
+
+    async def read_model_field_metadata(self, *, model: str, field_name: str) -> list[dict[str, Any]]:
+        self.calls.append({"model": model, "field_name": field_name})
+        return [{"name": field_name, "ttype": "many2one", "relation": "product.product"}]
+
+
 def test_partner_lookup_returns_immutable_dtos() -> None:
     adapter = RecordingAdapter(
         {"res.partner": [{"id": 10, "name": "Supplier", "vat": "123", "active": True, "company_id": [7, "Main"]}]}
@@ -327,6 +348,16 @@ def test_adapter_paginates_search_read() -> None:
         {"id": 2, "name": "B"},
         {"id": 3, "name": "C"},
     )
+
+
+def test_adapter_reads_field_metadata_through_read_only_boundary() -> None:
+    client = FieldMetadataClient()
+    adapter = OdooReadOnlyAdapter(client=client, retry_backoff_seconds=0)
+
+    records = adapter.read_model_field_metadata(model="x_line", field_name="x_product_id")
+
+    assert records == ({"name": "x_product_id", "ttype": "many2one", "relation": "product.product"},)
+    assert client.calls == [{"model": "x_line", "field_name": "x_product_id"}]
 
 
 def test_adapter_retries_connector_errors() -> None:

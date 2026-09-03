@@ -83,10 +83,16 @@ class FakeAdapter:
     def __init__(
         self,
         *,
+        field_records: tuple[dict[str, Any], ...] | None = None,
         scenarios: tuple[dict[str, Any], ...] = (_scenario(),),
         parents: tuple[dict[str, Any], ...] = (_parent(),),
         lines: tuple[dict[str, Any], ...] | None = None,
     ) -> None:
+        self.field_records = (
+            ({"name": "x_studio_product_variant_id", "ttype": "many2one", "relation": "product.product"},)
+            if field_records is None
+            else field_records
+        )
         self.scenarios = scenarios
         self.parents = parents
         self.lines = lines or (
@@ -102,6 +108,17 @@ class FakeAdapter:
         if model == "x_ipp_proposal_scenario":
             return self.scenarios
         return self.parents
+
+    def read_model_field_metadata(self, *, model, field_name):
+        self.reads.append(
+            (
+                "ir.model.fields",
+                [["model", "=", model], ["name", "=", field_name]],
+                ["name", "ttype", "relation"],
+                2,
+            )
+        )
+        return self.field_records
 
     def search_read_all(self, *, model, domain, fields, **kwargs):
         del kwargs
@@ -135,15 +152,67 @@ def test_reader_reads_valid_source_and_orders_by_sequence_then_odoo_id() -> None
     adapter = FakeAdapter()
     source = _read(adapter)
 
-    assert adapter.reads[0][0] == "x_ipp_proposal_scenario"
-    assert adapter.reads[0][1] == [["x_studio_scenario_id", "=", "scenario-1"]]
+    assert adapter.reads[0][0] == "ir.model.fields"
+    assert adapter.reads[0][1] == [
+        ["model", "=", "x_ipp_proposal_scenario_line"],
+        ["name", "=", "x_studio_product_variant_id"],
+    ]
+    assert adapter.reads[0][2] == ["name", "ttype", "relation"]
     assert adapter.reads[0][3] == 2
-    assert adapter.reads[1][1] == [["id", "=", 7]]
-    assert adapter.reads[2][1] == [["x_studio_scenario_id", "=", 50]]
+    assert adapter.reads[1][0] == "x_ipp_proposal_scenario"
+    assert adapter.reads[1][1] == [["x_studio_scenario_id", "=", "scenario-1"]]
+    assert adapter.reads[1][3] == 2
+    assert adapter.reads[2][1] == [["id", "=", 7]]
+    assert adapter.reads[3][1] == [["x_studio_scenario_id", "=", 50]]
     assert [line.line_id for line in source.lines] == ["line-1", "line-2"]
     assert source.currency == "TRY"
     assert source.lines[0].product_variant_id == 101
     assert source.lines[0].sales_unit_price == Decimal("0")
+
+
+def test_reader_accepts_product_product_many2one_metadata() -> None:
+    source = _read(
+        FakeAdapter(
+            field_records=({"name": "x_studio_product_variant_id", "ttype": "many2one", "relation": "product.product"},)
+        )
+    )
+
+    assert source.lines[0].product_variant_id == 101
+
+
+def test_reader_validates_product_field_metadata_once_per_reader_instance() -> None:
+    adapter = FakeAdapter()
+    reader = OdooQuotationScenarioSourceReader(adapter=adapter, mapping=_mapping())
+
+    reader.get_scenario(scenario_id="scenario-1", company_id=1)
+    reader.get_scenario(scenario_id="scenario-1", company_id=1)
+
+    assert [read[0] for read in adapter.reads].count("ir.model.fields") == 1
+
+
+def test_reader_rejects_product_template_comodel_metadata() -> None:
+    with pytest.raises(WorkbenchCandidateDataError):
+        _read(
+            FakeAdapter(
+                field_records=(
+                    {"name": "x_studio_product_variant_id", "ttype": "many2one", "relation": "product.template"},
+                )
+            )
+        )
+
+
+def test_reader_rejects_wrong_product_relation_type_metadata() -> None:
+    with pytest.raises(WorkbenchCandidateDataError):
+        _read(
+            FakeAdapter(
+                field_records=({"name": "x_studio_product_variant_id", "ttype": "char", "relation": "product.product"},)
+            )
+        )
+
+
+def test_reader_rejects_missing_product_field_metadata() -> None:
+    with pytest.raises(WorkbenchCandidateDataError):
+        _read(FakeAdapter(field_records=()))
 
 
 def test_reader_rejects_scenario_not_found() -> None:

@@ -19,6 +19,7 @@ SAFE_QUOTATION_SOURCE_READ_ERROR = "Odoo quotation scenario source read failed."
 SAFE_QUOTATION_SOURCE_DATA_ERROR = "Odoo quotation scenario source data is invalid."
 SAFE_QUOTATION_SOURCE_NOT_FOUND = "Odoo quotation scenario was not found."
 SAFE_QUOTATION_SOURCE_AMBIGUITY = "Odoo quotation scenario lookup returned multiple records."
+PRODUCT_VARIANT_COMODEL = "product.product"
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,9 +103,11 @@ class OdooQuotationScenarioSourceReader:
     ) -> None:
         self._adapter = adapter
         self._mapping = mapping
+        self._product_variant_field_validated = False
 
     def get_scenario(self, *, scenario_id: str, company_id: int) -> QuotationScenarioSource:
         try:
+            self._ensure_product_variant_field_mapping()
             scenario = self._scenario(scenario_id)
             scenario_record_id = _required_id(scenario.get("id"))
             parent_id = _required_relation(scenario.get(self._mapping.scenario_parent_id))
@@ -132,6 +135,24 @@ class OdooQuotationScenarioSourceReader:
             raise WorkbenchCandidateDataError(SAFE_QUOTATION_SOURCE_DATA_ERROR) from exc
         except ErpRepositoryError as exc:
             raise WorkbenchCandidateReadError(SAFE_QUOTATION_SOURCE_READ_ERROR) from exc
+
+    def _ensure_product_variant_field_mapping(self) -> None:
+        if self._product_variant_field_validated:
+            return
+        records = self._adapter.read_model_field_metadata(
+            model=self._mapping.line_model,
+            field_name=self._mapping.line_product_variant_id,
+        )
+        if len(records) != 1:
+            raise WorkbenchCandidateDataError(SAFE_QUOTATION_SOURCE_DATA_ERROR)
+        field = records[0]
+        if (
+            field.get("name") != self._mapping.line_product_variant_id
+            or field.get("ttype") != "many2one"
+            or field.get("relation") != PRODUCT_VARIANT_COMODEL
+        ):
+            raise WorkbenchCandidateDataError(SAFE_QUOTATION_SOURCE_DATA_ERROR)
+        self._product_variant_field_validated = True
 
     def _scenario(self, scenario_id: str) -> dict[str, Any]:
         records = self._adapter.search_read(
