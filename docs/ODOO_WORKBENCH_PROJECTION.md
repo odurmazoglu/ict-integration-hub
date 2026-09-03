@@ -160,8 +160,8 @@ and fields have been confirmed:
 | Quantity | `ODOO_QUOTATION_SCENARIO_LINE_QUANTITY_FIELD` |
 | Sales unit price | `ODOO_QUOTATION_SCENARIO_LINE_SALES_UNIT_PRICE_FIELD` |
 | Parent RFQ model | `ODOO_QUOTATION_SCENARIO_PARENT_MODEL` |
-| Parent company | `ODO_QUOTATION_SCENARIO_PARENT_COMPANY_FIELD` |
-| Parent customer | `ODO_QUOTATION_SCENARIO_PARENT_CUSTOMER_FIELD` |
+| Parent company | `ODOO_QUOTATION_SCENARIO_PARENT_COMPANY_FIELD` |
+| Parent customer | `ODOO_QUOTATION_SCENARIO_PARENT_CUSTOMER_FIELD` |
 | Parent currency | `ODOO_QUOTATION_SCENARIO_PARENT_CURRENCY_FIELD` |
 | Optional UoM | `ODOO_QUOTATION_SCENARIO_LINE_UOM_FIELD` |
 | Optional cost unit price | `ODOO_QUOTATION_SCENARIO_LINE_COST_UNIT_PRICE_FIELD` |
@@ -170,9 +170,10 @@ and fields have been confirmed:
 | Optional opportunity | `ODOO_QUOTATION_SCENARIO_PARENT_OPPORTUNITY_FIELD` |
 
 The reader performs exact `search_read` calls only. It preserves explicit line
-sequence order with the Odoo record ID as a deterministic tie-breaker, requires
-a real `product.product` variant relation, normalizes a three-letter currency
-code, and rejects missing or ambiguous relational data. It returns immutable
+sequence order with the Odoo record ID as a deterministic tie-breaker, parses
+the configured product variant relation, normalizes a three-letter currency
+code, and rejects missing or ambiguous relational data. Capture validates every
+referenced ID against real active `product.product` variants before returning an immutable
 source DTOs to the application capture use case, which constructs the existing
 quotation scenario snapshot. Unselected scenarios are not executable.
 
