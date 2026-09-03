@@ -64,10 +64,10 @@ class QuotationScenarioSnapshot(ApplicationDTO):
         lines = tuple(self.lines)
         if not lines:
             raise WorkbenchContractError("quotation scenario requires at least one line.")
-        if len({line.line_id for line in lines}) != len(lines):
-            raise WorkbenchContractError("quotation scenario line_id values must be unique.")
         if any(not isinstance(line, QuotationScenarioLine) for line in lines):
             raise WorkbenchContractError("quotation scenario lines must be canonical.")
+        if len({line.line_id for line in lines}) != len(lines):
+            raise WorkbenchContractError("quotation scenario line_id values must be unique.")
         object.__setattr__(self, "lines", lines)
         object.__setattr__(self, "currency", self.currency.strip().upper())
 

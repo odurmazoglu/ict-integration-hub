@@ -71,6 +71,11 @@ def test_dtos_are_frozen() -> None:
         line.quantity = Decimal("3")  # type: ignore[misc]
 
 
+def test_noncanonical_line_fails_with_contract_error() -> None:
+    with pytest.raises(WorkbenchContractError):
+        _snapshot(lines=(object(),))
+
+
 @pytest.mark.parametrize(
     ("factory", "kwargs"),
     [
