@@ -165,6 +165,7 @@ class ReviewDecisionRequest(BaseModel):
     line_resolutions: list[LineResolutionRequest] = Field(default_factory=list)
     tax_resolutions: list[TaxResolutionRequest] = Field(default_factory=list)
     business_context_allocations: BusinessContextAllocationSetRequest | None = None
+    selected_quotation_scenario_ids: list[str] = Field(default_factory=list)
     comment: str | None = None
     idempotency_key: str
 

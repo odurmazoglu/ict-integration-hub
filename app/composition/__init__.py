@@ -10,8 +10,10 @@ from app.composition.imports import (
     build_odoo_workbench_projection_publisher,
     build_uyumsoft_canonical_invoice_importer,
 )
+from app.composition.quotation import build_capture_and_persist_accepted_quotation_scenarios_use_case
 
 __all__ = [
+    "build_capture_and_persist_accepted_quotation_scenarios_use_case",
     "build_import_invoice_use_case",
     "build_odoo_workbench_decision_ingestion_workflow",
     "build_odoo_workbench_projection_publisher",

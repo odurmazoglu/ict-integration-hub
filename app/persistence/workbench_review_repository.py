@@ -1470,6 +1470,7 @@ def _decision_model_from_command(
         tax_resolutions=[_serialize_tax_resolution(resolution) for resolution in command.tax_resolutions],
         business_context=None,
         business_context_allocations=_serialize_business_context_allocations(command.business_context_allocations),
+        selected_quotation_scenario_ids=list(command.selected_quotation_scenario_ids) or None,
         comment=command.comment,
         decided_by=command.decided_by,
         idempotency_key=command.idempotency_key,
@@ -1503,12 +1504,23 @@ def _accepted_review_decision_from_model(record: WorkbenchReviewDecision) -> Acc
             decision_id=record.decision_id,
             selected_workflow=WorkflowType(record.selected_workflow) if record.selected_workflow is not None else None,
             business_context_allocations=_deserialize_business_context_allocations(record.business_context_allocations),
+            selected_quotation_scenario_ids=_deserialize_selected_quotation_scenario_ids(
+                record.selected_quotation_scenario_ids
+            ),
             decision_type=ReviewDecisionType(record.decision_type),
         )
     except ReviewDecisionDataIntegrityError:
         raise
     except (TypeError, ValueError) as exc:
         raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.") from exc
+
+
+def _deserialize_selected_quotation_scenario_ids(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    return tuple(value)
 
 
 def _review_item_from_model(record: WorkbenchReviewItem) -> ReviewItem:
@@ -1927,6 +1939,7 @@ def _decision_fingerprint(command: ReviewDecisionCommand) -> tuple[Any, ...]:
         tuple(_line_resolution_fingerprint(resolution) for resolution in command.line_resolutions),
         tuple(_tax_resolution_fingerprint(resolution) for resolution in command.tax_resolutions),
         _business_context_allocations_fingerprint(command.business_context_allocations),
+        tuple(command.selected_quotation_scenario_ids),
         command.comment,
         command.decided_by,
     )
@@ -1948,6 +1961,9 @@ def _decision_fingerprint_from_model(record: WorkbenchReviewDecision) -> tuple[A
                 _deserialize_tax_resolution(resolution) for resolution in _require_list(record.tax_resolutions)
             ),
             business_context_allocations=_deserialize_business_context_allocations(record.business_context_allocations),
+            selected_quotation_scenario_ids=_deserialize_selected_quotation_scenario_ids(
+                record.selected_quotation_scenario_ids
+            ),
             comment=record.comment,
             decided_by=record.decided_by,
             idempotency_key=record.idempotency_key,

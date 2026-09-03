@@ -19,6 +19,8 @@ Supported decisions:
 
 `select_workflow` requires `selected_workflow` and may include `business_context_allocations`. `dismiss` rejects workflow-specific selections, including allocation evidence.
 
+`select_workflow` for `customer_quotation` additionally requires `selected_quotation_scenario_ids`: an ordered, unique, non-empty list of stable Odoo Proposal Scenario source identities frozen as approved-for-customer-presentation decision intent. It is rejected for any other workflow and for `dismiss`. It is part of the decision idempotency fingerprint (order-sensitive), so a replay with a changed or reordered selection conflicts; changing the approved selection requires a new decision version.
+
 Example:
 
 ```json
@@ -73,7 +75,7 @@ The source vendor invoice is already identified by the Workbench review item and
 
 Accepted decisions are append-only. New decisions write allocation evidence to `business_context_allocations` JSON. Legacy `business_context` is no longer accepted by the active API.
 
-Idempotency is scoped by `(company_id, idempotency_key)`. Allocation comparison uses canonical Decimal strings, canonical currency case, enum values as strings, and allocation rows sorted by `allocation_key`. List reordering alone is idempotent; changed amounts, percentages, allocation types, target ERP identifiers, customer invoice links, completeness, totals, currency, or allocation keys conflict.
+Idempotency is scoped by `(company_id, idempotency_key)`. Allocation comparison uses canonical Decimal strings, canonical currency case, enum values as strings, and allocation rows sorted by `allocation_key`. List reordering alone is idempotent; changed amounts, percentages, allocation types, target ERP identifiers, customer invoice links, completeness, totals, currency, or allocation keys conflict. `selected_quotation_scenario_ids` is compared as an ordered list, so any change or reordering conflicts.
 
 ## Non-Goals
 

@@ -57,6 +57,7 @@ def test_canonical_workflow_mapping_is_explicit() -> None:
         WorkflowType.EXPENSE: "Expense",
         WorkflowType.ASSET: "Asset",
         WorkflowType.SUBSCRIPTION: "Subscription",
+        WorkflowType.CUSTOMER_QUOTATION: "Customer Quotation",
         WorkflowType.MANUAL_REVIEW: "Manual Review",
     }
 

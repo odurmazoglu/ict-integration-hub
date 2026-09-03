@@ -23,6 +23,7 @@ def test_workflow_type_defines_canonical_platform_vocabulary() -> None:
         "expense",
         "asset",
         "subscription",
+        "customer_quotation",
         "manual_review",
     }
 

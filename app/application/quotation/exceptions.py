@@ -31,3 +31,9 @@ class QuotationEvidenceDataIntegrityError(QuotationEvidenceError):
     """Safe error raised when persisted quotation scenario evidence cannot hydrate."""
 
     error_category = "quotation_evidence_data_integrity_error"
+
+
+class QuotationScenarioOrchestrationError(QuotationEvidenceError):
+    """Safe error raised when accepted-decision quotation scenario capture is inconsistent."""
+
+    error_category = "quotation_scenario_orchestration_error"

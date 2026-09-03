@@ -216,6 +216,50 @@ no accepted-decision ingestion wiring. Connecting acceptance to this use case is
 a later change once the accepted-decision transaction boundary provides
 `QuotationScenarioSnapshot` objects.
 
+### Accepted quotation decision orchestration (Phase 2C)
+
+The accepted decision *freezes which scenarios were approved for customer
+presentation*. Selection is explicit decision intent, not mutable Odoo state: a
+`SELECT_WORKFLOW` decision for the new `WorkflowType.CUSTOMER_QUOTATION` workflow
+carries `selected_quotation_scenario_ids` — an ordered, unique, non-empty tuple
+of stable Odoo Proposal Scenario source identities. It is stored in the new
+nullable `workbench_review_decisions.selected_quotation_scenario_ids` JSON column
+and is part of the decision idempotency fingerprint, so replaying the same
+idempotency key with a changed or reordered selection fails closed
+(`ReviewDecisionIdempotencyConflictError`); changing the approved selection
+requires a new `decision_version`. The field is rejected for any other workflow
+and for `DISMISS`.
+
+`CaptureAndPersistAcceptedQuotationScenariosUseCase` then turns that frozen
+selection into immutable Hub evidence:
+
+1. For each selected scenario id, in declared order, it reads the current
+   commercial contents from Odoo **read-only** via the existing
+   `OdooQuotationScenarioSourceReader` / `CaptureQuotationScenarioUseCase`, into
+   memory.
+2. It verifies each captured `QuotationScenarioSnapshot` identity
+   (`company_id`, `review_id`, `decision_id`, `decision_version`, `scenario_id`)
+   matches the accepted decision.
+3. Only after **all** captures and identity checks succeed does it persist every
+   snapshot through `PersistQuotationScenarioEvidenceUseCase` in a **single Hub
+   database transaction** (one commit, rollback on any failure).
+
+Atomicity guarantee: Odoo network reads never happen inside the database
+transaction. A partial capture failure persists nothing, so downstream execution
+stays blocked until every expected evidence row exists. Replaying the same
+decision identity and selection with identical commercial contents is idempotent;
+the same identity with different commercial contents fails closed via the
+Phase 2B evidence-conflict semantics.
+
+Future quotation execution and retries consume this persisted Hub evidence; they
+must not re-read the mutable Odoo Proposal Scenario authoring records. Phase 2C
+still performs no `sale.order` write, no Odoo authoring write, no quotation
+execution strategy or resolver registration, and no Studio schema change. The
+orchestration is assembled at a composition root
+(`build_capture_and_persist_accepted_quotation_scenarios_use_case`) and is not
+invoked from `SubmitReviewDecisionUseCase`, which keeps decision submission free
+of any Odoo dependency.
+
 Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 
 ## Source Of Truth

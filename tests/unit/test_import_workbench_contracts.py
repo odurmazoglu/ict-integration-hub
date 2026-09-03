@@ -308,6 +308,7 @@ def _command(
     line_resolutions: tuple[LineResolution, ...] = (),
     tax_resolutions: tuple[TaxResolution, ...] = (),
     business_context_allocations: BusinessContextAllocationSet | None = None,
+    selected_quotation_scenario_ids: tuple[str, ...] = (),
     comment: str | None = None,
     decided_by: str = "user-1",
     idempotency_key: str = "review-1:v1:user-1",
@@ -322,10 +323,67 @@ def _command(
         line_resolutions=line_resolutions,
         tax_resolutions=tax_resolutions,
         business_context_allocations=business_context_allocations,
+        selected_quotation_scenario_ids=selected_quotation_scenario_ids,
         comment=comment,
         decided_by=decided_by,
         idempotency_key=idempotency_key,
     )
+
+
+def test_customer_quotation_requires_selected_scenario_ids() -> None:
+    with pytest.raises(WorkbenchContractError):
+        _command(
+            decision=ReviewDecisionType.SELECT_WORKFLOW,
+            selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+        )
+
+    command = _command(
+        decision=ReviewDecisionType.SELECT_WORKFLOW,
+        selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+        selected_quotation_scenario_ids=("scenario-a", "scenario-b"),
+    )
+    assert command.selected_quotation_scenario_ids == ("scenario-a", "scenario-b")
+
+
+def test_selected_scenario_ids_rejected_for_non_customer_quotation_workflow() -> None:
+    with pytest.raises(WorkbenchContractError):
+        _command(
+            decision=ReviewDecisionType.SELECT_WORKFLOW,
+            selected_workflow=WorkflowType.RFQ,
+            selected_quotation_scenario_ids=("scenario-a",),
+        )
+
+
+def test_dismiss_rejects_selected_scenario_ids() -> None:
+    with pytest.raises(WorkbenchContractError):
+        _command(
+            decision=ReviewDecisionType.DISMISS,
+            selected_quotation_scenario_ids=("scenario-a",),
+        )
+
+
+def test_selected_scenario_ids_must_be_unique_and_non_empty() -> None:
+    with pytest.raises(WorkbenchContractError):
+        _command(
+            decision=ReviewDecisionType.SELECT_WORKFLOW,
+            selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+            selected_quotation_scenario_ids=("scenario-a", "scenario-a"),
+        )
+    with pytest.raises(WorkbenchContractError):
+        _command(
+            decision=ReviewDecisionType.SELECT_WORKFLOW,
+            selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+            selected_quotation_scenario_ids=("scenario-a", "  "),
+        )
+
+
+def test_selected_scenario_ids_preserve_declared_order() -> None:
+    command = _command(
+        decision=ReviewDecisionType.SELECT_WORKFLOW,
+        selected_workflow=WorkflowType.CUSTOMER_QUOTATION,
+        selected_quotation_scenario_ids=("scenario-c", "scenario-a", "scenario-b"),
+    )
+    assert command.selected_quotation_scenario_ids == ("scenario-c", "scenario-a", "scenario-b")
 
 
 def _allocation_set() -> BusinessContextAllocationSet:

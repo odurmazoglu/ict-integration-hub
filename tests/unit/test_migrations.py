@@ -414,6 +414,16 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "uq_import_receipts_company_idempotency_key" in import_receipt_unique_constraints
     assert ImportReceipt.__table__.c.company_id.nullable is False
     assert ImportReceipt.__table__.c.idempotency_key.nullable is False
+    decision_columns_at_head = {column["name"] for column in inspector.get_columns("workbench_review_decisions")}
+    assert "selected_quotation_scenario_ids" in decision_columns_at_head
+    assert WorkbenchReviewDecision.__table__.c.selected_quotation_scenario_ids.nullable is True
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "selected_quotation_scenario_ids" not in {
+        column["name"] for column in inspector.get_columns("workbench_review_decisions")
+    }
+    assert "quotation_scenario_evidence" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -514,4 +524,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "execution_customer_billing_evidence" in inspector.get_table_names()
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
     assert "quotation_scenario_evidence" in inspector.get_table_names()
+    assert "selected_quotation_scenario_ids" in {
+        column["name"] for column in inspector.get_columns("workbench_review_decisions")
+    }
     get_settings.cache_clear()

@@ -50,6 +50,7 @@ ODOO_WORKFLOW_BY_CANONICAL: dict[WorkflowType, str] = {
     WorkflowType.EXPENSE: "Expense",
     WorkflowType.ASSET: "Asset",
     WorkflowType.SUBSCRIPTION: "Subscription",
+    WorkflowType.CUSTOMER_QUOTATION: "Customer Quotation",
     WorkflowType.MANUAL_REVIEW: "Manual Review",
 }
 

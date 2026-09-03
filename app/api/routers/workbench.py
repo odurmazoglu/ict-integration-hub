@@ -269,6 +269,7 @@ def _decision_command(
         line_resolutions=tuple(_line_resolution(value) for value in request.line_resolutions),
         tax_resolutions=tuple(_tax_resolution(value) for value in request.tax_resolutions),
         business_context_allocations=_business_context_allocations(request.business_context_allocations),
+        selected_quotation_scenario_ids=tuple(request.selected_quotation_scenario_ids),
         comment=request.comment,
     )
 
