@@ -37,6 +37,9 @@ class _SearchReadClient(Protocol):
     ) -> list[JsonRecord]:
         pass
 
+    async def read_model_field_metadata(self, *, model: str, field_name: str) -> list[JsonRecord]:
+        pass
+
 
 class OdooReadOnlyAdapter:
     def __init__(
@@ -104,6 +107,17 @@ class OdooReadOnlyAdapter:
             offset += limit
         return tuple(records)
 
+    def read_model_field_metadata(self, *, model: str, field_name: str) -> tuple[JsonRecord, ...]:
+        self._ensure_readonly(method=READONLY_METHOD)
+        return tuple(
+            _run_sync(
+                self._read_model_field_metadata_async(
+                    model=model,
+                    field_name=field_name,
+                )
+            )
+        )
+
     async def _search_read_async(
         self,
         *,
@@ -123,6 +137,23 @@ class OdooReadOnlyAdapter:
                     limit=limit,
                     offset=offset,
                 )
+            except ConnectorTimeoutError as exc:
+                last_error = exc
+                if attempt + 1 >= self._retry_attempts:
+                    raise ErpRepositoryTimeoutError(exc.safe_message) from exc
+            except ConnectorError as exc:
+                last_error = exc
+                if attempt + 1 >= self._retry_attempts:
+                    raise ErpRepositoryError(exc.safe_message) from exc
+            if self._retry_backoff_seconds:
+                await asyncio.sleep(self._retry_backoff_seconds)
+        raise ErpRepositoryError(last_error.safe_message if last_error else "ERP repository request failed.")
+
+    async def _read_model_field_metadata_async(self, *, model: str, field_name: str) -> list[JsonRecord]:
+        last_error: ConnectorError | None = None
+        for attempt in range(self._retry_attempts):
+            try:
+                return await self._client.read_model_field_metadata(model=model, field_name=field_name)
             except ConnectorTimeoutError as exc:
                 last_error = exc
                 if attempt + 1 >= self._retry_attempts:

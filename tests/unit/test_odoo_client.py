@@ -210,6 +210,49 @@ async def test_search_read_allows_account_move_for_duplicate_detection() -> None
     assert await client.search_read(model="account.move", domain=[], fields=["id"]) == []
 
 
+async def test_read_model_field_metadata_uses_constrained_read_only_endpoint() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/ir.model.fields/search_read"
+        assert "create" not in request.url.path
+        assert "write" not in request.url.path
+        payload = json.loads(request.content)
+        assert payload == {
+            "domain": [["model", "=", "x_line"], ["name", "=", "x_product_id"]],
+            "fields": ["name", "ttype", "relation"],
+            "limit": 2,
+            "offset": 0,
+        }
+        return httpx.Response(
+            200,
+            json=[{"name": "x_product_id", "ttype": "many2one", "relation": "product.product"}],
+        )
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    assert await client.read_model_field_metadata(model="x_line", field_name="x_product_id") == [
+        {"name": "x_product_id", "ttype": "many2one", "relation": "product.product"}
+    ]
+
+
+async def test_generic_search_read_rejects_ir_model_fields_metadata_model() -> None:
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[]))),
+    )
+
+    with pytest.raises(ConnectorError):
+        await client.search_read(model="ir.model.fields", domain=[], fields=["id"])
+
+
 async def test_search_read_rejects_non_allowlisted_model() -> None:
     client = OdooJson2Client(
         base_url="https://example.odoo.com",

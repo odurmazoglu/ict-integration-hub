@@ -159,6 +159,29 @@ class OdooJson2Client:
             records.append(item)
         return records
 
+    async def read_model_field_metadata(self, *, model: str, field_name: str) -> list[dict[str, Any]]:
+        if not _is_read_only_model_allowed(model):
+            raise ConnectorError("Odoo metadata target model is not allowed.")
+        if not isinstance(field_name, str) or not field_name.strip():
+            raise ConnectorError("Odoo metadata field name is required.")
+        result = await self._post_json(
+            "/json/2/ir.model.fields/search_read",
+            {
+                "domain": [["model", "=", model], ["name", "=", field_name]],
+                "fields": ["name", "ttype", "relation"],
+                "limit": 2,
+                "offset": 0,
+            },
+        )
+        if not isinstance(result, list):
+            raise ConnectorError("Odoo field metadata search_read returned an unexpected response.")
+        records: list[dict[str, Any]] = []
+        for item in result:
+            if not isinstance(item, dict):
+                raise ConnectorError("Odoo field metadata search_read returned an unexpected record.")
+            records.append(item)
+        return records
+
     async def _post_json(self, path: str, payload: dict[str, Any]) -> JsonValue:
         try:
             headers = {

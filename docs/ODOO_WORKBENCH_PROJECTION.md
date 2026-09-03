@@ -138,6 +138,49 @@ deterministic and separate from business fields.
 
 Unused or intentionally redundant PR #102 execution mappings remain intentionally absent from the contract: `execution_id`, `execution_mode`, `execution_runtime_state`, and `vendor_bill_created`. They are runtime-support and audit details, not required for Workbench UX, and they would duplicate information already represented by `Execution Status`, `Vendor Bill`, and the trace / sync fields.
 
+### Customer quotation scenario capture (Phase 2)
+
+The read-only capture boundary uses an explicit deployment mapping because this
+repository does not define canonical Proposal Scenario Studio technical names.
+The mapping is configuration, not an application-owned schema. Configure the
+following environment variables only after the corresponding Odoo Studio models
+and fields have been confirmed:
+
+| Source | Environment variable |
+| --- | --- |
+| Proposal Scenario model | `ODOO_QUOTATION_SCENARIO_SCENARIO_MODEL` |
+| Scenario identity | `ODOO_QUOTATION_SCENARIO_SCENARIO_ID_FIELD` |
+| Scenario name | `ODOO_QUOTATION_SCENARIO_SCENARIO_NAME_FIELD` |
+| Selected/customer-presentable flag | `ODOO_QUOTATION_SCENARIO_SCENARIO_SELECTED_FIELD` |
+| Scenario → parent RFQ relation | `ODOO_QUOTATION_SCENARIO_SCENARIO_PARENT_FIELD` |
+| Scenario line model | `ODOO_QUOTATION_SCENARIO_LINE_MODEL` |
+| Scenario line → scenario relation | `ODOO_QUOTATION_SCENARIO_LINE_PARENT_FIELD` |
+| Scenario line identity | `ODOO_QUOTATION_SCENARIO_LINE_ID_FIELD` |
+| Product variant relation | `ODOO_QUOTATION_SCENARIO_LINE_PRODUCT_VARIANT_FIELD` |
+| Quantity | `ODOO_QUOTATION_SCENARIO_LINE_QUANTITY_FIELD` |
+| Sales unit price | `ODOO_QUOTATION_SCENARIO_LINE_SALES_UNIT_PRICE_FIELD` |
+| Parent RFQ model | `ODOO_QUOTATION_SCENARIO_PARENT_MODEL` |
+| Parent company | `ODOO_QUOTATION_SCENARIO_PARENT_COMPANY_FIELD` |
+| Parent customer | `ODOO_QUOTATION_SCENARIO_PARENT_CUSTOMER_FIELD` |
+| Parent currency | `ODOO_QUOTATION_SCENARIO_PARENT_CURRENCY_FIELD` |
+| Optional UoM | `ODOO_QUOTATION_SCENARIO_LINE_UOM_FIELD` |
+| Optional cost unit price | `ODOO_QUOTATION_SCENARIO_LINE_COST_UNIT_PRICE_FIELD` |
+| Optional description | `ODOO_QUOTATION_SCENARIO_LINE_DESCRIPTION_FIELD` |
+| Optional line sequence | `ODOO_QUOTATION_SCENARIO_LINE_SEQUENCE_FIELD` |
+| Optional opportunity | `ODOO_QUOTATION_SCENARIO_PARENT_OPPORTUNITY_FIELD` |
+
+The reader performs exact `search_read` calls only. It preserves explicit line
+sequence order with the Odoo record ID as a deterministic tie-breaker, parses
+the configured product variant relation, normalizes a three-letter currency
+code, and rejects missing or ambiguous relational data. Capture validates every
+referenced ID against real active `product.product` variants before returning an immutable
+source DTOs to the application capture use case, which constructs the existing
+quotation scenario snapshot. Unselected scenarios are not executable.
+
+This phase has no `sale.order` write, persistence, execution registration,
+migration, Studio schema creation, or Studio schema mutation. Hub never creates
+or mutates Odoo Studio schema.
+
 Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 
 ## Source Of Truth
