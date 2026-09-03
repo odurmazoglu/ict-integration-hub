@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.models.import_receipt import ImportReceipt
+from app.models.quotation_scenario_evidence import QuotationScenarioEvidence
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
 from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
@@ -66,6 +67,29 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "execution_customer_billing_evidence" in inspector.get_table_names()
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
     assert "import_receipts" in inspector.get_table_names()
+    assert "quotation_scenario_evidence" in inspector.get_table_names()
+    quotation_evidence_columns = {column["name"] for column in inspector.get_columns("quotation_scenario_evidence")}
+    assert {
+        "id",
+        "company_id",
+        "review_id",
+        "decision_id",
+        "decision_version",
+        "scenario_id",
+        "schema_version",
+        "scenario_snapshot",
+        "created_at",
+    }.issubset(quotation_evidence_columns)
+    quotation_evidence_indexes = {index["name"] for index in inspector.get_indexes("quotation_scenario_evidence")}
+    assert {
+        "ix_quotation_scenario_evidence_company_review_decision",
+        "ix_quotation_scenario_evidence_scenario_id",
+    }.issubset(quotation_evidence_indexes)
+    quotation_evidence_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("quotation_scenario_evidence")
+    }
+    assert "uq_quotation_scenario_evidence_semantic_identity" in quotation_evidence_unique_constraints
+    assert QuotationScenarioEvidence.__table__.c.scenario_snapshot.nullable is False
     columns = {column["name"] for column in inspector.get_columns("uyumsoft_invoice_metadata")}
     assert {
         "provider",
@@ -393,6 +417,11 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
+    assert "quotation_scenario_evidence" not in inspector.get_table_names()
+    assert "import_receipts" in inspector.get_table_names()
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
     assert "import_receipts" not in inspector.get_table_names()
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
 
@@ -484,4 +513,5 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workbench_review_billing_evidence" in inspector.get_table_names()
     assert "execution_customer_billing_evidence" in inspector.get_table_names()
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
+    assert "quotation_scenario_evidence" in inspector.get_table_names()
     get_settings.cache_clear()
