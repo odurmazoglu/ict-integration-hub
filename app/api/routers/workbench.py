@@ -14,6 +14,7 @@ from app.api.dependencies import (
     RequestContextDep,
     SubmitReviewDecisionUseCaseDep,
     WorkbenchDecisionIngestionWorkflowDep,
+    WorkbenchQuotationScenarioEvidenceWorkflowDep,
     WorkbenchVendorBillExecutionWorkflowDep,
 )
 from app.api.error_handling import error_response_factory
@@ -24,6 +25,7 @@ from app.application.execution import (
     ExecutionPlanningError,
     WorkbenchVendorBillExecutionResult,
 )
+from app.application.quotation import WorkbenchQuotationScenarioEvidenceResult
 from app.application.workbench import (
     BusinessContextAllocation,
     BusinessContextAllocationSet,
@@ -70,6 +72,9 @@ from app.schemas.workbench import (
     WorkbenchDecisionIngestionCandidateResponse,
     WorkbenchDecisionIngestionEnvelope,
     WorkbenchDecisionIngestionResponse,
+    WorkbenchQuotationScenarioEvidenceEnvelope,
+    WorkbenchQuotationScenarioEvidenceRequest,
+    WorkbenchQuotationScenarioEvidenceResponse,
     WorkbenchVendorBillExecutionEnvelope,
     WorkbenchVendorBillExecutionRequest,
     WorkbenchVendorBillExecutionResponse,
@@ -214,6 +219,42 @@ def execute_workbench_vendor_bill(
             trace_id=context.trace_id,
         )
         return _success(response, context.trace_id, _vendor_bill_execution_response(result), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/reviews/{review_id}/quotation-scenarios",
+    response_model=WorkbenchQuotationScenarioEvidenceEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Capture accepted customer quotation scenario evidence",
+    description=(
+        "Requires workbench_execute. Post-acceptance step for an already persisted CUSTOMER_QUOTATION decision: "
+        "reads the durable accepted decision, captures each frozen selected scenario from Odoo read-only, and "
+        "persists immutable Hub quotation scenario evidence. Idempotent on retry; performs no sale.order write."
+    ),
+)
+def capture_workbench_quotation_scenarios(
+    review_id: str,
+    request_body: WorkbenchQuotationScenarioEvidenceRequest,
+    response: Response,
+    context: RequestContextDep,
+    workflow: WorkbenchQuotationScenarioEvidenceWorkflowDep,
+) -> WorkbenchQuotationScenarioEvidenceEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        result = workflow.capture(
+            review_id=review_id,
+            company_id=context.company_id,
+            decision_version=request_body.decision_version,
+            trace_id=context.trace_id,
+        )
+        return _success(
+            response,
+            context.trace_id,
+            _quotation_scenario_evidence_response(result),
+            warnings=[],
+        )
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -419,6 +460,20 @@ def _vendor_bill_execution_response(
         execution_id=result.execution_id,
         runtime_state=result.runtime_state.value if result.runtime_state is not None else None,
         artifacts=[_artifact_response(artifact) for artifact in result.artifacts],
+        message=result.message,
+    )
+
+
+def _quotation_scenario_evidence_response(
+    result: WorkbenchQuotationScenarioEvidenceResult,
+) -> WorkbenchQuotationScenarioEvidenceResponse:
+    return WorkbenchQuotationScenarioEvidenceResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        decision_version=result.decision_version,
+        status=result.status,
+        decision_id=result.decision_id,
+        persisted_scenario_ids=list(result.persisted_scenario_ids),
         message=result.message,
     )
 

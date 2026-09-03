@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 
 from app.application.exceptions import ApplicationError
 from app.application.execution.contracts import AcceptedReviewDecision, ExecutionSourceInvoice
-from app.application.execution.exceptions import ExecutionSourceInvoiceError, ExecutionSourceInvoiceIntegrityError
+from app.application.execution.exceptions import (
+    ExecutionPlanningError,
+    ExecutionSourceInvoiceError,
+    ExecutionSourceInvoiceIntegrityError,
+)
 from app.application.workbench.allocations import (
     AllocationCompleteness,
     BusinessContextAllocation,
@@ -1511,7 +1515,7 @@ def _accepted_review_decision_from_model(record: WorkbenchReviewDecision) -> Acc
         )
     except ReviewDecisionDataIntegrityError:
         raise
-    except (TypeError, ValueError) as exc:
+    except (ExecutionPlanningError, TypeError, ValueError) as exc:
         raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.") from exc
 
 

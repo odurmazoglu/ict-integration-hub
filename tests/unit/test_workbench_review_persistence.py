@@ -538,6 +538,20 @@ def test_repository_defaults_quotation_selection_to_empty_tuple(session: Session
     assert accepted.selected_quotation_scenario_ids == ()
 
 
+def test_repository_fails_closed_on_corrupted_workflow_selection_combination(session: Session) -> None:
+    repository = SqlAlchemyReviewRepository(session)
+    repository.create_review_item(_review_item("review-1", invoice_id="ETTN-1"), company_id=7, idempotency_key="rk-1")
+    repository.submit_review_decision(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
+
+    record = session.scalar(select(WorkbenchReviewDecision).where(WorkbenchReviewDecision.review_id == "review-1"))
+    assert record is not None
+    record.selected_quotation_scenario_ids = ["scenario-a"]
+    session.flush()
+
+    with pytest.raises(ReviewDecisionDataIntegrityError):
+        repository.get_accepted_decision(review_id="review-1", company_id=7, decision_version=2)
+
+
 def test_repository_atomically_persists_vendor_bill_decision_with_execution_source_evidence(
     session: Session,
 ) -> None:

@@ -23,6 +23,11 @@ from app.application.quotation.orchestration import (
     CaptureAndPersistAcceptedQuotationScenariosCommand,
     CaptureAndPersistAcceptedQuotationScenariosUseCase,
 )
+from app.application.quotation.workbench_workflow import (
+    WorkbenchQuotationScenarioEvidenceResult,
+    WorkbenchQuotationScenarioEvidenceStatus,
+    WorkbenchQuotationScenarioEvidenceWorkflow,
+)
 
 __all__ = [
     "QUOTATION_SCENARIO_EVIDENCE_SCHEMA_VERSION",
@@ -42,5 +47,8 @@ __all__ = [
     "QuotationScenarioLine",
     "QuotationScenarioOrchestrationError",
     "QuotationScenarioSnapshot",
+    "WorkbenchQuotationScenarioEvidenceResult",
+    "WorkbenchQuotationScenarioEvidenceStatus",
+    "WorkbenchQuotationScenarioEvidenceWorkflow",
     "quotation_scenario_execution_key",
 ]

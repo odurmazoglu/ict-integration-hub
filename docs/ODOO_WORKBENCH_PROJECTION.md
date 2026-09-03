@@ -254,11 +254,34 @@ Phase 2B evidence-conflict semantics.
 Future quotation execution and retries consume this persisted Hub evidence; they
 must not re-read the mutable Odoo Proposal Scenario authoring records. Phase 2C
 still performs no `sale.order` write, no Odoo authoring write, no quotation
-execution strategy or resolver registration, and no Studio schema change. The
-orchestration is assembled at a composition root
-(`build_capture_and_persist_accepted_quotation_scenarios_use_case`) and is not
-invoked from `SubmitReviewDecisionUseCase`, which keeps decision submission free
-of any Odoo dependency.
+execution strategy or resolver registration, and no Studio schema change.
+
+**Production runtime path.** The orchestration is not invoked from
+`SubmitReviewDecisionUseCase` — decision submission stays free of any Odoo
+dependency and its transaction boundary is unchanged. Instead a dedicated
+post-acceptance endpoint `POST /api/workbench/reviews/{review_id}/quotation-scenarios`
+(permission `workbench_execute`) drives `WorkbenchQuotationScenarioEvidenceWorkflow`,
+which mirrors the existing `WorkbenchVendorBillExecutionWorkflow` /
+`/reviews/{review_id}/execute` continuation pattern:
+
+1. Read the durable `AcceptedReviewDecision`
+   (`get_accepted_decision(review_id, company_id, decision_version)`). The
+   request body carries only `decision_version`; `company_id`, `review_id`,
+   `decision_id`, `decision_version`, `selected_workflow`, and
+   `selected_quotation_scenario_ids` all come from the persisted decision.
+2. Proceed only when `decision_type == SELECT_WORKFLOW` and
+   `selected_workflow == CUSTOMER_QUOTATION`; every other workflow returns
+   `not_applicable` and never touches Odoo.
+3. If immutable evidence already exists for every selected scenario, return
+   `already_captured` **without re-reading Odoo**. A partial-evidence state
+   fails closed (`capture_failed`) rather than re-reading Odoo.
+4. Otherwise run `CaptureAndPersistAcceptedQuotationScenariosUseCase`.
+
+Retries are safe: re-calling the endpoint re-reads the persisted decision and is
+idempotent (`already_captured`, or an evidence conflict surfaced as
+`evidence_conflict`). The accepted decision remains durable regardless of capture
+outcome. A future quotation execution step must require that this evidence exists
+before it may run; a non-`captured`/`already_captured` status is the block signal.
 
 Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 

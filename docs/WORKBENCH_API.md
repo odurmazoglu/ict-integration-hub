@@ -77,6 +77,10 @@ Accepted decisions are append-only. New decisions write allocation evidence to `
 
 Idempotency is scoped by `(company_id, idempotency_key)`. Allocation comparison uses canonical Decimal strings, canonical currency case, enum values as strings, and allocation rows sorted by `allocation_key`. List reordering alone is idempotent; changed amounts, percentages, allocation types, target ERP identifiers, customer invoice links, completeness, totals, currency, or allocation keys conflict. `selected_quotation_scenario_ids` is compared as an ordered list, so any change or reordering conflicts.
 
+## Customer Quotation Scenario Evidence
+
+`POST /reviews/{review_id}/quotation-scenarios` (requires `workbench_execute`) is the post-acceptance step that freezes an accepted `customer_quotation` decision as immutable Hub evidence. The request body carries only `decision_version`; `company_id`, `review_id`, `decision_id`, and `selected_quotation_scenario_ids` are taken from the durable accepted decision, never from the request. It reads each frozen scenario from Odoo read-only and persists immutable quotation scenario evidence in a single Hub transaction, then returns a `status`: `captured`, `already_captured` (evidence already existed — Odoo is not re-read), `not_applicable` (decision is not a `customer_quotation` selection), `not_found`, `evidence_conflict` (a same-identity scenario now has different commercial contents), or `capture_failed`. Retrying is safe and idempotent. The accepted decision stays durable regardless of outcome. This endpoint performs no `sale.order` write.
+
 ## Non-Goals
 
-This API does not execute workflows, create Vendor Bills, create customer invoices, perform recharge, synchronize Odoo Studio child lines, call AI, or post profitability.
+This API does not execute workflows, create Vendor Bills, create customer invoices, create sales quotations or `sale.order` records, perform recharge, synchronize Odoo Studio child lines, call AI, or post profitability.

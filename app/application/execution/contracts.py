@@ -314,6 +314,18 @@ class AcceptedReviewDecision(ApplicationDTO):
             if scenario_id in seen:
                 raise ExecutionPlanningError("selected_quotation_scenario_ids must be unique.")
             seen.add(scenario_id)
+        is_customer_quotation = (
+            self.decision_type is ReviewDecisionType.SELECT_WORKFLOW
+            and self.selected_workflow is WorkflowType.CUSTOMER_QUOTATION
+        )
+        if scenario_ids and not is_customer_quotation:
+            raise ExecutionPlanningError(
+                "selected_quotation_scenario_ids is only valid for a CUSTOMER_QUOTATION workflow decision."
+            )
+        if is_customer_quotation and not scenario_ids:
+            raise ExecutionPlanningError(
+                "CUSTOMER_QUOTATION workflow decision requires selected_quotation_scenario_ids."
+            )
 
 
 @dataclass(frozen=True, slots=True)
