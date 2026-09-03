@@ -43,7 +43,7 @@ def test_existing_postgresql_database_at_original_015_upgrades_to_head(
 
     _alembic(monkeypatch, database_url, "upgrade", "head")
 
-    assert _current_revision(database_url) == "202607170016"
+    assert _current_revision(database_url) == "202607170017"
     _assert_import_receipts_schema(database_url)
 
 
@@ -55,7 +55,7 @@ def test_fresh_postgresql_database_upgrades_directly_to_head(
 
     _alembic(monkeypatch, database_url, "upgrade", "head")
 
-    assert _current_revision(database_url) == "202607170016"
+    assert _current_revision(database_url) == "202607170017"
     _assert_import_receipts_schema(database_url)
     assert "workbench_review_classification_evidence" in inspect(create_engine(database_url)).get_table_names()
 
@@ -75,7 +75,7 @@ def test_postgresql_head_downgrades_to_015_and_reupgrades_without_duplicate_rece
 
     _alembic(monkeypatch, database_url, "upgrade", "head")
 
-    assert _current_revision(database_url) == "202607170016"
+    assert _current_revision(database_url) == "202607170017"
     _assert_import_receipts_schema(database_url)
 
 

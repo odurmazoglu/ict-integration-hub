@@ -181,6 +181,41 @@ This phase has no `sale.order` write, persistence, execution registration,
 migration, Studio schema creation, or Studio schema mutation. Hub never creates
 or mutates Odoo Studio schema.
 
+### Quotation scenario evidence persistence (Phase 2B)
+
+The Odoo Proposal Scenario is the authoring source only. The
+`QuotationScenarioSnapshot` captured at acceptance becomes immutable Hub-owned
+evidence in the `quotation_scenario_evidence` table
+(`PersistQuotationScenarioEvidenceUseCase` →
+`QuotationScenarioEvidenceRepository` →
+`SqlAlchemyQuotationScenarioEvidenceRepository`). Future quotation execution and
+retries read this persisted Hub evidence; they never re-read the mutable Odoo
+Proposal Scenario authoring records.
+
+Semantic evidence identity is `(company_id, review_id, decision_id,
+decision_version, scenario_id)` and is enforced by a database unique constraint.
+Timestamps, surrogate keys, scenario name, monetary values, and Odoo destination
+record IDs are never part of that identity. Each selected scenario of an accepted
+decision is persisted as its own independent evidence row; a different
+`scenario_id` or `decision_version` is distinct evidence.
+
+Persistence is immutable and append-only. The first write inserts the snapshot.
+An exact replay of an equivalent snapshot is idempotent and returns the stored
+evidence. A replay carrying the same semantic identity but a different commercial
+snapshot — scenario name, customer, opportunity, currency, or any line's order,
+identity, product variant, quantity, sales unit price, cost unit price,
+description, or UoM — fails closed as an explicit evidence conflict. Stored
+evidence is never updated in place. The canonical snapshot is stored as JSON with
+`Decimal` values serialized as canonical strings and line order preserved, so it
+reconstructs exactly; SQLAlchemy ORM objects never cross the persistence
+boundary.
+
+Phase 2B performs no `sale.order` write, no Odoo authoring re-read, no execution
+strategy or resolver registration, no Alembic-visible Studio schema change, and
+no accepted-decision ingestion wiring. Connecting acceptance to this use case is
+a later change once the accepted-decision transaction boundary provides
+`QuotationScenarioSnapshot` objects.
+
 Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 
 ## Source Of Truth
