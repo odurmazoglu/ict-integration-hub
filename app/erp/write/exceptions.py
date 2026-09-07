@@ -65,3 +65,43 @@ class CustomerInvoiceWriteDuplicateError(CustomerInvoiceWriteError):
 
 class CustomerInvoiceWriteUnexpectedErpError(CustomerInvoiceWriteError):
     error_category = "unexpected_erp_error"
+
+
+class CustomerQuotationWriteError(ApplicationError):
+    error_category = "customer_quotation_write_error"
+
+
+class CustomerQuotationWriteAuthenticationError(CustomerQuotationWriteError):
+    error_category = "authentication_failure"
+
+
+class CustomerQuotationWriteAuthorizationError(CustomerQuotationWriteError):
+    error_category = "authorization_failure"
+
+
+class CustomerQuotationWriteValidationError(CustomerQuotationWriteError):
+    error_category = "validation_failure"
+
+
+class CustomerQuotationWriteSafetyGateError(CustomerQuotationWriteValidationError):
+    error_category = "production_safety_gate_failure"
+
+
+class CustomerQuotationWriteConfigurationError(CustomerQuotationWriteValidationError):
+    error_category = "configuration_failure"
+
+
+class CustomerQuotationWritePricelistError(CustomerQuotationWriteValidationError):
+    error_category = "pricelist_resolution_failure"
+
+
+class CustomerQuotationWriteTransportError(CustomerQuotationWriteError):
+    error_category = "transport_failure"
+
+
+class CustomerQuotationWriteDuplicateError(CustomerQuotationWriteError):
+    error_category = "duplicate_detection_failure"
+
+
+class CustomerQuotationWriteUnexpectedErpError(CustomerQuotationWriteError):
+    error_category = "unexpected_erp_error"
