@@ -283,6 +283,78 @@ idempotent (`already_captured`, or an evidence conflict surfaced as
 outcome. A future quotation execution step must require that this evidence exists
 before it may run; a non-`captured`/`already_captured` status is the block signal.
 
+### Customer Sales Quotation Odoo writer (Phase 3A)
+
+"New RFQ" is the business-process name; the execution *output* is a customer
+**Sales Quotation** (`sale.order`), not a supplier RFQ. Each explicitly selected
+Proposal Scenario produces **one independent draft `sale.order`** — alternatives
+are never merged into one quotation. The legacy
+`BusinessContextAllocationType.NEW_RFQ_PURCHASE` /
+`ExecutionStepType.NEW_RFQ_PURCHASE` taxonomy is supplier-purchase and is not
+reused.
+
+Data flow: immutable `quotation_scenario_evidence`
+→ `QuotationScenarioSnapshot` → `CustomerQuotationDraft.from_snapshot(...)`
+→ `CustomerQuotationWriter` (port) → `OdooCustomerQuotationWriter`
+→ one draft `sale.order` + its lines. Execution input is the persisted immutable
+snapshot only; the writer never re-reads a Proposal Scenario, RFQ authoring line,
+mutable sales unit price, or mutable product selection. `cost_unit_price` stays
+in evidence and is never written to `sale.order.line`.
+
+**Idempotency — technical execution key.** The Hub identifies a scenario's
+quotation by a deterministic technical key,
+`quotation-scenario-execution:<sha256>`, a pure function of
+`(execution_type, company_id, review_id, decision_id, decision_version,
+scenario_id)` — no timestamps, runtime UUIDs, `sale.order` ids, prices, or
+labels (`customer_quotation_execution_key(...)`). The writer:
+
+1. `search_read` `sale.order` by `(<execution-key field> = key, company_id)`;
+2. 0 matches → create exactly one draft;
+3. 1 match → return it as idempotent success, **no create**, no commercial
+   update;
+4. >1 matches → fail closed (`CustomerQuotationWriteDuplicateError`).
+
+**Required Odoo precondition (manual Studio field).** The key is written to a
+pre-existing, manually created technical field on `sale.order` — recommended
+`x_studio_ict_hub_execution_key` (a stored, indexed Char) — named by
+`ODOO_CUSTOMER_QUOTATION_EXECUTION_KEY_FIELD`. Hub never creates Studio schema.
+When the variable is unset (or set to `client_order_ref`) the writer fails closed
+with `CustomerQuotationWriteConfigurationError` before any Odoo call. The
+customer-facing `client_order_ref` is never used as the technical key.
+
+**Currency / pricelist.** The snapshot carries a canonical 3-letter currency, not
+a pricelist. `OdooCustomerQuotationPricelistResolver` resolves the currency to a
+`res.currency` id, then resolves exactly one `product.pricelist` for
+`(currency_id, company_id | shared)`. Zero or more-than-one matches fail closed
+(`CustomerQuotationWritePricelistError`). It never creates a pricelist. The
+`sale.order` payload sets only `pricelist_id`; currency derives from it.
+
+**Opportunity / scenario name.** `opportunity_id` is written only when
+`ODOO_CUSTOMER_QUOTATION_OPPORTUNITY_FIELD` is configured and the snapshot
+carries one; otherwise the quotation is left unlinked (optional, never fails
+closed). `scenario_name` is written to a customer-visible reference field only
+when `ODOO_CUSTOMER_QUOTATION_SOURCE_REFERENCE_FIELD` is configured; by default
+it is not written to Odoo and lives only in Hub result metadata. The scenario
+name is never placed in the execution-key field.
+
+**One-call nested create.** The order and every line are created in a single
+`sale.order` `create` using Odoo one2many command tuples
+(`order_line = [(0, 0, {...}), ...]`), mirroring the established
+`to_odoo_account_move_payload` pattern. There is no multi-call partial-write
+window and no cleanup/compensation. Line order follows the immutable snapshot.
+`price_unit` and `product_uom_qty` are serialized as canonical decimal strings
+(`format(value, "f")`) — never floats — so the authoritative scenario price is
+preserved in the outbound payload. The quotation is left in its Odoo create
+default state; `action_confirm` is never called and forbidden tokens
+(`action_confirm`, `action_cancel`, `client_order_ref`, `unlink`) are rejected
+from the payload.
+
+**Not in Phase 3A.** No execution strategy / resolver / planner registration
+(the writer is standalone and independently testable; Phase 3B wires it), no
+`ExecutionStepType` addition, no quotation confirmation, no subscription /
+recurring-plan mapping, no tax recomputation, no cost write, no Studio schema
+mutation, no database migration.
+
 Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 
 ## Source Of Truth

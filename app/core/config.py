@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     live_connector_readonly: bool = False
     execution_execute_enabled: bool = False
     customer_invoice_execute_enabled: bool = False
+    customer_quotation_execute_enabled: bool = False
     production_operations_enabled: bool = False
     production_approval_ack: str = ""
     ipp_auth_mode: AuthenticationMode = "disabled"

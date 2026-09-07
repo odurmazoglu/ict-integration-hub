@@ -29,6 +29,56 @@ async def test_create_account_move_returns_created_id() -> None:
     assert await client.create_account_move({"move_type": "in_invoice"}) == 123
 
 
+def _client(handler) -> OdooJson2Client:
+    return OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+
+async def test_create_sale_order_returns_created_id() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/sale.order/create"
+        assert b"action_confirm" not in request.content
+        return httpx.Response(200, json=9001)
+
+    assert await _client(handler).create_sale_order({"partner_id": 1}) == 9001
+
+
+async def test_create_sale_order_accepts_dict_and_single_id_list_shapes() -> None:
+    async def dict_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 9002})
+
+    async def list_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[9003])
+
+    assert await _client(dict_handler).create_sale_order({"partner_id": 1}) == 9002
+    assert await _client(list_handler).create_sale_order({"partner_id": 1}) == 9003
+
+
+@pytest.mark.parametrize("body", [True, False, {"unexpected": True}, "9001", [9001, 9002], []])
+async def test_create_sale_order_rejects_unexpected_response_shapes(body: object) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(ConnectorError) as exc_info:
+        await _client(handler).create_sale_order({"partner_id": 1})
+    assert "unexpected response shape" in exc_info.value.safe_message
+    assert "secret" not in exc_info.value.safe_message
+
+
+async def test_search_read_allows_sale_order_and_product_pricelist() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path in {"/json/2/sale.order/search_read", "/json/2/product.pricelist/search_read"}
+        return httpx.Response(200, json=[])
+
+    assert await _client(handler).search_read(model="sale.order", domain=[], fields=["id"]) == []
+    assert await _client(handler).search_read(model="product.pricelist", domain=[], fields=["id"]) == []
+
+
 async def test_create_account_move_rejects_unexpected_response() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"unexpected": True})

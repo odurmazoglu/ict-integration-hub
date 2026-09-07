@@ -18,6 +18,8 @@ READ_ONLY_MODELS = frozenset(
     {
         "account.move",
         "purchase.order",
+        "sale.order",
+        "product.pricelist",
         "res.company",
         "res.partner",
         "product.product",
@@ -78,6 +80,19 @@ class OdooJson2Client:
         if isinstance(result, dict) and isinstance(result.get("id"), int):
             return int(result["id"])
         raise ConnectorError("Odoo account.move create returned an unexpected response.")
+
+    async def create_sale_order(self, payload: dict[str, Any]) -> int:
+        result = await self._post_json("/json/2/sale.order/create", payload)
+        if not isinstance(result, bool):
+            if isinstance(result, int):
+                return result
+            if isinstance(result, dict) and type(result.get("id")) is int:
+                return int(result["id"])
+            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
+                return result[0]
+        raise ConnectorError(
+            f"Odoo sale.order create returned an unexpected response shape: {_response_shape(result)}."
+        )
 
     async def write_account_move(self, *, record_id: int, values: dict[str, Any]) -> bool:
         if type(record_id) is not int or record_id <= 0:
