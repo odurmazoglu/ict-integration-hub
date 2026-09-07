@@ -30,6 +30,7 @@ from app.application.execution.customer_invoice_strategy import (
     CustomerInvoiceExecutionStrategy,
     customer_invoice_write_idempotency_key,
 )
+from app.application.execution.customer_quotation_strategy import CustomerQuotationExecutionStrategy
 from app.application.execution.customer_recharge_router import CustomerRechargeExecutionRouter
 from app.application.execution.customer_recharge_strategy import CustomerRechargeExecutionStrategy
 from app.application.execution.exceptions import (
@@ -99,6 +100,10 @@ from app.application.execution.vendor_bill_strategy import (
     VendorBillExecutionStrategy,
     vendor_bill_write_idempotency_key,
 )
+from app.application.execution.workbench_customer_quotation import (
+    WorkbenchAcceptedDecisionExecutionDispatcher,
+    WorkbenchCustomerQuotationExecutionWorkflow,
+)
 from app.application.execution.workbench_vendor_bill import (
     WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
@@ -118,6 +123,7 @@ __all__ = [
     "CustomerInvoiceBillingInstruction",
     "CustomerInvoiceBillingLine",
     "CustomerInvoiceExecutionStrategy",
+    "CustomerQuotationExecutionStrategy",
     "CustomerRechargeExecutionRouter",
     "CustomerRechargeExecutionStrategy",
     "CustomerRechargeInvoiceCreationRequiredError",
@@ -184,6 +190,8 @@ __all__ = [
     "RunAcceptedDecisionExecutionUseCase",
     "StaticRetryPolicyResolver",
     "VendorBillExecutionStrategy",
+    "WorkbenchAcceptedDecisionExecutionDispatcher",
+    "WorkbenchCustomerQuotationExecutionWorkflow",
     "WorkbenchVendorBillExecutionResult",
     "WorkbenchVendorBillExecutionStatus",
     "WorkbenchVendorBillExecutionWorkflow",

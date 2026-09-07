@@ -185,6 +185,7 @@ def _execution_request(
         selected_workflow=decision.selected_workflow,
         business_context_allocations=decision.business_context_allocations,
         accepted_billing_instructions=accepted_billing_instructions,
+        selected_quotation_scenario_ids=decision.selected_quotation_scenario_ids,
     )
 
 

@@ -12,7 +12,11 @@ from app.api.security import (
     RequestContextResolver,
     RequestMetadata,
 )
-from app.application.execution import RunAcceptedDecisionExecutionUseCase, WorkbenchVendorBillExecutionWorkflow
+from app.application.execution import (
+    RunAcceptedDecisionExecutionUseCase,
+    WorkbenchAcceptedDecisionExecutionDispatcher,
+    WorkbenchVendorBillExecutionWorkflow,
+)
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceWorkflow
 from app.application.workbench import (
     GetReviewItemUseCase,
@@ -26,6 +30,7 @@ from app.composition import (
     build_odoo_workbench_decision_ingestion_workflow,
     build_uyumsoft_canonical_invoice_importer,
     build_vendor_bill_execution_use_case,
+    build_workbench_accepted_decision_execution_dispatcher,
     build_workbench_quotation_scenario_evidence_workflow,
     build_workbench_vendor_bill_execution_workflow,
 )
@@ -236,6 +241,37 @@ class _LazyWorkbenchVendorBillExecutionWorkflow:
 WorkbenchVendorBillExecutionWorkflowDep = Annotated[
     WorkbenchVendorBillExecutionWorkflow,
     Depends(get_workbench_vendor_bill_execution_workflow),
+]
+
+
+def get_workbench_accepted_decision_execution_dispatcher(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> WorkbenchAcceptedDecisionExecutionDispatcher:
+    return _LazyWorkbenchAcceptedDecisionExecutionDispatcher(session=session, settings=settings)
+
+
+class _LazyWorkbenchAcceptedDecisionExecutionDispatcher:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._dispatcher: WorkbenchAcceptedDecisionExecutionDispatcher | None = None
+
+    def execute(self, **kwargs):
+        return self._get_dispatcher().execute(**kwargs)
+
+    def _get_dispatcher(self) -> WorkbenchAcceptedDecisionExecutionDispatcher:
+        if self._dispatcher is None:
+            self._dispatcher = build_workbench_accepted_decision_execution_dispatcher(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._dispatcher
+
+
+WorkbenchAcceptedDecisionExecutionDispatcherDep = Annotated[
+    WorkbenchAcceptedDecisionExecutionDispatcher,
+    Depends(get_workbench_accepted_decision_execution_dispatcher),
 ]
 
 

@@ -422,6 +422,7 @@ def _plan_to_data(plan: ExecutionPlan) -> dict[str, Any]:
                 "customer_invoice_billing_instruction": _billing_instruction_to_data(
                     step.customer_invoice_billing_instruction
                 ),
+                "customer_quotation_scenario_id": step.customer_quotation_scenario_id,
             }
             for step in plan.steps
         ],
@@ -448,6 +449,11 @@ def _plan_from_data(data: dict[str, Any]) -> ExecutionPlan:
                 allocations=tuple(_allocation_from_data(allocation) for allocation in step.get("allocations", ())),
                 customer_invoice_billing_instruction=_billing_instruction_from_data(
                     step.get("customer_invoice_billing_instruction")
+                ),
+                customer_quotation_scenario_id=(
+                    str(step["customer_quotation_scenario_id"])
+                    if step.get("customer_quotation_scenario_id") is not None
+                    else None
                 ),
             )
             for step in data["steps"]
@@ -710,21 +716,23 @@ def _plan_signature(plan: ExecutionPlan) -> str:
         "decision_version": plan.decision_version,
         "decision_id": plan.decision_id,
         "mode": plan.mode.value,
-        "steps": [
-            {
-                "step_key": step.step_key,
-                "step_type": step.step_type.value,
-                "allocation_keys": list(step.allocation_keys),
-                "sequence": step.sequence,
-                "execute_supported": step.execute_supported,
-                "writer_required": step.writer_required,
-                "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
-                "customer_invoice_billing_instruction": _billing_instruction_to_data(
-                    step.customer_invoice_billing_instruction
-                ),
-            }
-            for step in plan.steps
-        ],
+        "steps": [_plan_signature_step(step) for step in plan.steps],
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _plan_signature_step(step: ExecutionStep) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "step_key": step.step_key,
+        "step_type": step.step_type.value,
+        "allocation_keys": list(step.allocation_keys),
+        "sequence": step.sequence,
+        "execute_supported": step.execute_supported,
+        "writer_required": step.writer_required,
+        "allocations": [_allocation_to_data(allocation) for allocation in step.allocations],
+        "customer_invoice_billing_instruction": _billing_instruction_to_data(step.customer_invoice_billing_instruction),
+    }
+    if step.customer_quotation_scenario_id is not None:
+        payload["customer_quotation_scenario_id"] = step.customer_quotation_scenario_id
+    return payload

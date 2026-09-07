@@ -42,6 +42,7 @@ class ExecutionStepType(StrEnum):
     FIXED_ASSET = "fixed_asset"
     SUBSCRIPTION_SERVICE = "subscription_service"
     INTERNAL_COST = "internal_cost"
+    CREATE_CUSTOMER_QUOTATION = "create_customer_quotation"
 
 
 class ExecutionStepStatus(StrEnum):
@@ -61,6 +62,7 @@ class ExecutionArtifactType(StrEnum):
     FIXED_ASSET = WorkflowType.ASSET.value
     SUBSCRIPTION = WorkflowType.SUBSCRIPTION.value
     CUSTOMER_INVOICE = "customer_invoice"
+    CUSTOMER_QUOTATION = WorkflowType.CUSTOMER_QUOTATION.value
 
 
 class ExecutionFailurePolicy(StrEnum):
@@ -80,6 +82,7 @@ class ExecutionRequest(Command):
     selected_workflow: WorkflowType | None
     business_context_allocations: BusinessContextAllocationSet | None = None
     accepted_billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...] = field(default_factory=tuple)
+    selected_quotation_scenario_ids: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _require_text(self.execution_id, "execution_id is required.")
@@ -104,6 +107,12 @@ class ExecutionRequest(Command):
         if len({instruction.billing_key for instruction in instructions}) != len(instructions):
             raise ExecutionPlanningError("accepted_billing_instructions billing_key values must be unique.")
         object.__setattr__(self, "accepted_billing_instructions", instructions)
+        scenario_ids = tuple(self.selected_quotation_scenario_ids)
+        for scenario_id in scenario_ids:
+            _require_text(scenario_id, "selected_quotation_scenario_ids values must be non-empty.")
+        if len(set(scenario_ids)) != len(scenario_ids):
+            raise ExecutionPlanningError("selected_quotation_scenario_ids values must be unique.")
+        object.__setattr__(self, "selected_quotation_scenario_ids", scenario_ids)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,10 +126,22 @@ class ExecutionStep(ApplicationDTO):
     writer_required: bool = False
     allocations: tuple[BusinessContextAllocation, ...] = field(default_factory=tuple)
     customer_invoice_billing_instruction: CustomerInvoiceBillingInstruction | None = None
+    customer_quotation_scenario_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.step_key, "step_key is required.")
         _require_enum(self.step_type, ExecutionStepType, "step_type must be a canonical ExecutionStepType.")
+        if self.customer_quotation_scenario_id is not None:
+            _require_text(
+                self.customer_quotation_scenario_id,
+                "customer_quotation_scenario_id must be non-empty when supplied.",
+            )
+        if (self.step_type is ExecutionStepType.CREATE_CUSTOMER_QUOTATION) != (
+            self.customer_quotation_scenario_id is not None
+        ):
+            raise ExecutionPlanningError(
+                "customer_quotation_scenario_id is required for and exclusive to CREATE_CUSTOMER_QUOTATION steps."
+            )
         if type(self.sequence) is not int or self.sequence < 1:
             raise ExecutionPlanningError("step sequence must be positive.")
         allocation_keys = tuple(self.allocation_keys)
