@@ -79,20 +79,27 @@ def execution_idempotency_key(plan: ExecutionPlan) -> str:
         "decision_version": plan.decision_version,
         "decision_id": plan.decision_id,
         "mode": plan.mode.value,
-        "steps": [
-            {
-                "step_type": step.step_type.value,
-                "allocation_keys": list(step.allocation_keys),
-            }
-            for step in plan.steps
-        ],
+        "steps": [_step_identity(step) for step in plan.steps],
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"execution:{digest}"
 
 
+def _step_identity(step: ExecutionStep) -> dict[str, object]:
+    identity: dict[str, object] = {
+        "step_type": step.step_type.value,
+        "allocation_keys": list(step.allocation_keys),
+    }
+    if step.customer_quotation_scenario_id is not None:
+        identity["customer_quotation_scenario_id"] = step.customer_quotation_scenario_id
+    return identity
+
+
 def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
+    if request.selected_workflow is WorkflowType.CUSTOMER_QUOTATION:
+        return _customer_quotation_steps(request)
+
     grouped: dict[ExecutionStepType, set[str]] = defaultdict(set)
     allocations_by_step: dict[ExecutionStepType, list[BusinessContextAllocation]] = defaultdict(list)
     if request.business_context_allocations is not None:
@@ -144,6 +151,30 @@ def _planned_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
 def _step_key(request: ExecutionRequest, *, step_type: ExecutionStepType, allocation_keys: tuple[str, ...]) -> str:
     allocation_part = "+".join(allocation_keys) if allocation_keys else "workflow"
     return f"{request.review_id}:{request.decision_version}:{step_type.value}:{allocation_part}"
+
+
+def _customer_quotation_steps(request: ExecutionRequest) -> tuple[ExecutionStep, ...]:
+    """One independent CREATE_CUSTOMER_QUOTATION step per selected scenario, in order."""
+
+    scenario_ids = request.selected_quotation_scenario_ids
+    if not scenario_ids:
+        raise ExecutionPlanningError("Customer quotation execution requires at least one selected scenario id.")
+    if request.business_context_allocations is not None:
+        raise ExecutionPlanningError("Customer quotation decisions must not carry business context allocations.")
+    step_type = ExecutionStepType.CREATE_CUSTOMER_QUOTATION
+    return tuple(
+        ExecutionStep(
+            step_key=(f"{request.review_id}:{request.decision_version}:{step_type.value}:{scenario_id}"),
+            step_type=step_type,
+            allocation_keys=(),
+            sequence=index,
+            dry_run_supported=True,
+            execute_supported=True,
+            writer_required=True,
+            customer_quotation_scenario_id=scenario_id,
+        )
+        for index, scenario_id in enumerate(scenario_ids, start=1)
+    )
 
 
 def _customer_recharge_steps(request: ExecutionRequest, *, first_sequence: int) -> tuple[ExecutionStep, ...]:

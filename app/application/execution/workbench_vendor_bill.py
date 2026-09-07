@@ -56,6 +56,7 @@ class WorkbenchVendorBillExecutionStatus(StrEnum):
     APPROVAL_REQUIRED = "approval_required"
     EXECUTION_DISABLED = "execution_disabled"
     MISSING_SOURCE_EVIDENCE = "missing_source_evidence"
+    MISSING_QUOTATION_EVIDENCE = "missing_quotation_evidence"
     EXECUTION_FAILED = "execution_failed"
 
 

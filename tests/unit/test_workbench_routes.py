@@ -12,9 +12,9 @@ from app.api.dependencies import (
     get_request_context,
     get_review_item_use_case,
     get_submit_review_decision_use_case,
+    get_workbench_accepted_decision_execution_dispatcher,
     get_workbench_decision_ingestion_workflow,
     get_workbench_quotation_scenario_evidence_workflow,
-    get_workbench_vendor_bill_execution_workflow,
 )
 from app.api.security import (
     AuthenticationMethod,
@@ -688,6 +688,64 @@ async def test_workbench_execute_body_cannot_supply_erp_payload(api_client: Asyn
     assert response.json()["errors"][0] == {"code": "request_validation_error", "message": "Request validation failed."}
 
 
+async def test_workbench_execute_route_reaches_customer_quotation_dispatch(api_client: AsyncClient) -> None:
+    dispatcher = FakeWorkbenchVendorBillExecutionWorkflow(
+        WorkbenchVendorBillExecutionResult(
+            review_id="review-quote",
+            company_id=7,
+            decision_version=4,
+            mode=ExecutionMode.EXECUTE,
+            status=WorkbenchVendorBillExecutionStatus.EXECUTED,
+            execution_id="execution-1",
+        )
+    )
+
+    response = await _post_execute(
+        api_client,
+        "review-quote",
+        context=_context(Permission.WORKBENCH_EXECUTE, company_id=7),
+        workflow=dispatcher,
+        json={"decision_version": 4, "mode": "execute", "approval": {"approved_by": "controller"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "executed"
+    assert dispatcher.calls == [
+        {
+            "review_id": "review-quote",
+            "company_id": 7,
+            "decision_version": 4,
+            "mode": ExecutionMode.EXECUTE,
+            "approval": ExecutionApproval(approved_by="controller"),
+            "trace_id": "trace-123",
+        }
+    ]
+
+
+async def test_workbench_execute_route_surfaces_missing_quotation_evidence_block(api_client: AsyncClient) -> None:
+    dispatcher = FakeWorkbenchVendorBillExecutionWorkflow(
+        WorkbenchVendorBillExecutionResult(
+            review_id="review-quote",
+            company_id=7,
+            decision_version=4,
+            mode=ExecutionMode.EXECUTE,
+            status=WorkbenchVendorBillExecutionStatus.MISSING_QUOTATION_EVIDENCE,
+            message="Immutable quotation scenario evidence is missing for 1 selected scenario(s).",
+        )
+    )
+
+    response = await _post_execute(
+        api_client,
+        "review-quote",
+        context=_context(Permission.WORKBENCH_EXECUTE, company_id=7),
+        workflow=dispatcher,
+        json={"decision_version": 4, "mode": "execute", "approval": {"approved_by": "controller"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "missing_quotation_evidence"
+
+
 async def test_response_and_error_envelope_consistency(api_client: AsyncClient) -> None:
     success = await _get(
         api_client,
@@ -969,7 +1027,7 @@ async def _post_execute(
 ):
     app.dependency_overrides[get_request_context] = lambda: context
     if workflow is not None:
-        app.dependency_overrides[get_workbench_vendor_bill_execution_workflow] = lambda: workflow
+        app.dependency_overrides[get_workbench_accepted_decision_execution_dispatcher] = lambda: workflow
     try:
         return await api_client.post(f"/api/workbench/reviews/{review_id}/execute", json=json)
     finally:

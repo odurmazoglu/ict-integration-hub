@@ -13,9 +13,9 @@ from app.api.dependencies import (
     ListReviewQueueUseCaseDep,
     RequestContextDep,
     SubmitReviewDecisionUseCaseDep,
+    WorkbenchAcceptedDecisionExecutionDispatcherDep,
     WorkbenchDecisionIngestionWorkflowDep,
     WorkbenchQuotationScenarioEvidenceWorkflowDep,
-    WorkbenchVendorBillExecutionWorkflowDep,
 )
 from app.api.error_handling import error_response_factory
 from app.api.security import Permission, PermissionDeniedError, require_permission
@@ -195,10 +195,12 @@ def sync_odoo_workbench_decisions(
     "/reviews/{review_id}/execute",
     response_model=WorkbenchVendorBillExecutionEnvelope,
     responses=COMMON_ERROR_RESPONSES,
-    summary="Execute accepted Vendor Bill Workbench decision",
+    summary="Execute an accepted Workbench decision",
     description=(
-        "Requires workbench_execute. Executes only an already persisted canonical Vendor Bill decision using "
-        "pinned Hub evidence. The request cannot provide ERP document, line, tax, product, or vendor payloads."
+        "Requires workbench_execute. Executes an already persisted canonical accepted decision using pinned Hub "
+        "evidence, routed by the decision's selected workflow. Vendor Bill decisions run the Vendor Bill flow; "
+        "CUSTOMER_QUOTATION decisions create one draft sale.order per selected scenario from immutable quotation "
+        "evidence (capture it first via the quotation-scenarios endpoint). The request cannot provide ERP payloads."
     ),
 )
 def execute_workbench_vendor_bill(
@@ -206,7 +208,7 @@ def execute_workbench_vendor_bill(
     request_body: WorkbenchVendorBillExecutionRequest,
     response: Response,
     context: RequestContextDep,
-    workflow: WorkbenchVendorBillExecutionWorkflowDep,
+    workflow: WorkbenchAcceptedDecisionExecutionDispatcherDep,
 ) -> WorkbenchVendorBillExecutionEnvelope | JSONResponse:
     try:
         context = require_permission(Permission.WORKBENCH_EXECUTE)(context)

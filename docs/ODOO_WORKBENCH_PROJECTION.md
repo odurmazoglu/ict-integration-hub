@@ -355,6 +355,77 @@ from the payload.
 recurring-plan mapping, no tax recomputation, no cost write, no Studio schema
 mutation, no database migration.
 
+### Customer Sales Quotation execution runtime (Phase 3B)
+
+Phase 3B wires the Phase 3A writer into the **existing** execution runtime — no
+second framework, no new API.
+
+Runtime sequence:
+
+```text
+CUSTOMER_QUOTATION decision accepted (frozen selected_quotation_scenario_ids)
+  -> POST /reviews/{review_id}/quotation-scenarios   (evidence capture prerequisite)
+  -> POST /reviews/{review_id}/execute
+       -> WorkbenchAcceptedDecisionExecutionDispatcher routes by decision.selected_workflow
+       -> WorkbenchCustomerQuotationExecutionWorkflow
+            -> ALL-scenarios evidence gate (fail closed, no partial subset)
+            -> RunAcceptedDecisionExecutionUseCase
+                 -> ExecutionPlanner: one CREATE_CUSTOMER_QUOTATION step per selected
+                    scenario, in the accepted selection order
+                 -> ExecutionRuntimeCoordinator (unchanged) resolves each step to
+                    CustomerQuotationExecutionStrategy
+                      -> load immutable QuotationScenarioSnapshot from
+                         quotation_scenario_evidence by semantic identity
+                      -> CustomerQuotationDraft.from_snapshot(snapshot)
+                      -> OdooCustomerQuotationWriter.create_quotation(...)  (draft sale.order)
+                      -> ExecutionStepResult + ExecutionArtifact(CUSTOMER_QUOTATION)
+```
+
+- **`ExecutionStepType.CREATE_CUSTOMER_QUOTATION`** and
+  **`ExecutionArtifactType.CUSTOMER_QUOTATION`** are new StrEnum values only
+  (serialized as strings in the existing plan/result JSON columns) — **no
+  database migration**. `NEW_RFQ_PURCHASE` / `PURCHASE_ORDER` / `RFQ` are not
+  reused.
+- **One selected scenario = one execution step = one independent draft
+  `sale.order`.** Alternatives are never merged. Step key is
+  `<review_id>:<decision_version>:create_customer_quotation:<scenario_id>` —
+  deterministic, no timestamps / runtime UUIDs / prices / labels. The
+  writer's technical execution key aligns with
+  `customer_quotation_execution_key(company_id, review_id, decision_id,
+  decision_version, scenario_id)`.
+- **Execution never rereads Odoo Proposal Scenario records.** The strategy loads
+  only the persisted immutable snapshot; there is no auto-capture and no
+  mutable-authoring read. Missing evidence for any selected scenario blocks the
+  whole execution before any Odoo write (`missing_quotation_evidence`); a partial
+  evidence set never executes the available subset.
+- **Approver identity** is the existing `ExecutionApproval.approved_by` from the
+  `/execute` request body, propagated through
+  `RunAcceptedDecisionExecutionCommand` exactly as the Vendor Bill strategy
+  consumes it.
+- **Retries** are safe at both levels. The Hub runtime resumes by durable
+  execution/step identity. If a retry runs after Odoo created the quotation but
+  before Hub persisted the artifact, the strategy calls the writer again and the
+  writer's execution-key lookup recovers the same `sale.order` (`created=False`,
+  no duplicate). The execution key is never regenerated on retry.
+- **Multi-scenario failure semantics** follow the existing
+  `ExecutionRuntimeCoordinator`: EXECUTE mode is fail-fast (a failed scenario
+  step stops the run; already-created quotations for earlier scenarios remain and
+  are recovered idempotently on the next attempt). There is no all-or-nothing
+  distributed transaction across multiple `sale.order` records.
+- **Artifact** stores only `artifact_type=CUSTOMER_QUOTATION`,
+  `artifact_id=<sale.order id>`, `external_identity=<technical execution key>`,
+  `created`. No mutable Proposal Scenario commercial data. The quotation stays
+  draft — `action_confirm` is never called.
+- **Production safety gates are unchanged and additive**: `/execute` permission,
+  `EXECUTION_EXECUTE_ENABLED`, the execution preflight gate for
+  `CREATE_CUSTOMER_QUOTATION` (`PRODUCTION_OPERATIONS_ENABLED` +
+  `PRODUCTION_APPROVAL_ACK` + `CUSTOMER_QUOTATION_EXECUTE_ENABLED` + named
+  `approved_by`), and the writer's own policy + configured execution-key field.
+- **Still not implemented**: subscription / recurring-plan mapping, quotation
+  confirmation, tax override, cost write. No live Odoo write is performed by this
+  change — a controlled live smoke is a separate gate after the manual Studio
+  field is created.
+
 Current allocation child fields include `x_studio_allocation_key`, `x_studio_allocation_type`, `x_studio_source_line_number`, `x_studio_description`, `x_studio_amount`, `x_studio_percentage`, `x_studio_currency`, `x_studio_internal_note`, `x_studio_customer`, `x_studio_recharge_recipient`, `x_studio_target_company`, `x_studio_opportunity`, `x_studio_sales_order`, `x_studio_purchase_order`, `x_studio_analytic_account`, `x_studio_department`, and `x_studio_import_review`. `x_studio_department` is ignored by Hub because Department is not part of canonical `BusinessContextAllocation`.
 
 ## Source Of Truth

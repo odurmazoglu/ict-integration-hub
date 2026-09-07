@@ -1,7 +1,10 @@
 """Production composition roots for application use cases."""
 
 from app.composition.execution import (
+    build_customer_quotation_execution_use_case,
     build_vendor_bill_execution_use_case,
+    build_workbench_accepted_decision_execution_dispatcher,
+    build_workbench_customer_quotation_execution_workflow,
     build_workbench_vendor_bill_execution_workflow,
 )
 from app.composition.imports import (
@@ -17,11 +20,14 @@ from app.composition.quotation import (
 
 __all__ = [
     "build_capture_and_persist_accepted_quotation_scenarios_use_case",
+    "build_customer_quotation_execution_use_case",
     "build_import_invoice_use_case",
     "build_odoo_workbench_decision_ingestion_workflow",
     "build_odoo_workbench_projection_publisher",
     "build_uyumsoft_canonical_invoice_importer",
     "build_vendor_bill_execution_use_case",
+    "build_workbench_accepted_decision_execution_dispatcher",
+    "build_workbench_customer_quotation_execution_workflow",
     "build_workbench_quotation_scenario_evidence_workflow",
     "build_workbench_vendor_bill_execution_workflow",
 ]

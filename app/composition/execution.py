@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.application.execution import (
     CustomerInvoiceExecutionStrategy,
+    CustomerQuotationExecutionStrategy,
     CustomerRechargeExecutionRouter,
     CustomerRechargeExecutionStrategy,
     ExecutionPlanner,
@@ -16,8 +17,11 @@ from app.application.execution import (
     RunAcceptedDecisionExecutionUseCase,
     StaticRetryPolicyResolver,
     VendorBillExecutionStrategy,
+    WorkbenchAcceptedDecisionExecutionDispatcher,
+    WorkbenchCustomerQuotationExecutionWorkflow,
     WorkbenchVendorBillExecutionWorkflow,
 )
+from app.application.execution.contracts import ExecutionStepType
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
@@ -31,6 +35,11 @@ from app.erp.write import (
     AccountMoveRepository,
     OdooCustomerInvoiceWritePolicy,
     OdooCustomerInvoiceWriter,
+    OdooCustomerQuotationFieldMapping,
+    OdooCustomerQuotationPricelistResolver,
+    OdooCustomerQuotationRepository,
+    OdooCustomerQuotationWritePolicy,
+    OdooCustomerQuotationWriter,
     OdooVendorBillWritePolicy,
     OdooVendorBillWriter,
 )
@@ -38,6 +47,7 @@ from app.persistence import (
     SqlAlchemyAcceptedBillingEvidenceReader,
     SqlAlchemyExecutionRuntimeRepository,
     SqlAlchemyExecutionSourceInvoiceReader,
+    SqlAlchemyQuotationScenarioEvidenceRepository,
     SqlAlchemyReviewRepository,
 )
 
@@ -145,4 +155,102 @@ def build_workbench_vendor_bill_execution_workflow(
         ),
         runtime_repository=runtime_repository,
         execution_result_publisher=execution_result_publisher,
+    )
+
+
+def build_customer_quotation_execution_use_case(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> RunAcceptedDecisionExecutionUseCase:
+    """Compose accepted CUSTOMER_QUOTATION decisions into the shared execution runtime.
+
+    Registers ``CustomerQuotationExecutionStrategy`` only for
+    ``ExecutionStepType.CREATE_CUSTOMER_QUOTATION``; existing strategies are not
+    touched. Execution consumes immutable ``quotation_scenario_evidence`` and
+    never rereads Odoo Proposal Scenario authoring records.
+    """
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    runtime_repository = SqlAlchemyExecutionRuntimeRepository(session)
+    quotation_write_policy = OdooCustomerQuotationWritePolicy.from_settings(settings)
+    quotation_field_mapping = OdooCustomerQuotationFieldMapping.from_environment()
+    customer_quotation_writer = OdooCustomerQuotationWriter(
+        repository=OdooCustomerQuotationRepository(
+            client=resolved_odoo_client,
+            mapping=quotation_field_mapping,
+        ),
+        pricelist_resolver=OdooCustomerQuotationPricelistResolver(client=resolved_odoo_client),
+        policy=quotation_write_policy,
+    )
+    strategy = CustomerQuotationExecutionStrategy(
+        quotation_evidence_reader=SqlAlchemyQuotationScenarioEvidenceRepository(session),
+        customer_quotation_writer=customer_quotation_writer,
+    )
+    return RunAcceptedDecisionExecutionUseCase(
+        accepted_decision_reader=SqlAlchemyReviewRepository(session),
+        execution_planner=ExecutionPlanner(),
+        runtime_service=ExecutionRuntimeService(
+            runtime_repository=runtime_repository,
+            event_repository=runtime_repository,
+        ),
+        runtime_coordinator=ExecutionRuntimeCoordinator(
+            runtime_repository=runtime_repository,
+            event_repository=runtime_repository,
+            strategy_resolver=ExecutionStrategyResolver((strategy,)),
+        ),
+        runtime_repository=runtime_repository,
+        retry_policy_resolver=StaticRetryPolicyResolver(ExecutionRetryPolicy.immediate(max_attempts=2)),
+        execution_preflight=ExecutionPreflightPolicy(
+            production_execution_enabled=settings.execution_execute_enabled,
+            real_write_gates={ExecutionStepType.CREATE_CUSTOMER_QUOTATION: quotation_write_policy},
+            writer_step_types=(ExecutionStepType.CREATE_CUSTOMER_QUOTATION,),
+        ),
+    )
+
+
+def build_workbench_customer_quotation_execution_workflow(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> WorkbenchCustomerQuotationExecutionWorkflow:
+    """Compose persisted Workbench CUSTOMER_QUOTATION decisions into the shared runtime."""
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    runtime_repository = SqlAlchemyExecutionRuntimeRepository(session)
+    return WorkbenchCustomerQuotationExecutionWorkflow(
+        accepted_decision_reader=SqlAlchemyReviewRepository(session),
+        quotation_evidence_reader=SqlAlchemyQuotationScenarioEvidenceRepository(session),
+        execution_use_case=build_customer_quotation_execution_use_case(
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
+        ),
+        runtime_repository=runtime_repository,
+    )
+
+
+def build_workbench_accepted_decision_execution_dispatcher(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> WorkbenchAcceptedDecisionExecutionDispatcher:
+    """Compose the ``/reviews/{review_id}/execute`` dispatcher over both sub-workflows."""
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    return WorkbenchAcceptedDecisionExecutionDispatcher(
+        accepted_decision_reader=SqlAlchemyReviewRepository(session),
+        vendor_bill_workflow=build_workbench_vendor_bill_execution_workflow(
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
+        ),
+        customer_quotation_workflow=build_workbench_customer_quotation_execution_workflow(
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
+        ),
     )
