@@ -6,6 +6,7 @@ from enum import StrEnum
 from app.application.commands import Command
 from app.application.dto import ApplicationDTO
 from app.application.execution.exceptions import ExecutionPlanningError
+from app.application.expense_mapping import OperatingExpenseMatchResult, operating_expense_evidence_errors
 from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationSet
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workflow import WorkflowType
@@ -367,6 +368,7 @@ class ExecutionSourceInvoice(ApplicationDTO):
     partner_match: PartnerMatchResult
     product_match: InvoiceProductMatchResult
     tax_match: InvoiceTaxMappingResult
+    operating_expense_match: OperatingExpenseMatchResult | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -381,6 +383,15 @@ class ExecutionSourceInvoice(ApplicationDTO):
             raise ExecutionPlanningError("InvoiceProductMatchResult DTO is required.")
         if not isinstance(self.tax_match, InvoiceTaxMappingResult):
             raise ExecutionPlanningError("InvoiceTaxMappingResult DTO is required.")
+        expense_errors = operating_expense_evidence_errors(
+            operating_expense_match=self.operating_expense_match,
+            company_id=self.company_id,
+            invoice=self.invoice,
+            partner_match=self.partner_match,
+            product_match=self.product_match,
+        )
+        if expense_errors:
+            raise ExecutionPlanningError(expense_errors[0])
 
 
 def _reject_duplicate_step_keys(steps: tuple[ExecutionStep, ...]) -> None:

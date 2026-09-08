@@ -440,6 +440,24 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         index["name"] == "uq_operating_expense_mappings_active_supplier" and index["unique"]
         for index in inspector.get_indexes("operating_expense_mappings")
     )
+    stage1_evidence_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
+    }
+    assert "operating_expense_match" in stage1_evidence_columns_at_head
+    stage2_evidence_columns_at_head = {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+    assert "operating_expense_match" in stage2_evidence_columns_at_head
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "operating_expense_match" not in {
+        column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
+    }
+    assert "operating_expense_match" not in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+    assert "operating_expense_mappings" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -555,6 +573,12 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
     assert "quotation_scenario_evidence" in inspector.get_table_names()
     assert "operating_expense_mappings" in inspector.get_table_names()
+    assert "operating_expense_match" in {
+        column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
+    }
+    assert "operating_expense_match" in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
     assert "selected_quotation_scenario_ids" in {
         column["name"] for column in inspector.get_columns("workbench_review_decisions")
     }

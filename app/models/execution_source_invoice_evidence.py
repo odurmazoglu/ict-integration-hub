@@ -44,4 +44,5 @@ class ExecutionSourceInvoiceEvidence(Base):
     partner_match: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     product_match: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     tax_match: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    operating_expense_match: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime(), server_default=func.now(), nullable=False)

@@ -111,6 +111,7 @@ def _source_from_review_evidence(
             "partner_match": _require_dict(record.partner_match),
             "product_match": _require_dict(record.product_match),
             "tax_match": _require_dict(record.tax_match),
+            "operating_expense_match": record.operating_expense_match,
         }
     )
 
@@ -138,6 +139,7 @@ def _validate_stage_one_linkage(
         partner_match=source.partner_match,
         product_match=source.product_match,
         tax_match=source.tax_match,
+        operating_expense_match=source.operating_expense_match,
     )
 
 

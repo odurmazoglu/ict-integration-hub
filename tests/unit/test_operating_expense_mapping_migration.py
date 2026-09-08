@@ -78,4 +78,6 @@ def test_migration_chain_is_linear_with_single_head() -> None:
             if line.startswith("down_revision: str | None = ") and '"' in line:
                 down_revisions.add(line.split('"')[1])
     heads = revisions - down_revisions
-    assert heads == {REVISION}
+    assert len(heads) == 1
+    assert REVISION in revisions
+    assert DOWN_REVISION in down_revisions

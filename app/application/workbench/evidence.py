@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.application.dto import ApplicationDTO
+from app.application.expense_mapping import OperatingExpenseMatchResult, operating_expense_evidence_errors
 from app.application.rules import (
     InvoiceClassificationResult,
     InvoiceClassificationRuleEvidence,
@@ -30,6 +31,7 @@ class ReviewExecutionEvidence(ApplicationDTO):
     partner_match: PartnerMatchResult
     product_match: InvoiceProductMatchResult
     tax_match: InvoiceTaxMappingResult
+    operating_expense_match: OperatingExpenseMatchResult | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -49,6 +51,15 @@ class ReviewExecutionEvidence(ApplicationDTO):
             raise WorkbenchContractError("source_invoice_id must match InternalInvoice identity.")
         _validate_product_scope(self.invoice, self.product_match)
         _validate_tax_scope(self.invoice, self.tax_match)
+        expense_errors = operating_expense_evidence_errors(
+            operating_expense_match=self.operating_expense_match,
+            company_id=self.company_id,
+            invoice=self.invoice,
+            partner_match=self.partner_match,
+            product_match=self.product_match,
+        )
+        if expense_errors:
+            raise WorkbenchContractError(expense_errors[0])
 
 
 @dataclass(frozen=True, slots=True)
