@@ -48,6 +48,7 @@ from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceE
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence import SqlAlchemyReviewExecutionEvidenceReader, SqlAlchemyReviewRepository
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
@@ -589,8 +590,11 @@ class RecordingEvidenceWriter:
         company_id: int,
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
+        classification_evidence=None,
+        source_invoice_evidence=None,
     ) -> ReviewItem:
         self.evidence_calls = (*self.evidence_calls, (item, company_id, idempotency_key, evidence))
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
 
@@ -795,6 +799,7 @@ def session() -> Session:
             WorkbenchReviewExecutionEvidence.__table__,
             WorkbenchReviewDecision.__table__,
             ExecutionSourceInvoiceEvidence.__table__,
+            WorkbenchReviewSourceInvoiceEvidence.__table__,
         ],
     )
     factory = sessionmaker(bind=engine)

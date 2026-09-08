@@ -16,6 +16,7 @@ from app.application.workbench import (
     ReviewExecutionEvidence,
     ReviewItem,
     ReviewItemCreationService,
+    ReviewSourceInvoiceEvidence,
     ReviewStatus,
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateReadError,
@@ -198,12 +199,14 @@ def _persist_review_if_required(
         command=command,
         decision_result=decision_result,
     )
+    source_invoice_evidence = _source_invoice_evidence(item=item, company_id=company_id, command=command)
     persisted = _create_review_item(
         item=item,
         company_id=company_id,
         idempotency_key=command.idempotency_key,
         classification_evidence=classification_evidence,
         execution_evidence=execution_evidence,
+        source_invoice_evidence=source_invoice_evidence,
         review_item_creation_service=review_item_creation_service,
     )
     return persisted
@@ -237,6 +240,7 @@ def _create_review_item(
     idempotency_key: str,
     classification_evidence: ReviewClassificationEvidence | None,
     execution_evidence: ReviewExecutionEvidence | None,
+    source_invoice_evidence: ReviewSourceInvoiceEvidence | None,
     review_item_creation_service: ReviewItemCreationService,
 ) -> ReviewItem:
     if execution_evidence is not None:
@@ -246,18 +250,44 @@ def _create_review_item(
             idempotency_key=idempotency_key,
             evidence=execution_evidence,
             classification_evidence=classification_evidence,
+            source_invoice_evidence=source_invoice_evidence,
         )
     if classification_evidence is None:
         return review_item_creation_service.create_pending_review_item(
             item,
             company_id=company_id,
             idempotency_key=idempotency_key,
+            source_invoice_evidence=source_invoice_evidence,
         )
     return review_item_creation_service.create_pending_review_item_with_classification_evidence(
         item,
         company_id=company_id,
         idempotency_key=idempotency_key,
         classification_evidence=classification_evidence,
+        source_invoice_evidence=source_invoice_evidence,
+    )
+
+
+def _source_invoice_evidence(
+    *,
+    item: ReviewItem,
+    company_id: int,
+    command: ImportInvoiceCommand,
+) -> ReviewSourceInvoiceEvidence:
+    """Immutable canonical snapshot of the exact ``InternalInvoice`` the Hub classified.
+
+    Persisted for every review created through this use case so deterministic
+    re-evaluation can later consume the identical source invoice with zero
+    connector dependency. Carries no partner/tax/product/expense match and no
+    workflow decision -- only "what invoice did the Hub classify?".
+    """
+
+    return ReviewSourceInvoiceEvidence(
+        review_id=item.review_id,
+        company_id=company_id,
+        review_version=item.version,
+        source_invoice_id=command.invoice.header.ettn or command.invoice.header.invoice_uuid,
+        invoice=command.invoice,
     )
 
 

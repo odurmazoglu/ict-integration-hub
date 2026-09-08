@@ -14,6 +14,7 @@ from app.models.workbench_review_classification_evidence import WorkbenchReviewC
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     "ExecutionSourceInvoiceEvidence",
     "ImportReceipt",
     "WorkbenchReviewExecutionEvidence",
+    "WorkbenchReviewSourceInvoiceEvidence",
     "WorkbenchReviewBillingEvidence",
     "WorkbenchReviewClassificationEvidence",
     "InvoiceDocument",

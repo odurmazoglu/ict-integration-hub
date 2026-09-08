@@ -37,6 +37,7 @@ from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingE
 from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence import SqlAlchemyReviewClassificationEvidenceReader, SqlAlchemyReviewRepository
 
 
@@ -522,11 +523,13 @@ class RecordingClassificationEvidenceWriter:
         company_id: int,
         idempotency_key: str,
         classification_evidence: ReviewClassificationEvidence,
+        source_invoice_evidence=None,
     ) -> ReviewItem:
         self.classification_calls = (
             *self.classification_calls,
             (item, company_id, idempotency_key, classification_evidence),
         )
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
 
@@ -720,6 +723,7 @@ def session() -> Session:
             WorkbenchReviewExecutionEvidence.__table__,
             WorkbenchReviewBillingEvidence.__table__,
             WorkbenchReviewClassificationEvidence.__table__,
+            WorkbenchReviewSourceInvoiceEvidence.__table__,
         ],
     )
     factory = sessionmaker(bind=engine)

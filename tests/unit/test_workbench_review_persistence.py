@@ -1238,8 +1238,11 @@ class RecordingWriter:
     def __init__(self) -> None:
         self.calls: tuple[tuple[ReviewItem, int, str], ...] = ()
 
-    def create_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
+    def create_review_item(
+        self, item: ReviewItem, *, company_id: int, idempotency_key: str, source_invoice_evidence=None
+    ) -> ReviewItem:
         self.calls = (*self.calls, (item, company_id, idempotency_key))
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
 

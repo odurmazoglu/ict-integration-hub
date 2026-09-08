@@ -63,6 +63,7 @@ from app.application.workbench.evidence import (
     ReviewClassificationEvidence,
     ReviewExecutionBillingEvidence,
     ReviewExecutionEvidence,
+    ReviewSourceInvoiceEvidence,
 )
 from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
@@ -156,6 +157,7 @@ __all__ = [
     "ReviewExecutionBillingEvidence",
     "ReviewExecutionEvidence",
     "ReviewExecutionEvidenceReader",
+    "ReviewSourceInvoiceEvidence",
     "ReviewDetailQuery",
     "ReviewItem",
     "ReviewItemCreationService",

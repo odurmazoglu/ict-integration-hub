@@ -17,6 +17,36 @@ from app.matching import InvoiceProductMatchResult, PartnerMatchResult
 from app.tax_mapping import InvoiceTaxMappingResult
 
 REVIEW_CLASSIFICATION_EVIDENCE_SCHEMA_VERSION = 1
+REVIEW_SOURCE_INVOICE_EVIDENCE_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewSourceInvoiceEvidence(ApplicationDTO):
+    """Immutable canonical source-invoice snapshot for one Workbench review.
+
+    Records only *what invoice the Hub classified* — the complete ``InternalInvoice``
+    needed to reconstruct deterministic classification inputs later. It carries no
+    partner/tax/product/operating-expense match and no workflow decision; those are
+    classification/execution facts kept in :class:`ReviewExecutionEvidence`.
+    Every review created through the import path has exactly one of these.
+    """
+
+    review_id: str
+    company_id: int
+    review_version: int
+    source_invoice_id: str
+    invoice: InternalInvoice
+
+    def __post_init__(self) -> None:
+        _require_text(self.review_id, "review_id is required.")
+        _require_positive_int(self.company_id, "company_id must be positive.")
+        _require_positive_int(self.review_version, "review_version must be positive.")
+        _require_text(self.source_invoice_id, "source_invoice_id is required.")
+        if not isinstance(self.invoice, InternalInvoice):
+            raise WorkbenchContractError("InternalInvoice DTO is required.")
+        invoice_identity = self.invoice.header.ettn or self.invoice.header.invoice_uuid
+        if self.source_invoice_id != invoice_identity:
+            raise WorkbenchContractError("source_invoice_id must match InternalInvoice identity.")
 
 
 @dataclass(frozen=True, slots=True)
