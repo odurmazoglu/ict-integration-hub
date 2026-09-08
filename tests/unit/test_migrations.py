@@ -448,6 +448,40 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
     }
     assert "operating_expense_match" in stage2_evidence_columns_at_head
+    assert "workbench_review_source_invoice_evidence" in inspector.get_table_names()
+    source_invoice_evidence_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_source_invoice_evidence")
+    }
+    assert {
+        "id",
+        "review_id",
+        "company_id",
+        "review_version",
+        "source_invoice_id",
+        "schema_version",
+        "invoice",
+        "created_at",
+    }.issubset(source_invoice_evidence_columns_at_head)
+    source_invoice_evidence_indexes_at_head = {
+        index["name"] for index in inspector.get_indexes("workbench_review_source_invoice_evidence")
+    }
+    assert {
+        "ix_workbench_review_source_invoice_evidence_company_review",
+        "ix_workbench_review_source_invoice_evidence_source_invoice_id",
+    }.issubset(source_invoice_evidence_indexes_at_head)
+    source_invoice_evidence_unique_constraints_at_head = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("workbench_review_source_invoice_evidence")
+    }
+    assert "uq_workbench_review_source_invoice_evidence_review_id" in source_invoice_evidence_unique_constraints_at_head
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_source_invoice_evidence" not in inspector.get_table_names()
+    assert "operating_expense_match" in {
+        column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
+    }
+    assert "operating_expense_mappings" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -573,6 +607,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
     assert "quotation_scenario_evidence" in inspector.get_table_names()
     assert "operating_expense_mappings" in inspector.get_table_names()
+    assert "workbench_review_source_invoice_evidence" in inspector.get_table_names()
     assert "operating_expense_match" in {
         column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
     }

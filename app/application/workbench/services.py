@@ -5,6 +5,7 @@ from app.application.workbench.evidence import (
     ReviewClassificationEvidence,
     ReviewExecutionBillingEvidence,
     ReviewExecutionEvidence,
+    ReviewSourceInvoiceEvidence,
 )
 from app.application.workbench.ports import ReviewItemWriter
 
@@ -15,8 +16,20 @@ class ReviewItemCreationService:
     def __init__(self, writer: ReviewItemWriter) -> None:
         self._writer = writer
 
-    def create_pending_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
-        return self._writer.create_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
+    def create_pending_review_item(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
+    ) -> ReviewItem:
+        return self._writer.create_review_item(
+            item,
+            company_id=company_id,
+            idempotency_key=idempotency_key,
+            source_invoice_evidence=source_invoice_evidence,
+        )
 
     def create_pending_review_item_with_execution_evidence(
         self,
@@ -26,6 +39,7 @@ class ReviewItemCreationService:
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
         classification_evidence: ReviewClassificationEvidence | None = None,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
     ) -> ReviewItem:
         if classification_evidence is None:
             return self._writer.create_review_item_with_execution_evidence(
@@ -33,6 +47,7 @@ class ReviewItemCreationService:
                 company_id=company_id,
                 idempotency_key=idempotency_key,
                 evidence=evidence,
+                source_invoice_evidence=source_invoice_evidence,
             )
         return self._writer.create_review_item_with_execution_evidence(
             item,
@@ -40,6 +55,7 @@ class ReviewItemCreationService:
             idempotency_key=idempotency_key,
             evidence=evidence,
             classification_evidence=classification_evidence,
+            source_invoice_evidence=source_invoice_evidence,
         )
 
     def create_pending_review_item_with_classification_evidence(
@@ -49,12 +65,14 @@ class ReviewItemCreationService:
         company_id: int,
         idempotency_key: str,
         classification_evidence: ReviewClassificationEvidence,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
     ) -> ReviewItem:
         return self._writer.create_review_item_with_classification_evidence(
             item,
             company_id=company_id,
             idempotency_key=idempotency_key,
             classification_evidence=classification_evidence,
+            source_invoice_evidence=source_invoice_evidence,
         )
 
     def create_pending_review_item_with_billing_evidence(

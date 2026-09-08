@@ -26,6 +26,7 @@ from app.application.workbench import (
     ReviewExecutionEvidence,
     ReviewItem,
     ReviewItemCreationService,
+    ReviewSourceInvoiceEvidence,
     ReviewStatus,
     SubmitReviewDecisionUseCase,
 )
@@ -51,6 +52,7 @@ from app.models.workbench_review_classification_evidence import WorkbenchReviewC
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence import SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import (
@@ -212,28 +214,34 @@ class RecordingReviewItemCreationService:
         self.calls: list[str] = []
         self.execution_evidence: ReviewExecutionEvidence | None = None
         self.classification_evidence: ReviewClassificationEvidence | None = None
+        self.source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None
         self.created_item: ReviewItem | None = None
 
-    def create_pending_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
+    def create_pending_review_item(
+        self, item: ReviewItem, *, company_id: int, idempotency_key: str, source_invoice_evidence=None
+    ) -> ReviewItem:
         self.calls.append("plain")
         self.created_item = item
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
     def create_pending_review_item_with_classification_evidence(
-        self, item, *, company_id, idempotency_key, classification_evidence
+        self, item, *, company_id, idempotency_key, classification_evidence, source_invoice_evidence=None
     ) -> ReviewItem:
         self.calls.append("classification")
         self.created_item = item
         self.classification_evidence = classification_evidence
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
     def create_pending_review_item_with_execution_evidence(
-        self, item, *, company_id, idempotency_key, evidence, classification_evidence=None
+        self, item, *, company_id, idempotency_key, evidence, classification_evidence=None, source_invoice_evidence=None
     ) -> ReviewItem:
         self.calls.append("execution")
         self.created_item = item
         self.execution_evidence = evidence
         self.classification_evidence = classification_evidence
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
 
@@ -483,6 +491,7 @@ def session() -> Session:
             WorkbenchReviewClassificationEvidence.__table__,
             WorkbenchReviewDecision.__table__,
             ExecutionSourceInvoiceEvidence.__table__,
+            WorkbenchReviewSourceInvoiceEvidence.__table__,
         ],
     )
     factory = sessionmaker(bind=engine)

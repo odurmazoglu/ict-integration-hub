@@ -37,6 +37,7 @@ from app.application.workbench.evidence import (
     ReviewClassificationEvidence,
     ReviewExecutionBillingEvidence,
     ReviewExecutionEvidence,
+    ReviewSourceInvoiceEvidence,
 )
 from app.application.workbench.exceptions import (
     ReviewDataIntegrityError,
@@ -60,6 +61,7 @@ from app.models.workbench_review_classification_evidence import WorkbenchReviewC
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
+from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence.execution_source_invoice_reader import (
     deserialize_execution_source_invoice_payload,
     serialize_execution_source_invoice,
@@ -74,6 +76,12 @@ from app.persistence.review_classification_evidence_reader import (
     classification_evidence_from_record,
     classification_evidence_payload,
 )
+from app.persistence.workbench_review_source_invoice_reader import (
+    deserialize_review_source_invoice_evidence,
+    model_from_review_source_invoice_evidence,
+    review_source_invoice_evidence_fingerprint,
+    review_source_invoice_evidence_fingerprint_from_model,
+)
 
 SAFE_PERSISTENCE_ERROR = "Review persistence operation failed."
 SAFE_DECISION_ERROR = "Review decision persistence operation failed."
@@ -87,17 +95,39 @@ class SqlAlchemyReviewRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
+    def create_review_item(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
+    ) -> ReviewItem:
         _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
+        if source_invoice_evidence is not None:
+            _validate_review_source_invoice_evidence_linkage(
+                item=item, company_id=company_id, source_invoice_evidence=source_invoice_evidence
+            )
         try:
             existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
             if existing is not None:
-                return self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                if source_invoice_evidence is not None:
+                    self._return_existing_review_source_invoice_evidence_or_raise_conflict(source_invoice_evidence)
+                return existing_item
 
             record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
+            source_invoice_record = (
+                model_from_review_source_invoice_evidence(source_invoice_evidence)
+                if source_invoice_evidence is not None
+                else None
+            )
             with self._session.begin_nested():
                 self._session.add(record)
                 self._session.flush()
+                if source_invoice_record is not None:
+                    self._session.add(source_invoice_record)
+                    self._session.flush()
                 self._session.refresh(record)
             return _review_item_from_model(record)
         except IntegrityError as exc:
@@ -105,6 +135,7 @@ class SqlAlchemyReviewRepository:
                 item,
                 company_id=company_id,
                 idempotency_key=idempotency_key,
+                source_invoice_evidence=source_invoice_evidence,
                 exc=exc,
             )
         except ReviewPersistenceError:
@@ -120,6 +151,7 @@ class SqlAlchemyReviewRepository:
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
         classification_evidence: ReviewClassificationEvidence | None = None,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
     ) -> ReviewItem:
         _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
         _validate_review_evidence_linkage(item=item, company_id=company_id, evidence=evidence)
@@ -129,6 +161,10 @@ class SqlAlchemyReviewRepository:
                 company_id=company_id,
                 classification_evidence=classification_evidence,
             )
+        if source_invoice_evidence is not None:
+            _validate_review_source_invoice_evidence_linkage(
+                item=item, company_id=company_id, source_invoice_evidence=source_invoice_evidence
+            )
         try:
             existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
             if existing is not None:
@@ -136,6 +172,8 @@ class SqlAlchemyReviewRepository:
                 self._return_existing_review_evidence_or_raise_conflict(evidence)
                 if classification_evidence is not None:
                     self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
+                if source_invoice_evidence is not None:
+                    self._return_existing_review_source_invoice_evidence_or_raise_conflict(source_invoice_evidence)
                 return existing_item
 
             record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
@@ -143,12 +181,19 @@ class SqlAlchemyReviewRepository:
             classification_record = (
                 _classification_evidence_model(classification_evidence) if classification_evidence is not None else None
             )
+            source_invoice_record = (
+                model_from_review_source_invoice_evidence(source_invoice_evidence)
+                if source_invoice_evidence is not None
+                else None
+            )
             with self._session.begin_nested():
                 self._session.add(record)
                 self._session.flush()
                 self._session.add(evidence_record)
                 if classification_record is not None:
                     self._session.add(classification_record)
+                if source_invoice_record is not None:
+                    self._session.add(source_invoice_record)
                 self._session.flush()
                 self._session.refresh(record)
             return _review_item_from_model(record)
@@ -159,6 +204,7 @@ class SqlAlchemyReviewRepository:
                 idempotency_key=idempotency_key,
                 evidence=evidence,
                 classification_evidence=classification_evidence,
+                source_invoice_evidence=source_invoice_evidence,
                 exc=exc,
             )
         except ReviewPersistenceError:
@@ -173,6 +219,7 @@ class SqlAlchemyReviewRepository:
         company_id: int,
         idempotency_key: str,
         classification_evidence: ReviewClassificationEvidence,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
     ) -> ReviewItem:
         _validate_create_request(item, company_id=company_id, idempotency_key=idempotency_key)
         _validate_review_classification_evidence_linkage(
@@ -180,19 +227,32 @@ class SqlAlchemyReviewRepository:
             company_id=company_id,
             classification_evidence=classification_evidence,
         )
+        if source_invoice_evidence is not None:
+            _validate_review_source_invoice_evidence_linkage(
+                item=item, company_id=company_id, source_invoice_evidence=source_invoice_evidence
+            )
         try:
             existing = self._find_by_idempotency_key(company_id=company_id, idempotency_key=idempotency_key)
             if existing is not None:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
                 self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
+                if source_invoice_evidence is not None:
+                    self._return_existing_review_source_invoice_evidence_or_raise_conflict(source_invoice_evidence)
                 return existing_item
 
             record = _model_from_review_item(item, company_id=company_id, idempotency_key=idempotency_key)
             classification_record = _classification_evidence_model(classification_evidence)
+            source_invoice_record = (
+                model_from_review_source_invoice_evidence(source_invoice_evidence)
+                if source_invoice_evidence is not None
+                else None
+            )
             with self._session.begin_nested():
                 self._session.add(record)
                 self._session.flush()
                 self._session.add(classification_record)
+                if source_invoice_record is not None:
+                    self._session.add(source_invoice_record)
                 self._session.flush()
                 self._session.refresh(record)
             return _review_item_from_model(record)
@@ -202,6 +262,7 @@ class SqlAlchemyReviewRepository:
                 company_id=company_id,
                 idempotency_key=idempotency_key,
                 classification_evidence=classification_evidence,
+                source_invoice_evidence=source_invoice_evidence,
                 exc=exc,
             )
         except ReviewPersistenceError:
@@ -746,6 +807,7 @@ class SqlAlchemyReviewRepository:
         *,
         company_id: int,
         idempotency_key: str,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
         exc: IntegrityError,
     ) -> ReviewItem:
         try:
@@ -754,7 +816,10 @@ class SqlAlchemyReviewRepository:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from lookup_exc
         if existing is not None:
             try:
-                return self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
+                if source_invoice_evidence is not None:
+                    self._return_existing_review_source_invoice_evidence_or_raise_conflict(source_invoice_evidence)
+                return existing_item
             except ReviewPersistenceError as conflict_exc:
                 raise conflict_exc from exc
 
@@ -776,6 +841,7 @@ class SqlAlchemyReviewRepository:
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
         classification_evidence: ReviewClassificationEvidence | None = None,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
         exc: IntegrityError,
     ) -> ReviewItem:
         try:
@@ -788,6 +854,8 @@ class SqlAlchemyReviewRepository:
                 self._return_existing_review_evidence_or_raise_conflict(evidence)
                 if classification_evidence is not None:
                     self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
+                if source_invoice_evidence is not None:
+                    self._return_existing_review_source_invoice_evidence_or_raise_conflict(source_invoice_evidence)
                 return existing_item
             except ReviewPersistenceError as conflict_exc:
                 raise conflict_exc from exc
@@ -800,6 +868,7 @@ class SqlAlchemyReviewRepository:
         company_id: int,
         idempotency_key: str,
         classification_evidence: ReviewClassificationEvidence,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
         exc: IntegrityError,
     ) -> ReviewItem:
         try:
@@ -810,6 +879,8 @@ class SqlAlchemyReviewRepository:
             try:
                 existing_item = self._return_existing_or_raise_conflict(existing, item, company_id=company_id)
                 self._return_existing_review_classification_evidence_or_raise_conflict(classification_evidence)
+                if source_invoice_evidence is not None:
+                    self._return_existing_review_source_invoice_evidence_or_raise_conflict(source_invoice_evidence)
                 return existing_item
             except ReviewPersistenceError as conflict_exc:
                 raise conflict_exc from exc
@@ -906,6 +977,42 @@ class SqlAlchemyReviewRepository:
                 WorkbenchReviewExecutionEvidence.company_id == company_id,
                 WorkbenchReviewExecutionEvidence.review_version == review_version,
             )
+        )
+
+    def _find_review_source_invoice_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> WorkbenchReviewSourceInvoiceEvidence | None:
+        return self._session.scalar(
+            select(WorkbenchReviewSourceInvoiceEvidence).where(
+                WorkbenchReviewSourceInvoiceEvidence.review_id == review_id,
+                WorkbenchReviewSourceInvoiceEvidence.company_id == company_id,
+            )
+        )
+
+    def _return_existing_review_source_invoice_evidence_or_raise_conflict(
+        self,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence,
+    ) -> ReviewSourceInvoiceEvidence:
+        existing = self._find_review_source_invoice_evidence(
+            review_id=source_invoice_evidence.review_id,
+            company_id=source_invoice_evidence.company_id,
+        )
+        if existing is None:
+            raise ReviewDataIntegrityError("Review source invoice evidence is missing for existing review item.")
+        existing_fingerprint = review_source_invoice_evidence_fingerprint_from_model(existing)
+        if existing_fingerprint != review_source_invoice_evidence_fingerprint(source_invoice_evidence):
+            raise ReviewIdempotencyConflictError("Review source invoice evidence conflicts with existing review.")
+        return deserialize_review_source_invoice_evidence(
+            {
+                "review_id": existing.review_id,
+                "company_id": existing.company_id,
+                "review_version": existing.review_version,
+                "source_invoice_id": existing.source_invoice_id,
+                "invoice": existing.invoice,
+            }
         )
 
     def _find_all_review_billing_evidence(
@@ -1189,6 +1296,22 @@ def _validate_evidence_query(*, review_id: str, company_id: int, review_version:
         raise WorkbenchContractError("company_id must be positive.")
     if type(review_version) is not int or review_version <= 0:
         raise WorkbenchContractError("review_version must be positive.")
+
+
+def _validate_review_source_invoice_evidence_linkage(
+    *,
+    item: ReviewItem,
+    company_id: int,
+    source_invoice_evidence: ReviewSourceInvoiceEvidence,
+) -> None:
+    if source_invoice_evidence.review_id != item.review_id:
+        raise WorkbenchContractError("Source invoice evidence review_id must match review item.")
+    if source_invoice_evidence.company_id != company_id:
+        raise WorkbenchContractError("Source invoice evidence company_id must match review item company.")
+    if source_invoice_evidence.review_version != item.version:
+        raise WorkbenchContractError("Source invoice evidence review_version must match review item version.")
+    if source_invoice_evidence.source_invoice_id != item.invoice_id:
+        raise WorkbenchContractError("Source invoice evidence source_invoice_id must match review item invoice_id.")
 
 
 def _validate_review_evidence_linkage(

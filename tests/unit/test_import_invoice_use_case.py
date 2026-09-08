@@ -24,7 +24,7 @@ from app.application.use_cases import (
     ImportInvoiceUseCase,
     ImportInvoiceValidationError,
 )
-from app.application.workbench import ReviewClassificationEvidence, ReviewItem
+from app.application.workbench import ReviewClassificationEvidence, ReviewItem, ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateReadError,
@@ -394,10 +394,19 @@ class RecordingReviewItemCreationService:
         self.order = order
         self.created_item: ReviewItem | None = None
         self.classification_evidence: ReviewClassificationEvidence | None = None
+        self.source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None
 
-    def create_pending_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
+    def create_pending_review_item(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
+    ) -> ReviewItem:
         self.order.append("persist") if self.order is not None else None
         self.created_item = item
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
     def create_pending_review_item_with_classification_evidence(
@@ -407,10 +416,12 @@ class RecordingReviewItemCreationService:
         company_id: int,
         idempotency_key: str,
         classification_evidence: ReviewClassificationEvidence,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
     ) -> ReviewItem:
         self.order.append("persist") if self.order is not None else None
         self.created_item = item
         self.classification_evidence = classification_evidence
+        self.source_invoice_evidence = source_invoice_evidence
         return item
 
 

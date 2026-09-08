@@ -12,6 +12,7 @@ from app.application.workbench.evidence import (
     ReviewClassificationEvidence,
     ReviewExecutionBillingEvidence,
     ReviewExecutionEvidence,
+    ReviewSourceInvoiceEvidence,
 )
 from app.application.workbench.projection import (
     OdooWorkbenchDecisionCandidate,
@@ -38,7 +39,14 @@ class ReviewQueueReader(Protocol):
 class ReviewItemWriter(Protocol):
     """Write port for idempotent creation of pending Workbench review items."""
 
-    def create_review_item(self, item: ReviewItem, *, company_id: int, idempotency_key: str) -> ReviewItem:
+    def create_review_item(
+        self,
+        item: ReviewItem,
+        *,
+        company_id: int,
+        idempotency_key: str,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
+    ) -> ReviewItem:
         pass
 
     def create_review_item_with_execution_evidence(
@@ -49,6 +57,7 @@ class ReviewItemWriter(Protocol):
         idempotency_key: str,
         evidence: ReviewExecutionEvidence,
         classification_evidence: ReviewClassificationEvidence | None = None,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
     ) -> ReviewItem:
         pass
 
@@ -59,6 +68,7 @@ class ReviewItemWriter(Protocol):
         company_id: int,
         idempotency_key: str,
         classification_evidence: ReviewClassificationEvidence,
+        source_invoice_evidence: ReviewSourceInvoiceEvidence | None = None,
     ) -> ReviewItem:
         pass
 
