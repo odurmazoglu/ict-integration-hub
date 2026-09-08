@@ -4,6 +4,7 @@ from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceE
 from app.models.import_receipt import ImportReceipt
 from app.models.invoice_document import InvoiceDocument
 from app.models.odoo_draft_invoice import OdooDraftInvoice
+from app.models.operating_expense_mapping import OperatingExpenseMappingRecord
 from app.models.provider import Provider
 from app.models.quotation_scenario_evidence import QuotationScenarioEvidence
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
@@ -25,6 +26,7 @@ __all__ = [
     "WorkbenchReviewClassificationEvidence",
     "InvoiceDocument",
     "OdooDraftInvoice",
+    "OperatingExpenseMappingRecord",
     "Provider",
     "QuotationScenarioEvidence",
     "UyumsoftInvoiceMetadata",
