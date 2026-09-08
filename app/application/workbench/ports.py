@@ -20,6 +20,10 @@ from app.application.workbench.projection import (
     WorkbenchProjection,
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
+from app.application.workbench.reclassification import (
+    ReviewReclassificationProposal,
+    ReviewReclassificationResult,
+)
 from app.billing.dto import CustomerInvoiceBillingInstruction
 
 if TYPE_CHECKING:
@@ -93,6 +97,25 @@ class ReviewItemWriter(Protocol):
         billing_evidence: tuple[ReviewExecutionBillingEvidence, ...],
         classification_evidence: ReviewClassificationEvidence | None = None,
     ) -> ReviewItem:
+        pass
+
+
+class ReviewSourceInvoiceEvidenceReader(Protocol):
+    """Read-only port for the immutable canonical source invoice pinned to a review."""
+
+    def get(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> ReviewSourceInvoiceEvidence:
+        pass
+
+
+class ReviewReclassificationWriter(Protocol):
+    """Write port for one atomic non-destructive review reclassification transition."""
+
+    def reclassify_review(self, proposal: ReviewReclassificationProposal) -> ReviewReclassificationResult:
         pass
 
 

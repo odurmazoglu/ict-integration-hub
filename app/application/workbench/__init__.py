@@ -96,6 +96,8 @@ from app.application.workbench.ports import (
     ReviewExecutionEvidenceReader,
     ReviewItemWriter,
     ReviewQueueReader,
+    ReviewReclassificationWriter,
+    ReviewSourceInvoiceEvidenceReader,
     WorkbenchBillingAuthoringReader,
     WorkbenchDecisionCandidateReader,
     WorkbenchProjectionPublisher,
@@ -112,6 +114,12 @@ from app.application.workbench.projection import (
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workbench.query_use_cases import GetReviewItemUseCase, ListReviewQueueUseCase
+from app.application.workbench.reclassification import (
+    ReclassifyReviewCommand,
+    ReviewReclassificationProposal,
+    ReviewReclassificationResult,
+    ReviewReclassificationTrigger,
+)
 from app.application.workbench.services import ReviewItemCreationService
 
 __all__ = [
@@ -146,6 +154,7 @@ __all__ = [
     "ProjectionPublishResult",
     "PurchaseOrderReference",
     "PurchaseOrderReferenceRepository",
+    "ReclassifyReviewCommand",
     "ReviewDecisionAcknowledgement",
     "ReviewDecisionCommand",
     "ReviewDecisionType",
@@ -157,7 +166,12 @@ __all__ = [
     "ReviewExecutionBillingEvidence",
     "ReviewExecutionEvidence",
     "ReviewExecutionEvidenceReader",
+    "ReviewReclassificationProposal",
+    "ReviewReclassificationResult",
+    "ReviewReclassificationTrigger",
+    "ReviewReclassificationWriter",
     "ReviewSourceInvoiceEvidence",
+    "ReviewSourceInvoiceEvidenceReader",
     "ReviewDetailQuery",
     "ReviewItem",
     "ReviewItemCreationService",

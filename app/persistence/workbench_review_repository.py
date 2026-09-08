@@ -52,6 +52,11 @@ from app.application.workbench.exceptions import (
     WorkbenchContractError,
 )
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
+from app.application.workbench.reclassification import (
+    ReviewReclassificationProposal,
+    ReviewReclassificationResult,
+    ReviewReclassificationTrigger,
+)
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.billing.dto import CustomerInvoiceBillingInstruction
 from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
@@ -61,6 +66,7 @@ from app.models.workbench_review_classification_evidence import WorkbenchReviewC
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import REVIEW_AMOUNT_PRECISION, REVIEW_AMOUNT_SCALE, WorkbenchReviewItem
+from app.models.workbench_review_reclassification import WorkbenchReviewReclassification
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence.execution_source_invoice_reader import (
     deserialize_execution_source_invoice_payload,
@@ -382,6 +388,219 @@ class SqlAlchemyReviewRepository:
             raise
         except SQLAlchemyError as exc:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def reclassify_review(self, proposal: ReviewReclassificationProposal) -> ReviewReclassificationResult:
+        if not isinstance(proposal, ReviewReclassificationProposal):
+            raise WorkbenchContractError("ReviewReclassificationProposal is required.")
+        try:
+            current = self._session.scalar(
+                select(WorkbenchReviewItem).where(
+                    WorkbenchReviewItem.review_id == proposal.review_id,
+                    WorkbenchReviewItem.company_id == proposal.company_id,
+                )
+            )
+            if current is None:
+                raise ReviewNotFoundError("Review item was not found.")
+
+            existing_event = self._find_reclassification_from_version(
+                review_id=proposal.review_id,
+                company_id=proposal.company_id,
+                from_version=proposal.expected_version,
+            )
+            if existing_event is not None:
+                return self._reclassification_result_from_event(existing_event, proposal)
+
+            if current.status != ReviewStatus.PENDING_REVIEW.value:
+                raise ReviewStateConflictError("Review item is not pending review.")
+            if current.version != proposal.expected_version:
+                raise ReviewVersionConflictError("Review item version does not match expected_version.")
+
+            previous_workflow = WorkflowType(current.workflow)
+            previous_reasons_payload = list(_require_list(current.review_reasons))
+            previous_reasons = tuple(_deserialize_reason(reason) for reason in previous_reasons_payload)
+            new_reasons_payload = [_serialize_reason(reason) for reason in proposal.new_review_reasons]
+
+            current_executable = (
+                self._find_review_execution_evidence(
+                    review_id=proposal.review_id,
+                    company_id=proposal.company_id,
+                    review_version=current.version,
+                )
+                is not None
+            )
+            if (
+                previous_workflow is proposal.new_workflow
+                and previous_reasons_payload == new_reasons_payload
+                and current_executable == proposal.executable
+            ):
+                return ReviewReclassificationResult(
+                    review_id=proposal.review_id,
+                    company_id=proposal.company_id,
+                    changed=False,
+                    from_version=current.version,
+                    to_version=current.version,
+                    previous_workflow=previous_workflow,
+                    new_workflow=previous_workflow,
+                    previous_review_reasons=previous_reasons,
+                    new_review_reasons=previous_reasons,
+                    trigger=proposal.trigger,
+                    executable=current_executable,
+                )
+
+            event = WorkbenchReviewReclassification(
+                review_id=proposal.review_id,
+                company_id=proposal.company_id,
+                from_version=proposal.expected_version,
+                to_version=proposal.to_version,
+                source_invoice_id=proposal.source_invoice_id,
+                trigger=proposal.trigger.value,
+                note=proposal.note,
+                previous_workflow=current.workflow,
+                previous_review_reasons=previous_reasons_payload,
+                new_workflow=proposal.new_workflow.value,
+                new_review_reasons=new_reasons_payload,
+                matched_rule_code=proposal.matched_rule_code,
+                matched_rule_id=proposal.matched_rule_id,
+                executable=proposal.executable,
+            )
+            classification_record = (
+                _classification_evidence_model(proposal.new_classification_evidence)
+                if proposal.new_classification_evidence is not None
+                else None
+            )
+            execution_record = (
+                _evidence_model_from_review_evidence(proposal.new_execution_evidence)
+                if proposal.new_execution_evidence is not None
+                else None
+            )
+            with self._session.begin_nested():
+                result = self._session.execute(
+                    update(WorkbenchReviewItem)
+                    .where(
+                        WorkbenchReviewItem.review_id == proposal.review_id,
+                        WorkbenchReviewItem.company_id == proposal.company_id,
+                        WorkbenchReviewItem.status == ReviewStatus.PENDING_REVIEW.value,
+                        WorkbenchReviewItem.version == proposal.expected_version,
+                    )
+                    .values(
+                        workflow=proposal.new_workflow.value,
+                        review_reasons=new_reasons_payload,
+                        warnings=[str(warning) for warning in proposal.new_warnings],
+                        version=proposal.to_version,
+                        updated_at=func.now(),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if int(result.rowcount or 0) != 1:
+                    self._raise_reclassification_conflict(proposal)
+                self._session.add(event)
+                if classification_record is not None:
+                    self._session.add(classification_record)
+                if execution_record is not None:
+                    self._session.add(execution_record)
+                self._session.flush()
+            return ReviewReclassificationResult(
+                review_id=proposal.review_id,
+                company_id=proposal.company_id,
+                changed=True,
+                from_version=proposal.expected_version,
+                to_version=proposal.to_version,
+                previous_workflow=previous_workflow,
+                new_workflow=proposal.new_workflow,
+                previous_review_reasons=previous_reasons,
+                new_review_reasons=proposal.new_review_reasons,
+                trigger=proposal.trigger,
+                executable=proposal.executable,
+            )
+        except IntegrityError as exc:
+            return self._handle_reclassification_integrity_error(proposal, exc=exc)
+        except ApplicationError:
+            self._session.expire_all()
+            raise
+        except SQLAlchemyError as exc:
+            self._session.expire_all()
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def _find_reclassification_from_version(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        from_version: int,
+    ) -> WorkbenchReviewReclassification | None:
+        return self._session.scalar(
+            select(WorkbenchReviewReclassification).where(
+                WorkbenchReviewReclassification.review_id == review_id,
+                WorkbenchReviewReclassification.company_id == company_id,
+                WorkbenchReviewReclassification.from_version == from_version,
+            )
+        )
+
+    def _reclassification_result_from_event(
+        self,
+        event: WorkbenchReviewReclassification,
+        proposal: ReviewReclassificationProposal,
+    ) -> ReviewReclassificationResult:
+        if _reclassification_event_fingerprint(event) != _reclassification_proposal_fingerprint(proposal):
+            raise ReviewVersionConflictError(
+                "Review was already reclassified from this version with a different deterministic outcome."
+            )
+        return ReviewReclassificationResult(
+            review_id=event.review_id,
+            company_id=event.company_id,
+            changed=True,
+            from_version=event.from_version,
+            to_version=event.to_version,
+            previous_workflow=WorkflowType(event.previous_workflow),
+            new_workflow=WorkflowType(event.new_workflow),
+            previous_review_reasons=tuple(
+                _deserialize_reason(reason) for reason in _require_list(event.previous_review_reasons)
+            ),
+            new_review_reasons=tuple(_deserialize_reason(reason) for reason in _require_list(event.new_review_reasons)),
+            trigger=ReviewReclassificationTrigger(event.trigger),
+            executable=bool(event.executable),
+        )
+
+    def _raise_reclassification_conflict(self, proposal: ReviewReclassificationProposal) -> None:
+        try:
+            record = self._session.scalar(
+                select(WorkbenchReviewItem).where(
+                    WorkbenchReviewItem.review_id == proposal.review_id,
+                    WorkbenchReviewItem.company_id == proposal.company_id,
+                )
+            )
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+        if record is None:
+            raise ReviewNotFoundError("Review item was not found.")
+        if record.status != ReviewStatus.PENDING_REVIEW.value:
+            raise ReviewStateConflictError("Review item is no longer pending review.")
+        if record.version != proposal.expected_version:
+            raise ReviewVersionConflictError("Review item version does not match expected_version.")
+        raise ReviewStateConflictError("Review item could not accept the reclassification.")
+
+    def _handle_reclassification_integrity_error(
+        self,
+        proposal: ReviewReclassificationProposal,
+        *,
+        exc: IntegrityError,
+    ) -> ReviewReclassificationResult:
+        try:
+            existing = self._find_reclassification_from_version(
+                review_id=proposal.review_id,
+                company_id=proposal.company_id,
+                from_version=proposal.expected_version,
+            )
+        except SQLAlchemyError as lookup_exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from lookup_exc
+        if existing is not None:
+            try:
+                return self._reclassification_result_from_event(existing, proposal)
+            except ReviewVersionConflictError as conflict_exc:
+                raise conflict_exc from exc
+        raise ReviewVersionConflictError(
+            "Review reclassification conflicts with a concurrent review transition."
+        ) from exc
 
     def get_review_classification_evidence(
         self,
@@ -1979,6 +2198,32 @@ def _review_evidence_fingerprint(evidence: ReviewExecutionEvidence) -> tuple[Any
         payload["product_match"],
         payload["tax_match"],
         payload["operating_expense_match"],
+    )
+
+
+def _reclassification_proposal_fingerprint(proposal: ReviewReclassificationProposal) -> tuple[Any, ...]:
+    return (
+        proposal.review_id,
+        proposal.company_id,
+        proposal.expected_version,
+        proposal.to_version,
+        proposal.trigger.value,
+        proposal.new_workflow.value,
+        tuple(_reason_fingerprint(reason) for reason in proposal.new_review_reasons),
+        proposal.executable,
+    )
+
+
+def _reclassification_event_fingerprint(event: WorkbenchReviewReclassification) -> tuple[Any, ...]:
+    return (
+        event.review_id,
+        event.company_id,
+        event.from_version,
+        event.to_version,
+        event.trigger,
+        event.new_workflow,
+        tuple(_reason_fingerprint(_deserialize_reason(reason)) for reason in _require_list(event.new_review_reasons)),
+        bool(event.executable),
     )
 
 
