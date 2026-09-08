@@ -1357,6 +1357,7 @@ def _evidence_model_from_review_evidence(evidence: ReviewExecutionEvidence) -> W
         partner_match=payload["partner_match"],
         product_match=payload["product_match"],
         tax_match=payload["tax_match"],
+        operating_expense_match=payload["operating_expense_match"],
     )
 
 
@@ -1373,6 +1374,7 @@ def _review_evidence_from_model(record: WorkbenchReviewExecutionEvidence) -> Rev
             "partner_match": record.partner_match,
             "product_match": record.product_match,
             "tax_match": record.tax_match,
+            "operating_expense_match": record.operating_expense_match,
         }
     )
     return _review_evidence_from_execution_source(source)
@@ -1440,6 +1442,7 @@ def _execution_source_from_review_evidence(evidence: ReviewExecutionEvidence) ->
         partner_match=evidence.partner_match,
         product_match=evidence.product_match,
         tax_match=evidence.tax_match,
+        operating_expense_match=evidence.operating_expense_match,
     )
 
 
@@ -1453,6 +1456,7 @@ def _review_evidence_from_execution_source(source: ExecutionSourceInvoice) -> Re
         partner_match=source.partner_match,
         product_match=source.product_match,
         tax_match=source.tax_match,
+        operating_expense_match=source.operating_expense_match,
     )
 
 
@@ -1851,6 +1855,7 @@ def _review_evidence_fingerprint(evidence: ReviewExecutionEvidence) -> tuple[Any
         payload["partner_match"],
         payload["product_match"],
         payload["tax_match"],
+        payload["operating_expense_match"],
     )
 
 
@@ -2034,6 +2039,7 @@ def _evidence_fingerprint_from_model(record: ExecutionSourceInvoiceEvidence) -> 
             "partner_match": record.partner_match,
             "product_match": record.product_match,
             "tax_match": record.tax_match,
+            "operating_expense_match": record.operating_expense_match,
         }
     )
 

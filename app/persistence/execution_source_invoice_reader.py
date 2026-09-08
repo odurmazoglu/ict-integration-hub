@@ -14,6 +14,7 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceIntegrityError,
     ExecutionSourceInvoiceNotFoundError,
 )
+from app.application.expense_mapping import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
 from app.domain.invoice import (
     Address,
     Attachment,
@@ -162,6 +163,7 @@ def serialize_execution_source_invoice_payload(source: ExecutionSourceInvoice) -
         "partner_match": _partner_match_to_data(source.partner_match),
         "product_match": _product_match_to_data(source.product_match),
         "tax_match": _tax_match_to_data(source.tax_match),
+        "operating_expense_match": _operating_expense_match_to_data(source.operating_expense_match),
     }
 
 
@@ -177,6 +179,7 @@ def deserialize_execution_source_invoice_payload(data: dict[str, Any]) -> Execut
         partner_match=_partner_match_from_data(_require_dict(data.get("partner_match"))),
         product_match=_product_match_from_data(_require_dict(data.get("product_match"))),
         tax_match=_tax_match_from_data(_require_dict(data.get("tax_match"))),
+        operating_expense_match=_operating_expense_match_from_data(data.get("operating_expense_match")),
     )
     invoice_identity = source.invoice.header.ettn or source.invoice.header.invoice_uuid
     if source.source_invoice_id != invoice_identity:
@@ -205,6 +208,7 @@ def _source_from_evidence(evidence: ExecutionSourceInvoiceEvidence) -> Execution
             "partner_match": evidence.partner_match,
             "product_match": evidence.product_match,
             "tax_match": evidence.tax_match,
+            "operating_expense_match": evidence.operating_expense_match,
         }
     )
 
@@ -423,6 +427,41 @@ def _attachment_from_data(data: dict[str, Any]) -> Attachment:
         mime_type=_optional_text(data.get("mime_type")),
         sha256=_optional_text(data.get("sha256")),
         size=_optional_int(data.get("size")),
+    )
+
+
+def _operating_expense_match_to_data(result: OperatingExpenseMatchResult | None) -> dict[str, Any] | None:
+    if result is None:
+        return None
+    return {
+        "status": result.status.value,
+        "reason": result.reason,
+        "candidate_count": result.candidate_count,
+        "mapping_id": result.mapping_id,
+        "company_id": result.company_id,
+        "vendor_partner_id": result.vendor_partner_id,
+        "expense_account_id": result.expense_account_id,
+        "expense_category": result.expense_category,
+        "matched_by": result.matched_by,
+        "confidence": _decimal_to_data(result.confidence),
+    }
+
+
+def _operating_expense_match_from_data(data: Any) -> OperatingExpenseMatchResult | None:
+    if data is None:
+        return None
+    data = _require_dict(data)
+    return OperatingExpenseMatchResult(
+        status=OperatingExpenseMatchStatus(str(data["status"])),
+        reason=_required_text(data.get("reason")),
+        candidate_count=_required_int(data.get("candidate_count")),
+        mapping_id=_optional_int(data.get("mapping_id")),
+        company_id=_optional_int(data.get("company_id")),
+        vendor_partner_id=_optional_int(data.get("vendor_partner_id")),
+        expense_account_id=_optional_int(data.get("expense_account_id")),
+        expense_category=_optional_text(data.get("expense_category")),
+        matched_by=_optional_text(data.get("matched_by")),
+        confidence=_optional_decimal(data.get("confidence")),
     )
 
 

@@ -497,8 +497,18 @@ class RecordingVendorBillBuilder(VendorBillBuilder):
         self.calls = 0
         self.vendor_bill = _vendor_bill()
 
-    def build(self, invoice, partner_match, product_match, tax_match, *, company_id: int | None = None) -> VendorBill:
+    def build(
+        self,
+        invoice,
+        partner_match,
+        product_match,
+        tax_match,
+        *,
+        company_id: int | None = None,
+        operating_expense_match=None,
+    ) -> VendorBill:
         self.calls += 1
+        self.last_operating_expense_match = operating_expense_match
         return self.vendor_bill
 
 

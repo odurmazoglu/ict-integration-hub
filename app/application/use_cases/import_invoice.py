@@ -283,24 +283,45 @@ def _execution_evidence(
     tax_match = decision_result.tax_match
     if partner_match is None or product_match is None or tax_match is None:
         return None
-    if not validate_vendor_bill_inputs(
+
+    def _build(operating_expense_match: object | None) -> ReviewExecutionEvidence:
+        return ReviewExecutionEvidence(
+            review_id=item.review_id,
+            company_id=company_id,
+            review_version=item.version,
+            source_invoice_id=command.invoice.header.ettn or command.invoice.header.invoice_uuid,
+            invoice=command.invoice,
+            partner_match=partner_match,
+            product_match=product_match,
+            tax_match=tax_match,
+            operating_expense_match=operating_expense_match,
+        )
+
+    # Product mode wins: a valid deterministic product Vendor Bill is pinned as product evidence.
+    if validate_vendor_bill_inputs(
         command.invoice,
         partner_match,
         product_match,
         tax_match,
         company_id=company_id,
     ).is_valid:
+        return _build(None)
+
+    # Operating-expense mode: pin the exact deterministic expense-account match when the
+    # account-only Vendor Bill validation (PR #124) accepts it. Never re-resolve later.
+    operating_expense_match = decision_result.operating_expense_match
+    if operating_expense_match is None:
         return None
-    return ReviewExecutionEvidence(
-        review_id=item.review_id,
+    if not validate_vendor_bill_inputs(
+        command.invoice,
+        partner_match,
+        product_match,
+        tax_match,
         company_id=company_id,
-        review_version=item.version,
-        source_invoice_id=command.invoice.header.ettn or command.invoice.header.invoice_uuid,
-        invoice=command.invoice,
-        partner_match=partner_match,
-        product_match=product_match,
-        tax_match=tax_match,
-    )
+        operating_expense_match=operating_expense_match,
+    ).is_valid:
+        return None
+    return _build(operating_expense_match)
 
 
 def _review_item_from_import(

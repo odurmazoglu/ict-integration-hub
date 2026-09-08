@@ -67,6 +67,7 @@ class VendorBillExecutionStrategy:
                 source.product_match,
                 source.tax_match,
                 company_id=request.company_id,
+                operating_expense_match=source.operating_expense_match,
             )
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,

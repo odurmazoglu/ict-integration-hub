@@ -6,6 +6,10 @@ no persistence I/O itself and is not wired into production composition here.
 """
 
 from app.application.expense_mapping.contracts import OperatingExpenseMapping
+from app.application.expense_mapping.evidence_rules import (
+    EXACT_OPERATING_EXPENSE_CONFIDENCE,
+    operating_expense_evidence_errors,
+)
 from app.application.expense_mapping.exceptions import (
     OperatingExpenseMappingContractError,
     OperatingExpenseMappingDataIntegrityError,
@@ -27,6 +31,7 @@ from app.application.expense_mapping.repository import OperatingExpenseMappingRe
 
 __all__ = [
     "EXACT_MATCH_CONFIDENCE",
+    "EXACT_OPERATING_EXPENSE_CONFIDENCE",
     "MATCHED_BY_COMPANY_PARTNER",
     "NullOperatingExpenseMatcher",
     "OperatingExpenseMapping",
@@ -39,4 +44,5 @@ __all__ = [
     "OperatingExpenseMatchResult",
     "OperatingExpenseMatchStatus",
     "invoice_is_product_identifier_free",
+    "operating_expense_evidence_errors",
 ]
