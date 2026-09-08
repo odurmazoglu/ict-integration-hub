@@ -13,6 +13,7 @@ from app.application.ports import InvoiceImportHistory
 from app.application.services import UnitOfWork
 from app.application.workbench import (
     ReviewClassificationEvidence,
+    ReviewExecutionEvidence,
     ReviewItem,
     ReviewItemCreationService,
     ReviewStatus,
@@ -22,6 +23,8 @@ from app.application.workbench import (
     WorkbenchProjectionPublisher,
     WorkbenchProjectionPublishError,
 )
+from app.application.workflow import WorkflowType
+from app.billing.builder import validate_vendor_bill_inputs
 from app.domain.invoice import InternalInvoice
 
 WORKBENCH_PROJECTION_FAILURE_WARNING = "Odoo Workbench projection publish failed; Hub review remains authoritative."
@@ -189,11 +192,18 @@ def _persist_review_if_required(
         company_id=company_id,
         decision_result=decision_result,
     )
+    execution_evidence = _execution_evidence(
+        item=item,
+        company_id=company_id,
+        command=command,
+        decision_result=decision_result,
+    )
     persisted = _create_review_item(
         item=item,
         company_id=company_id,
         idempotency_key=command.idempotency_key,
         classification_evidence=classification_evidence,
+        execution_evidence=execution_evidence,
         review_item_creation_service=review_item_creation_service,
     )
     return persisted
@@ -205,7 +215,7 @@ def _record_successful_import_receipt_if_supported(
     result: ImportInvoiceResult,
     import_history: InvoiceImportHistory,
 ) -> None:
-    if not result.success or result.status == "already_imported":
+    if not result.success or result.review_required or result.status == "already_imported":
         return
     recorder = getattr(import_history, "record_import_result", None)
     if recorder is None:
@@ -226,8 +236,17 @@ def _create_review_item(
     company_id: int,
     idempotency_key: str,
     classification_evidence: ReviewClassificationEvidence | None,
+    execution_evidence: ReviewExecutionEvidence | None,
     review_item_creation_service: ReviewItemCreationService,
 ) -> ReviewItem:
+    if execution_evidence is not None:
+        return review_item_creation_service.create_pending_review_item_with_execution_evidence(
+            item,
+            company_id=company_id,
+            idempotency_key=idempotency_key,
+            evidence=execution_evidence,
+            classification_evidence=classification_evidence,
+        )
     if classification_evidence is None:
         return review_item_creation_service.create_pending_review_item(
             item,
@@ -239,6 +258,48 @@ def _create_review_item(
         company_id=company_id,
         idempotency_key=idempotency_key,
         classification_evidence=classification_evidence,
+    )
+
+
+def _execution_evidence(
+    *,
+    item: ReviewItem,
+    company_id: int,
+    command: ImportInvoiceCommand,
+    decision_result: DecisionResult,
+) -> ReviewExecutionEvidence | None:
+    """Immutable pre-decision Stage-1 evidence for a fully matched Vendor Bill candidate.
+
+    Only produced when the deterministic execution inputs are canonically complete
+    (``validate_vendor_bill_inputs``). Incomplete or ambiguous matches keep the
+    existing fail-closed behavior: a normal review item is created without
+    executable Vendor Bill evidence.
+    """
+
+    if decision_result.workflow is not WorkflowType.VENDOR_BILL:
+        return None
+    partner_match = decision_result.partner_match
+    product_match = decision_result.product_match
+    tax_match = decision_result.tax_match
+    if partner_match is None or product_match is None or tax_match is None:
+        return None
+    if not validate_vendor_bill_inputs(
+        command.invoice,
+        partner_match,
+        product_match,
+        tax_match,
+        company_id=company_id,
+    ).is_valid:
+        return None
+    return ReviewExecutionEvidence(
+        review_id=item.review_id,
+        company_id=company_id,
+        review_version=item.version,
+        source_invoice_id=command.invoice.header.ettn or command.invoice.header.invoice_uuid,
+        invoice=command.invoice,
+        partner_match=partner_match,
+        product_match=product_match,
+        tax_match=tax_match,
     )
 
 
