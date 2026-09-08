@@ -1,8 +1,8 @@
-"""Deterministic Hub-owned operating-expense mapping foundation.
+"""Deterministic Hub-owned operating-expense mapping and classification.
 
-This package holds only the persistent mapping data contract and its read port.
-It carries no classification or execution behavior: nothing here is wired into
-the rule engine, decision engine, builder, or execution runtime yet.
+This package holds the persistent mapping data contract, its read port, and the
+ERP-independent classification layer (typed match result + matcher). It performs
+no persistence I/O itself and is not wired into production composition here.
 """
 
 from app.application.expense_mapping.contracts import OperatingExpenseMapping
@@ -11,12 +11,32 @@ from app.application.expense_mapping.exceptions import (
     OperatingExpenseMappingDataIntegrityError,
     OperatingExpenseMappingError,
 )
+from app.application.expense_mapping.matcher import (
+    NullOperatingExpenseMatcher,
+    OperatingExpenseMatcher,
+)
+from app.application.expense_mapping.matching import (
+    EXACT_MATCH_CONFIDENCE,
+    MATCHED_BY_COMPANY_PARTNER,
+    OperatingExpenseMatchingEngine,
+    OperatingExpenseMatchResult,
+    OperatingExpenseMatchStatus,
+)
+from app.application.expense_mapping.predicates import invoice_is_product_identifier_free
 from app.application.expense_mapping.repository import OperatingExpenseMappingRepository
 
 __all__ = [
+    "EXACT_MATCH_CONFIDENCE",
+    "MATCHED_BY_COMPANY_PARTNER",
+    "NullOperatingExpenseMatcher",
     "OperatingExpenseMapping",
     "OperatingExpenseMappingContractError",
     "OperatingExpenseMappingDataIntegrityError",
     "OperatingExpenseMappingError",
     "OperatingExpenseMappingRepository",
+    "OperatingExpenseMatcher",
+    "OperatingExpenseMatchingEngine",
+    "OperatingExpenseMatchResult",
+    "OperatingExpenseMatchStatus",
+    "invoice_is_product_identifier_free",
 ]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.application.dto.base import ApplicationDTO
+from app.application.expense_mapping.matching import OperatingExpenseMatchResult
 from app.application.workflow import ManualReviewReason, WorkflowDecision, WorkflowType
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult
 from app.tax_mapping import InvoiceTaxMappingResult
@@ -16,6 +17,7 @@ class RuleEvaluationResult(ApplicationDTO):
     partner_match: PartnerMatchResult | None = None
     product_match: InvoiceProductMatchResult | None = None
     tax_match: InvoiceTaxMappingResult | None = None
+    operating_expense_match: OperatingExpenseMatchResult | None = None
     classification_result: object | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
@@ -50,6 +52,7 @@ class DecisionResult(ApplicationDTO):
     partner_match: PartnerMatchResult | None = None
     product_match: InvoiceProductMatchResult | None = None
     tax_match: InvoiceTaxMappingResult | None = None
+    operating_expense_match: OperatingExpenseMatchResult | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     duration: float = 0.0

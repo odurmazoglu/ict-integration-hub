@@ -48,6 +48,7 @@ class DecisionEngine:
             partner_match=rule_result.partner_match,
             product_match=rule_result.product_match,
             tax_match=rule_result.tax_match,
+            operating_expense_match=rule_result.operating_expense_match,
             warnings=rule_result.warnings + result.warnings,
             errors=rule_result.errors + result.errors,
             duration=perf_counter() - started,
