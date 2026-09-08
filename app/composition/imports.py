@@ -8,6 +8,7 @@ from app.application.decision import (
     VendorBillReviewRecommendationStrategy,
     WorkflowStrategyResolver,
 )
+from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.ports import InvoiceImportHistory
 from app.application.rules import DeterministicRuleEngine, InvoiceDecisionRuleEngine, OdooDecisionRuleFieldMapping
 from app.application.use_cases import ImportInvoiceUseCase
@@ -50,6 +51,7 @@ from app.erp.provider import StaticRepositoryProvider
 from app.matching import PartnerMatchingEngine, ProductMatchingEngine
 from app.persistence import (
     SqlAlchemyImportHistory,
+    SqlAlchemyOperatingExpenseMappingRepository,
     SqlAlchemyReviewBillingEvidenceReader,
     SqlAlchemyReviewClassificationEvidenceReader,
     SqlAlchemyReviewExecutionEvidenceReader,
@@ -167,11 +169,16 @@ def build_uyumsoft_canonical_invoice_importer(
         currency_repository=OdooCurrencyRepository(adapter=read_adapter),
         company_repository=company_repository,
     )
+    # The mapping table itself is the activation gate: with no enabled row the matcher
+    # returns NOT_FOUND and identifier-free invoices stay in Manual Review, exactly as
+    # before this wiring. No runtime feature flag is introduced.
+    operating_expense_matcher = OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session))
     decision_engine = DecisionEngine(
         rule_engine=DeterministicRuleEngine(
             partner_matcher=PartnerMatchingEngine(provider),
             product_matcher=ProductMatchingEngine(provider),
             tax_mapper=TaxMappingEngine(provider.tax_repository),
+            operating_expense_matcher=operating_expense_matcher,
         ),
         strategy_resolver=WorkflowStrategyResolver(
             [
