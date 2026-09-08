@@ -24,6 +24,19 @@ Production requires multiple explicit conditions:
 
 Contradictory configuration must fail at startup. Test and production endpoint separation is mandatory. Secrets must never be logged. Runtime gates complement operational governance but do not replace manual go-live approval.
 
+### Sanctioned staging Vendor Bill execute exception
+
+A single narrow exception allows a draft `account.move` Vendor Bill write outside `APP_ENV=production` so the incoming-invoice pipeline can be proven end to end against an approved staging Odoo tenant. It never reuses the production flags.
+
+The staging path is allowed only when all of the following hold:
+
+- `APP_ENV != production`
+- `STAGING_VENDOR_BILL_EXECUTE_ENABLED=true` (default `false`)
+- `ODOO_BASE_URL` hostname is an exact match in the code-owned `APPROVED_STAGING_ODOO_HOSTS` allowlist (no suffix or wildcard matching, never sourced from env)
+- a named `approved_by` is supplied at execution time
+
+`EXECUTION_EXECUTE_ENABLED=true` is accepted outside production only when the staging path above is sanctioned. `PRODUCTION_OPERATIONS_ENABLED` and `PRODUCTION_APPROVAL_ACK` must still be false/empty outside production, and `STAGING_VENDOR_BILL_EXECUTE_ENABLED` must be false in production. The exception is scoped to `ExecutionStepType.VENDOR_BILL` only; customer invoice, customer quotation, purchase order, subscription, recharge, and every other executable step type stay blocked. Draft-only guarantees are unchanged: still one `account.move/create`, still no `action_post`, `unlink`, payment, or reconciliation, and still an idempotency check before create.
+
 ## Consequences
 
 ### Positive
@@ -61,6 +74,9 @@ These alternatives were rejected because they are either too easy to misconfigur
 - `app/core/runtime_checks.py`
 - `app/api/routers/health.py`
 - `app/core/logging.py`
+- `app/erp/write/odoo_vendor_bill_writer.py`
+- `app/application/execution/preflight.py`
+- `app/composition/execution.py`
 
 ## Related Documentation
 

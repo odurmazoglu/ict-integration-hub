@@ -12,8 +12,26 @@ from app.core.config import Settings
 
 PRODUCTION_APPROVAL_ACK = "APPROVED_FOR_PRODUCTION"
 APPROVED_UYUMSOFT_PRODUCTION_HOSTS = frozenset({"efatura.uyumsoft.com.tr"})
+# Code-owned allowlist for the sanctioned non-production Vendor Bill execute path.
+# Exact lowercase hostnames only; never suffix/wildcard matched and never sourced from env.
+APPROVED_STAGING_ODOO_HOSTS = frozenset({"test-ictteknoloji.odoo.com"})
 PLACEHOLDER_VALUES = frozenset({"", "change-me", "example", "placeholder", "todo"})
 RuntimeCheckStatus = Literal["ok", "error"]
+
+
+def staging_vendor_bill_execute_sanctioned(settings: Settings) -> bool:
+    """Return True only when the narrow non-production Vendor Bill execute path is allowed.
+
+    Requires a non-production ``APP_ENV``, an explicit ``STAGING_VENDOR_BILL_EXECUTE_ENABLED``
+    opt-in, and an exact approved staging Odoo hostname. It never consults the production
+    operation flags and never widens any other executable workflow type.
+    """
+
+    if settings.app_env == "production":
+        return False
+    if not settings.staging_vendor_bill_execute_enabled:
+        return False
+    return _host(settings.odoo_base_url) in APPROVED_STAGING_ODOO_HOSTS
 
 
 class RuntimeConfigurationError(RuntimeError):
@@ -109,6 +127,8 @@ def _validate_production_settings(settings: Settings, errors: list[str]) -> None
         errors.append("PRODUCTION_OPERATIONS_ENABLED must be true in production.")
     if settings.production_approval_ack != PRODUCTION_APPROVAL_ACK:
         errors.append("PRODUCTION_APPROVAL_ACK must confirm manual production approval.")
+    if settings.staging_vendor_bill_execute_enabled:
+        errors.append("STAGING_VENDOR_BILL_EXECUTE_ENABLED must be false in production.")
     if settings.uyumsoft_environment != "production":
         errors.append("UYUMSOFT_ENVIRONMENT must be production when APP_ENV=production.")
     if _host(settings.uyumsoft_prod_wsdl_url) not in APPROVED_UYUMSOFT_PRODUCTION_HOSTS:
@@ -130,7 +150,12 @@ def _validate_production_settings(settings: Settings, errors: list[str]) -> None
 
 
 def _validate_non_production_settings(settings: Settings, errors: list[str]) -> None:
-    if settings.execution_execute_enabled:
+    staging_vendor_bill_execute = settings.staging_vendor_bill_execute_enabled
+    staging_host_approved = _host(settings.odoo_base_url) in APPROVED_STAGING_ODOO_HOSTS
+    if staging_vendor_bill_execute and not staging_host_approved:
+        errors.append("STAGING_VENDOR_BILL_EXECUTE_ENABLED=true requires ODOO_BASE_URL to be an approved staging host.")
+    staging_execute_sanctioned = staging_vendor_bill_execute and staging_host_approved
+    if settings.execution_execute_enabled and not staging_execute_sanctioned:
         errors.append("EXECUTION_EXECUTE_ENABLED must be false outside production.")
     if settings.customer_invoice_execute_enabled:
         errors.append("CUSTOMER_INVOICE_EXECUTE_ENABLED must be false outside production.")

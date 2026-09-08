@@ -66,6 +66,7 @@ def build_vendor_bill_execution_use_case(
     accepted_billing_reader = SqlAlchemyAcceptedBillingEvidenceReader(session)
     account_move_repository = AccountMoveRepository(client=odoo_client or OdooJson2Client.from_settings(settings))
     vendor_bill_policy = OdooVendorBillWritePolicy.from_settings(settings)
+    staging_vendor_bill_execute = vendor_bill_policy.staging_write_sanctioned
     customer_invoice_policy = OdooCustomerInvoiceWritePolicy.from_settings(settings)
     writer = OdooVendorBillWriter(
         repository=account_move_repository,
@@ -120,6 +121,7 @@ def build_vendor_bill_execution_use_case(
                 purchase_order_strategy.supported_step_types[0]: vendor_bill_policy,
                 customer_recharge_strategy.supported_step_types[0]: customer_invoice_policy,
             },
+            staging_execution_step_types=((ExecutionStepType.VENDOR_BILL,) if staging_vendor_bill_execute else ()),
         ),
         accepted_billing_evidence_reader=accepted_billing_reader,
     )

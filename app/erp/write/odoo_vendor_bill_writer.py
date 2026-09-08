@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Protocol
+from urllib.parse import urlparse
 
 from app.application.commands import VendorBillWriteCommand
 from app.application.dto import VendorBillWriteResult
 from app.application.ports import VendorBillWriter
 from app.core.config import Settings
-from app.core.runtime_checks import PRODUCTION_APPROVAL_ACK
+from app.core.runtime_checks import APPROVED_STAGING_ODOO_HOSTS, PRODUCTION_APPROVAL_ACK
 from app.erp.write.account_move_repository import AccountMoveDraft
 from app.erp.write.exceptions import (
     VendorBillWriteSafetyGateError,
@@ -40,21 +41,44 @@ class OdooVendorBillWritePolicy:
     production_operations_enabled: bool = False
     production_approval_ack: str = ""
     required_approval_ack: str = PRODUCTION_APPROVAL_ACK
+    app_env: str = "development"
+    staging_vendor_bill_execute_enabled: bool = False
+    odoo_host: str = ""
+    approved_staging_hosts: frozenset[str] = APPROVED_STAGING_ODOO_HOSTS
 
     @classmethod
     def from_settings(cls, settings: Settings) -> OdooVendorBillWritePolicy:
         return cls(
             production_operations_enabled=settings.production_operations_enabled,
             production_approval_ack=settings.production_approval_ack,
+            app_env=settings.app_env,
+            staging_vendor_bill_execute_enabled=settings.staging_vendor_bill_execute_enabled,
+            odoo_host=_normalized_host(settings.odoo_base_url),
+        )
+
+    @property
+    def staging_write_sanctioned(self) -> bool:
+        """Draft Vendor Bill writes are allowed via the narrow sanctioned staging path.
+
+        Requires a non-production environment, the explicit staging opt-in, and an exact
+        approved staging Odoo hostname. It never consults the production operation flags.
+        """
+
+        return (
+            self.app_env != "production"
+            and self.staging_vendor_bill_execute_enabled
+            and self.odoo_host in self.approved_staging_hosts
         )
 
     def ensure_real_write_allowed(self, *, approved_by: str | None) -> None:
+        if self.staging_write_sanctioned:
+            _ensure_named_approver(approved_by)
+            return
         if not self.production_operations_enabled:
             raise VendorBillWriteSafetyGateError("Production operations must be explicitly enabled.")
         if self.production_approval_ack != self.required_approval_ack:
             raise VendorBillWriteSafetyGateError("Production approval acknowledgement is required.")
-        if approved_by is None or not approved_by.strip():
-            raise VendorBillWriteSafetyGateError("A named approver is required for Vendor Bill creation.")
+        _ensure_named_approver(approved_by)
 
 
 class OdooVendorBillWriter(VendorBillWriter):
@@ -100,6 +124,15 @@ class OdooVendorBillWriter(VendorBillWriter):
             vendor_bill_id=created.id,
             draft_number=created.name,
         )
+
+
+def _ensure_named_approver(approved_by: str | None) -> None:
+    if approved_by is None or not approved_by.strip():
+        raise VendorBillWriteSafetyGateError("A named approver is required for Vendor Bill creation.")
+
+
+def _normalized_host(value: object) -> str:
+    return (urlparse(str(value)).hostname or "").lower()
 
 
 def _idempotency_key(command: VendorBillWriteCommand) -> str:

@@ -164,6 +164,8 @@ For `SELECT_WORKFLOW` decisions, the use case plans the canonical decision evide
 
 `DISMISS` decisions return `NOT_EXECUTABLE` and create no runtime rows. `EXECUTE` mode is allowed only after the plan is built, explicit approval is present, `EXECUTION_EXECUTE_ENABLED` is true, writer production gates pass when a writer-backed strategy is present, and every planned step supports `EXECUTE`. `VENDOR_BILL + CUSTOMER_RECHARGE` plans can execute when existing-invoice recharge steps are no-write and creation-mode recharge steps pass the Customer Invoice writer gate. Purchase, project cost, expense, asset, subscription, and internal-cost execution are rejected before runtime creation and before any writer call.
 
+Outside `APP_ENV=production` a single sanctioned exception permits a draft Vendor Bill write: `STAGING_VENDOR_BILL_EXECUTE_ENABLED=true` plus an exact approved staging Odoo hostname (`APPROVED_STAGING_ODOO_HOSTS`) plus a named approver. It never consults `PRODUCTION_OPERATIONS_ENABLED` or `PRODUCTION_APPROVAL_ACK`, and `ExecutionPreflightPolicy` narrows the staging plan to `ExecutionStepType.VENDOR_BILL` only, so every other executable step type stays blocked. See [ADR-0007](adr/0007-production-safety-gates.md).
+
 ## Vendor Bill Execution
 
 Vendor Bill execution bridges the durable runtime to the existing Draft Vendor Bill writer. The strategy constructs a deterministic writer idempotency key from execution identity and the `VENDOR_BILL` step key, then delegates duplicate detection and production gates to `VendorBillWriter` and its concrete Odoo implementation.
