@@ -5,6 +5,13 @@ from typing import Protocol
 from app.application.commands import ImportInvoiceCommand
 from app.application.dto import RuleEvaluationResult
 from app.application.exceptions import ApplicationError
+from app.application.expense_mapping import (
+    NullOperatingExpenseMatcher,
+    OperatingExpenseMatcher,
+    OperatingExpenseMatchResult,
+    OperatingExpenseMatchStatus,
+    invoice_is_product_identifier_free,
+)
 from app.application.workflow import (
     ManualReviewDecision,
     ManualReviewReason,
@@ -22,9 +29,14 @@ from app.matching import (
 from app.tax_mapping import InvoiceTaxMappingResult, TaxMatchStatus
 
 DIRECT_VENDOR_BILL_RULE_ID = "RULE-DIRECT-VENDOR-BILL-001"
+OPERATING_EXPENSE_VENDOR_BILL_RULE_ID = "RULE-OPERATING-EXPENSE-VENDOR-BILL-001"
 MANUAL_REVIEW_RULE_ID = "RULE-MANUAL-REVIEW-001"
 DIRECT_VENDOR_BILL_EXPLANATION = (
     "Supplier, products and taxes matched deterministically; Vendor Bill workflow selected."
+)
+OPERATING_EXPENSE_VENDOR_BILL_EXPLANATION = (
+    "Supplier and taxes matched deterministically; explicit operating-expense mapping selected "
+    "the Vendor Bill workflow."
 )
 MANUAL_REVIEW_EXPLANATION = "Deterministic business mismatch requires Manual Review."
 
@@ -45,6 +57,10 @@ class TaxRuleEvaluationError(RuleEvaluationError):
     error_category = "tax_rule_evaluation_error"
 
 
+class OperatingExpenseRuleEvaluationError(RuleEvaluationError):
+    error_category = "operating_expense_rule_evaluation_error"
+
+
 class PartnerMatcher(Protocol):
     def match_invoice(self, invoice: InternalInvoice, *, company_id: int | None = None) -> PartnerMatchResult:
         pass
@@ -61,7 +77,13 @@ class TaxMapper(Protocol):
 
 
 class DeterministicRuleEngine:
-    """Evaluate deterministic invoice facts for the direct Vendor Bill rule."""
+    """Evaluate deterministic invoice facts for the Vendor Bill rules.
+
+    The direct product-based Vendor Bill rule is unchanged. When every line is
+    free of deterministic product identifiers and an explicit operating-expense
+    mapping resolves for the matched supplier, the operating-expense Vendor Bill
+    rule applies instead. Anything else remains Manual Review.
+    """
 
     def __init__(
         self,
@@ -69,42 +91,71 @@ class DeterministicRuleEngine:
         partner_matcher: PartnerMatcher,
         product_matcher: ProductMatcher,
         tax_mapper: TaxMapper,
+        operating_expense_matcher: OperatingExpenseMatcher | None = None,
     ) -> None:
         self._partner_matcher = partner_matcher
         self._product_matcher = product_matcher
         self._tax_mapper = tax_mapper
+        self._operating_expense_matcher = operating_expense_matcher or NullOperatingExpenseMatcher()
 
     def evaluate(self, command: ImportInvoiceCommand) -> RuleEvaluationResult:
         invoice = _invoice(command)
         partner_match = _evaluate_partner(self._partner_matcher, invoice, command.company_id)
         product_match = _evaluate_products(self._product_matcher, invoice, command.company_id)
         tax_match = _evaluate_taxes(self._tax_mapper, invoice, command.company_id)
+        operating_expense_match = _evaluate_operating_expense(
+            self._operating_expense_matcher,
+            invoice,
+            command.company_id,
+            partner_match,
+        )
 
         warnings = product_match.warnings + tax_match.warnings
-        review_reasons = (
-            _partner_review_reasons(partner_match)
-            + _product_review_reasons(invoice, product_match)
-            + _tax_review_reasons(invoice, tax_match)
-        )
-        if review_reasons:
-            return RuleEvaluationResult(
-                workflow_decision=_manual_review_decision(review_reasons),
+        partner_reasons = _partner_review_reasons(partner_match)
+        product_reasons = _product_review_reasons(invoice, product_match)
+        tax_reasons = _tax_review_reasons(invoice, tax_match)
+
+        partner_ok = not partner_reasons
+        product_ok = not product_reasons
+        tax_ok = not tax_reasons
+        identifier_free = invoice_is_product_identifier_free(invoice)
+        expense_matched = operating_expense_match.status is OperatingExpenseMatchStatus.MATCHED
+
+        if partner_ok and product_ok and tax_ok:
+            return _vendor_bill_result(
+                DIRECT_VENDOR_BILL_RULE_ID,
+                DIRECT_VENDOR_BILL_EXPLANATION,
                 partner_match=partner_match,
                 product_match=product_match,
                 tax_match=tax_match,
+                operating_expense_match=operating_expense_match,
+                warnings=warnings,
+            )
+        if partner_ok and tax_ok and identifier_free and expense_matched:
+            return _vendor_bill_result(
+                OPERATING_EXPENSE_VENDOR_BILL_RULE_ID,
+                OPERATING_EXPENSE_VENDOR_BILL_EXPLANATION,
+                partner_match=partner_match,
+                product_match=product_match,
+                tax_match=tax_match,
+                operating_expense_match=operating_expense_match,
                 warnings=warnings,
             )
 
-        workflow_decision = WorkflowDecision(
-            workflow=WorkflowType.VENDOR_BILL,
-            matched_rule=DIRECT_VENDOR_BILL_RULE_ID,
-            explanation=DIRECT_VENDOR_BILL_EXPLANATION,
+        review_reasons = _manual_review_reasons(
+            partner_reasons=partner_reasons,
+            product_reasons=product_reasons,
+            tax_reasons=tax_reasons,
+            identifier_free=identifier_free,
+            tax_ok=tax_ok,
+            operating_expense_match=operating_expense_match,
         )
         return RuleEvaluationResult(
-            workflow_decision=workflow_decision,
+            workflow_decision=_manual_review_decision(review_reasons),
             partner_match=partner_match,
             product_match=product_match,
             tax_match=tax_match,
+            operating_expense_match=operating_expense_match,
             warnings=warnings,
         )
 
@@ -152,6 +203,77 @@ def _evaluate_taxes(
         raise
     except Exception as exc:
         raise TaxRuleEvaluationError(_safe_message(exc, "Tax mapping failed.")) from exc
+
+
+def _evaluate_operating_expense(
+    matcher: OperatingExpenseMatcher,
+    invoice: InternalInvoice,
+    company_id: int | None,
+    partner_match: PartnerMatchResult,
+) -> OperatingExpenseMatchResult:
+    try:
+        return matcher.match_invoice(invoice, company_id=company_id, partner_match=partner_match)
+    except ApplicationError:
+        raise
+    except Exception as exc:
+        raise OperatingExpenseRuleEvaluationError(_safe_message(exc, "Operating-expense matching failed.")) from exc
+
+
+def _vendor_bill_result(
+    rule_id: str,
+    explanation: str,
+    *,
+    partner_match: PartnerMatchResult,
+    product_match: InvoiceProductMatchResult,
+    tax_match: InvoiceTaxMappingResult,
+    operating_expense_match: OperatingExpenseMatchResult,
+    warnings: tuple[str, ...],
+) -> RuleEvaluationResult:
+    return RuleEvaluationResult(
+        workflow_decision=WorkflowDecision(
+            workflow=WorkflowType.VENDOR_BILL,
+            matched_rule=rule_id,
+            explanation=explanation,
+        ),
+        partner_match=partner_match,
+        product_match=product_match,
+        tax_match=tax_match,
+        operating_expense_match=operating_expense_match,
+        warnings=warnings,
+    )
+
+
+def _manual_review_reasons(
+    *,
+    partner_reasons: tuple[ManualReviewReason, ...],
+    product_reasons: tuple[ManualReviewReason, ...],
+    tax_reasons: tuple[ManualReviewReason, ...],
+    identifier_free: bool,
+    tax_ok: bool,
+    operating_expense_match: OperatingExpenseMatchResult,
+) -> tuple[ManualReviewReason, ...]:
+    if identifier_free and tax_ok:
+        # Every line is product-identifier-free, so the product reasons are only
+        # "identifier missing" noise; the real blocker is the absent/ambiguous
+        # operating-expense mapping. Partner and tax reasons stay authoritative.
+        return partner_reasons + (_operating_expense_review_reason(operating_expense_match),) + tax_reasons
+    return partner_reasons + product_reasons + tax_reasons
+
+
+def _operating_expense_review_reason(match: OperatingExpenseMatchResult) -> ManualReviewReason:
+    if match.status is OperatingExpenseMatchStatus.MULTIPLE_MATCHES:
+        code = ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_AMBIGUOUS
+        message = "More than one enabled operating-expense mapping exists for this supplier."
+    else:
+        code = ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_REQUIRED
+        message = "No enabled operating-expense mapping is configured for this supplier."
+    return _reason(
+        code=code,
+        message=message,
+        source="operating_expense_matching",
+        candidate_count=match.candidate_count,
+        details=(("reason", match.reason),),
+    )
 
 
 def _partner_review_reasons(result: PartnerMatchResult) -> tuple[ManualReviewReason, ...]:
