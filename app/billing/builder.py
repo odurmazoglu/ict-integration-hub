@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.billing.dto import (
     CustomerInvoice,
@@ -16,6 +16,13 @@ from app.domain.invoice import InternalInvoice, InvoiceLine
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus, ProductMatchStatus
 from app.tax_mapping import InvoiceTaxMappingResult, TaxMatchStatus
 
+if TYPE_CHECKING:
+    from app.application.expense_mapping import OperatingExpenseMatchResult
+
+# ``app.application.expense_mapping`` sits above ``app.billing`` in the import graph, so the
+# operating-expense classification symbols are imported lazily inside the functions that use them
+# to avoid an import cycle (app.application.decision -> app.billing -> app.application...).
+
 
 class VendorBillBuilder:
     def build(
@@ -26,6 +33,7 @@ class VendorBillBuilder:
         tax_match: InvoiceTaxMappingResult,
         *,
         company_id: int | None = None,
+        operating_expense_match: OperatingExpenseMatchResult | None = None,
     ) -> VendorBill:
         validation = validate_vendor_bill_inputs(
             invoice,
@@ -33,13 +41,27 @@ class VendorBillBuilder:
             product_match,
             tax_match,
             company_id=company_id,
+            operating_expense_match=operating_expense_match,
         )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
 
         assert partner_match.partner_id is not None
-        product_by_line = _product_results_by_line(product_match)
         tax_ids_by_line = _tax_ids_by_line(tax_match)
+        expense_account_id = (
+            operating_expense_match.expense_account_id
+            if _operating_expense_mode(invoice, operating_expense_match)
+            else None
+        )
+        if expense_account_id is not None:
+            invoice_lines = tuple(
+                _expense_vendor_bill_line(line, expense_account_id, tax_ids_by_line) for line in invoice.lines
+            )
+        else:
+            product_by_line = _product_results_by_line(product_match)
+            invoice_lines = tuple(
+                _vendor_bill_line(line, product_by_line[line.line_number], tax_ids_by_line) for line in invoice.lines
+            )
         return VendorBill(
             supplier_id=partner_match.partner_id,
             invoice_number=invoice.header.invoice_number.strip(),
@@ -48,9 +70,7 @@ class VendorBillBuilder:
             external_uuid=invoice.header.invoice_uuid.strip() or invoice.header.ettn,
             reference=invoice.header.invoice_number.strip(),
             company_id=company_id,
-            invoice_lines=tuple(
-                _vendor_bill_line(line, product_by_line[line.line_number], tax_ids_by_line) for line in invoice.lines
-            ),
+            invoice_lines=invoice_lines,
             notes=tuple(note.strip() for note in invoice.header.notes if note and note.strip()),
         )
 
@@ -128,6 +148,7 @@ def validate_vendor_bill_inputs(
     tax_match: object,
     *,
     company_id: int | None = None,
+    operating_expense_match: object | None = None,
 ) -> VendorBillValidationResult:
     errors: list[str] = []
     if company_id is not None and (type(company_id) is not int or company_id <= 0):
@@ -141,6 +162,8 @@ def validate_vendor_bill_inputs(
     if not isinstance(tax_match, InvoiceTaxMappingResult):
         return validation_result(["InvoiceTaxMappingResult DTO is required."])
 
+    expense_mode = _operating_expense_mode(invoice, operating_expense_match)
+
     if partner_match.status is not PartnerMatchStatus.MATCHED or partner_match.partner_id is None:
         errors.append("Supplier partner must be matched before building a vendor bill.")
     if not invoice.header.invoice_number.strip():
@@ -152,8 +175,12 @@ def validate_vendor_bill_inputs(
     if not invoice.lines:
         errors.append("At least one invoice line is required.")
 
-    product_by_line, product_errors = _validated_product_results(product_match)
-    errors.extend(product_errors)
+    if expense_mode:
+        product_by_line = {}
+        errors.extend(_operating_expense_product_shape_errors(invoice, product_match))
+    else:
+        product_by_line, product_errors = _validated_product_results(product_match)
+        errors.extend(product_errors)
     tax_by_line, tax_errors = _validated_tax_results(tax_match)
     errors.extend(tax_errors)
 
@@ -162,7 +189,7 @@ def validate_vendor_bill_inputs(
         if line.line_number is None or not line.line_number.strip():
             errors.append(f"{line_path}.line_number is required.")
             continue
-        if line.line_number not in product_by_line:
+        if not expense_mode and line.line_number not in product_by_line:
             errors.append(f"{line_path}.product must be matched.")
         if line.quantity is None or line.quantity <= Decimal("0"):
             errors.append(f"{line_path}.quantity must be greater than zero.")
@@ -175,6 +202,49 @@ def validate_vendor_bill_inputs(
                 errors.append(f"{line_path}.taxes[{tax_index}] must be matched.")
 
     return validation_result(errors)
+
+
+def _operating_expense_mode(invoice: InternalInvoice, operating_expense_match: object | None) -> bool:
+    """True only for a deterministic operating-expense line invoice.
+
+    Requires an explicit ``MATCHED`` operating-expense result with a positive pinned
+    expense account and an invoice whose every line is free of deterministic product
+    identifiers. It never bypasses a genuine failed product lookup: any line carrying
+    a buyer/seller item code or barcode makes this ``False``.
+    """
+
+    from app.application.expense_mapping import OperatingExpenseMatchStatus, invoice_is_product_identifier_free
+
+    if operating_expense_match is None or getattr(operating_expense_match, "status", None) is not (
+        OperatingExpenseMatchStatus.MATCHED
+    ):
+        return False
+    account_id = getattr(operating_expense_match, "expense_account_id", None)
+    if type(account_id) is not int or account_id <= 0:
+        return False
+    return invoice_is_product_identifier_free(invoice)
+
+
+def _operating_expense_product_shape_errors(
+    invoice: InternalInvoice,
+    product_match: InvoiceProductMatchResult,
+) -> tuple[str, ...]:
+    """Product results for an identifier-free invoice must be one INVALID_INPUT per line.
+
+    Malformed or incomplete product result collections still fail closed even when an
+    operating-expense mapping is present.
+    """
+
+    if product_match.errors:
+        return ("Operating-expense product result carries evaluation errors.",)
+    invoice_line_numbers = tuple(line.line_number for line in invoice.lines)
+    result_line_numbers = tuple(line_result.line_number for line_result in product_match.line_results)
+    if result_line_numbers != invoice_line_numbers:
+        return ("Operating-expense product result does not cover every invoice line exactly once.",)
+    for line_result in product_match.line_results:
+        if line_result.result.status is not ProductMatchStatus.INVALID_INPUT:
+            return ("Operating-expense product result must be INVALID_INPUT for an identifier-free invoice.",)
+    return ()
 
 
 def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int | None = None) -> dict[str, Any]:
@@ -217,6 +287,8 @@ def to_odoo_customer_invoice_payload(
 
 
 def _line_payload(line: VendorBillLine) -> dict[str, Any]:
+    if line.account_id is not None:
+        return _operating_expense_line_payload(line)
     payload: dict[str, Any] = {
         "product_id": line.product_id,
         "quantity": _decimal_text(line.quantity),
@@ -226,6 +298,17 @@ def _line_payload(line: VendorBillLine) -> dict[str, Any]:
     }
     if line.uom is not None:
         payload["product_uom_id"] = line.uom
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _operating_expense_line_payload(line: VendorBillLine) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "name": line.description,
+        "quantity": _decimal_text(line.quantity),
+        "price_unit": _decimal_text(line.unit_price),
+        "account_id": line.account_id,
+        "tax_ids": ((6, 0, line.tax_ids),),
+    }
     return {key: value for key, value in payload.items() if value is not None}
 
 
@@ -256,6 +339,25 @@ def _vendor_bill_line(
         product_id=product_result.product_id,
         quantity=line.quantity,
         uom=line.unit_code,
+        unit_price=line.unit_price,
+        tax_ids=tax_ids,
+        description=line.description,
+    )
+
+
+def _expense_vendor_bill_line(
+    line: InvoiceLine,
+    expense_account_id: int,
+    tax_ids_by_line: dict[tuple[str | None, int], int],
+) -> VendorBillLine:
+    assert line.quantity is not None
+    assert line.unit_price is not None
+    tax_ids = tuple(tax_ids_by_line[(line.line_number, tax_index)] for tax_index, _tax in enumerate(line.taxes))
+    return VendorBillLine(
+        product_id=None,
+        account_id=expense_account_id,
+        quantity=line.quantity,
+        uom=None,
         unit_price=line.unit_price,
         tax_ids=tax_ids,
         description=line.description,
