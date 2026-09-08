@@ -7,12 +7,30 @@ from decimal import Decimal
 
 @dataclass(frozen=True, slots=True)
 class VendorBillLine:
-    product_id: int
+    """One draft Vendor Bill line.
+
+    Exactly one accounting source is set: a matched ``product_id`` (Odoo derives
+    the expense account) or a pinned ``account_id`` for a deterministic operating
+    expense line with no product. ``product_id XOR account_id``.
+    """
+
+    product_id: int | None
     quantity: Decimal
     uom: str | None
     unit_price: Decimal
     tax_ids: tuple[int, ...] = field(default_factory=tuple)
     description: str | None = None
+    account_id: int | None = None
+
+    def __post_init__(self) -> None:
+        product_set = self.product_id is not None
+        account_set = self.account_id is not None
+        if product_set == account_set:
+            raise ValueError("VendorBillLine requires exactly one of product_id or account_id.")
+        if product_set:
+            _require_positive_int(self.product_id, "product_id must be a positive ERP id.")
+        else:
+            _require_positive_int(self.account_id, "account_id must be a positive ERP account id.")
 
 
 @dataclass(frozen=True, slots=True)
