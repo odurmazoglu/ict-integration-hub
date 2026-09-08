@@ -417,6 +417,36 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     decision_columns_at_head = {column["name"] for column in inspector.get_columns("workbench_review_decisions")}
     assert "selected_quotation_scenario_ids" in decision_columns_at_head
     assert WorkbenchReviewDecision.__table__.c.selected_quotation_scenario_ids.nullable is True
+    assert "operating_expense_mappings" in inspector.get_table_names()
+    operating_expense_mapping_columns = {
+        column["name"] for column in inspector.get_columns("operating_expense_mappings")
+    }
+    assert {
+        "id",
+        "company_id",
+        "vendor_partner_id",
+        "expense_account_id",
+        "expense_category",
+        "enabled",
+        "created_at",
+        "updated_at",
+    }.issubset(operating_expense_mapping_columns)
+    operating_expense_mapping_indexes = {index["name"] for index in inspector.get_indexes("operating_expense_mappings")}
+    assert {
+        "ix_operating_expense_mappings_company_partner",
+        "uq_operating_expense_mappings_active_supplier",
+    }.issubset(operating_expense_mapping_indexes)
+    assert any(
+        index["name"] == "uq_operating_expense_mappings_active_supplier" and index["unique"]
+        for index in inspector.get_indexes("operating_expense_mappings")
+    )
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "operating_expense_mappings" not in inspector.get_table_names()
+    assert "selected_quotation_scenario_ids" in {
+        column["name"] for column in inspector.get_columns("workbench_review_decisions")
+    }
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -524,6 +554,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "execution_customer_billing_evidence" in inspector.get_table_names()
     assert "workbench_review_classification_evidence" in inspector.get_table_names()
     assert "quotation_scenario_evidence" in inspector.get_table_names()
+    assert "operating_expense_mappings" in inspector.get_table_names()
     assert "selected_quotation_scenario_ids" in {
         column["name"] for column in inspector.get_columns("workbench_review_decisions")
     }
