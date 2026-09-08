@@ -27,6 +27,7 @@ class ExecutionPreflightPolicy:
     real_write_gate: RealWriteGate | None = None
     real_write_gates: Mapping[ExecutionStepType, RealWriteGate] | None = None
     writer_step_types: tuple[ExecutionStepType, ...] = (ExecutionStepType.VENDOR_BILL,)
+    staging_execution_step_types: tuple[ExecutionStepType, ...] = ()
 
     def ensure_execute_allowed(self, *, plan: ExecutionPlan, approval: ExecutionApproval | None) -> None:
         if plan.mode is not ExecutionMode.EXECUTE:
@@ -35,6 +36,10 @@ class ExecutionPreflightPolicy:
             raise ExecutionApprovalError("Explicit execution approval is required for EXECUTE mode.")
         if not self.production_execution_enabled:
             raise ExecutionModeNotEnabledError("Production execution must be explicitly enabled.")
+        if self.staging_execution_step_types:
+            for step in plan.steps:
+                if step.step_type not in self.staging_execution_step_types:
+                    raise ExecutionModeNotEnabledError("Staging execution is limited to sanctioned Vendor Bill steps.")
         for step in plan.steps:
             if not step.execute_supported:
                 raise ExecutionUnsupportedStepError("Execution plan contains a step that is not execute-capable.")

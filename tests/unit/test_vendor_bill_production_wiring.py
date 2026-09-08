@@ -220,6 +220,71 @@ def test_customer_invoice_creation_without_billing_instruction_fails_before_runt
     assert client.create_calls == []
 
 
+def test_staging_gate_creates_one_draft_vendor_bill_without_production_flags(session: Session) -> None:
+    _submit_vendor_bill_decision(session)
+    client = FakeOdooVendorBillClient(created_id=9100)
+    repository = SqlAlchemyExecutionRuntimeRepository(session)
+
+    result = _use_case(session, client=client, settings=_staging_settings()).execute(
+        _command(mode=ExecutionMode.EXECUTE)
+    )
+
+    assert result.status is AcceptedDecisionExecutionStatus.EXECUTED
+    assert result.runtime_state is ExecutionState.COMPLETED
+    assert len(client.create_calls) == 1
+    payload = client.create_calls[0]
+    assert payload["move_type"] == "in_invoice"
+    assert "action_post" not in str(payload).lower()
+    assert "payment" not in str(payload).lower()
+    snapshot = repository.get_snapshot(execution_id=result.execution_id or "")
+    assert snapshot is not None
+    artifact = snapshot.steps[0].last_result.produced_artifacts[0]  # type: ignore[union-attr]
+    assert artifact.artifact_type is ExecutionArtifactType.VENDOR_BILL
+    assert artifact.artifact_id == "9100"
+
+
+def test_staging_gate_on_unapproved_host_fails_closed_before_runtime_or_odoo_call(session: Session) -> None:
+    _submit_vendor_bill_decision(session)
+    client = FakeOdooVendorBillClient()
+
+    with pytest.raises(VendorBillWriteSafetyGateError):
+        _use_case(
+            session,
+            client=client,
+            settings=_staging_settings(odoo_base_url="https://not-approved.odoo.com"),
+        ).execute(_command(mode=ExecutionMode.EXECUTE))
+
+    assert _runtime_count(session) == 0
+    assert client.search_calls == []
+    assert client.create_calls == []
+
+
+def test_staging_gate_retry_recovers_existing_vendor_bill_without_duplicate(session: Session) -> None:
+    _submit_vendor_bill_decision(session)
+    client = FakeOdooVendorBillClient(timeout_after_create=True, created_id=9100)
+    use_case = _use_case(session, client=client, settings=_staging_settings())
+
+    first = use_case.execute(_command(mode=ExecutionMode.EXECUTE))
+    second = use_case.execute(_command(mode=ExecutionMode.EXECUTE))
+
+    assert first.runtime_state is ExecutionState.WAITING_RETRY
+    assert second.status is AcceptedDecisionExecutionStatus.EXECUTED
+    assert len(client.create_calls) == 1
+    assert len(client.search_calls) == 2
+
+
+def test_staging_gate_blocks_customer_recharge_creation_step_before_runtime_or_odoo_call(session: Session) -> None:
+    _submit_customer_invoice_decision(session)
+    client = FakeOdooVendorBillClient()
+
+    with pytest.raises(ExecutionModeNotEnabledError):
+        _use_case(session, client=client, settings=_staging_settings()).execute(_command(mode=ExecutionMode.EXECUTE))
+
+    assert _runtime_count(session) == 0
+    assert client.search_calls == []
+    assert client.create_calls == []
+
+
 def test_production_composition_keeps_infrastructure_out_of_application_layer() -> None:
     application_source = "\n".join(path.read_text(encoding="utf-8") for path in Path("app/application").rglob("*.py"))
     composition_source = Path("app/composition/execution.py").read_text(encoding="utf-8")
@@ -466,6 +531,17 @@ def _execute_settings(*, customer_invoice_execute_enabled: bool = False) -> Sett
         production_operations_enabled=True,
         production_approval_ack=PRODUCTION_APPROVAL_ACK,
         customer_invoice_execute_enabled=customer_invoice_execute_enabled,
+    )
+
+
+def _staging_settings(*, odoo_base_url: str = "https://test-ictteknoloji.odoo.com") -> Settings:
+    return Settings(
+        app_env="development",
+        odoo_base_url=odoo_base_url,
+        staging_vendor_bill_execute_enabled=True,
+        execution_execute_enabled=True,
+        production_operations_enabled=False,
+        production_approval_ack="",
     )
 
 
