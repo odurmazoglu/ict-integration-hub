@@ -61,6 +61,9 @@ async def test_decision_engine_selects_and_executes_resolved_strategy() -> None:
         strategy="fake_vendor_bill",
         status="created",
         vendor_bill_id=42,
+        partner_match=rule_result.partner_match,
+        product_match=rule_result.product_match,
+        tax_match=rule_result.tax_match,
         warnings=("rules ok", "strategy ok"),
         errors=(),
         duration=result.duration,
@@ -68,6 +71,21 @@ async def test_decision_engine_selects_and_executes_resolved_strategy() -> None:
     assert result.duration >= 0
     assert rule_engine.commands == [command]
     assert strategy.calls == [(command, rule_result)]
+
+
+@pytest.mark.asyncio
+async def test_decision_engine_propagates_exact_match_dtos_from_rule_result() -> None:
+    rule_result = _rule_result()
+    engine = DecisionEngine(
+        rule_engine=FakeRuleEngine(rule_result),
+        strategy_resolver=WorkflowStrategyResolver([FakeWorkflowStrategy(WorkflowType.VENDOR_BILL)]),
+    )
+
+    result = await engine.decide(_command())
+
+    assert result.partner_match is rule_result.partner_match
+    assert result.product_match is rule_result.product_match
+    assert result.tax_match is rule_result.tax_match
 
 
 @pytest.mark.asyncio

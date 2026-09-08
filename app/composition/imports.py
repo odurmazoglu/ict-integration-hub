@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.application.decision import DecisionEngine, ManualReviewStrategy, VendorBillStrategy, WorkflowStrategyResolver
+from app.application.decision import (
+    DecisionEngine,
+    ManualReviewStrategy,
+    VendorBillReviewRecommendationStrategy,
+    WorkflowStrategyResolver,
+)
 from app.application.ports import InvoiceImportHistory
 from app.application.rules import DeterministicRuleEngine, InvoiceDecisionRuleEngine, OdooDecisionRuleFieldMapping
 from app.application.use_cases import ImportInvoiceUseCase
@@ -14,7 +19,6 @@ from app.application.workbench import (
     WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
-from app.billing import VendorBillBuilder
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings
@@ -43,7 +47,6 @@ from app.erp.odoo.workbench_reference_repositories import (
     OdooSalesOrderReferenceRepository,
 )
 from app.erp.provider import StaticRepositoryProvider
-from app.erp.write import AccountMoveRepository, OdooVendorBillWritePolicy, OdooVendorBillWriter
 from app.matching import PartnerMatchingEngine, ProductMatchingEngine
 from app.persistence import (
     SqlAlchemyImportHistory,
@@ -172,13 +175,7 @@ def build_uyumsoft_canonical_invoice_importer(
         ),
         strategy_resolver=WorkflowStrategyResolver(
             [
-                VendorBillStrategy(
-                    vendor_bill_builder=VendorBillBuilder(),
-                    vendor_bill_writer=OdooVendorBillWriter(
-                        repository=AccountMoveRepository(client=resolved_odoo_client),
-                        policy=OdooVendorBillWritePolicy.from_settings(settings),
-                    ),
-                ),
+                VendorBillReviewRecommendationStrategy(),
                 ManualReviewStrategy(),
             ]
         ),
