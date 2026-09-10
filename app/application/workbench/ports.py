@@ -24,6 +24,7 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationProposal,
     ReviewReclassificationResult,
 )
+from app.application.workbench.supplier_resolution import ResolutionPartnerRecord, SupplierResolution
 from app.billing.dto import CustomerInvoiceBillingInstruction
 
 if TYPE_CHECKING:
@@ -116,6 +117,29 @@ class ReviewReclassificationWriter(Protocol):
     """Write port for one atomic non-destructive review reclassification transition."""
 
     def reclassify_review(self, proposal: ReviewReclassificationProposal) -> ReviewReclassificationResult:
+        pass
+
+
+class SupplierResolutionPartnerReader(Protocol):
+    """Read-only port for reading one Odoo ``res.partner`` when validating MATCH_EXISTING."""
+
+    def find_partner_by_id(self, partner_id: int) -> ResolutionPartnerRecord | None:
+        pass
+
+
+class SupplierResolutionWriter(Protocol):
+    """Append-only port for persisting an explicit supplier-resolution decision."""
+
+    def create_supplier_resolution(self, resolution: SupplierResolution) -> SupplierResolution:
+        pass
+
+    def get_supplier_resolution(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> SupplierResolution:
         pass
 
 

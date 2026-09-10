@@ -10,6 +10,7 @@ from app.erp.odoo.decision_rule_repository import (
 from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.provider import OdooRepositoryProvider
+from app.erp.odoo.supplier_resolution_partner_reader import OdooSupplierResolutionPartnerReader
 from app.erp.odoo.tax_repository import OdooTaxRepository
 from app.erp.odoo.workbench_billing_authoring_reader import (
     OdooWorkbenchBillingAuthoringReader,
@@ -64,6 +65,7 @@ __all__ = [
     "OdooSalesOrderLineReferenceRepository",
     "OdooSalesOrderReferenceRepository",
     "OdooSalesTaxReferenceRepository",
+    "OdooSupplierResolutionPartnerReader",
     "OdooTaxRepository",
     "OdooWorkbenchAllocationFieldMapping",
     "OdooWorkbenchDecisionCandidateReader",
