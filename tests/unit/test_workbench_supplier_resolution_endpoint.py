@@ -284,6 +284,18 @@ async def test_permission_required(api_client: AsyncClient) -> None:
     assert response.status_code == 403
 
 
+async def test_truthful_workbench_republished_true_is_returned_to_the_caller(api_client: AsyncClient) -> None:
+    use_case = _FakeResolveUseCase(result=_result(workbench_republished=True))
+    response = await _post(
+        api_client,
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE, company_id=7),
+        json={"mode": "match_existing", "expected_version": 1, "partner_id": 4010},
+        use_case=use_case,
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["workbench_republished"] is True
+
+
 async def test_invalid_mode_is_rejected(api_client: AsyncClient) -> None:
     response = await _post(
         api_client,
@@ -326,6 +338,8 @@ async def test_partner_id_for_create_permanent_is_rejected(api_client: AsyncClie
         {"mode": "match_existing", "expected_version": 1, "partner_id": 4010, "supplier_name": "Acme"},
         {"mode": "match_existing", "expected_version": 1, "partner_id": 4010, "supplier_tax_number": "0430367181"},
         {"mode": "match_existing", "expected_version": 1, "partner_id": 4010, "review_id": "review:other"},
+        {"mode": "match_existing", "expected_version": 1, "partner_id": 4010, "odoo_record_id": 999},
+        {"mode": "match_existing", "expected_version": 1, "partner_id": 4010, "workbench_record_id": 999},
     ],
 )
 async def test_body_cannot_set_identity_or_path_fields(api_client: AsyncClient, body: dict[str, Any]) -> None:

@@ -707,6 +707,78 @@ def test_idempotent_repeat_publish_updates_existing_row_without_duplicate_create
     assert adapter.write_values == first_payload
 
 
+# --------------------------------------------------------- P0-3D2E: republish_projection (update-only)
+
+
+def test_republish_projection_updates_existing_row_and_never_creates() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[{"id": 55}])
+    result = OdooWorkbenchProjectionPublisher(
+        adapter=adapter,
+        mapping=_mapping(),
+        classification_service=StaticClassificationService(_matched_classification()),
+    ).republish_projection(_projection(version=6))
+
+    assert (result.created, result.updated) == (False, True)
+    assert result.odoo_record_id == 55
+    assert result.version == 6
+    assert adapter.create_calls == 0
+    assert adapter.write_calls == 1
+    assert adapter.write_record_id == 55
+    assert adapter.calls[0]["method"] == "search_read"
+    assert adapter.calls[0]["domain"] == [
+        ["x_studio_review_id", "=", "review-1"],
+        ["x_studio_company", "=", 7],
+    ]
+
+
+def test_republish_projection_without_existing_row_fails_closed_and_never_creates() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[])
+    publisher = OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping())
+
+    with pytest.raises(WorkbenchProjectionPublishError):
+        publisher.republish_projection(_projection())
+
+    assert adapter.create_calls == 0
+    assert adapter.write_calls == 0
+
+
+def test_republish_projection_with_duplicate_rows_fails_closed() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[{"id": 1}, {"id": 2}])
+    publisher = OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping())
+
+    with pytest.raises(WorkbenchCandidateAmbiguityError):
+        publisher.republish_projection(_projection())
+
+    assert adapter.create_calls == 0
+    assert adapter.write_calls == 0
+
+
+def test_republish_projection_write_failure_maps_to_projection_publish_error() -> None:
+    adapter = RecordingProjectionAdapter(
+        search_records=[{"id": 55}],
+        write_exc=ErpRepositoryError("odoo down"),
+    )
+    publisher = OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping())
+
+    with pytest.raises(WorkbenchProjectionPublishError):
+        publisher.republish_projection(_projection())
+
+    assert adapter.create_calls == 0
+
+
+def test_republish_projection_repeated_retries_update_the_same_row_without_duplicate() -> None:
+    adapter = RecordingProjectionAdapter(search_records=[{"id": 55}])
+    publisher = OdooWorkbenchProjectionPublisher(adapter=adapter, mapping=_mapping())
+
+    publisher.republish_projection(_projection(version=6))
+    publisher.republish_projection(_projection(version=6))
+    publisher.republish_projection(_projection(version=6))
+
+    assert adapter.create_calls == 0
+    assert adapter.write_calls == 3
+    assert {call["record_id"] for call in adapter.calls if call["method"] == "write"} == {55}
+
+
 async def test_json2_projection_adapter_rejects_sync_call_inside_running_event_loop() -> None:
     adapter = OdooWorkbenchJson2ProjectionAdapter(client=AsyncFakeOdooClient())
 

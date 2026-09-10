@@ -38,6 +38,10 @@ from app.application.workbench.exceptions import (
     SupplierResolutionDataIntegrityError,
     SupplierResolutionError,
     SupplierResolutionNotFoundError,
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchCandidateReadError,
+    WorkbenchContractError,
+    WorkbenchProjectionPublishError,
 )
 from app.application.workbench.ports import (
     ReviewQueueReader,
@@ -45,6 +49,7 @@ from app.application.workbench.ports import (
     SupplierRemediationEffectWriter,
     SupplierResolutionWriter,
 )
+from app.application.workbench.projection import ProjectionPublishResult, WorkbenchProjection
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import ReclassifyReviewCommand, ReviewReclassificationTrigger
 from app.application.workbench.supplier_remediation import (
@@ -65,6 +70,15 @@ from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
 
 SAFE_SUPPLIER_REMEDIATION_ERROR = "Supplier remediation failed."
 
+# A failed Workbench republish never rolls back or falsifies an already-committed
+# remediation: these are swallowed and reported as ``workbench_republished=False``.
+_BEST_EFFORT_REPUBLISH_EXCEPTIONS = (
+    WorkbenchProjectionPublishError,
+    WorkbenchCandidateReadError,
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchContractError,
+)
+
 
 class SupplierReclassifier(Protocol):
     """Structural type for the P0-3D2B ``ReclassifyWorkbenchReviewUseCase``.
@@ -74,6 +88,18 @@ class SupplierReclassifier(Protocol):
     """
 
     async def execute(self, command: ReclassifyReviewCommand): ...
+
+
+class WorkbenchReviewRepublisher(Protocol):
+    """Update-only republish of an already-created Odoo Workbench projection row.
+
+    Structural on purpose: the orchestration must never reach a generic
+    "create projection" operation that could add a second Workbench row. The
+    single method here resolves its target from the trusted ``(review_id,
+    company_id)`` lookup and fails closed when no row exists.
+    """
+
+    def republish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult: ...
 
 
 class ResolveWorkbenchSupplierUseCase:
@@ -90,6 +116,7 @@ class ResolveWorkbenchSupplierUseCase:
         supplier_partner_writer: SupplierPartnerWriter,
         reclassifier: SupplierReclassifier,
         unit_of_work: UnitOfWork,
+        workbench_republisher: WorkbenchReviewRepublisher | None = None,
         _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
@@ -100,6 +127,9 @@ class ResolveWorkbenchSupplierUseCase:
         self._supplier_partner_writer = supplier_partner_writer
         self._reclassifier = reclassifier
         self._unit_of_work = unit_of_work
+        # Optional: present only when odoo_workbench_projection_publish_enabled is set.
+        # None -> republish is not attempted and every result reports republished=False.
+        self._workbench_republisher = workbench_republisher
         # Test-only seam: invoked on the fresh path just before the reservation INSERT,
         # so a test can commit a competing reservation in another transaction in between.
         self._after_precheck_hook = _after_precheck_hook
@@ -261,9 +291,16 @@ class ResolveWorkbenchSupplierUseCase:
         )
 
         reclass = await self._reclassify(command)
-        result = self._result_from_reclass(command, effect, reclass, already_applied=already_applied)
         self._unit_of_work.commit()
-        return result
+        # Best-effort, post-commit: the remediation + reclassification are already durable.
+        republished = self._republish_workbench_projection(command)
+        return self._result_from_reclass(
+            command,
+            effect,
+            reclass,
+            already_applied=already_applied,
+            workbench_republished=republished,
+        )
 
     async def _create_permanent_partner(
         self,
@@ -307,6 +344,7 @@ class ResolveWorkbenchSupplierUseCase:
         reclass,
         *,
         already_applied: bool,
+        workbench_republished: bool = False,
     ) -> SupplierRemediationResult:
         supplier_still_missing = _has_supplier_not_found(reclass.new_review_reasons)
         status = (
@@ -327,7 +365,7 @@ class ResolveWorkbenchSupplierUseCase:
             partner_write_status=effect.partner_write_status,
             reclassified=bool(reclass.changed),
             already_applied=already_applied,
-            workbench_republished=False,
+            workbench_republished=workbench_republished,
             safe_message=(
                 "Supplier resolved; the review was reclassified."
                 if status is SupplierRemediationStatus.RESOLVED
@@ -337,6 +375,48 @@ class ResolveWorkbenchSupplierUseCase:
                 )
             ),
         )
+
+    # ------------------------------------------------------------------ workbench republish
+
+    def _republish_workbench_projection(self, command: ResolveWorkbenchSupplierCommand) -> bool:
+        """Update the existing Odoo Workbench projection row for this review.
+
+        Post-commit and strictly best-effort: the supplier resolution, the effect
+        and the reclassification are already durable. Returns ``True`` only when the
+        publisher confirmed an update of the already-created row; any lookup /
+        write / mapping failure (or a missing target row) is swallowed and reported
+        as ``False`` so a Workbench outage never rolls back or falsifies a
+        committed remediation. A retry re-enters here and updates the same row.
+        The publisher is update-only -- it can never create a second Workbench row.
+        """
+
+        if self._workbench_republisher is None:
+            return False
+        try:
+            review_item = self._review_reader.get_review_item(
+                ReviewDetailQuery(review_id=command.review_id, company_id=command.company_id)
+            )
+            projection = WorkbenchProjection(
+                review_id=review_item.review_id,
+                company_id=command.company_id,
+                invoice_id=review_item.invoice_id,
+                version=review_item.version,
+                status=review_item.status,
+                invoice_number=review_item.invoice_number,
+                supplier_name=review_item.supplier_name,
+                supplier_tax_number=review_item.supplier_tax_number,
+                invoice_date=review_item.invoice_date,
+                currency=review_item.currency,
+                total_amount=review_item.total_amount,
+                workflow=review_item.workflow,
+                review_reasons=review_item.review_reasons,
+                warnings=review_item.warnings,
+                updated_at=review_item.updated_at,
+            )
+            result = self._workbench_republisher.republish_projection(projection)
+        except _BEST_EFFORT_REPUBLISH_EXCEPTIONS:
+            return False
+        return bool(result.updated)
 
     # ------------------------------------------------------------------ resume / idempotency
 
@@ -402,6 +482,10 @@ class ResolveWorkbenchSupplierUseCase:
                 raise SupplierResolutionDataIntegrityError(
                     "The review advanced past this version but no remediation effect was recorded."
                 )
+            # Full remediation already committed on an earlier attempt. Re-attempt the
+            # (idempotent, update-only) Workbench republish so a retry after a prior
+            # republish failure can still reflect the new review state in the UI.
+            republished = self._republish_workbench_projection(command)
             return SupplierRemediationResult(
                 review_id=command.review_id,
                 company_id=command.company_id,
@@ -419,7 +503,7 @@ class ResolveWorkbenchSupplierUseCase:
                 partner_write_status=effect.partner_write_status,
                 reclassified=True,
                 already_applied=True,
-                workbench_republished=False,
+                workbench_republished=republished,
                 safe_message="This supplier remediation was already applied.",
             )
 
@@ -433,9 +517,15 @@ class ResolveWorkbenchSupplierUseCase:
             if effect is None:
                 return await self._complete(command, review, source, existing, already_applied=True)
             reclass = await self._reclassify(command)
-            result = self._result_from_reclass(command, effect, reclass, already_applied=True)
             self._unit_of_work.commit()
-            return result
+            republished = self._republish_workbench_projection(command)
+            return self._result_from_reclass(
+                command,
+                effect,
+                reclass,
+                already_applied=True,
+                workbench_republished=republished,
+            )
         except BaseException:
             self._unit_of_work.rollback()
             raise
