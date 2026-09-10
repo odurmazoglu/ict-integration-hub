@@ -24,6 +24,7 @@ from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import (
     ReviewNotFoundError,
+    ReviewPersistenceError,
     ReviewStateConflictError,
     ReviewVersionConflictError,
     SupplierResolutionConflictError,
@@ -143,10 +144,17 @@ def _review_item(
 class _FakeReviewReader:
     def __init__(self, item: ReviewItem) -> None:
         self.item = item
+        self.calls = 0
+        # When set, get_review_item raises `raise_error` once `calls > raise_after`.
+        self.raise_error: Exception | None = None
+        self.raise_after = 0
 
     def get_review_item(self, query: ReviewDetailQuery) -> ReviewItem:
         if not isinstance(query, ReviewDetailQuery):
             raise SupplierResolutionContractError("ReviewDetailQuery is required.")
+        self.calls += 1
+        if self.raise_error is not None and self.calls > self.raise_after:
+            raise self.raise_error
         if query.review_id != self.item.review_id or query.company_id != COMPANY_ID:
             raise ReviewNotFoundError("Review item was not found.")
         return self.item
@@ -929,6 +937,73 @@ async def test_ambiguous_projection_rows_fail_closed_as_republish_false(session:
 
     assert result.workbench_republished is False
     assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_post_commit_review_reread_failure_does_not_break_committed_remediation(session: Session) -> None:
+    # A. The remediation, effect and reclassification are committed. The republish-stage
+    #    re-read of the current ReviewItem then hits the canonical persistence error
+    #    (ReviewPersistenceError -- the translation target for any SQLAlchemyError, and
+    #    the base of ReviewNotFoundError / ReviewDataIntegrityError). The use case must
+    #    NOT raise; the result is the successful remediation with republished == False.
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher()
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+    # initial execute() lookup = call #1 (ok); the republish-stage re-read = call #2 (fails)
+    h.reader.raise_error = ReviewPersistenceError("Persistence operation failed.")
+    h.reader.raise_after = 1
+
+    result = await h.use_case.execute(
+        h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+    )
+
+    assert result.status is SupplierRemediationStatus.RESOLVED
+    assert result.workbench_republished is False
+    assert republisher.calls == []  # projection was never built / published
+    assert len(writer.calls) == 1  # supplier writer not called again
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_exact_retry_after_post_commit_reread_failure_republishes_without_recreating_supplier(
+    session: Session,
+) -> None:
+    # B. Exact retry once the ReviewItem read recovers.
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher()
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+    cmd = h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+
+    h.reader.raise_error = ReviewPersistenceError("Persistence operation failed.")
+    h.reader.raise_after = 1
+    first = await h.use_case.execute(cmd)
+    assert first.workbench_republished is False
+
+    h.reader.raise_error = None  # the Hub read recovers
+    retry = await h.use_case.execute(cmd)
+
+    assert retry.already_applied is True
+    assert retry.workbench_republished is True
+    assert len(writer.calls) == 1  # no supplier recreation
+    assert len(republisher.calls) == 1  # the existing row updated exactly once
+    assert republisher.calls[0].version == 2
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_initial_review_lookup_failure_is_not_swallowed_by_the_republish_boundary(session: Session) -> None:
+    # C. The same exception raised during the *initial* pre-remediation lookup must
+    #    still fail normally -- proving the best-effort boundary did not widen.
+    republisher = _FakeRepublisher()
+    h = _Harness(session, republisher=republisher)
+    h.reader.raise_error = ReviewPersistenceError("Persistence operation failed.")
+    h.reader.raise_after = 0  # fail on the very first (pre-commit) lookup
+
+    with pytest.raises(ReviewPersistenceError):
+        await h.use_case.execute(h.command())
+
+    assert republisher.calls == []
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 0
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 0
 
 
 def test_orchestration_module_republish_is_update_only_never_a_create_path() -> None:

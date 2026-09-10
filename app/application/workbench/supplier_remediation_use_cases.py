@@ -31,6 +31,7 @@ from app.application.exceptions import ApplicationError
 from app.application.ports.supplier_partner_writer import SupplierPartnerWriter
 from app.application.services import UnitOfWork
 from app.application.workbench.exceptions import (
+    ReviewPersistenceError,
     ReviewStateConflictError,
     ReviewVersionConflictError,
     SupplierResolutionConflictError,
@@ -70,13 +71,26 @@ from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
 
 SAFE_SUPPLIER_REMEDIATION_ERROR = "Supplier remediation failed."
 
-# A failed Workbench republish never rolls back or falsifies an already-committed
-# remediation: these are swallowed and reported as ``workbench_republished=False``.
+# The Workbench republish stage runs *after* the remediation, effect and
+# reclassification have been committed. Every safe application error it can raise is
+# swallowed and reported as ``workbench_republished=False`` -- an already-committed
+# remediation must never become an HTTP/application failure, and an exact retry can
+# republish later. This deliberately covers both:
+#   * the publisher lookup/write (WorkbenchProjectionPublishError /
+#     WorkbenchCandidateReadError / WorkbenchCandidateAmbiguityError) and the
+#     WorkbenchProjection construction (WorkbenchContractError);
+#   * the post-commit re-read of the current ReviewItem. The production review
+#     reader's ``get_review_item`` translates every failure into
+#     ReviewPersistenceError or a subclass -- ReviewNotFoundError (row gone) and
+#     ReviewDataIntegrityError (corrupt persisted row) both inherit from it, and any
+#     lower-level query error is re-raised as ReviewPersistenceError.
+# It is intentionally NOT ``except Exception`` -- only these precise safe types.
 _BEST_EFFORT_REPUBLISH_EXCEPTIONS = (
     WorkbenchProjectionPublishError,
     WorkbenchCandidateReadError,
     WorkbenchCandidateAmbiguityError,
     WorkbenchContractError,
+    ReviewPersistenceError,
 )
 
 
@@ -416,7 +430,11 @@ class ResolveWorkbenchSupplierUseCase:
             result = self._workbench_republisher.republish_projection(projection)
         except _BEST_EFFORT_REPUBLISH_EXCEPTIONS:
             return False
-        return bool(result.updated)
+        # Truthful only: report success solely when the update-only publisher confirmed
+        # an *existing* row was updated. ``ProjectionPublishResult`` already guarantees
+        # exactly one of created/updated is True, and ``republish_projection`` has no
+        # create branch, so this is belt-and-suspenders, not a behavior change.
+        return result.updated is True and result.created is False
 
     # ------------------------------------------------------------------ resume / idempotency
 
