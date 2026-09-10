@@ -69,6 +69,54 @@ class ReviewDecisionDataIntegrityError(ReviewDecisionError):
     error_category = "review_decision_data_integrity_error"
 
 
+class SupplierResolutionError(ApplicationError):
+    """Safe base error for explicit supplier-resolution policy validation and persistence."""
+
+    error_category = "supplier_resolution_error"
+
+
+class SupplierResolutionContractError(SupplierResolutionError):
+    """Safe error raised when a SupplierResolution is structurally invalid."""
+
+    error_category = "supplier_resolution_contract_error"
+
+
+class SupplierResolutionNotFoundError(SupplierResolutionError):
+    """Safe error raised when no supplier resolution exists for the review version."""
+
+    error_category = "supplier_resolution_not_found"
+
+
+class SupplierResolutionPartnerNotFoundError(SupplierResolutionError):
+    """Safe error raised when a MATCH_EXISTING selected partner cannot be read."""
+
+    error_category = "supplier_resolution_partner_not_found"
+
+
+class SupplierResolutionPartnerInactiveError(SupplierResolutionError):
+    """Safe error raised when a MATCH_EXISTING selected partner is archived/inactive."""
+
+    error_category = "supplier_resolution_partner_inactive"
+
+
+class SupplierResolutionPartnerMismatchError(SupplierResolutionError):
+    """Safe error raised when a MATCH_EXISTING selected partner fails exact VAT identity."""
+
+    error_category = "supplier_resolution_partner_mismatch"
+
+
+class SupplierResolutionDataIntegrityError(SupplierResolutionError):
+    """Safe error raised when persisted supplier-resolution evidence cannot hydrate."""
+
+    error_category = "supplier_resolution_data_integrity_error"
+
+
+class SupplierResolutionConflictError(SupplierResolutionError):
+    """Safe error raised when a different supplier resolution already exists for the review version."""
+
+    error_category = "supplier_resolution_conflict"
+
+
 class WorkbenchCandidateReadError(ApplicationError):
     """Safe base error for reading Workbench decision candidates from an ERP UI projection."""
 

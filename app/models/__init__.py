@@ -16,6 +16,7 @@ from app.models.workbench_review_execution_evidence import WorkbenchReviewExecut
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workbench_review_reclassification import WorkbenchReviewReclassification
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
+from app.models.workbench_review_supplier_resolution import WorkbenchReviewSupplierResolution
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "WorkbenchReviewDecision",
     "WorkbenchReviewItem",
     "WorkbenchReviewReclassification",
+    "WorkbenchReviewSupplierResolution",
     "WorkflowExecution",
     "WorkflowExecutionEvent",
     "WorkflowExecutionStep",

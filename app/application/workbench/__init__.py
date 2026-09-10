@@ -98,6 +98,8 @@ from app.application.workbench.ports import (
     ReviewQueueReader,
     ReviewReclassificationWriter,
     ReviewSourceInvoiceEvidenceReader,
+    SupplierResolutionPartnerReader,
+    SupplierResolutionWriter,
     WorkbenchBillingAuthoringReader,
     WorkbenchDecisionCandidateReader,
     WorkbenchProjectionPublisher,
@@ -121,6 +123,15 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationTrigger,
 )
 from app.application.workbench.services import ReviewItemCreationService
+from app.application.workbench.supplier_resolution import (
+    ResolutionPartnerRecord,
+    SupplierResolution,
+    SupplierResolutionMode,
+    SupplierResolutionValidation,
+    SupplierResolutionValidationStatus,
+    normalize_supplier_vat,
+)
+from app.application.workbench.supplier_resolution_use_cases import ValidateSupplierResolutionUseCase
 
 __all__ = [
     "AllocationCompleteness",
@@ -180,6 +191,15 @@ __all__ = [
     "ReviewQueueReader",
     "ReviewQueueResult",
     "ReviewStatus",
+    "ResolutionPartnerRecord",
+    "SupplierResolution",
+    "SupplierResolutionMode",
+    "SupplierResolutionPartnerReader",
+    "SupplierResolutionValidation",
+    "SupplierResolutionValidationStatus",
+    "SupplierResolutionWriter",
+    "ValidateSupplierResolutionUseCase",
+    "normalize_supplier_vat",
     "SalesOrderLineReference",
     "SalesOrderLineReferenceRepository",
     "SalesOrderReference",
