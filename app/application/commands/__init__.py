@@ -4,10 +4,12 @@ from app.application.commands.base import Command
 from app.application.commands.customer_invoice import CustomerInvoiceWriteCommand
 from app.application.commands.import_invoice import ImportInvoiceCommand
 from app.application.commands.import_session import ImportSessionCommand
+from app.application.commands.supplier_partner import CreateSupplierPartnerCommand
 from app.application.commands.vendor_bill import VendorBillWriteCommand
 
 __all__ = [
     "Command",
+    "CreateSupplierPartnerCommand",
     "CustomerInvoiceWriteCommand",
     "ImportInvoiceCommand",
     "ImportSessionCommand",

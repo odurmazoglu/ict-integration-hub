@@ -70,6 +70,38 @@ async def test_create_sale_order_rejects_unexpected_response_shapes(body: object
     assert "secret" not in exc_info.value.safe_message
 
 
+async def test_create_res_partner_returns_created_id_via_vals_list() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/res.partner/create"
+        assert json.loads(request.content) == {"vals_list": [{"name": "Acme", "vat": "0430367181"}]}
+        return httpx.Response(200, json=501)
+
+    result = await _client(handler).create_res_partner({"name": "Acme", "vat": "0430367181"})
+    assert result == 501
+
+
+async def test_create_res_partner_accepts_dict_and_single_id_list_shapes() -> None:
+    async def dict_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 502})
+
+    async def list_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[503])
+
+    assert await _client(dict_handler).create_res_partner({"name": "A"}) == 502
+    assert await _client(list_handler).create_res_partner({"name": "A"}) == 503
+
+
+@pytest.mark.parametrize("body", [True, False, {"unexpected": True}, "501", [501, 502], []])
+async def test_create_res_partner_rejects_unexpected_response_shapes(body: object) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(ConnectorError) as exc_info:
+        await _client(handler).create_res_partner({"name": "A", "api_key": "secret"})
+    assert "unexpected response shape" in exc_info.value.safe_message
+    assert "secret" not in exc_info.value.safe_message
+
+
 async def test_search_read_allows_sale_order_and_product_pricelist() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path in {"/json/2/sale.order/search_read", "/json/2/product.pricelist/search_read"}

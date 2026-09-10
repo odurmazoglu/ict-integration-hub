@@ -72,6 +72,32 @@ def test_non_production_rejects_production_flags_and_provider_environment() -> N
     assert "UYUMSOFT_ENVIRONMENT=production outside production requires LIVE_CONNECTOR_READONLY=true." in errors
 
 
+def test_non_production_supplier_remediation_write_requires_approved_staging_host() -> None:
+    unapproved = Settings(
+        app_env="development",
+        supplier_remediation_write_enabled=True,
+        odoo_base_url="https://example.odoo.com",
+    )
+    assert (
+        "SUPPLIER_REMEDIATION_WRITE_ENABLED=true requires ODOO_BASE_URL to be an approved staging host."
+        in runtime_configuration_errors(unapproved)
+    )
+
+    approved = Settings(
+        app_env="development",
+        supplier_remediation_write_enabled=True,
+        odoo_base_url="https://test-ictteknoloji.odoo.com",
+    )
+    assert (
+        "SUPPLIER_REMEDIATION_WRITE_ENABLED=true requires ODOO_BASE_URL to be an approved staging host."
+        not in runtime_configuration_errors(approved)
+    )
+
+
+def test_default_settings_have_supplier_remediation_write_disabled() -> None:
+    assert Settings().supplier_remediation_write_enabled is False
+
+
 def test_non_production_production_connector_requires_live_readonly() -> None:
     settings = Settings(
         app_env="development",

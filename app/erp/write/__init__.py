@@ -1,5 +1,18 @@
 """ERP write adapters for controlled draft-only operations."""
 
+from app.application.exceptions.supplier_partner import (
+    SupplierPartnerAmbiguityError,
+    SupplierPartnerDataIntegrityError,
+    SupplierPartnerDuplicateRaceError,
+    SupplierPartnerInactiveError,
+    SupplierPartnerWriteAuthenticationError,
+    SupplierPartnerWriteAuthorizationError,
+    SupplierPartnerWriteError,
+    SupplierPartnerWriteSafetyGateError,
+    SupplierPartnerWriteTransportError,
+    SupplierPartnerWriteUnexpectedErpError,
+    SupplierPartnerWriteValidationError,
+)
 from app.erp.write.account_move_repository import AccountMoveDraft, AccountMoveRepository
 from app.erp.write.exceptions import (
     CustomerInvoiceWriteAuthenticationError,
@@ -39,6 +52,13 @@ from app.erp.write.odoo_customer_quotation_writer import (
     SaleOrderDraft,
     build_sale_order_payload,
 )
+from app.erp.write.odoo_supplier_partner_writer import (
+    OdooSupplierPartnerRepository,
+    OdooSupplierPartnerWritePolicy,
+    OdooSupplierPartnerWriter,
+    SupplierPartnerJson2Client,
+    SupplierPartnerRecord,
+)
 from app.erp.write.odoo_vendor_bill_writer import OdooVendorBillWritePolicy, OdooVendorBillWriter
 
 __all__ = [
@@ -69,9 +89,25 @@ __all__ = [
     "OdooCustomerQuotationRepository",
     "OdooCustomerQuotationWritePolicy",
     "OdooCustomerQuotationWriter",
+    "OdooSupplierPartnerRepository",
+    "OdooSupplierPartnerWritePolicy",
+    "OdooSupplierPartnerWriter",
     "OdooVendorBillWritePolicy",
     "OdooVendorBillWriter",
     "SaleOrderDraft",
+    "SupplierPartnerAmbiguityError",
+    "SupplierPartnerDataIntegrityError",
+    "SupplierPartnerDuplicateRaceError",
+    "SupplierPartnerInactiveError",
+    "SupplierPartnerJson2Client",
+    "SupplierPartnerRecord",
+    "SupplierPartnerWriteAuthenticationError",
+    "SupplierPartnerWriteAuthorizationError",
+    "SupplierPartnerWriteError",
+    "SupplierPartnerWriteSafetyGateError",
+    "SupplierPartnerWriteTransportError",
+    "SupplierPartnerWriteUnexpectedErpError",
+    "SupplierPartnerWriteValidationError",
     "VendorBillWriteAuthenticationError",
     "VendorBillWriteAuthorizationError",
     "VendorBillWriteDuplicateError",
