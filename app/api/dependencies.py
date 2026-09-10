@@ -21,13 +21,19 @@ from app.application.quotation import WorkbenchQuotationScenarioEvidenceWorkflow
 from app.application.workbench import (
     GetReviewItemUseCase,
     ListReviewQueueUseCase,
+    ResolveWorkbenchSupplierUseCase,
     ReviewDecisionWriter,
     ReviewQueueReader,
     SubmitReviewDecisionUseCase,
     WorkbenchDecisionIngestionWorkflow,
 )
+from app.application.workbench.supplier_remediation import (
+    ResolveWorkbenchSupplierCommand,
+    SupplierRemediationResult,
+)
 from app.composition import (
     build_odoo_workbench_decision_ingestion_workflow,
+    build_resolve_workbench_supplier_use_case,
     build_uyumsoft_canonical_invoice_importer,
     build_vendor_bill_execution_use_case,
     build_workbench_accepted_decision_execution_dispatcher,
@@ -303,4 +309,35 @@ class _LazyWorkbenchQuotationScenarioEvidenceWorkflow:
 WorkbenchQuotationScenarioEvidenceWorkflowDep = Annotated[
     WorkbenchQuotationScenarioEvidenceWorkflow,
     Depends(get_workbench_quotation_scenario_evidence_workflow),
+]
+
+
+def get_resolve_workbench_supplier_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> ResolveWorkbenchSupplierUseCase:
+    return _LazyResolveWorkbenchSupplierUseCase(session=session, settings=settings)
+
+
+class _LazyResolveWorkbenchSupplierUseCase:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._use_case: ResolveWorkbenchSupplierUseCase | None = None
+
+    async def execute(self, command: ResolveWorkbenchSupplierCommand) -> SupplierRemediationResult:
+        return await self._get_use_case().execute(command)
+
+    def _get_use_case(self) -> ResolveWorkbenchSupplierUseCase:
+        if self._use_case is None:
+            self._use_case = build_resolve_workbench_supplier_use_case(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._use_case
+
+
+ResolveWorkbenchSupplierUseCaseDep = Annotated[
+    ResolveWorkbenchSupplierUseCase,
+    Depends(get_resolve_workbench_supplier_use_case),
 ]

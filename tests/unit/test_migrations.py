@@ -531,6 +531,43 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         constraint["name"] for constraint in inspector.get_unique_constraints("workbench_review_supplier_resolutions")
     }
     assert "uq_workbench_review_supplier_resolutions_review_version" in supplier_resolution_unique_constraints_at_head
+    assert "workbench_review_supplier_remediation_effects" in inspector.get_table_names()
+    remediation_effect_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_supplier_remediation_effects")
+    }
+    assert {
+        "id",
+        "review_id",
+        "company_id",
+        "review_version",
+        "source_invoice_id",
+        "mode",
+        "resolved_partner_id",
+        "partner_write_status",
+        "source_supplier_tax_number",
+        "approved_by",
+        "created_at",
+    }.issubset(remediation_effect_columns_at_head)
+    remediation_effect_indexes_at_head = {
+        index["name"] for index in inspector.get_indexes("workbench_review_supplier_remediation_effects")
+    }
+    assert {
+        "ix_workbench_review_supplier_remediation_effects_company_review",
+        "ix_workbench_review_supplier_remediation_effects_partner_id",
+    }.issubset(remediation_effect_indexes_at_head)
+    remediation_effect_unique_constraints_at_head = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("workbench_review_supplier_remediation_effects")
+    }
+    assert (
+        "uq_workbench_review_supplier_remediation_effects_review_version"
+        in remediation_effect_unique_constraints_at_head
+    )
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_supplier_remediation_effects" not in inspector.get_table_names()
+    assert "workbench_review_supplier_resolutions" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -677,6 +714,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "workbench_review_source_invoice_evidence" in inspector.get_table_names()
     assert "workbench_review_reclassifications" in inspector.get_table_names()
     assert "workbench_review_supplier_resolutions" in inspector.get_table_names()
+    assert "workbench_review_supplier_remediation_effects" in inspector.get_table_names()
     assert "operating_expense_match" in {
         column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
     }

@@ -24,6 +24,7 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationProposal,
     ReviewReclassificationResult,
 )
+from app.application.workbench.supplier_remediation import SupplierRemediationEffect
 from app.application.workbench.supplier_resolution import ResolutionPartnerRecord, SupplierResolution
 from app.billing.dto import CustomerInvoiceBillingInstruction
 
@@ -140,6 +141,22 @@ class SupplierResolutionWriter(Protocol):
         company_id: int,
         review_version: int,
     ) -> SupplierResolution:
+        pass
+
+
+class SupplierRemediationEffectWriter(Protocol):
+    """Append-only port for the completed effect of a supplier remediation."""
+
+    def create_remediation_effect(self, effect: SupplierRemediationEffect) -> SupplierRemediationEffect:
+        pass
+
+    def find_remediation_effect(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> SupplierRemediationEffect | None:
         pass
 
 
