@@ -117,6 +117,16 @@ class SupplierResolutionConflictError(SupplierResolutionError):
     error_category = "supplier_resolution_conflict"
 
 
+class SupplierResolutionRaceError(SupplierResolutionError):
+    """Safe error raised when a concurrent request won the reservation for this review version.
+
+    The losing request must not proceed to any Odoo write. A retry re-enters through
+    the pre-check and either resumes the (now committed) reservation or conflicts.
+    """
+
+    error_category = "supplier_resolution_race"
+
+
 class WorkbenchCandidateReadError(ApplicationError):
     """Safe base error for reading Workbench decision candidates from an ERP UI projection."""
 

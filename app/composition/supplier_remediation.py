@@ -23,6 +23,7 @@ from app.persistence import (
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyReviewSupplierResolutionRepository,
+    SqlAlchemyUnitOfWork,
 )
 
 
@@ -77,4 +78,5 @@ def build_resolve_workbench_supplier_use_case(
         remediation_effect_writer=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
         supplier_partner_writer=supplier_partner_writer,
         reclassifier=reclassifier,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
     )

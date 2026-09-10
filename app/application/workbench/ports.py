@@ -134,6 +134,9 @@ class SupplierResolutionWriter(Protocol):
     def create_supplier_resolution(self, resolution: SupplierResolution) -> SupplierResolution:
         pass
 
+    def reserve_supplier_resolution(self, resolution: SupplierResolution) -> SupplierResolution:
+        """Single-winner reservation: the concurrent INSERT-race loser is raised out, never returned."""
+
     def get_supplier_resolution(
         self,
         *,

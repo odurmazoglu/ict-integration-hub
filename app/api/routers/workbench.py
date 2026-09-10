@@ -62,6 +62,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionPartnerInactiveError,
     SupplierResolutionPartnerMismatchError,
     SupplierResolutionPartnerNotFoundError,
+    SupplierResolutionRaceError,
     WorkbenchContractError,
 )
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
@@ -616,6 +617,7 @@ def _status_code_for_exception(exc: Exception) -> int:
             ReviewStateConflictError,
             ReviewDecisionIdempotencyConflictError,
             SupplierResolutionConflictError,
+            SupplierResolutionRaceError,
             SupplierResolutionPartnerMismatchError,
             SupplierResolutionPartnerInactiveError,
         ),

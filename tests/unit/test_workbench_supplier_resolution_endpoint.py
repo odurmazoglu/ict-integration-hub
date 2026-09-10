@@ -20,6 +20,7 @@ from app.application.workbench.exceptions import (
     ReviewVersionConflictError,
     SupplierResolutionConflictError,
     SupplierResolutionPartnerMismatchError,
+    SupplierResolutionRaceError,
 )
 from app.application.workbench.supplier_remediation import (
     ResolveWorkbenchSupplierCommand,
@@ -241,6 +242,18 @@ async def test_conflicting_resolution_maps_to_409(api_client: AsyncClient) -> No
         use_case=use_case,
     )
     assert response.status_code == 409
+
+
+async def test_concurrent_reservation_race_maps_to_409(api_client: AsyncClient) -> None:
+    use_case = _FakeResolveUseCase(error=SupplierResolutionRaceError("a concurrent request already reserved this"))
+    response = await _post(
+        api_client,
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        json={"mode": "create_permanent_supplier", "expected_version": 1},
+        use_case=use_case,
+    )
+    assert response.status_code == 409
+    assert response.json()["errors"][0]["code"] == "supplier_resolution_race"
 
 
 async def test_write_gate_failure_maps_to_403(api_client: AsyncClient) -> None:

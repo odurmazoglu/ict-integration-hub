@@ -22,12 +22,14 @@ Odoo client.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from app.application.commands.supplier_partner import CreateSupplierPartnerCommand
 from app.application.dto.supplier_partner import SupplierPartnerWriteStatus
 from app.application.exceptions import ApplicationError
 from app.application.ports.supplier_partner_writer import SupplierPartnerWriter
+from app.application.services import UnitOfWork
 from app.application.workbench.exceptions import (
     ReviewStateConflictError,
     ReviewVersionConflictError,
@@ -87,6 +89,8 @@ class ResolveWorkbenchSupplierUseCase:
         remediation_effect_writer: SupplierRemediationEffectWriter,
         supplier_partner_writer: SupplierPartnerWriter,
         reclassifier: SupplierReclassifier,
+        unit_of_work: UnitOfWork,
+        _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
         self._source_invoice_reader = source_invoice_reader
@@ -95,6 +99,10 @@ class ResolveWorkbenchSupplierUseCase:
         self._remediation_effect_writer = remediation_effect_writer
         self._supplier_partner_writer = supplier_partner_writer
         self._reclassifier = reclassifier
+        self._unit_of_work = unit_of_work
+        # Test-only seam: invoked on the fresh path just before the reservation INSERT,
+        # so a test can commit a competing reservation in another transaction in between.
+        self._after_precheck_hook = _after_precheck_hook
 
     async def execute(self, command: ResolveWorkbenchSupplierCommand) -> SupplierRemediationResult:
         if not isinstance(command, ResolveWorkbenchSupplierCommand):
@@ -112,11 +120,25 @@ class ResolveWorkbenchSupplierUseCase:
         self._require_pending_supplier_not_found(review, command)
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
 
+        if self._after_precheck_hook is not None:
+            await self._after_precheck_hook()
+
         if command.mode is SupplierResolutionMode.USE_ONE_OFF_SUPPLIER:
             return self._resolve_one_off(command, review, source)
 
-        intent = self._reserve_intent(command, source)
-        return await self._complete(command, review, source, intent, already_applied=False)
+        try:
+            # The reservation is the cross-process single-winner barrier: it is committed
+            # here, before any Odoo write. A concurrent INSERT-race loser is raised out of
+            # _reserve_intent (SupplierResolutionRaceError / SupplierResolutionConflictError)
+            # and never reaches the supplier writer.
+            intent = self._reserve_intent(command, source)
+            return await self._complete(command, review, source, intent, already_applied=False)
+        except BaseException:
+            # A committed reservation stays committed (it enables a safe resume); discard
+            # any uncommitted work (a lost reservation INSERT, or effect / reclassification
+            # after a partial failure) so no half-applied state is left behind.
+            self._unit_of_work.rollback()
+            raise
 
     # ------------------------------------------------------------------ eligibility
 
@@ -148,7 +170,8 @@ class ResolveWorkbenchSupplierUseCase:
         validation = self._resolution_validator.execute(resolution)
         if validation.status is not SupplierResolutionValidationStatus.ONE_OFF_EXECUTION_NOT_SUPPORTED:
             raise SupplierResolutionDataIntegrityError("Unexpected one-off supplier resolution validation status.")
-        self._resolution_writer.create_supplier_resolution(resolution)
+        self._resolution_writer.reserve_supplier_resolution(resolution)
+        self._unit_of_work.commit()
         return SupplierRemediationResult(
             review_id=command.review_id,
             company_id=command.company_id,
@@ -185,10 +208,14 @@ class ResolveWorkbenchSupplierUseCase:
             )
             if validation.status is not SupplierResolutionValidationStatus.VALID:
                 raise SupplierResolutionDataIntegrityError("Unexpected MATCH_EXISTING resolution validation status.")
-        # Reserve the operator's intent BEFORE any irreversible Odoo write.
-        return self._resolution_writer.create_supplier_resolution(
+        # Reserve the operator's intent and COMMIT it before any irreversible Odoo write.
+        # A concurrent transaction that lost this UNIQUE(review_id, review_version) INSERT
+        # is raised out here and never proceeds.
+        reserved = self._resolution_writer.reserve_supplier_resolution(
             self._resolution(command, source, resolved_partner_id=resolved_partner_id)
         )
+        self._unit_of_work.commit()
+        return reserved
 
     # ------------------------------------------------------------------ completion
 
@@ -234,7 +261,9 @@ class ResolveWorkbenchSupplierUseCase:
         )
 
         reclass = await self._reclassify(command)
-        return self._result_from_reclass(command, effect, reclass, already_applied=already_applied)
+        result = self._result_from_reclass(command, effect, reclass, already_applied=already_applied)
+        self._unit_of_work.commit()
+        return result
 
     async def _create_permanent_partner(
         self,
@@ -395,12 +424,21 @@ class ResolveWorkbenchSupplierUseCase:
             )
 
         # The review is still at the pre-remediation version: resume the interrupted work.
+        # The committed reservation already fixed the single winner for this version, so a
+        # resume never creates a parallel reservation; the supplier writer's own exact-VAT
+        # idempotency keeps a re-run from creating a second partner when one already exists.
         self._require_pending_supplier_not_found(review, command)
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
-        if effect is None:
-            return await self._complete(command, review, source, existing, already_applied=True)
-        reclass = await self._reclassify(command)
-        return self._result_from_reclass(command, effect, reclass, already_applied=True)
+        try:
+            if effect is None:
+                return await self._complete(command, review, source, existing, already_applied=True)
+            reclass = await self._reclassify(command)
+            result = self._result_from_reclass(command, effect, reclass, already_applied=True)
+            self._unit_of_work.commit()
+            return result
+        except BaseException:
+            self._unit_of_work.rollback()
+            raise
 
     # ------------------------------------------------------------------ helpers
 

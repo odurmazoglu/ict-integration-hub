@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from sqlalchemy import create_engine
@@ -30,6 +31,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionPartnerInactiveError,
     SupplierResolutionPartnerMismatchError,
     SupplierResolutionPartnerNotFoundError,
+    SupplierResolutionRaceError,
 )
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import (
@@ -54,6 +56,7 @@ from app.models.workbench_review_supplier_resolution import WorkbenchReviewSuppl
 from app.persistence import (
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyReviewSupplierResolutionRepository,
+    SqlAlchemyUnitOfWork,
 )
 
 COMPANY_ID = 7
@@ -307,7 +310,9 @@ class _Harness:
         writer: _FakeSupplierPartnerWriter | None = None,
         resolves: bool = True,
         reclassify_fail: Exception | None = None,
+        after_precheck_hook: Any = None,
     ) -> None:
+        self.session = session
         self.reader = _FakeReviewReader(review or _review_item())
         self.source_reader = _FakeSourceReader(source or _source_evidence())
         resolved_partner = _partner() if partner is _UNSET else partner
@@ -327,6 +332,8 @@ class _Harness:
             remediation_effect_writer=self.effect_repo,
             supplier_partner_writer=self.writer,
             reclassifier=self.reclassifier,
+            unit_of_work=SqlAlchemyUnitOfWork(session),
+            _after_precheck_hook=after_precheck_hook,
         )
 
     def command(self, **kw) -> ResolveWorkbenchSupplierCommand:
@@ -486,7 +493,12 @@ async def test_create_permanent_already_exists_records_already_exists(session: S
     assert result.effective_partner_id == 5001
 
 
-async def test_create_permanent_resumes_after_effect_write_failure_without_second_partner(session: Session) -> None:
+async def test_create_permanent_resumes_after_a_committed_reservation_and_partial_failure(session: Session) -> None:
+    # Committed reservation is durable; reclassify fails -> the request errors but the
+    # reservation (and the effect) stay committed so a retry can resume. A retry does not
+    # create a second Odoo partner *because the writer's own exact-VAT lookup returns
+    # ALREADY_EXISTS* -- see test_..._concurrent_writer_interleave_is_detection_only for the
+    # residual race the writer only detects, not prevents.
     writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
     h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, reclassify_fail=RuntimeError("boom"))
 
@@ -495,12 +507,10 @@ async def test_create_permanent_resumes_after_effect_write_failure_without_secon
             h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
         )
 
-    # reservation + effect were written; the Odoo partner exists once
-    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
-    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1  # reservation committed
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1  # effect committed
     assert len(writer.calls) == 1
 
-    # retry with a healthy reclassifier resumes without creating a second partner
     h.reclassifier = _FakeReclassifier(h.reader, resolves=True)
     h.use_case._reclassifier = h.reclassifier
     result = await h.use_case.execute(
@@ -508,7 +518,7 @@ async def test_create_permanent_resumes_after_effect_write_failure_without_secon
     )
     assert result.status is SupplierRemediationStatus.RESOLVED
     assert result.already_applied is True
-    assert len(writer.calls) == 1  # no second create
+    assert len(writer.calls) == 1  # writer's own idempotency -> no second create on this retry
     assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
 
 
@@ -552,18 +562,163 @@ async def test_use_one_off_exact_replay_is_stable(session: Session) -> None:
     assert session.query(WorkbenchReviewSupplierResolution).count() == 1
 
 
-# --------------------------------------------------------- Phase 33: concurrency
+# --------------------------------------------------------- Phase 33: concurrency (two real transactions)
 
 
-async def test_concurrent_create_permanent_duplicate_request_creates_one_effect_one_partner(session: Session) -> None:
+@pytest.fixture()
+def shared_db_factory(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'remed.db'}")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            WorkbenchReviewItem.__table__,
+            WorkbenchReviewSupplierResolution.__table__,
+            WorkbenchReviewSupplierRemediationEffect.__table__,
+        ],
+    )
+    factory = sessionmaker(bind=engine)
+    with factory() as seed:
+        seed.add(
+            WorkbenchReviewItem(
+                review_id=REVIEW_ID,
+                company_id=COMPANY_ID,
+                invoice_id=ETTN,
+                invoice_number="AKY-1",
+                supplier_tax_number=VKN,
+                supplier_name="AKYASAM",
+                invoice_date=date(2026, 8, 20),
+                currency="TRY",
+                total_amount=Decimal("100.00"),
+                workflow="manual_review",
+                status="pending_review",
+                review_reasons=[{"code": "supplier_not_found", "message": "x"}],
+                warnings=[],
+                version=1,
+                idempotency_key="uyumsoft:7:AKYASAM-ETTN-REMED-1",
+            )
+        )
+        seed.commit()
+    try:
+        yield factory
+    finally:
+        engine.dispose()
+
+
+async def test_reservation_barrier_stops_the_losing_concurrent_request_before_odoo(shared_db_factory) -> None:
+    # Two independent sessions / transactions on the same database. Session B does its
+    # pre-check (sees nothing), then session A wins and COMMITS its reservation, then B
+    # attempts to reserve -> UNIQUE(review_id, review_version) violation -> the loser is
+    # raised out (SupplierResolutionRaceError) BEFORE reaching SupplierPartnerWriter.
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)  # shared across both "processes"
+    session_a = shared_db_factory()
+    session_b = shared_db_factory()
+    try:
+        h_a = _Harness(session_a, partner=_partner(id=6001, vat=VKN), writer=writer)
+        cmd = h_a.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+
+        async def _winner_commits_between_bs_precheck_and_reserve() -> None:
+            await h_a.use_case.execute(cmd)  # A reserves + commits, creates the partner, writes the effect
+
+        h_b = _Harness(
+            session_b,
+            partner=_partner(id=6001, vat=VKN),
+            writer=writer,
+            after_precheck_hook=_winner_commits_between_bs_precheck_and_reserve,
+        )
+
+        with pytest.raises(SupplierResolutionRaceError):
+            await h_b.use_case.execute(cmd)
+
+        # exactly one winner: one reservation, one effect, one Odoo create; B never called the writer
+        assert session_b.query(WorkbenchReviewSupplierResolution).count() == 1
+        assert session_b.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+        assert len(writer.calls) == 1
+    finally:
+        session_a.close()
+        session_b.close()
+
+
+async def test_different_decisions_for_same_version_conflict_across_two_sessions(shared_db_factory) -> None:
     writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
-    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer)
-    cmd = h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
-    await h.use_case.execute(cmd)
-    h.reader.item = _review_item(version=1)  # simulate the second racing worker still seeing v1
-    await h.use_case.execute(cmd)
-    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
-    assert len(writer.calls) == 1
+    session_a = shared_db_factory()
+    session_b = shared_db_factory()
+    try:
+        h_a = _Harness(session_a, partner=_partner(id=6001, vat=VKN), writer=writer)
+
+        async def _winner_commits() -> None:
+            await h_a.use_case.execute(
+                h_a.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+            )
+
+        h_b = _Harness(
+            session_b,
+            partner=_partner(id=4010, vat=VKN),
+            writer=writer,
+            after_precheck_hook=_winner_commits,
+        )
+        with pytest.raises(SupplierResolutionConflictError):
+            # B picked MATCH_EXISTING with a different partner for the same review version
+            await h_b.use_case.execute(
+                h_b.command(mode=SupplierResolutionMode.MATCH_EXISTING, resolved_partner_id=4010)
+            )
+        assert session_b.query(WorkbenchReviewSupplierResolution).count() == 1  # only A's
+        assert len(writer.calls) == 1  # only A reached the writer
+    finally:
+        session_a.close()
+        session_b.close()
+
+
+async def test_concurrent_writer_interleave_is_detection_only_not_prevention() -> None:
+    # DOCUMENTED RESIDUAL RACE. The Hub reservation makes exactly one request the winner
+    # for a review version, but a request that legitimately RESUMES a committed reservation
+    # (whose owner is still in flight) calls the controlled writer; Odoo has no VAT
+    # uniqueness. If two create_supplier calls interleave inside the writer -- both search
+    # 0, both create -- the post-create exact-VAT re-query DETECTS it and fails closed with
+    # SupplierPartnerDuplicateRaceError. It is NOT prevented and no "one net partner" is
+    # claimed. This test asserts the fail-closed detection, using the real #129 writer.
+    from app.application.exceptions.supplier_partner import SupplierPartnerDuplicateRaceError
+    from app.erp.write.odoo_supplier_partner_writer import (
+        OdooSupplierPartnerRepository,
+        OdooSupplierPartnerWritePolicy,
+        OdooSupplierPartnerWriter,
+    )
+
+    class _RacyJson2Client:
+        # search always returns 0 before create; the post-create re-query returns TWO rows.
+        def __init__(self) -> None:
+            self.created = 0
+
+        async def create_res_partner(self, payload: dict[str, Any]) -> int:
+            self.created += 1
+            return 6000 + self.created
+
+        async def search_read(self, *, model, domain, fields, limit=20, offset=0):
+            has_vat_eq = any(clause[:2] == ["vat", "="] for clause in domain if isinstance(clause, list))
+            if has_vat_eq and self.created == 0:
+                return []
+            if has_vat_eq and self.created >= 1:
+                return [
+                    {"id": 6001, "name": "AKYASAM", "vat": VKN, "active": True, "company_id": False},
+                    {"id": 6002, "name": "AKYASAM", "vat": VKN, "active": True, "company_id": False},
+                ]
+            return []
+
+    writer = OdooSupplierPartnerWriter(
+        repository=OdooSupplierPartnerRepository(client=_RacyJson2Client()),
+        policy=OdooSupplierPartnerWritePolicy(
+            supplier_remediation_write_enabled=True, app_env="staging", odoo_host="test-ictteknoloji.odoo.com"
+        ),
+    )
+    with pytest.raises(SupplierPartnerDuplicateRaceError):
+        await writer.create_supplier(
+            CreateSupplierPartnerCommand(
+                company_id=COMPANY_ID,
+                supplier_name="AKYASAM",
+                supplier_tax_number=VKN,
+                idempotency_key="supplier-remediation:7:X:1",
+                approved_by=ACTOR,
+            )
+        )
 
 
 def test_command_rejects_partner_id_for_non_match_modes() -> None:
