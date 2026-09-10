@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     customer_invoice_execute_enabled: bool = False
     customer_quotation_execute_enabled: bool = False
     staging_vendor_bill_execute_enabled: bool = False
+    supplier_remediation_write_enabled: bool = False
     production_operations_enabled: bool = False
     production_approval_ack: str = ""
     ipp_auth_mode: AuthenticationMode = "disabled"

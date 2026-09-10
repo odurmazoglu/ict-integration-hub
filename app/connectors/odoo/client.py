@@ -94,6 +94,27 @@ class OdooJson2Client:
             f"Odoo sale.order create returned an unexpected response shape: {_response_shape(result)}."
         )
 
+    async def create_res_partner(self, payload: dict[str, Any]) -> int:
+        """Create exactly one ``res.partner`` and return its positive integer id.
+
+        This is the single sanctioned ``res.partner`` write route. It uses the
+        hardened ``{"vals_list": [values]}`` create shape and accepts only a bare
+        int, ``{"id": int}``, or a single-element ``[int]`` response; a boolean or
+        any other shape fails closed.
+        """
+
+        result = await self._post_json("/json/2/res.partner/create", {"vals_list": [payload]})
+        if not isinstance(result, bool):
+            if isinstance(result, int):
+                return result
+            if isinstance(result, dict) and type(result.get("id")) is int:
+                return int(result["id"])
+            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
+                return result[0]
+        raise ConnectorError(
+            f"Odoo res.partner create returned an unexpected response shape: {_response_shape(result)}."
+        )
+
     async def write_account_move(self, *, record_id: int, values: dict[str, Any]) -> bool:
         if type(record_id) is not int or record_id <= 0:
             raise ConnectorError("Odoo account.move record id is invalid.")
