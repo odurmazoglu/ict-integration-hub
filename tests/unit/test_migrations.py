@@ -474,6 +474,44 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         for constraint in inspector.get_unique_constraints("workbench_review_source_invoice_evidence")
     }
     assert "uq_workbench_review_source_invoice_evidence_review_id" in source_invoice_evidence_unique_constraints_at_head
+    assert "workbench_review_reclassifications" in inspector.get_table_names()
+    reclassification_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_reclassifications")
+    }
+    assert {
+        "id",
+        "review_id",
+        "company_id",
+        "from_version",
+        "to_version",
+        "source_invoice_id",
+        "trigger",
+        "note",
+        "previous_workflow",
+        "previous_review_reasons",
+        "new_workflow",
+        "new_review_reasons",
+        "matched_rule_code",
+        "matched_rule_id",
+        "executable",
+        "created_at",
+    }.issubset(reclassification_columns_at_head)
+    reclassification_indexes_at_head = {
+        index["name"] for index in inspector.get_indexes("workbench_review_reclassifications")
+    }
+    assert "ix_workbench_review_reclassifications_company_review" in reclassification_indexes_at_head
+    reclassification_unique_constraints_at_head = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("workbench_review_reclassifications")
+    }
+    assert {
+        "uq_workbench_review_reclassifications_review_to_version",
+        "uq_workbench_review_reclassifications_review_from_version",
+    }.issubset(reclassification_unique_constraints_at_head)
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_reclassifications" not in inspector.get_table_names()
+    assert "workbench_review_source_invoice_evidence" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
@@ -608,6 +646,7 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "quotation_scenario_evidence" in inspector.get_table_names()
     assert "operating_expense_mappings" in inspector.get_table_names()
     assert "workbench_review_source_invoice_evidence" in inspector.get_table_names()
+    assert "workbench_review_reclassifications" in inspector.get_table_names()
     assert "operating_expense_match" in {
         column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
     }

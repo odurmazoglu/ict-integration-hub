@@ -11,6 +11,10 @@ from app.application.dto import DecisionResult, ImportInvoiceResult
 from app.application.exceptions import ApplicationError
 from app.application.ports import InvoiceImportHistory
 from app.application.services import UnitOfWork
+from app.application.use_cases.review_classification_outcome import (
+    build_review_classification_evidence,
+    build_review_execution_evidence,
+)
 from app.application.workbench import (
     ReviewClassificationEvidence,
     ReviewExecutionEvidence,
@@ -24,8 +28,6 @@ from app.application.workbench import (
     WorkbenchProjectionPublisher,
     WorkbenchProjectionPublishError,
 )
-from app.application.workflow import WorkflowType
-from app.billing.builder import validate_vendor_bill_inputs
 from app.domain.invoice import InternalInvoice
 
 WORKBENCH_PROJECTION_FAILURE_WARNING = "Odoo Workbench projection publish failed; Hub review remains authoritative."
@@ -300,58 +302,17 @@ def _execution_evidence(
 ) -> ReviewExecutionEvidence | None:
     """Immutable pre-decision Stage-1 evidence for a fully matched Vendor Bill candidate.
 
-    Only produced when the deterministic execution inputs are canonically complete
-    (``validate_vendor_bill_inputs``). Incomplete or ambiguous matches keep the
-    existing fail-closed behavior: a normal review item is created without
-    executable Vendor Bill evidence.
+    Delegates to the shared version-pinned builder so first-time import and
+    reclassification produce byte-for-byte identical Stage-1 evidence.
     """
 
-    if decision_result.workflow is not WorkflowType.VENDOR_BILL:
-        return None
-    partner_match = decision_result.partner_match
-    product_match = decision_result.product_match
-    tax_match = decision_result.tax_match
-    if partner_match is None or product_match is None or tax_match is None:
-        return None
-
-    def _build(operating_expense_match: object | None) -> ReviewExecutionEvidence:
-        return ReviewExecutionEvidence(
-            review_id=item.review_id,
-            company_id=company_id,
-            review_version=item.version,
-            source_invoice_id=command.invoice.header.ettn or command.invoice.header.invoice_uuid,
-            invoice=command.invoice,
-            partner_match=partner_match,
-            product_match=product_match,
-            tax_match=tax_match,
-            operating_expense_match=operating_expense_match,
-        )
-
-    # Product mode wins: a valid deterministic product Vendor Bill is pinned as product evidence.
-    if validate_vendor_bill_inputs(
-        command.invoice,
-        partner_match,
-        product_match,
-        tax_match,
+    return build_review_execution_evidence(
+        review_id=item.review_id,
         company_id=company_id,
-    ).is_valid:
-        return _build(None)
-
-    # Operating-expense mode: pin the exact deterministic expense-account match when the
-    # account-only Vendor Bill validation (PR #124) accepts it. Never re-resolve later.
-    operating_expense_match = decision_result.operating_expense_match
-    if operating_expense_match is None:
-        return None
-    if not validate_vendor_bill_inputs(
-        command.invoice,
-        partner_match,
-        product_match,
-        tax_match,
-        company_id=company_id,
-        operating_expense_match=operating_expense_match,
-    ).is_valid:
-        return None
-    return _build(operating_expense_match)
+        review_version=item.version,
+        invoice=command.invoice,
+        decision_result=decision_result,
+    )
 
 
 def _review_item_from_import(
@@ -387,13 +348,11 @@ def _classification_evidence(
     company_id: int,
     decision_result: DecisionResult,
 ) -> ReviewClassificationEvidence | None:
-    if decision_result.classification_result is None:
-        return None
-    return ReviewClassificationEvidence.from_result(
+    return build_review_classification_evidence(
         review_id=item.review_id,
         company_id=company_id,
         review_version=item.version,
-        result=decision_result.classification_result,
+        decision_result=decision_result,
     )
 
 
