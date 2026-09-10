@@ -11,6 +11,8 @@ from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
+from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
+from app.application.workbench.supplier_resolution import SupplierResolutionMode
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
 
 
@@ -180,6 +182,37 @@ class ReviewDecisionAcknowledgementResponse(BaseModel):
     version: int
     decision: ReviewDecisionType
     selected_workflow: WorkflowType | None = None
+
+
+class SupplierResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=False)
+
+    mode: SupplierResolutionMode
+    expected_version: int
+    partner_id: int | None = None
+    note: str | None = None
+
+
+class SupplierRemediationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    mode: SupplierResolutionMode
+    resolution_status: SupplierRemediationStatus
+    previous_version: int
+    current_version: int
+    current_workflow: WorkflowType
+    current_review_reasons: list[ManualReviewReasonResponse]
+    partner_id: int | None = None
+    partner_write_status: SupplierPartnerWriteEffectStatus | None = None
+    reclassified: bool
+    already_applied: bool
+    workbench_republished: bool
+    safe_message: str | None = None
+
+
+SupplierRemediationEnvelope = ApiEnvelope[SupplierRemediationResponse]
 
 
 class WorkbenchDecisionIngestionCandidateResponse(BaseModel):

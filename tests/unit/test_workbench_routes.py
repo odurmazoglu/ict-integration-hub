@@ -790,7 +790,23 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}/decision",
         "/api/workbench/reviews/{review_id}/execute",
         "/api/workbench/reviews/{review_id}/quotation-scenarios",
+        "/api/workbench/reviews/{review_id}/supplier-resolution",
     }
+    supplier_resolution_schema = response.json()["components"]["schemas"]["SupplierResolutionRequest"]
+    supplier_resolution_text = str(supplier_resolution_schema)
+    for forbidden in (
+        "company_id",
+        "review_id",
+        "approved_by",
+        "supplier_name",
+        "supplier_vat",
+        "supplier_tax_number",
+        "invoice_number",
+        "ettn",
+    ):
+        assert forbidden not in supplier_resolution_text
+    assert set(supplier_resolution_schema["properties"]) == {"mode", "expected_version", "partner_id", "note"}
+    assert supplier_resolution_schema.get("additionalProperties") is False
     decision_schema = response.json()["components"]["schemas"]["ReviewDecisionRequest"]
     schema_text = str(decision_schema)
     assert "company_id" not in schema_text

@@ -12,6 +12,7 @@ from app.api.dependencies import (
     GetReviewItemUseCaseDep,
     ListReviewQueueUseCaseDep,
     RequestContextDep,
+    ResolveWorkbenchSupplierUseCaseDep,
     SubmitReviewDecisionUseCaseDep,
     WorkbenchAcceptedDecisionExecutionDispatcherDep,
     WorkbenchDecisionIngestionWorkflowDep,
@@ -19,6 +20,10 @@ from app.api.dependencies import (
 )
 from app.api.error_handling import error_response_factory
 from app.api.security import Permission, PermissionDeniedError, require_permission
+from app.application.exceptions.supplier_partner import (
+    SupplierPartnerWriteError,
+    SupplierPartnerWriteSafetyGateError,
+)
 from app.application.execution import (
     ExecutionApproval,
     ExecutionArtifact,
@@ -50,8 +55,17 @@ from app.application.workbench.exceptions import (
     ReviewQueryError,
     ReviewStateConflictError,
     ReviewVersionConflictError,
+    SupplierResolutionConflictError,
+    SupplierResolutionContractError,
+    SupplierResolutionDataIntegrityError,
+    SupplierResolutionError,
+    SupplierResolutionPartnerInactiveError,
+    SupplierResolutionPartnerMismatchError,
+    SupplierResolutionPartnerNotFoundError,
+    SupplierResolutionRaceError,
     WorkbenchContractError,
 )
+from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.schemas.workbench import (
     ApiEnvelope,
@@ -68,6 +82,9 @@ from app.schemas.workbench import (
     ReviewItemResponse,
     ReviewQueueEnvelope,
     ReviewQueueResponse,
+    SupplierRemediationEnvelope,
+    SupplierRemediationResponse,
+    SupplierResolutionRequest,
     TaxResolutionRequest,
     WorkbenchDecisionIngestionCandidateResponse,
     WorkbenchDecisionIngestionEnvelope,
@@ -292,6 +309,68 @@ def submit_review_decision(
         )
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/reviews/{review_id}/supplier-resolution",
+    response_model=SupplierRemediationEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Resolve a missing supplier for an Import Workbench review",
+    description=(
+        "Requires workbench_review_decide. For a review whose reasons include SUPPLIER_NOT_FOUND, records an "
+        "explicit resolution (match an existing partner, create a permanent partner, or one-off) and triggers the "
+        "non-destructive SUPPLIER_RESOLUTION reclassification. Legal supplier identity comes only from the review's "
+        "immutable source evidence -- never the request body. CREATE_PERMANENT_SUPPLIER is gated by "
+        "SUPPLIER_REMEDIATION_WRITE_ENABLED. It never executes a Vendor Bill."
+    ),
+)
+async def resolve_review_supplier(
+    review_id: str,
+    request_body: SupplierResolutionRequest,
+    response: Response,
+    context: RequestContextDep,
+    use_case: ResolveWorkbenchSupplierUseCaseDep,
+) -> SupplierRemediationEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
+        result = await use_case.execute(
+            ResolveWorkbenchSupplierCommand(
+                review_id=review_id,
+                company_id=context.company_id,
+                expected_version=request_body.expected_version,
+                mode=request_body.mode,
+                approved_by=context.user_name or context.user_id,
+                resolved_partner_id=request_body.partner_id,
+                note=request_body.note,
+            )
+        )
+        return _success(
+            response,
+            context.trace_id,
+            _supplier_remediation_response(result),
+            warnings=[],
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+def _supplier_remediation_response(result) -> SupplierRemediationResponse:
+    return SupplierRemediationResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        mode=result.mode,
+        resolution_status=result.status,
+        previous_version=result.previous_version,
+        current_version=result.current_version,
+        current_workflow=result.current_workflow,
+        current_review_reasons=[_reason_response(reason) for reason in result.current_review_reasons],
+        partner_id=result.effective_partner_id,
+        partner_write_status=result.partner_write_status,
+        reclassified=result.reclassified,
+        already_applied=result.already_applied,
+        workbench_republished=result.workbench_republished,
+        safe_message=result.safe_message,
+    )
 
 
 def _decision_command(
@@ -523,9 +602,13 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, ExecutionPlanningError):
         return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, SupplierResolutionContractError):
+        return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, SupplierPartnerWriteSafetyGateError):
+        return HTTPStatus.FORBIDDEN
     if isinstance(exc, PermissionDeniedError):
         return HTTPStatus.FORBIDDEN
-    if isinstance(exc, ReviewNotFoundError):
+    if isinstance(exc, (ReviewNotFoundError, SupplierResolutionPartnerNotFoundError)):
         return HTTPStatus.NOT_FOUND
     if isinstance(
         exc,
@@ -533,6 +616,10 @@ def _status_code_for_exception(exc: Exception) -> int:
             ReviewVersionConflictError,
             ReviewStateConflictError,
             ReviewDecisionIdempotencyConflictError,
+            SupplierResolutionConflictError,
+            SupplierResolutionRaceError,
+            SupplierResolutionPartnerMismatchError,
+            SupplierResolutionPartnerInactiveError,
         ),
     ):
         return HTTPStatus.CONFLICT
@@ -544,6 +631,9 @@ def _status_code_for_exception(exc: Exception) -> int:
             ReviewPersistenceError,
             ReviewQueryError,
             ReviewDecisionError,
+            SupplierResolutionDataIntegrityError,
+            SupplierResolutionError,
+            SupplierPartnerWriteError,
         ),
     ):
         return HTTPStatus.INTERNAL_SERVER_ERROR

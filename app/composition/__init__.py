@@ -8,6 +8,7 @@ from app.composition.execution import (
     build_workbench_vendor_bill_execution_workflow,
 )
 from app.composition.imports import (
+    build_deterministic_decision_engine,
     build_import_invoice_use_case,
     build_odoo_workbench_decision_ingestion_workflow,
     build_odoo_workbench_projection_publisher,
@@ -17,13 +18,16 @@ from app.composition.quotation import (
     build_capture_and_persist_accepted_quotation_scenarios_use_case,
     build_workbench_quotation_scenario_evidence_workflow,
 )
+from app.composition.supplier_remediation import build_resolve_workbench_supplier_use_case
 
 __all__ = [
     "build_capture_and_persist_accepted_quotation_scenarios_use_case",
     "build_customer_quotation_execution_use_case",
+    "build_deterministic_decision_engine",
     "build_import_invoice_use_case",
     "build_odoo_workbench_decision_ingestion_workflow",
     "build_odoo_workbench_projection_publisher",
+    "build_resolve_workbench_supplier_use_case",
     "build_uyumsoft_canonical_invoice_importer",
     "build_vendor_bill_execution_use_case",
     "build_workbench_accepted_decision_execution_dispatcher",

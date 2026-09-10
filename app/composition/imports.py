@@ -169,11 +169,59 @@ def build_uyumsoft_canonical_invoice_importer(
         currency_repository=OdooCurrencyRepository(adapter=read_adapter),
         company_repository=company_repository,
     )
-    # The mapping table itself is the activation gate: with no enabled row the matcher
-    # returns NOT_FOUND and identifier-free invoices stay in Manual Review, exactly as
-    # before this wiring. No runtime feature flag is introduced.
+    decision_engine = _build_deterministic_decision_engine(
+        session=session,
+        provider=provider,
+        read_adapter=read_adapter,
+    )
+
+    def use_case_factory() -> ImportInvoiceUseCase:
+        return build_import_invoice_use_case(
+            import_history=SqlAlchemyImportHistory(session),
+            decision_engine=decision_engine,
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
+        )
+
+    return UyumsoftCanonicalInvoiceImporter(
+        document_service=InvoiceDocumentService(session=session, client=uyumsoft_client, storage=storage),
+        storage=storage,
+        company_resolver=ExactCompanyResolver(company_repository),
+        import_use_case_factory=use_case_factory,
+    )
+
+
+def build_odoo_read_repository_provider(
+    *,
+    read_adapter: OdooReadOnlyAdapter,
+) -> StaticRepositoryProvider:
+    """The sanctioned read-only Odoo repository provider used by deterministic matching."""
+
+    return StaticRepositoryProvider(
+        partner_repository=OdooPartnerRepository(adapter=read_adapter),
+        product_repository=OdooProductRepository(adapter=read_adapter),
+        tax_repository=OdooTaxRepository(adapter=read_adapter),
+        currency_repository=OdooCurrencyRepository(adapter=read_adapter),
+        company_repository=OdooCompanyRepository(adapter=read_adapter),
+    )
+
+
+def _build_deterministic_decision_engine(
+    *,
+    session: Session,
+    provider: StaticRepositoryProvider,
+    read_adapter: OdooReadOnlyAdapter,
+) -> DecisionEngine:
+    """The production deterministic ``DecisionEngine`` shared by import and reclassification.
+
+    The operating-expense mapping table itself is the activation gate: with no
+    enabled row the matcher returns NOT_FOUND and identifier-free invoices stay in
+    Manual Review. No runtime feature flag is introduced.
+    """
+
     operating_expense_matcher = OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session))
-    decision_engine = DecisionEngine(
+    return DecisionEngine(
         rule_engine=DeterministicRuleEngine(
             partner_matcher=PartnerMatchingEngine(provider),
             product_matcher=ProductMatchingEngine(provider),
@@ -194,18 +242,20 @@ def build_uyumsoft_canonical_invoice_importer(
         invoice_decision_rule_engine=InvoiceDecisionRuleEngine(),
     )
 
-    def use_case_factory() -> ImportInvoiceUseCase:
-        return build_import_invoice_use_case(
-            import_history=SqlAlchemyImportHistory(session),
-            decision_engine=decision_engine,
-            session=session,
-            settings=settings,
-            odoo_client=resolved_odoo_client,
-        )
 
-    return UyumsoftCanonicalInvoiceImporter(
-        document_service=InvoiceDocumentService(session=session, client=uyumsoft_client, storage=storage),
-        storage=storage,
-        company_resolver=ExactCompanyResolver(company_repository),
-        import_use_case_factory=use_case_factory,
+def build_deterministic_decision_engine(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> DecisionEngine:
+    """Public composer for the deterministic ``DecisionEngine`` from settings."""
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    read_adapter = OdooReadOnlyAdapter(client=resolved_odoo_client)
+    provider = build_odoo_read_repository_provider(read_adapter=read_adapter)
+    return _build_deterministic_decision_engine(
+        session=session,
+        provider=provider,
+        read_adapter=read_adapter,
     )

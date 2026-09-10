@@ -98,6 +98,7 @@ from app.application.workbench.ports import (
     ReviewQueueReader,
     ReviewReclassificationWriter,
     ReviewSourceInvoiceEvidenceReader,
+    SupplierRemediationEffectWriter,
     SupplierResolutionPartnerReader,
     SupplierResolutionWriter,
     WorkbenchBillingAuthoringReader,
@@ -123,6 +124,14 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationTrigger,
 )
 from app.application.workbench.services import ReviewItemCreationService
+from app.application.workbench.supplier_remediation import (
+    ResolveWorkbenchSupplierCommand,
+    SupplierPartnerWriteEffectStatus,
+    SupplierRemediationEffect,
+    SupplierRemediationResult,
+    SupplierRemediationStatus,
+)
+from app.application.workbench.supplier_remediation_use_cases import ResolveWorkbenchSupplierUseCase
 from app.application.workbench.supplier_resolution import (
     ResolutionPartnerRecord,
     SupplierResolution,
@@ -192,6 +201,13 @@ __all__ = [
     "ReviewQueueResult",
     "ReviewStatus",
     "ResolutionPartnerRecord",
+    "ResolveWorkbenchSupplierCommand",
+    "ResolveWorkbenchSupplierUseCase",
+    "SupplierPartnerWriteEffectStatus",
+    "SupplierRemediationEffect",
+    "SupplierRemediationEffectWriter",
+    "SupplierRemediationResult",
+    "SupplierRemediationStatus",
     "SupplierResolution",
     "SupplierResolutionMode",
     "SupplierResolutionPartnerReader",

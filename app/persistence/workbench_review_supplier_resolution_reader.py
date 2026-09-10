@@ -12,6 +12,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionDataIntegrityError,
     SupplierResolutionError,
     SupplierResolutionNotFoundError,
+    SupplierResolutionRaceError,
 )
 from app.application.workbench.supplier_resolution import SupplierResolution, SupplierResolutionMode
 from app.models.workbench_review_supplier_resolution import WorkbenchReviewSupplierResolution
@@ -101,6 +102,35 @@ class SqlAlchemyReviewSupplierResolutionRepository:
         except SQLAlchemyError as exc:
             raise SupplierResolutionError(SAFE_SUPPLIER_RESOLUTION_PERSISTENCE_ERROR) from exc
 
+    def reserve_supplier_resolution(self, resolution: SupplierResolution) -> SupplierResolution:
+        """Single-winner reservation for one ``(review_id, review_version)``.
+
+        Unlike :meth:`create_supplier_resolution`, this method does **not** short-circuit
+        on a pre-read: callers reach it only after a top-level pre-check found no visible
+        reservation, so a ``UNIQUE(review_id, review_version)`` violation on the INSERT
+        means a *concurrent* transaction committed the reservation first. The loser is
+        raised out (:class:`SupplierResolutionRaceError` for an identical decision,
+        :class:`SupplierResolutionConflictError` for a different one) and must not
+        perform any Odoo write. This is the cross-process barrier: exactly one
+        transaction can hold the committed row for a given review version.
+        """
+
+        if not isinstance(resolution, SupplierResolution):
+            raise SupplierResolutionContractError("A canonical SupplierResolution is required.")
+        try:
+            record = model_from_supplier_resolution(resolution)
+            with self._session.begin_nested():
+                self._session.add(record)
+                self._session.flush()
+                self._session.refresh(record)
+            return supplier_resolution_from_model(record)
+        except IntegrityError as exc:
+            return self._handle_reservation_integrity_error(resolution, exc=exc)
+        except SupplierResolutionError:
+            raise
+        except SQLAlchemyError as exc:
+            raise SupplierResolutionError(SAFE_SUPPLIER_RESOLUTION_PERSISTENCE_ERROR) from exc
+
     def get_supplier_resolution(
         self,
         *,
@@ -169,3 +199,26 @@ class SqlAlchemyReviewSupplierResolutionRepository:
             except SupplierResolutionConflictError as conflict_exc:
                 raise conflict_exc from exc
         raise SupplierResolutionError(SAFE_SUPPLIER_RESOLUTION_PERSISTENCE_ERROR) from exc
+
+    def _handle_reservation_integrity_error(
+        self,
+        resolution: SupplierResolution,
+        *,
+        exc: IntegrityError,
+    ) -> SupplierResolution:
+        try:
+            existing = self._find(
+                review_id=resolution.review_id,
+                company_id=resolution.company_id,
+                review_version=resolution.review_version,
+            )
+        except SQLAlchemyError as lookup_exc:
+            raise SupplierResolutionError(SAFE_SUPPLIER_RESOLUTION_PERSISTENCE_ERROR) from lookup_exc
+        if existing is None:
+            raise SupplierResolutionError(SAFE_SUPPLIER_RESOLUTION_PERSISTENCE_ERROR) from exc
+        existing_resolution = supplier_resolution_from_model(existing)
+        if supplier_resolution_fingerprint(existing_resolution) != supplier_resolution_fingerprint(resolution):
+            raise SupplierResolutionConflictError(
+                "A different supplier resolution already exists for this review version."
+            ) from exc
+        raise SupplierResolutionRaceError("A concurrent request already reserved this review version; retry.") from exc
