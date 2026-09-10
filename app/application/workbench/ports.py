@@ -267,6 +267,9 @@ class WorkbenchProjectionPublisher(Protocol):
     def publish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult:
         pass
 
+    def republish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult:
+        """Update an already-created projection row; never create one (fails closed if missing)."""
+
     def acknowledge_decision(
         self,
         acknowledgement: ReviewDecisionAcknowledgement,

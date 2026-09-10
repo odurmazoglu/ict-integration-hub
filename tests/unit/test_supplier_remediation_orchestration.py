@@ -24,6 +24,7 @@ from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import (
     ReviewNotFoundError,
+    ReviewPersistenceError,
     ReviewStateConflictError,
     ReviewVersionConflictError,
     SupplierResolutionConflictError,
@@ -32,7 +33,10 @@ from app.application.workbench.exceptions import (
     SupplierResolutionPartnerMismatchError,
     SupplierResolutionPartnerNotFoundError,
     SupplierResolutionRaceError,
+    WorkbenchCandidateAmbiguityError,
+    WorkbenchProjectionPublishError,
 )
+from app.application.workbench.projection import ProjectionPublishResult, WorkbenchProjection
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import (
     ReclassifyReviewCommand,
@@ -140,10 +144,17 @@ def _review_item(
 class _FakeReviewReader:
     def __init__(self, item: ReviewItem) -> None:
         self.item = item
+        self.calls = 0
+        # When set, get_review_item raises `raise_error` once `calls > raise_after`.
+        self.raise_error: Exception | None = None
+        self.raise_after = 0
 
     def get_review_item(self, query: ReviewDetailQuery) -> ReviewItem:
         if not isinstance(query, ReviewDetailQuery):
             raise SupplierResolutionContractError("ReviewDetailQuery is required.")
+        self.calls += 1
+        if self.raise_error is not None and self.calls > self.raise_after:
+            raise self.raise_error
         if query.review_id != self.item.review_id or query.company_id != COMPANY_ID:
             raise ReviewNotFoundError("Review item was not found.")
         return self.item
@@ -299,6 +310,30 @@ def _partner(**kw) -> ResolutionPartnerRecord:
 _UNSET = object()
 
 
+class _FakeRepublisher:
+    """Update-only Workbench republisher. Records every projection it is handed.
+
+    Has no create path at all -- structurally incapable of adding a Workbench row.
+    """
+
+    def __init__(self, *, fail: Exception | None = None, record_id: int = 9100) -> None:
+        self.fail = fail
+        self.record_id = record_id
+        self.calls: list[WorkbenchProjection] = []
+
+    def republish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult:
+        self.calls.append(projection)
+        if self.fail is not None:
+            raise self.fail
+        return ProjectionPublishResult(
+            review_id=projection.review_id,
+            odoo_record_id=self.record_id,
+            created=False,
+            updated=True,
+            version=projection.version,
+        )
+
+
 class _Harness:
     def __init__(
         self,
@@ -311,6 +346,7 @@ class _Harness:
         resolves: bool = True,
         reclassify_fail: Exception | None = None,
         after_precheck_hook: Any = None,
+        republisher: Any = None,
     ) -> None:
         self.session = session
         self.reader = _FakeReviewReader(review or _review_item())
@@ -319,6 +355,7 @@ class _Harness:
         self.partner_reader = _FakePartnerReader(resolved_partner)  # type: ignore[arg-type]
         self.writer = writer or _FakeSupplierPartnerWriter()
         self.reclassifier = _FakeReclassifier(self.reader, resolves=resolves, fail=reclassify_fail)
+        self.republisher = republisher
         self.resolution_repo = SqlAlchemyReviewSupplierResolutionRepository(session)
         self.effect_repo = SqlAlchemyReviewSupplierRemediationEffectRepository(session)
         self.use_case = ResolveWorkbenchSupplierUseCase(
@@ -333,6 +370,7 @@ class _Harness:
             supplier_partner_writer=self.writer,
             reclassifier=self.reclassifier,
             unit_of_work=SqlAlchemyUnitOfWork(session),
+            workbench_republisher=republisher,
             _after_precheck_hook=after_precheck_hook,
         )
 
@@ -742,6 +780,242 @@ def test_command_never_carries_supplier_identity() -> None:
 
 
 # --------------------------------------------------------- Phase 25/37: no automatic create / no execution
+
+
+# --------------------------------------------------------- P0-3D2E: Workbench republish
+
+
+async def test_match_existing_republishes_existing_projection_with_new_review_state(session: Session) -> None:
+    republisher = _FakeRepublisher()
+    h = _Harness(session, republisher=republisher)
+
+    result = await h.use_case.execute(h.command())
+
+    assert result.status is SupplierRemediationStatus.RESOLVED
+    assert result.workbench_republished is True
+    assert len(republisher.calls) == 1
+    projection = republisher.calls[0]
+    assert isinstance(projection, WorkbenchProjection)
+    assert (projection.review_id, projection.company_id) == (REVIEW_ID, COMPANY_ID)
+    assert projection.version == 2  # post-reclassification review state, not the pre-remediation version
+    assert projection.workflow is WorkflowType.VENDOR_BILL
+
+
+async def test_create_permanent_republishes_existing_projection(session: Session) -> None:
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher()
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+
+    result = await h.use_case.execute(
+        h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+    )
+
+    assert result.workbench_republished is True
+    assert len(republisher.calls) == 1
+    assert republisher.calls[0].version == 2
+
+
+async def test_exact_retry_after_full_success_republishes_same_projection_without_recreating_supplier(
+    session: Session,
+) -> None:
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher()
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+    cmd = h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+
+    first = await h.use_case.execute(cmd)
+    retry = await h.use_case.execute(cmd)
+
+    assert first.workbench_republished is True
+    assert retry.workbench_republished is True
+    assert retry.already_applied is True
+    assert len(writer.calls) == 1  # no supplier recreation on retry
+    assert len(republisher.calls) == 2  # same row updated again, idempotently
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_republish_transport_failure_after_success_preserves_committed_remediation(session: Session) -> None:
+    republisher = _FakeRepublisher(fail=WorkbenchProjectionPublishError("Odoo Workbench projection publish failed."))
+    h = _Harness(session, republisher=republisher)
+
+    result = await h.use_case.execute(h.command())
+
+    assert result.status is SupplierRemediationStatus.RESOLVED
+    assert result.workbench_republished is False  # not manufactured
+    # remediation is committed and durable despite the republish failure
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_retry_after_republish_failure_republishes_without_recreating_supplier(session: Session) -> None:
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher(fail=WorkbenchProjectionPublishError("transient"))
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+    cmd = h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+
+    first = await h.use_case.execute(cmd)
+    assert first.workbench_republished is False
+
+    republisher.fail = None  # Workbench recovers
+    retry = await h.use_case.execute(cmd)
+
+    assert retry.workbench_republished is True
+    assert retry.already_applied is True
+    assert len(writer.calls) == 1  # no second supplier create
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_publisher_disabled_reports_false_and_never_touches_odoo(session: Session) -> None:
+    h = _Harness(session, republisher=None)  # odoo_workbench_projection_publish_enabled = false
+
+    result = await h.use_case.execute(h.command())
+
+    assert result.status is SupplierRemediationStatus.RESOLVED
+    assert result.workbench_republished is False
+
+
+async def test_use_one_off_never_republishes(session: Session) -> None:
+    republisher = _FakeRepublisher()
+    h = _Harness(session, republisher=republisher)
+
+    result = await h.use_case.execute(
+        h.command(mode=SupplierResolutionMode.USE_ONE_OFF_SUPPLIER, resolved_partner_id=None)
+    )
+
+    assert result.status is SupplierRemediationStatus.ONE_OFF_EXECUTION_NOT_SUPPORTED
+    assert result.workbench_republished is False
+    assert republisher.calls == []
+
+
+async def test_reclassification_failure_never_republishes(session: Session) -> None:
+    republisher = _FakeRepublisher()
+    h = _Harness(session, republisher=republisher, reclassify_fail=RuntimeError("boom"))
+
+    with pytest.raises(Exception):  # noqa: B017 - reclassify failure surfaces as a safe error
+        await h.use_case.execute(h.command())
+
+    assert republisher.calls == []
+
+
+async def test_missing_projection_identity_fails_closed_without_creating_a_replacement(session: Session) -> None:
+    # The publisher's update-only lookup found no row (wrong/missing identity). The fake
+    # has no create path at all, so a replacement row is structurally impossible; the
+    # remediation stays committed and the result is truthfully republished=False.
+    republisher = _FakeRepublisher(fail=WorkbenchProjectionPublishError("Odoo Workbench projection publish failed."))
+    h = _Harness(session, republisher=republisher)
+
+    result = await h.use_case.execute(h.command())
+
+    assert result.workbench_republished is False
+    assert not hasattr(republisher, "create")
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_concurrent_exact_retries_update_one_projection_and_never_duplicate(session: Session) -> None:
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher()
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+    cmd = h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+
+    await h.use_case.execute(cmd)
+    await h.use_case.execute(cmd)
+    await h.use_case.execute(cmd)
+
+    # every republish targeted the same review/company; one resolution, one effect, one create
+    assert {(p.review_id, p.company_id) for p in republisher.calls} == {(REVIEW_ID, COMPANY_ID)}
+    assert len(writer.calls) == 1
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_ambiguous_projection_rows_fail_closed_as_republish_false(session: Session) -> None:
+    republisher = _FakeRepublisher(fail=WorkbenchCandidateAmbiguityError("multiple rows"))
+    h = _Harness(session, republisher=republisher)
+
+    result = await h.use_case.execute(h.command())
+
+    assert result.workbench_republished is False
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_post_commit_review_reread_failure_does_not_break_committed_remediation(session: Session) -> None:
+    # A. The remediation, effect and reclassification are committed. The republish-stage
+    #    re-read of the current ReviewItem then hits the canonical persistence error
+    #    (ReviewPersistenceError -- the translation target for any SQLAlchemyError, and
+    #    the base of ReviewNotFoundError / ReviewDataIntegrityError). The use case must
+    #    NOT raise; the result is the successful remediation with republished == False.
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher()
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+    # initial execute() lookup = call #1 (ok); the republish-stage re-read = call #2 (fails)
+    h.reader.raise_error = ReviewPersistenceError("Persistence operation failed.")
+    h.reader.raise_after = 1
+
+    result = await h.use_case.execute(
+        h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+    )
+
+    assert result.status is SupplierRemediationStatus.RESOLVED
+    assert result.workbench_republished is False
+    assert republisher.calls == []  # projection was never built / published
+    assert len(writer.calls) == 1  # supplier writer not called again
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_exact_retry_after_post_commit_reread_failure_republishes_without_recreating_supplier(
+    session: Session,
+) -> None:
+    # B. Exact retry once the ReviewItem read recovers.
+    writer = _FakeSupplierPartnerWriter(new_partner_id=6001)
+    republisher = _FakeRepublisher()
+    h = _Harness(session, partner=_partner(id=6001, vat=VKN), writer=writer, republisher=republisher)
+    cmd = h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+
+    h.reader.raise_error = ReviewPersistenceError("Persistence operation failed.")
+    h.reader.raise_after = 1
+    first = await h.use_case.execute(cmd)
+    assert first.workbench_republished is False
+
+    h.reader.raise_error = None  # the Hub read recovers
+    retry = await h.use_case.execute(cmd)
+
+    assert retry.already_applied is True
+    assert retry.workbench_republished is True
+    assert len(writer.calls) == 1  # no supplier recreation
+    assert len(republisher.calls) == 1  # the existing row updated exactly once
+    assert republisher.calls[0].version == 2
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_initial_review_lookup_failure_is_not_swallowed_by_the_republish_boundary(session: Session) -> None:
+    # C. The same exception raised during the *initial* pre-remediation lookup must
+    #    still fail normally -- proving the best-effort boundary did not widen.
+    republisher = _FakeRepublisher()
+    h = _Harness(session, republisher=republisher)
+    h.reader.raise_error = ReviewPersistenceError("Persistence operation failed.")
+    h.reader.raise_after = 0  # fail on the very first (pre-commit) lookup
+
+    with pytest.raises(ReviewPersistenceError):
+        await h.use_case.execute(h.command())
+
+    assert republisher.calls == []
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 0
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 0
+
+
+def test_orchestration_module_republish_is_update_only_never_a_create_path() -> None:
+    from pathlib import Path
+
+    source = Path("app/application/workbench/supplier_remediation_use_cases.py").read_text(encoding="utf-8")
+    # The orchestration must call the update-only republish, never a create-capable
+    # projection operation.
+    assert "republish_projection" in source
+    assert "publish_projection" not in source.replace("republish_projection", "")
+    for token in ("create_studio_record", "create_projection", ".create(", "publisher.publish"):
+        assert token not in source
 
 
 def test_orchestration_module_never_executes_a_vendor_bill() -> None:

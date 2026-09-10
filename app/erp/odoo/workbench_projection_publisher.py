@@ -301,6 +301,38 @@ class OdooWorkbenchProjectionPublisher:
             version=projection.version,
         )
 
+    def republish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult:
+        """Update an already-created Workbench projection row; never create one.
+
+        Unlike :meth:`publish_projection`, this method has no create branch. It is
+        for re-projecting an existing review whose Odoo Workbench row was created at
+        import time (e.g. after a supplier remediation + reclassification). A missing
+        target row fails closed with :class:`WorkbenchProjectionPublishError`; two or
+        more matches fail closed with :class:`WorkbenchCandidateAmbiguityError`. The
+        target is resolved only from the trusted ``(review_id, company_id)`` lookup,
+        exactly like :meth:`project_vendor_bill_execution_result`.
+        """
+
+        records = self._lookup(review_id=projection.review_id, company_id=projection.company_id)
+        if not records:
+            raise WorkbenchProjectionPublishError(SAFE_PROJECTION_WRITE_ERROR)
+        record_id = _required_record_id(records[0])
+        try:
+            self._adapter.write(
+                model=self._mapping.model,
+                record_id=record_id,
+                values=self._projection_payload(projection),
+            )
+        except ErpRepositoryError as exc:
+            raise _projection_publish_error(exc) from exc
+        return ProjectionPublishResult(
+            review_id=projection.review_id,
+            odoo_record_id=record_id,
+            created=False,
+            updated=True,
+            version=projection.version,
+        )
+
     def acknowledge_decision(
         self,
         acknowledgement: ReviewDecisionAcknowledgement,
