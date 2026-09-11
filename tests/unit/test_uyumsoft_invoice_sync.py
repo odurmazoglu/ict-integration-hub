@@ -18,7 +18,9 @@ from app.schemas.uyumsoft_invoices import (
 )
 from app.services import uyumsoft_invoice_sync
 from app.services.invoice_persistence import InvoicePersistenceService
+from app.services.uyumsoft_canonical_import import UyumsoftCanonicalImportBatchResult
 from app.services.uyumsoft_invoice_sync import (
+    MAX_INVOICE_ETTN_FILTER_COUNT,
     MAX_SYNC_PAGES,
     SyncRunRepository,
     UyumsoftInvoiceSyncRequest,
@@ -79,6 +81,23 @@ class RecordingUyumsoftClient(UyumsoftSoapClient):
         if name in forbidden:
             raise AssertionError(f"Forbidden operation accessed: {name}")
         return super().__getattribute__(name)
+
+
+class RecordingCanonicalImporter:
+    """Spy standing in for the real canonical importer: records exactly which invoices
+    it was asked to import, so tests can prove unselected invoices never reach it."""
+
+    def __init__(self) -> None:
+        self.calls: list[UyumsoftInvoiceSummary] = []
+
+    def import_invoices(
+        self,
+        invoices: list[UyumsoftInvoiceSummary],
+        *,
+        persisted_records: dict[str, Any],
+    ) -> UyumsoftCanonicalImportBatchResult:
+        self.calls.extend(invoices)
+        return UyumsoftCanonicalImportBatchResult()
 
 
 def test_first_run_tracks_completed_sync_run(session: Session) -> None:
@@ -242,11 +261,176 @@ def test_sync_workflow_logs_only_safe_summary(monkeypatch: pytest.MonkeyPatch, s
     assert "secret" not in str(log_calls)
 
 
-def _workflow(session: Session, client: RecordingUyumsoftClient) -> UyumsoftInvoiceSyncWorkflow:
+def test_no_allowlist_persists_and_imports_everything_as_before(session: Session) -> None:
+    importer = RecordingCanonicalImporter()
+    client = RecordingUyumsoftClient()
+    result = _workflow(session, client, canonical_importer=importer).run(_request())
+
+    assert result.created == 2
+    assert result.selected_invoices == 2
+    assert result.requested_invoice_ettn == ()
+    assert result.matched_invoice_ettn == ()
+    assert {invoice.ettn for invoice in importer.calls} == {"inbox-ettn-1", "outbox-ettn-1"}
+
+
+def test_no_allowlist_preserves_pagination_and_counters(session: Session) -> None:
+    client = RecordingUyumsoftClient(
+        inbox_pages={
+            1: [_invoice("Inbox", "inbox-ettn-1")],
+            2: [_invoice("Inbox", "inbox-ettn-2")],
+        },
+        outbox_pages={},
+    )
+    result = _workflow(session, client).run(_request(directions=("Inbox",), page_size=1, max_pages=5))
+
+    assert result.directions[0].pages_fetched == 2
+    assert result.directions[0].invoices_seen == 2
+    assert result.selected_invoices == 2
+    assert result.created == 2
+
+
+def test_allowlist_selects_only_matching_invoice_among_two(session: Session) -> None:
+    importer = RecordingCanonicalImporter()
+    client = RecordingUyumsoftClient(
+        inbox_pages={1: [_invoice("Inbox", "target-ettn"), _invoice("Inbox", "other-ettn")]},
+        outbox_pages={},
+    )
+    result = _workflow(session, client, canonical_importer=importer).run(
+        _request(directions=("Inbox",), invoice_ettn=("target-ettn",))
+    )
+
+    records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert result.directions[0].invoices_seen == 2
+    assert result.created == 1
+    assert result.selected_invoices == 1
+    assert result.requested_invoice_ettn == ("target-ettn",)
+    assert result.matched_invoice_ettn == ("target-ettn",)
+    assert [record.ettn for record in records] == ["target-ettn"]
+    assert [invoice.ettn for invoice in importer.calls] == ["target-ettn"]
+
+
+def test_allowlist_selects_matching_invoice_when_it_is_second(session: Session) -> None:
+    importer = RecordingCanonicalImporter()
+    client = RecordingUyumsoftClient(
+        inbox_pages={1: [_invoice("Inbox", "other-ettn"), _invoice("Inbox", "target-ettn")]},
+        outbox_pages={},
+    )
+    result = _workflow(session, client, canonical_importer=importer).run(
+        _request(directions=("Inbox",), invoice_ettn=("target-ettn",))
+    )
+
+    records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert result.directions[0].invoices_seen == 2
+    assert result.selected_invoices == 1
+    assert [record.ettn for record in records] == ["target-ettn"]
+    assert [invoice.ettn for invoice in importer.calls] == ["target-ettn"]
+
+
+def test_allowlist_target_on_later_page_is_still_selected(session: Session) -> None:
+    importer = RecordingCanonicalImporter()
+    client = RecordingUyumsoftClient(
+        inbox_pages={
+            1: [_invoice("Inbox", "other-ettn-1")],
+            2: [_invoice("Inbox", "target-ettn")],
+        },
+        outbox_pages={},
+    )
+    result = _workflow(session, client, canonical_importer=importer).run(
+        _request(directions=("Inbox",), page_size=1, max_pages=5, invoice_ettn=("target-ettn",))
+    )
+
+    records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert result.directions[0].pages_fetched == 2
+    assert result.directions[0].invoices_seen == 2
+    assert result.selected_invoices == 1
+    assert result.matched_invoice_ettn == ("target-ettn",)
+    assert [record.ettn for record in records] == ["target-ettn"]
+    assert [invoice.ettn for invoice in importer.calls] == ["target-ettn"]
+
+
+def test_allowlist_identity_absent_reports_not_found(session: Session) -> None:
+    importer = RecordingCanonicalImporter()
+    client = RecordingUyumsoftClient(
+        inbox_pages={1: [_invoice("Inbox", "present-ettn")]},
+        outbox_pages={},
+    )
+    result = _workflow(session, client, canonical_importer=importer).run(
+        _request(directions=("Inbox",), invoice_ettn=("missing-ettn",))
+    )
+
+    records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert result.status == "completed"
+    assert result.created == 0
+    assert result.selected_invoices == 0
+    assert result.requested_invoice_ettn == ("missing-ettn",)
+    assert result.matched_invoice_ettn == ()
+    assert records == []
+    assert importer.calls == []
+
+
+def test_allowlist_selects_multiple_identities(session: Session) -> None:
+    importer = RecordingCanonicalImporter()
+    client = RecordingUyumsoftClient(
+        inbox_pages={1: [_invoice("Inbox", "a"), _invoice("Inbox", "b"), _invoice("Inbox", "c")]},
+        outbox_pages={},
+    )
+    result = _workflow(session, client, canonical_importer=importer).run(
+        _request(directions=("Inbox",), invoice_ettn=("a", "c"))
+    )
+
+    records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert result.selected_invoices == 2
+    assert result.matched_invoice_ettn == ("a", "c")
+    assert {record.ettn for record in records} == {"a", "c"}
+    assert {invoice.ettn for invoice in importer.calls} == {"a", "c"}
+
+
+def test_allowlist_duplicate_identities_do_not_cause_duplicate_processing(session: Session) -> None:
+    importer = RecordingCanonicalImporter()
+    client = RecordingUyumsoftClient(
+        inbox_pages={1: [_invoice("Inbox", "target-ettn")]},
+        outbox_pages={},
+    )
+    result = _workflow(session, client, canonical_importer=importer).run(
+        _request(directions=("Inbox",), invoice_ettn=("target-ettn", "target-ettn"))
+    )
+
+    records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert result.selected_invoices == 1
+    assert len(records) == 1
+    assert len(importer.calls) == 1
+
+
+def test_allowlist_rejects_blank_identity(session: Session) -> None:
+    workflow = _workflow(session, RecordingUyumsoftClient())
+    with pytest.raises(ValueError, match="blank"):
+        workflow.run(_request(invoice_ettn=("  ",)))
+
+
+def test_allowlist_rejects_empty_list(session: Session) -> None:
+    workflow = _workflow(session, RecordingUyumsoftClient())
+    with pytest.raises(ValueError, match="empty"):
+        workflow.run(_request(invoice_ettn=()))
+
+
+def test_allowlist_rejects_too_many_identities(session: Session) -> None:
+    workflow = _workflow(session, RecordingUyumsoftClient())
+    too_many = tuple(f"ettn-{i}" for i in range(MAX_INVOICE_ETTN_FILTER_COUNT + 1))
+    with pytest.raises(ValueError, match=str(MAX_INVOICE_ETTN_FILTER_COUNT)):
+        workflow.run(_request(invoice_ettn=too_many))
+
+
+def _workflow(
+    session: Session,
+    client: RecordingUyumsoftClient,
+    *,
+    canonical_importer: RecordingCanonicalImporter | None = None,
+) -> UyumsoftInvoiceSyncWorkflow:
     return UyumsoftInvoiceSyncWorkflow(
         client=client,
         persistence=InvoicePersistenceService(session),
         run_repository=SyncRunRepository(session),
+        canonical_importer=canonical_importer,
     )
 
 
@@ -257,6 +441,7 @@ def _request(
     to_date: datetime = datetime(2026, 7, 17, tzinfo=UTC),
     page_size: int = 10,
     max_pages: int = 1,
+    invoice_ettn: tuple[str, ...] | None = None,
 ) -> UyumsoftInvoiceSyncRequest:
     return UyumsoftInvoiceSyncRequest(
         from_date=from_date,
@@ -264,6 +449,7 @@ def _request(
         directions=directions,
         page_size=page_size,
         max_pages=max_pages,
+        invoice_ettn=invoice_ettn,
     )
 
 

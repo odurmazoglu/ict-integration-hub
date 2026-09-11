@@ -71,6 +71,55 @@ class RefusingCanonicalImporter:
         raise AssertionError("Canonical importer must not be called when the sync gate is disabled.")
 
 
+class TwoInboxInvoicesPerPageClient(UyumsoftSoapClient):
+    """Real production shape from P0-PROD-06B: two distinct real invoices returned by a
+    single provider page. Used to prove the invoice_ettn allowlist selects exactly one."""
+
+    def __init__(self) -> None:
+        pass
+
+    def list_inbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
+        return UyumsoftInvoiceListResponse(
+            direction="Inbox",
+            page=request.page,
+            page_size=request.page_size,
+            total_count=2,
+            invoices=[
+                UyumsoftInvoiceSummary(
+                    invoice_id="HD12026000964602",
+                    ettn="HD12026000964602",
+                    invoice_number="F1ADCCAD-FB70-AAF1-8105-005056BB160E",
+                    invoice_date=datetime(2026, 9, 11, 10, 58, 39, tzinfo=UTC),
+                    sender=None,
+                    receiver="D-MARKET ELEKTRONIK HIZMETLER VE TICARET ANONIM SIRKETI",
+                    tax_number="2650179910",
+                    currency="TRY",
+                    total_amount=Decimal("2599.20"),
+                    direction="Inbox",
+                    status="Approved",
+                ),
+                UyumsoftInvoiceSummary(
+                    invoice_id="HD12026000964604",
+                    ettn="HD12026000964604",
+                    invoice_number="F1ADCCAD-FB70-AAF1-8105-005056BB160F",
+                    invoice_date=datetime(2026, 9, 11, 10, 58, 41, tzinfo=UTC),
+                    sender=None,
+                    receiver="D-MARKET ELEKTRONIK HIZMETLER VE TICARET ANONIM SIRKETI",
+                    tax_number="2650179910",
+                    currency="TRY",
+                    total_amount=Decimal("676.21"),
+                    direction="Inbox",
+                    status="Approved",
+                ),
+            ],
+        )
+
+    def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
+        return UyumsoftInvoiceListResponse(
+            direction="Outbox", page=request.page, page_size=request.page_size, invoices=[]
+        )
+
+
 class NoopCanonicalImporter:
     def import_invoices(
         self,
@@ -210,6 +259,31 @@ async def test_sync_endpoint_denies_when_gate_disabled_with_production_environme
     assert response.status_code == 404
     assert "UYUMSOFT_SYNC_EXECUTE_ENABLED" in response.json()["detail"]
     assert settings.uyumsoft_environment == "production"
+
+
+async def test_sync_endpoint_denies_with_invoice_ettn_supplied_when_gate_disabled(api_client: AsyncClient) -> None:
+    """Gate false + invoice_ettn supplied -> still denied before any connector/importer call.
+
+    The allowlist is a selection detail of an already-authorized sync; it must never bypass
+    or interact with the execute gate itself."""
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=False)
+    app.dependency_overrides[get_uyumsoft_client] = lambda: RefusingSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: RefusingCanonicalImporter()
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+                "confirm_read_only": "true",
+                "invoice_ettn": "HD12026000964604",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert "UYUMSOFT_SYNC_EXECUTE_ENABLED" in response.json()["detail"]
 
 
 async def test_sync_endpoint_reaches_workflow_when_gate_enabled_with_production_environment(
@@ -391,6 +465,47 @@ async def test_sync_endpoint_reaches_canonical_importer(api_client: AsyncClient)
     body = response.json()
     assert body["review_count"] == 1
     assert body["directions"][0]["import_outcomes"][0]["status"] == IMPORT_STATUS_REVIEW_CREATED
+
+
+async def test_sync_endpoint_invoice_ettn_filter_selects_one_of_two_end_to_end(api_client: AsyncClient) -> None:
+    """End-to-end plumbing proof for the P0-PROD-06B blocker: two real invoices on one
+    provider page, only the exact requested ettn reaches persistence and the importer."""
+    session_factory = _session_factory()
+    importer = RecordingCanonicalImporter()
+
+    def db_override() -> Generator[Session]:
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_uyumsoft_client] = lambda: TwoInboxInvoicesPerPageClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: importer
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-09-01T00:00:00+00:00",
+                "to": "2026-09-11T23:59:59+00:00",
+                "direction": "Inbox",
+                "confirm_read_only": "true",
+                "invoice_ettn": "HD12026000964604",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["directions"][0]["invoices_seen"] == 2
+    assert body["selected_invoices"] == 1
+    assert body["requested_invoice_ettn"] == ["HD12026000964604"]
+    assert body["matched_invoice_ettn"] == ["HD12026000964604"]
+    with session_factory() as session:
+        records = session.scalars(select(UyumsoftInvoiceMetadata)).all()
+    assert [record.ettn for record in records] == ["HD12026000964604"]
+    assert len(importer.calls) == 1
+    assert [invoice.ettn for invoice in importer.calls[0]] == ["HD12026000964604"]
 
 
 async def test_sync_endpoint_commits_non_review_receipt_with_request_transaction(api_client: AsyncClient) -> None:
