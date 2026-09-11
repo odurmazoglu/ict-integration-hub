@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any
@@ -37,6 +38,12 @@ from app.core.config import Settings
 HEADER_AUTHORIZATION = "authorization"
 BEARER_PREFIX = "bearer"
 DEFAULT_HTTP_TIMEOUT_SECONDS = 5.0
+
+# Strict ASCII decimal digits only -- no sign, no decimal point, no exponent,
+# no whitespace, no non-ASCII digit look-alikes. Deliberately narrower than
+# str.isdigit()/str.isdecimal(), which accept Unicode digit characters outside
+# 0-9 (e.g. superscripts, full-width digits).
+_ASCII_DIGITS_ONLY = re.compile(r"[0-9]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,12 +252,30 @@ def _optional_text_claim(claims: dict[str, Any], name: str) -> str | None:
 
 
 def _company_id_from_claim(claims: dict[str, Any], name: str) -> int:
+    """Accept a native positive JSON integer, or a positive-integer-valued
+    ASCII digit string (e.g. Microsoft Entra custom/extension claims, which
+    are commonly emitted as strings rather than native JSON integers).
+
+    Strict and deterministic -- no generic casting. Rejected: missing/None,
+    booleans (``type(True) is bool``, never ``int``), floats, lists, dicts,
+    empty or whitespace-only strings, signed strings ("+1"/"-1"), decimal or
+    scientific-notation strings ("1.0"/"1e1"), mixed-alphanumeric strings, and
+    zero/negative values regardless of which form they arrived in. A leading
+    zero in a digit string (e.g. "001") is accepted and normalized to its
+    integer value, exactly like Python's own ``int("001")`` -- every
+    character is still an ASCII decimal digit, nothing else is inferred.
+    """
+
     value = claims.get(name)
-    if type(value) is not int:
+    if type(value) is int:  # excludes bool: type(True) is bool, not int
+        parsed = value
+    elif isinstance(value, str) and _ASCII_DIGITS_ONLY.fullmatch(value):
+        parsed = int(value)
+    else:
         raise InvalidAuthenticationContextError("Token company claim is invalid.")
-    if value <= 0:
+    if parsed <= 0:
         raise InvalidAuthenticationContextError("Token company claim is invalid.")
-    return value
+    return parsed
 
 
 def _permissions_from_claim(claims: dict[str, Any], name: str) -> tuple[Permission, ...]:
