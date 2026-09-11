@@ -25,6 +25,7 @@ class DirectionSyncSummaryResponse(BaseModel):
     import_outcomes: list[dict[str, object]] = Field(default_factory=list)
     status: SyncStatus
     failure_message: str | None = None
+    selected_invoices: int = 0
 
 
 class UyumsoftInvoiceSyncResponse(BaseModel):
@@ -43,4 +44,9 @@ class UyumsoftInvoiceSyncResponse(BaseModel):
     skipped_import_count: int = 0
     cursor_state: dict[str, object]
     failure_message: str | None = None
+    selected_invoices: int = 0
+    # Echo of the requested invoice_ettn allowlist (empty when omitted) and which of those
+    # exact identities were actually encountered. set(requested) - set(matched) is "not found".
+    requested_invoice_ettn: list[str] = Field(default_factory=list)
+    matched_invoice_ettn: list[str] = Field(default_factory=list)
     directions: list[DirectionSyncSummaryResponse]

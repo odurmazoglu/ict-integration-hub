@@ -23,6 +23,19 @@ SyncToQuery = Annotated[datetime, Query(alias="to", description="Inclusive invoi
 SyncPageSizeQuery = Annotated[int, Query(ge=1, le=100, description="Number of invoices per page, max 100.")]
 SyncMaxPagesQuery = Annotated[int, Query(ge=1, le=MAX_SYNC_PAGES, description="Maximum pages per direction.")]
 SyncConfirmQuery = Annotated[bool, Query(description="Must be true to explicitly opt into read-only sync.")]
+InvoiceEttnQuery = Annotated[
+    list[str] | None,
+    Query(
+        alias="invoice_ettn",
+        description=(
+            "Optional exact ETTN allowlist. When omitted, every invoice fetched for the "
+            "requested date range/direction is persisted and imported as before. When "
+            "supplied, the provider is still fetched/paginated normally, but only invoices "
+            "whose exact ettn is in this list are persisted and reach canonical import; "
+            "others are observed but not processed."
+        ),
+    ),
+]
 
 
 @router.post("/invoices", response_model=UyumsoftInvoiceSyncResponse)
@@ -37,6 +50,7 @@ def sync_uyumsoft_invoices(
     page_size: SyncPageSizeQuery = 50,
     max_pages: SyncMaxPagesQuery = 1,
     confirm_read_only: SyncConfirmQuery = False,
+    invoice_ettn: InvoiceEttnQuery = None,
 ) -> UyumsoftInvoiceSyncResponse:
     if not settings.uyumsoft_sync_execute_enabled:
         raise HTTPException(
@@ -67,6 +81,7 @@ def sync_uyumsoft_invoices(
                 directions=_directions(direction),
                 page_size=page_size,
                 max_pages=max_pages,
+                invoice_ettn=tuple(invoice_ettn) if invoice_ettn is not None else None,
             )
         )
         session.commit()
@@ -101,6 +116,9 @@ def _response_from_result(result: UyumsoftInvoiceSyncResult) -> UyumsoftInvoiceS
         skipped_import_count=result.skipped_import_count,
         cursor_state=result.cursor_state,
         failure_message=result.failure_message,
+        selected_invoices=result.selected_invoices,
+        requested_invoice_ettn=list(result.requested_invoice_ettn),
+        matched_invoice_ettn=list(result.matched_invoice_ettn),
         directions=[
             {
                 "direction": summary.direction,
@@ -117,6 +135,7 @@ def _response_from_result(result: UyumsoftInvoiceSyncResult) -> UyumsoftInvoiceS
                 "import_outcomes": list(summary.import_outcomes),
                 "status": summary.status,
                 "failure_message": summary.failure_message,
+                "selected_invoices": summary.selected_invoices,
             }
             for summary in result.directions
         ],

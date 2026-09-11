@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
-from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceListRequest
+from app.schemas.uyumsoft_invoices import InvoiceDirection, UyumsoftInvoiceListRequest, UyumsoftInvoiceSummary
 from app.services.invoice_persistence import InvoicePersistenceResult, InvoicePersistenceService
 from app.services.uyumsoft_canonical_import import (
     UyumsoftCanonicalImportBatchResult,
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 MAX_SYNC_PAGES = 10
 MAX_SYNC_PAGE_SIZE = 100
 MAX_SYNC_WINDOW_DAYS = 31
+MAX_INVOICE_ETTN_FILTER_COUNT = 20
 SYNC_STATUS_RUNNING = "running"
 SYNC_STATUS_COMPLETED = "completed"
 SYNC_STATUS_FAILED = "failed"
@@ -31,6 +32,12 @@ class UyumsoftInvoiceSyncRequest:
     directions: tuple[InvoiceDirection, ...] = ("Inbox", "Outbox")
     page_size: int = 50
     max_pages: int = 1
+    # Optional exact ETTN allowlist (UyumsoftInvoiceSummary.ettn -- the same immutable
+    # identity InvoicePersistenceService/build_invoice_identity already use for dedup).
+    # None preserves current behavior exactly: every fetched invoice is persisted/imported.
+    # When supplied, the provider is still fetched/paginated exactly as before, but only
+    # invoices whose exact ettn is in this set reach persistence/canonical import.
+    invoice_ettn: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,14 @@ class DirectionSyncSummary:
     import_outcomes: tuple[dict[str, Any], ...] = ()
     status: str = SYNC_STATUS_COMPLETED
     failure_message: str | None = None
+    # Count of invoices from this direction's fetched pages that passed the allowlist
+    # (or all of them, when no allowlist was supplied) and were forwarded to persistence
+    # and canonical import. Distinct from invoices_seen, which always counts every
+    # provider row fetched regardless of the allowlist.
+    selected_invoices: int = 0
+    # Which requested invoice_ettn values were actually encountered (and thus selected)
+    # in this direction. Empty when no allowlist was supplied.
+    matched_invoice_ettn: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,6 +74,16 @@ class UyumsoftInvoiceSyncResult:
     directions: list[DirectionSyncSummary] = field(default_factory=list)
     cursor_state: dict[str, Any] = field(default_factory=dict)
     failure_message: str | None = None
+    # Echo of the request's invoice_ettn allowlist (empty tuple when none was supplied),
+    # so a caller can diff it against matched_invoice_ettn to see what was not found.
+    requested_invoice_ettn: tuple[str, ...] = ()
+    # Union, across all directions, of requested identities that were actually
+    # encountered and selected. requested_invoice_ettn minus this set is "not found".
+    matched_invoice_ettn: tuple[str, ...] = ()
+
+    @property
+    def selected_invoices(self) -> int:
+        return sum(direction.selected_invoices for direction in self.directions)
 
     @property
     def created(self) -> int:
@@ -122,6 +147,8 @@ class UyumsoftInvoiceSyncWorkflow:
                 directions=summaries,
                 cursor_state=_cursor_state(summaries),
                 failure_message=exc.summary.failure_message,
+                requested_invoice_ettn=request.invoice_ettn or (),
+                matched_invoice_ettn=_merged_matched_identities(summaries),
             )
             if self._run_repository is not None and sync_run is not None:
                 self._run_repository.fail(sync_run, result, exc.__cause__ or exc)
@@ -138,6 +165,8 @@ class UyumsoftInvoiceSyncWorkflow:
                 status=SYNC_STATUS_COMPLETED,
                 directions=summaries,
                 cursor_state=_cursor_state(summaries),
+                requested_invoice_ettn=request.invoice_ettn or (),
+                matched_invoice_ettn=_merged_matched_identities(summaries),
             )
             if self._run_repository is not None and sync_run is not None:
                 self._run_repository.complete(sync_run, result)
@@ -156,6 +185,9 @@ class UyumsoftInvoiceSyncWorkflow:
     ) -> DirectionSyncSummary:
         pages_fetched = 0
         invoices_seen = 0
+        selected_count = 0
+        matched_identities: set[str] = set()
+        allowlist = _invoice_ettn_allowlist(request)
         persistence_result = InvoicePersistenceResult()
         import_result = UyumsoftCanonicalImportBatchResult()
         try:
@@ -175,10 +207,21 @@ class UyumsoftInvoiceSyncWorkflow:
                 )
                 pages_fetched += 1
                 invoices_seen += len(response.invoices)
-                persistence_result = persistence_result.add(self._persistence.persist_invoices(response.invoices))
+                # Provider pagination/termination (invoices_seen, break conditions below)
+                # is always driven by the full fetched page, unfiltered -- the allowlist
+                # only narrows what gets persisted/imported next.
+                selected_page_invoices = _select_invoices(response.invoices, allowlist)
+                selected_count += len(selected_page_invoices)
+                if allowlist is not None:
+                    matched_identities.update(
+                        invoice.ettn for invoice in selected_page_invoices if invoice.ettn is not None
+                    )
+                persistence_result = persistence_result.add(
+                    self._persistence.persist_invoices(selected_page_invoices)
+                )
                 import_result = _merge_import_results(
                     import_result,
-                    self._import_page(response.invoices),
+                    self._import_page(selected_page_invoices),
                 )
                 summary = DirectionSyncSummary(
                     direction=direction,
@@ -193,6 +236,8 @@ class UyumsoftInvoiceSyncWorkflow:
                     failed_import_count=import_result.failed_import_count,
                     skipped_import_count=import_result.skipped_import_count,
                     import_outcomes=_safe_import_outcomes(import_result),
+                    selected_invoices=selected_count,
+                    matched_invoice_ettn=tuple(sorted(matched_identities)),
                 )
                 if self._run_repository is not None and sync_run is not None:
                     self._run_repository.mark_page_completed(sync_run, summary)
@@ -207,6 +252,8 @@ class UyumsoftInvoiceSyncWorkflow:
                 invoices_seen=invoices_seen,
                 persistence_result=persistence_result,
                 import_result=import_result,
+                selected_count=selected_count,
+                matched_invoice_ettn=tuple(sorted(matched_identities)),
                 exc=exc,
             )
             raise SyncDirectionError(summary) from exc
@@ -223,6 +270,8 @@ class UyumsoftInvoiceSyncWorkflow:
             failed_import_count=import_result.failed_import_count,
             skipped_import_count=import_result.skipped_import_count,
             import_outcomes=_safe_import_outcomes(import_result),
+            selected_invoices=selected_count,
+            matched_invoice_ettn=tuple(sorted(matched_identities)),
         )
 
     def _import_page(self, invoices: list[Any]) -> UyumsoftCanonicalImportBatchResult:
@@ -244,6 +293,8 @@ class UyumsoftInvoiceSyncWorkflow:
         invoices_seen: int,
         persistence_result: InvoicePersistenceResult,
         import_result: UyumsoftCanonicalImportBatchResult,
+        selected_count: int,
+        matched_invoice_ettn: tuple[str, ...],
         exc: Exception,
     ) -> DirectionSyncSummary:
         return DirectionSyncSummary(
@@ -261,6 +312,8 @@ class UyumsoftInvoiceSyncWorkflow:
             import_outcomes=_safe_import_outcomes(import_result),
             status=SYNC_STATUS_FAILED,
             failure_message=_safe_failure_message(exc),
+            selected_invoices=selected_count,
+            matched_invoice_ettn=matched_invoice_ettn,
         )
 
 
@@ -343,6 +396,7 @@ class SyncRunRepository:
                 "failed_import_count": summary.failed_import_count,
                 "skipped_import_count": summary.skipped_import_count,
                 "status": summary.status,
+                "selected_invoices": summary.selected_invoices,
             },
         }
         sync_run.updated_at = datetime.now(UTC)
@@ -398,6 +452,43 @@ def _validate_request(request: UyumsoftInvoiceSyncRequest) -> None:
     invalid_directions = sorted(set(request.directions) - {"Inbox", "Outbox"})
     if invalid_directions:
         raise ValueError(f"Invalid directions: {', '.join(invalid_directions)}.")
+    if request.invoice_ettn is not None:
+        if len(request.invoice_ettn) == 0:
+            raise ValueError("invoice_ettn allowlist must not be empty when provided.")
+        if len(request.invoice_ettn) > MAX_INVOICE_ETTN_FILTER_COUNT:
+            raise ValueError(f"invoice_ettn allowlist must contain at most {MAX_INVOICE_ETTN_FILTER_COUNT} identities.")
+        if any(not value.strip() for value in request.invoice_ettn):
+            raise ValueError("invoice_ettn allowlist must not contain blank identities.")
+
+
+def _invoice_ettn_allowlist(request: UyumsoftInvoiceSyncRequest) -> frozenset[str] | None:
+    if request.invoice_ettn is None:
+        return None
+    return frozenset(value.strip() for value in request.invoice_ettn)
+
+
+def _select_invoices(
+    invoices: list[UyumsoftInvoiceSummary],
+    allowlist: frozenset[str] | None,
+) -> list[UyumsoftInvoiceSummary]:
+    """Restrict which fetched invoices reach persistence/canonical import.
+
+    None (no allowlist supplied) returns invoices unchanged -- current behavior is
+    preserved exactly. Otherwise, exact match only against the invoice's own
+    (already-normalized) ettn; no substring/fuzzy/case matching. An invoice without an
+    ettn can never be selected by this filter -- it has no canonical identity to match.
+    """
+
+    if allowlist is None:
+        return invoices
+    return [invoice for invoice in invoices if invoice.ettn is not None and invoice.ettn in allowlist]
+
+
+def _merged_matched_identities(summaries: list[DirectionSyncSummary]) -> tuple[str, ...]:
+    merged: set[str] = set()
+    for summary in summaries:
+        merged.update(summary.matched_invoice_ettn)
+    return tuple(sorted(merged))
 
 
 def _cursor_state(summaries: list[DirectionSyncSummary]) -> dict[str, Any]:
@@ -417,6 +508,7 @@ def _cursor_state(summaries: list[DirectionSyncSummary]) -> dict[str, Any]:
             "failed_import_count": summary.failed_import_count,
             "skipped_import_count": summary.skipped_import_count,
             "status": summary.status,
+            "selected_invoices": summary.selected_invoices,
         }
         for summary in summaries
     }
@@ -434,6 +526,9 @@ def _result_summary(result: UyumsoftInvoiceSyncResult) -> dict[str, Any]:
         "already_imported_count": result.already_imported_count,
         "failed_import_count": result.failed_import_count,
         "skipped_import_count": result.skipped_import_count,
+        "selected_invoices": result.selected_invoices,
+        "requested_invoice_ettn": list(result.requested_invoice_ettn),
+        "matched_invoice_ettn": list(result.matched_invoice_ettn),
         "directions": [
             {
                 "direction": summary.direction,
@@ -449,6 +544,7 @@ def _result_summary(result: UyumsoftInvoiceSyncResult) -> dict[str, Any]:
                 "failed_import_count": summary.failed_import_count,
                 "skipped_import_count": summary.skipped_import_count,
                 "import_outcomes": list(summary.import_outcomes),
+                "selected_invoices": summary.selected_invoices,
             }
             for summary in result.directions
         ],
