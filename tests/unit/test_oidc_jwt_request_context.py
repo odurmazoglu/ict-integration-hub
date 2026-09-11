@@ -194,7 +194,29 @@ def test_required_claims_are_rejected(claim: str) -> None:
         _resolver(jwk).resolve(_metadata(_token(private_key, kid="key-1", claims=claims)))
 
 
-@pytest.mark.parametrize("company_claim", ["0", "-1", "company=secret", ["7"]])
+@pytest.mark.parametrize(
+    "company_claim",
+    [
+        "0",
+        "-1",
+        "company=secret",
+        ["7"],
+        {},
+        "",
+        "   ",
+        "+1",
+        "1.0",
+        "1e1",
+        " 1 ",
+        "1a",
+        "a1",
+        True,
+        False,
+        1.0,
+        -7,
+        0,
+    ],
+)
 def test_malformed_company_claim_is_rejected_without_leaking_value(company_claim: object) -> None:
     private_key, jwk = _rsa_key("key-1")
 
@@ -203,6 +225,34 @@ def test_malformed_company_claim_is_rejected_without_leaking_value(company_claim
 
     assert str(error.value) == "Token company claim is invalid."
     assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("company_claim", "expected"),
+    [
+        pytest.param(7, 7, id="native-int-preserved"),
+        pytest.param(1, 1, id="native-int-minimum-positive"),
+        pytest.param("7", 7, id="digit-string-normalized"),
+        pytest.param("1", 1, id="digit-string-minimum-positive"),
+        # A leading zero is still nothing but ASCII decimal digits -- accepted
+        # and normalized exactly like Python's own int("007"), documented per
+        # the Entra compatibility task's explicit ambiguity callout.
+        pytest.param("007", 7, id="digit-string-leading-zeros-normalized"),
+    ],
+)
+def test_company_claim_native_int_and_digit_string_both_resolve_the_same_context(
+    company_claim: object, expected: int
+) -> None:
+    private_key, jwk = _rsa_key("key-1")
+
+    context = _resolver(jwk).resolve(_metadata(_token(private_key, kid="key-1", ipp_company_id=company_claim)))
+
+    assert context.company_id == expected
+    assert type(context.company_id) is int
+    # Everything else about the resolved context is unaffected by the claim's
+    # original JSON type (int vs digit-string).
+    assert context.user_id == "user-123"
+    assert context.permissions == (Permission.WORKBENCH_REVIEW_READ, Permission.WORKBENCH_REVIEW_DECIDE)
 
 
 def test_unknown_permission_is_rejected_without_leaking_value() -> None:
