@@ -269,6 +269,23 @@ def test_smoke_flag_does_not_bypass_live_readonly_requirement() -> None:
     assert "UYUMSOFT_ENVIRONMENT=production outside production requires LIVE_CONNECTOR_READONLY=true." in errors
 
 
+def test_uyumsoft_sync_execute_enabled_defaults_to_false() -> None:
+    assert Settings().uyumsoft_sync_execute_enabled is False
+
+
+def test_uyumsoft_sync_execute_gate_does_not_change_connector_environment_selection() -> None:
+    """The sync execute gate only authorizes the request; it must never itself select or change
+    which Uyumsoft tenant/WSDL a request targets -- that stays exclusively UYUMSOFT_ENVIRONMENT's
+    responsibility, for both possible gate values."""
+    for environment in ("test", "production"):
+        gate_disabled = Settings(uyumsoft_sync_execute_enabled=False, uyumsoft_environment=environment)
+        gate_enabled = Settings(uyumsoft_sync_execute_enabled=True, uyumsoft_environment=environment)
+
+        assert gate_disabled.uyumsoft_environment == environment
+        assert gate_enabled.uyumsoft_environment == environment
+        assert gate_disabled.uyumsoft_wsdl_url == gate_enabled.uyumsoft_wsdl_url
+
+
 def test_smoke_flag_does_not_enable_write_operations() -> None:
     settings = Settings(
         app_env="development",

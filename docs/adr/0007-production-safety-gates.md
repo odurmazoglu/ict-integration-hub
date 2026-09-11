@@ -37,6 +37,10 @@ The staging path is allowed only when all of the following hold:
 
 `EXECUTION_EXECUTE_ENABLED=true` is accepted outside production only when the staging path above is sanctioned. `PRODUCTION_OPERATIONS_ENABLED` and `PRODUCTION_APPROVAL_ACK` must still be false/empty outside production, and `STAGING_VENDOR_BILL_EXECUTE_ENABLED` must be false in production. The exception is scoped to `ExecutionStepType.VENDOR_BILL` only; customer invoice, customer quotation, purchase order, subscription, recharge, and every other executable step type stay blocked. Draft-only guarantees are unchanged: still one `account.move/create`, still no `action_post`, `unlink`, payment, or reconciliation, and still an idempotency check before create.
 
+### Uyumsoft inbound sync execute gate
+
+`UYUMSOFT_ENVIRONMENT` selects which Uyumsoft tenant/WSDL a request targets (`test` or `production`); it is not an execution authorization. `UYUMSOFT_SYNC_EXECUTE_ENABLED` (default `false`) is the separate, explicit opt-in that authorizes `POST /api/v1/sync/uyumsoft/invoices` to run the existing `UyumsoftInvoiceSyncWorkflow -> UyumsoftCanonicalInvoiceImporter -> ImportInvoiceUseCase` pipeline at all. When the gate is `false`, the endpoint fails closed with `404` before any Uyumsoft connector call, Hub persistence, or Workbench projection, for every value of `UYUMSOFT_ENVIRONMENT`. When the gate is `true`, the identical existing workflow becomes reachable against whichever Uyumsoft environment is configured -- no separate production-only code path exists. The gate does not itself authorize any Odoo write: Workbench projection publish, Vendor Bill execution, supplier creation, customer invoice execution, and customer quotation execution each remain independently controlled by their own existing gate (`ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED`, `EXECUTION_EXECUTE_ENABLED`, `SUPPLIER_REMEDIATION_WRITE_ENABLED`, `CUSTOMER_INVOICE_EXECUTE_ENABLED`, `CUSTOMER_QUOTATION_EXECUTE_ENABLED`). Production is allowed to boot with this gate at either value; it governs reachability of one endpoint, not runtime validity.
+
 ## Consequences
 
 ### Positive
@@ -77,6 +81,7 @@ These alternatives were rejected because they are either too easy to misconfigur
 - `app/erp/write/odoo_vendor_bill_writer.py`
 - `app/application/execution/preflight.py`
 - `app/composition/execution.py`
+- `app/api/routers/uyumsoft_sync.py`
 
 ## Related Documentation
 

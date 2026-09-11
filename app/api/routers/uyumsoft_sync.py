@@ -38,10 +38,10 @@ def sync_uyumsoft_invoices(
     max_pages: SyncMaxPagesQuery = 1,
     confirm_read_only: SyncConfirmQuery = False,
 ) -> UyumsoftInvoiceSyncResponse:
-    if settings.uyumsoft_environment != "test":
+    if not settings.uyumsoft_sync_execute_enabled:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Uyumsoft synchronization is available only for the test environment.",
+            detail="Uyumsoft synchronization is not enabled. Set UYUMSOFT_SYNC_EXECUTE_ENABLED=true to authorize it.",
         )
     if not confirm_read_only:
         raise HTTPException(

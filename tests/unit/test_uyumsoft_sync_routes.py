@@ -45,6 +45,32 @@ class FailingOutboxSyncUyumsoftClient(FakeSyncUyumsoftClient):
         raise ConnectorError("Outbox transport failed")
 
 
+class RefusingSyncUyumsoftClient(UyumsoftSoapClient):
+    """Fails the test if the Uyumsoft connector is ever reached. Used to prove the sync gate
+    denies the request before any connector call, regardless of UYUMSOFT_ENVIRONMENT."""
+
+    def __init__(self) -> None:
+        pass
+
+    def list_inbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
+        raise AssertionError("Uyumsoft connector must not be called when the sync gate is disabled.")
+
+    def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
+        raise AssertionError("Uyumsoft connector must not be called when the sync gate is disabled.")
+
+
+class RefusingCanonicalImporter:
+    """Fails the test if the canonical importer is ever reached when the sync gate is disabled."""
+
+    def import_invoices(
+        self,
+        invoices: list[UyumsoftInvoiceSummary],
+        *,
+        persisted_records: dict[str, object],
+    ) -> UyumsoftCanonicalImportBatchResult:
+        raise AssertionError("Canonical importer must not be called when the sync gate is disabled.")
+
+
 class NoopCanonicalImporter:
     def import_invoices(
         self,
@@ -118,21 +144,29 @@ class ReceiptWritingCanonicalImporter:
 
 
 async def test_sync_endpoint_requires_read_only_confirmation(api_client: AsyncClient) -> None:
-    response = await api_client.post(
-        "/api/v1/sync/uyumsoft/invoices",
-        params={
-            "from": "2026-07-16T00:00:00+00:00",
-            "to": "2026-07-17T00:00:00+00:00",
-        },
-    )
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 422
     assert "confirm_read_only" in response.json()["detail"]
 
 
-async def test_sync_endpoint_is_unavailable_outside_uyumsoft_test(api_client: AsyncClient) -> None:
-    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_environment="production")
-    app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
+async def test_sync_endpoint_denies_when_gate_disabled_with_test_environment(api_client: AsyncClient) -> None:
+    """Gate false + UYUMSOFT_ENVIRONMENT=test -> denied, connector/importer never reached."""
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        uyumsoft_sync_execute_enabled=False, uyumsoft_environment="test"
+    )
+    app.dependency_overrides[get_uyumsoft_client] = lambda: RefusingSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: RefusingCanonicalImporter()
     try:
         response = await api_client.post(
             "/api/v1/sync/uyumsoft/invoices",
@@ -146,6 +180,102 @@ async def test_sync_endpoint_is_unavailable_outside_uyumsoft_test(api_client: As
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+    assert "UYUMSOFT_SYNC_EXECUTE_ENABLED" in response.json()["detail"]
+
+
+async def test_sync_endpoint_denies_when_gate_disabled_with_production_environment(api_client: AsyncClient) -> None:
+    """Gate false + UYUMSOFT_ENVIRONMENT=production -> denied, connector/importer never reached.
+
+    This is the production configuration this gate exists to make reachable once explicitly
+    enabled; with the gate left at its safe default, it must stay denied exactly like the test
+    environment case, and the environment setting itself must be left untouched (no fallback to
+    "test", no connector/environment mutation as a side effect of the denial).
+    """
+    settings = Settings(uyumsoft_sync_execute_enabled=False, uyumsoft_environment="production")
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_uyumsoft_client] = lambda: RefusingSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: RefusingCanonicalImporter()
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+                "confirm_read_only": "true",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404
+    assert "UYUMSOFT_SYNC_EXECUTE_ENABLED" in response.json()["detail"]
+    assert settings.uyumsoft_environment == "production"
+
+
+async def test_sync_endpoint_reaches_workflow_when_gate_enabled_with_production_environment(
+    api_client: AsyncClient,
+) -> None:
+    """Gate true + UYUMSOFT_ENVIRONMENT=production -> the existing workflow is reachable.
+
+    No separate production-only code path is introduced: this exercises the identical
+    FakeSyncUyumsoftClient/NoopCanonicalImporter wiring used for the test-environment case.
+    """
+    session_factory = _session_factory()
+
+    def db_override() -> Generator[Session]:
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        uyumsoft_sync_execute_enabled=True, uyumsoft_environment="production"
+    )
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: NoopCanonicalImporter()
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+                "confirm_read_only": "true",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+
+
+async def test_sync_endpoint_does_not_require_bearer_authentication(api_client: AsyncClient) -> None:
+    """The new gate changes only availability, not authentication: an unauthenticated request
+    (no Authorization header, exactly as every other test in this file sends it) still reaches
+    the same 200 outcome as before once the gate is explicitly enabled -- no auth dependency was
+    added or removed by this change."""
+    session_factory = _session_factory()
+
+    def db_override() -> Generator[Session]:
+        with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
+    app.dependency_overrides[get_db_session] = db_override
+    app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
+    app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: NoopCanonicalImporter()
+    try:
+        response = await api_client.post(
+            "/api/v1/sync/uyumsoft/invoices",
+            params={
+                "from": "2026-07-16T00:00:00+00:00",
+                "to": "2026-07-17T00:00:00+00:00",
+                "confirm_read_only": "true",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "authorization" not in {key.lower() for key in response.request.headers.keys()}
+    assert response.status_code == 200
 
 
 async def test_sync_endpoint_persists_read_only_summary(api_client: AsyncClient) -> None:
@@ -155,6 +285,7 @@ async def test_sync_endpoint_persists_read_only_summary(api_client: AsyncClient)
         with session_factory() as session:
             yield session
 
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
     app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: NoopCanonicalImporter()
@@ -197,6 +328,7 @@ async def test_sync_endpoint_records_failed_run_on_connector_error(api_client: A
         with session_factory() as session:
             yield session
 
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FailingOutboxSyncUyumsoftClient()
     app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: NoopCanonicalImporter()
@@ -234,6 +366,7 @@ async def test_sync_endpoint_reaches_canonical_importer(api_client: AsyncClient)
         with session_factory() as session:
             yield session
 
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
     app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: importer
@@ -269,6 +402,7 @@ async def test_sync_endpoint_commits_non_review_receipt_with_request_transaction
             session_holder[:] = [session]
             yield session
 
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
     app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: ReceiptWritingCanonicalImporter(session_holder)
@@ -306,6 +440,7 @@ async def test_sync_endpoint_does_not_return_accepted_when_receipt_commit_fails(
             session_holder[:] = [session]
             yield session
 
+    app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_sync_execute_enabled=True)
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FakeSyncUyumsoftClient()
     app.dependency_overrides[get_uyumsoft_canonical_importer] = lambda: ReceiptWritingCanonicalImporter(session_holder)
