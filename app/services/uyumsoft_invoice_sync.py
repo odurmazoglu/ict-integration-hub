@@ -216,9 +216,7 @@ class UyumsoftInvoiceSyncWorkflow:
                     matched_identities.update(
                         invoice.ettn for invoice in selected_page_invoices if invoice.ettn is not None
                     )
-                persistence_result = persistence_result.add(
-                    self._persistence.persist_invoices(selected_page_invoices)
-                )
+                persistence_result = persistence_result.add(self._persistence.persist_invoices(selected_page_invoices))
                 import_result = _merge_import_results(
                     import_result,
                     self._import_page(selected_page_invoices),
