@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
@@ -72,7 +73,7 @@ class OdooReadOnlyAdapter:
         request_limit = self._page_size if limit is None else limit
         return tuple(
             _run_sync(
-                self._search_read_async(
+                lambda: self._search_read_async(
                     model=model,
                     domain=domain,
                     fields=fields,
@@ -111,7 +112,7 @@ class OdooReadOnlyAdapter:
         self._ensure_readonly(method=READONLY_METHOD)
         return tuple(
             _run_sync(
-                self._read_model_field_metadata_async(
+                lambda: self._read_model_field_metadata_async(
                     model=model,
                     field_name=field_name,
                 )
@@ -172,13 +173,41 @@ class OdooReadOnlyAdapter:
             raise ErpReadonlyViolationError("ERP adapter only permits read-only search_read operations.")
 
 
-def _run_sync(coro: Any) -> Any:
+def _run_sync(coro_factory: Callable[[], Any]) -> Any:
+    """Drive a fresh coroutine (created lazily by `coro_factory`) to completion and
+    return its result synchronously, regardless of whether the calling thread
+    already has a running asyncio event loop.
+
+    The coroutine is intentionally not created until we know how it will be run:
+    - No active loop: create it and hand it to asyncio.run() immediately, exactly as
+      before -- this path is unchanged.
+    - An active loop already exists in this thread (e.g. this synchronous repository
+      call was made from code running inside ImportInvoiceUseCase's own asyncio.run()
+      tree): asyncio.run() cannot be called again in this thread without nesting, so
+      the coroutine is created and driven to completion on a dedicated worker thread
+      instead, which has no event loop of its own. This thread blocks synchronously
+      on that worker's result -- it is not the loop itself, and it schedules nothing
+      else while waiting, so this cannot deadlock the active loop.
+
+    Deferring coroutine creation to the branch that will actually run it means a
+    coroutine is never constructed and then abandoned (which would otherwise risk a
+    "coroutine was never awaited" warning) even if thread/executor startup itself
+    were to fail before running it.
+    """
+
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
-    coro.close()
-    raise ErpRepositoryError("ERP adapter cannot run a synchronous request inside an active event loop.")
+        return asyncio.run(coro_factory())
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_run_coroutine_factory, coro_factory)
+        return future.result()
+
+
+def _run_coroutine_factory(coro_factory: Callable[[], Any]) -> Any:
+    """Entry point executed on the worker thread: create the coroutine here, where
+    there is no running loop yet, and run it to completion with its own fresh loop."""
+    return asyncio.run(coro_factory())
 
 
 def many2one_id(value: Any) -> int | None:
