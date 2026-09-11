@@ -4,16 +4,25 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.application.commands import ImportInvoiceCommand
 from app.application.dto import ImportInvoiceResult
 from app.application.exceptions import ApplicationError
 from app.application.use_cases import ImportInvoiceInfrastructureError, ImportInvoiceValidationError
+from app.composition.imports import build_deterministic_decision_engine, build_import_invoice_use_case
+from app.core.config import Settings
+from app.db.base import Base
 from app.domain.invoice import InternalInvoice
 from app.erp.exceptions import ErpRepositoryTimeoutError
 from app.erp.models import Company
+from app.erp.odoo.adapter import OdooReadOnlyAdapter
+from app.erp.odoo.company_repository import OdooCompanyRepository
+from app.persistence import SqlAlchemyImportHistory
 from app.schemas.uyumsoft_invoices import UyumsoftInvoiceSummary
 from app.services.document_service import DocumentDownloadItem, DocumentDownloadResult, DocumentValidationError
 from app.services.document_storage import DocumentStorageError
@@ -140,6 +149,53 @@ def test_batch_continues_when_one_invoice_fails_normalization() -> None:
         IMPORT_STATUS_NORMALIZATION_FAILED,
     ]
     assert len(use_case.commands) == 1
+
+
+def test_partner_matching_runs_inside_import_use_case_own_active_event_loop() -> None:
+    """P0-PROD-06D/06E regression: reproduce the exact production nesting shape and
+    prove it no longer fails.
+
+    UyumsoftCanonicalInvoiceImporter.import_invoice drives ImportInvoiceUseCase.execute
+    via _run_import's own asyncio.run(...). Inside that same coroutine tree,
+    DecisionEngine -> DeterministicRuleEngine -> PartnerMatchingEngine calls the
+    *real*, synchronous OdooPartnerRepository, backed by a *real* OdooReadOnlyAdapter
+    -- only its async Odoo HTTP client is faked. Before the fix, this always raised
+    ErpRepositoryError("... active event loop ...") wrapped as
+    "Partner repository lookup failed.", regardless of whether a matching partner
+    existed. It must now reach a genuine deterministic business outcome instead."""
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    settings = Settings(odoo_workbench_projection_publish_enabled=False)
+    odoo_client = _NoMatchOdooStub(company_record={"id": 7, "name": "ICT", "vat": "2222222222"})
+    read_adapter = OdooReadOnlyAdapter(client=odoo_client)
+
+    decision_engine = build_deterministic_decision_engine(session=session, settings=settings, odoo_client=odoo_client)
+    use_case = build_import_invoice_use_case(
+        import_history=SqlAlchemyImportHistory(session),
+        decision_engine=decision_engine,
+        session=session,
+        settings=settings,
+    )
+    importer = UyumsoftCanonicalInvoiceImporter(
+        document_service=FakeDocumentService(),
+        storage=FakeStorage(_valid_ubl()),
+        company_resolver=ExactCompanyResolver(OdooCompanyRepository(adapter=read_adapter)),
+        import_use_case_factory=lambda: use_case,
+    )
+
+    outcome = importer.import_invoice(_invoice(), persisted_record=_record())
+
+    assert outcome.safe_message != "Partner repository lookup failed."
+    assert outcome.status != IMPORT_STATUS_CANONICAL_IMPORT_FAILED
+    assert outcome.company_id == 7
+    # No Odoo partner, product, tax, or decision-rule row exists anywhere in this
+    # fake -- the pipeline must still complete normally (typically routed to manual
+    # review), never invent a match and never fail on the bridge itself.
+    assert outcome.status in (IMPORT_STATUS_REVIEW_CREATED, IMPORT_STATUS_ACCEPTED)
+    assert "res.partner" in odoo_client.calls
+    assert "res.company" in odoo_client.calls
 
 
 def test_outbox_invoice_is_not_imported_as_supplier_invoice() -> None:
@@ -359,6 +415,40 @@ class FailingCompanyRepository:
 
     def find_default(self) -> Company | None:
         return None
+
+
+class _NoMatchOdooStub:
+    """Fakes only the async Odoo HTTP/JSON boundary (adapter's `_SearchReadClient`).
+
+    Every real repository/matching/decision-rule layer above this stays genuine;
+    only the transport is faked. Returns the one company record needed for exact
+    company resolution and an empty result for everything else -- there is
+    deliberately no partner, product, tax, or decision-rule row anywhere, so a
+    correct pipeline reaches manual review/acceptance, never a fabricated match and
+    never a bridge failure."""
+
+    def __init__(self, *, company_record: dict[str, Any]) -> None:
+        self._company_record = company_record
+        self.calls: list[str] = []
+
+    async def search_read(
+        self,
+        *,
+        model: str,
+        domain: list[Any],
+        fields: list[str],
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        del domain, fields, limit
+        self.calls.append(model)
+        if model == "res.company" and offset == 0:
+            return [self._company_record]
+        return []
+
+    async def read_model_field_metadata(self, *, model: str, field_name: str) -> list[dict[str, Any]]:
+        del model, field_name
+        return []
 
 
 class FakeDocumentService:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import gc
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from decimal import Decimal
 from pathlib import Path
@@ -159,6 +162,33 @@ class FieldMetadataClient:
     async def read_model_field_metadata(self, *, model: str, field_name: str) -> list[dict[str, Any]]:
         self.calls.append({"model": model, "field_name": field_name})
         return [{"name": field_name, "ttype": "many2one", "relation": "product.product"}]
+
+
+class EmptyResultClient:
+    async def search_read(
+        self,
+        *,
+        model: str,
+        domain: list[Any],
+        fields: list[str],
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        del model, domain, fields, limit, offset
+        return []
+
+
+def _run_in_active_loop[T](sync_callable: Callable[[], T]) -> T:
+    """Call `sync_callable()` while this thread already has a running asyncio event
+    loop -- reproducing the exact production nesting shape: ImportInvoiceUseCase
+    executes inside _run_import's asyncio.run(...), and synchronous rule/matching
+    code (itself calling an OdooReadOnlyAdapter-backed repository) runs from within
+    that same coroutine tree."""
+
+    async def runner() -> T:
+        return sync_callable()
+
+    return asyncio.run(runner())
 
 
 def test_partner_lookup_returns_immutable_dtos() -> None:
@@ -348,6 +378,101 @@ def test_adapter_paginates_search_read() -> None:
         {"id": 2, "name": "B"},
         {"id": 3, "name": "C"},
     )
+
+
+def test_adapter_search_read_succeeds_with_no_active_loop() -> None:
+    """Baseline: sync context, no running loop -- behavior is unchanged."""
+    client = FieldMetadataClient()
+    adapter = OdooReadOnlyAdapter(client=client, retry_backoff_seconds=0)
+
+    records = adapter.search_read(model="res.company", domain=[], fields=["id"])
+
+    assert records == ()
+
+
+def test_adapter_search_read_succeeds_inside_an_active_event_loop() -> None:
+    """The exact production defect: a synchronous adapter call made from code that
+    is itself running inside an already-active asyncio event loop must succeed, not
+    raise merely because a loop exists."""
+    client = FieldMetadataClient()
+    adapter = OdooReadOnlyAdapter(client=client, retry_backoff_seconds=0)
+
+    records = _run_in_active_loop(lambda: adapter.search_read(model="res.company", domain=[], fields=["id"]))
+
+    assert records == ()
+
+
+def test_adapter_search_read_all_paginates_inside_an_active_event_loop() -> None:
+    adapter = OdooReadOnlyAdapter(client=PagingClient(), page_size=2, retry_backoff_seconds=0)
+
+    records = _run_in_active_loop(
+        lambda: adapter.search_read_all(model="res.company", domain=[], fields=["id", "name"])
+    )
+
+    assert records == (
+        {"id": 1, "name": "A"},
+        {"id": 2, "name": "B"},
+        {"id": 3, "name": "C"},
+    )
+
+
+def test_adapter_search_read_returns_empty_tuple_inside_an_active_event_loop() -> None:
+    adapter = OdooReadOnlyAdapter(client=EmptyResultClient(), retry_backoff_seconds=0)
+
+    records = _run_in_active_loop(
+        lambda: adapter.search_read(model="res.partner", domain=[["vat", "=", "does-not-exist"]], fields=["id"])
+    )
+
+    assert records == ()
+
+
+def test_adapter_connector_error_propagates_as_erp_error_inside_an_active_event_loop() -> None:
+    client = FlakySearchReadClient(failures=2)
+    adapter = OdooReadOnlyAdapter(client=client, retry_attempts=2, retry_backoff_seconds=0)
+
+    with pytest.raises(ErpRepositoryError) as exc_info:
+        _run_in_active_loop(lambda: adapter.search_read(model="res.company", domain=[], fields=["id"], limit=1))
+
+    assert exc_info.value.safe_message == "Odoo returned HTTP 503."
+
+
+def test_adapter_connector_timeout_propagates_as_erp_timeout_inside_an_active_event_loop() -> None:
+    client = FlakySearchReadClient(failures=2, timeout=True)
+    adapter = OdooReadOnlyAdapter(client=client, retry_attempts=2, retry_backoff_seconds=0)
+
+    with pytest.raises(ErpRepositoryTimeoutError) as exc_info:
+        _run_in_active_loop(lambda: adapter.search_read(model="res.company", domain=[], fields=["id"], limit=1))
+
+    assert exc_info.value.safe_message == "Odoo request timed out."
+
+
+def test_adapter_retries_unchanged_inside_an_active_event_loop() -> None:
+    client = FlakySearchReadClient(failures=1)
+    adapter = OdooReadOnlyAdapter(client=client, retry_attempts=2, retry_backoff_seconds=0)
+
+    records = _run_in_active_loop(lambda: adapter.search_read(model="res.company", domain=[], fields=["id"], limit=1))
+
+    assert records == ({"id": 1, "name": "Record 1"},)
+    assert len(client.calls) == 2
+
+
+def test_adapter_readonly_guard_unchanged_inside_an_active_event_loop() -> None:
+    with pytest.raises(ErpReadonlyViolationError):
+        _run_in_active_loop(lambda: OdooReadOnlyAdapter._ensure_readonly(method="create"))
+
+
+def test_adapter_bridge_never_leaks_a_never_awaited_coroutine_warning(recwarn: pytest.WarningsRecorder) -> None:
+    """Exercises both branches (no loop, then active loop) and forces garbage
+    collection so any coroutine that was created and abandoned without being
+    awaited would emit its RuntimeWarning within this test's capture window."""
+    adapter = OdooReadOnlyAdapter(client=FieldMetadataClient(), retry_backoff_seconds=0)
+
+    adapter.search_read(model="res.company", domain=[], fields=["id"])
+    _run_in_active_loop(lambda: adapter.search_read(model="res.company", domain=[], fields=["id"]))
+    gc.collect()
+
+    messages = [str(warning.message) for warning in recwarn.list]
+    assert not any("was never awaited" in message for message in messages)
 
 
 def test_adapter_reads_field_metadata_through_read_only_boundary() -> None:
