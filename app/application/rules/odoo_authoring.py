@@ -27,9 +27,9 @@ class OdooDecisionRuleFieldMapping(ApplicationDTO):
     model_name: str = ODOO_DECISION_RULE_MODEL
     name: str = "x_name"
     rule_code: str = "x_studio_rule_code"
-    active: str = "active"
+    active: str = "x_studio_active"
     priority: str = "x_studio_priority"
-    company: str = "company_id"
+    company: str = "x_studio_company_id"
     vendor: str = "x_studio_vendor_id"
     vendor_tax_id: str = "x_studio_vendor_tax_id"
     currency: str = "x_studio_currency_id"

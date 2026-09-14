@@ -28,16 +28,16 @@ def test_odoo_decision_rule_field_mapping_is_immutable_and_exported() -> None:
     assert application.ODOO_DECISION_RULE_MODEL == ODOO_DECISION_RULE_MODEL
     assert mapping.model_name == "x_ipp_decision_rule"
     assert mapping.name == "x_name"
-    assert mapping.active == "active"
-    assert mapping.company == "company_id"
+    assert mapping.active == "x_studio_active"
+    assert mapping.company == "x_studio_company_id"
     assert mapping.workflow == "x_studio_workflow"
     assert mapping.classification_code == "x_studio_classification_code"
     assert mapping.studio_fields() == (
         "x_name",
         "x_studio_rule_code",
-        "active",
+        "x_studio_active",
         "x_studio_priority",
-        "company_id",
+        "x_studio_company_id",
         "x_studio_vendor_id",
         "x_studio_vendor_tax_id",
         "x_studio_currency_id",
