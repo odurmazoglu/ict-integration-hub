@@ -31,10 +31,10 @@ def test_exact_company_specific_rule_read() -> None:
             "model": "x_ipp_decision_rule",
             "domain": [
                 "&",
-                ["active", "=", True],
+                ["x_studio_active", "=", True],
                 "|",
-                ["company_id", "=", 7],
-                ["company_id", "=", False],
+                ["x_studio_company_id", "=", 7],
+                ["x_studio_company_id", "=", False],
             ],
             "fields": ("id", *OdooDecisionRuleFieldMapping().studio_fields()),
         }
