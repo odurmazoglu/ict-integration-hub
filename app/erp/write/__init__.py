@@ -1,5 +1,25 @@
 """ERP write adapters for controlled draft-only operations."""
 
+from app.application.exceptions.product_remediation import (
+    ProductDataIntegrityError,
+    ProductVariantResolutionError,
+    ProductWriteAuthenticationError,
+    ProductWriteAuthorizationError,
+    ProductWriteError,
+    ProductWriteSafetyGateError,
+    ProductWriteTransportError,
+    ProductWriteUnexpectedErpError,
+    ProductWriteValidationError,
+    SupplierInfoAmbiguityError,
+    SupplierInfoDataIntegrityError,
+    SupplierInfoDuplicateRaceError,
+    SupplierInfoWriteAuthenticationError,
+    SupplierInfoWriteAuthorizationError,
+    SupplierInfoWriteError,
+    SupplierInfoWriteTransportError,
+    SupplierInfoWriteUnexpectedErpError,
+    SupplierInfoWriteValidationError,
+)
 from app.application.exceptions.supplier_partner import (
     SupplierPartnerAmbiguityError,
     SupplierPartnerDataIntegrityError,
@@ -52,12 +72,25 @@ from app.erp.write.odoo_customer_quotation_writer import (
     SaleOrderDraft,
     build_sale_order_payload,
 )
+from app.erp.write.odoo_product_write_policy import OdooProductWritePolicy
+from app.erp.write.odoo_product_writer import (
+    OdooProductTemplateRepository,
+    OdooProductWriter,
+    ProductTemplateJson2Client,
+    ProductTemplateRecord,
+)
 from app.erp.write.odoo_supplier_partner_writer import (
     OdooSupplierPartnerRepository,
     OdooSupplierPartnerWritePolicy,
     OdooSupplierPartnerWriter,
     SupplierPartnerJson2Client,
     SupplierPartnerRecord,
+)
+from app.erp.write.odoo_supplierinfo_writer import (
+    OdooSupplierInfoRepository,
+    OdooSupplierInfoWriter,
+    SupplierInfoJson2Client,
+    SupplierInfoRecord,
 )
 from app.erp.write.odoo_vendor_bill_writer import OdooVendorBillWritePolicy, OdooVendorBillWriter
 
@@ -89,12 +122,39 @@ __all__ = [
     "OdooCustomerQuotationRepository",
     "OdooCustomerQuotationWritePolicy",
     "OdooCustomerQuotationWriter",
+    "OdooProductTemplateRepository",
+    "OdooProductWriter",
+    "OdooProductWritePolicy",
+    "OdooSupplierInfoRepository",
+    "OdooSupplierInfoWriter",
     "OdooSupplierPartnerRepository",
     "OdooSupplierPartnerWritePolicy",
     "OdooSupplierPartnerWriter",
     "OdooVendorBillWritePolicy",
     "OdooVendorBillWriter",
+    "ProductDataIntegrityError",
+    "ProductTemplateJson2Client",
+    "ProductTemplateRecord",
+    "ProductVariantResolutionError",
+    "ProductWriteAuthenticationError",
+    "ProductWriteAuthorizationError",
+    "ProductWriteError",
+    "ProductWriteSafetyGateError",
+    "ProductWriteTransportError",
+    "ProductWriteUnexpectedErpError",
+    "ProductWriteValidationError",
     "SaleOrderDraft",
+    "SupplierInfoAmbiguityError",
+    "SupplierInfoDataIntegrityError",
+    "SupplierInfoDuplicateRaceError",
+    "SupplierInfoJson2Client",
+    "SupplierInfoRecord",
+    "SupplierInfoWriteAuthenticationError",
+    "SupplierInfoWriteAuthorizationError",
+    "SupplierInfoWriteError",
+    "SupplierInfoWriteTransportError",
+    "SupplierInfoWriteUnexpectedErpError",
+    "SupplierInfoWriteValidationError",
     "SupplierPartnerAmbiguityError",
     "SupplierPartnerDataIntegrityError",
     "SupplierPartnerDuplicateRaceError",

@@ -98,6 +98,32 @@ def test_default_settings_have_supplier_remediation_write_disabled() -> None:
     assert Settings().supplier_remediation_write_enabled is False
 
 
+def test_non_production_product_remediation_write_requires_approved_staging_host() -> None:
+    unapproved = Settings(
+        app_env="development",
+        product_remediation_write_enabled=True,
+        odoo_base_url="https://example.odoo.com",
+    )
+    assert (
+        "PRODUCT_REMEDIATION_WRITE_ENABLED=true requires ODOO_BASE_URL to be an approved staging host."
+        in runtime_configuration_errors(unapproved)
+    )
+
+    approved = Settings(
+        app_env="development",
+        product_remediation_write_enabled=True,
+        odoo_base_url="https://test-ictteknoloji.odoo.com",
+    )
+    assert (
+        "PRODUCT_REMEDIATION_WRITE_ENABLED=true requires ODOO_BASE_URL to be an approved staging host."
+        not in runtime_configuration_errors(approved)
+    )
+
+
+def test_default_settings_have_product_remediation_write_disabled() -> None:
+    assert Settings().product_remediation_write_enabled is False
+
+
 def test_non_production_production_connector_requires_live_readonly() -> None:
     settings = Settings(
         app_env="development",

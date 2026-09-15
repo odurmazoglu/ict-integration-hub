@@ -102,6 +102,83 @@ async def test_create_res_partner_rejects_unexpected_response_shapes(body: objec
     assert "secret" not in exc_info.value.safe_message
 
 
+async def test_create_product_template_returns_created_id_via_vals_list() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/product.template/create"
+        assert json.loads(request.content) == {"vals_list": [{"name": "Widget", "type": "consu"}]}
+        return httpx.Response(200, json=900)
+
+    result = await _client(handler).create_product_template({"name": "Widget", "type": "consu"})
+    assert result == 900
+
+
+async def test_create_product_template_accepts_dict_and_single_id_list_shapes() -> None:
+    async def dict_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 901})
+
+    async def list_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[902])
+
+    assert await _client(dict_handler).create_product_template({"name": "A"}) == 901
+    assert await _client(list_handler).create_product_template({"name": "A"}) == 902
+
+
+@pytest.mark.parametrize("body", [True, False, {"unexpected": True}, "900", [900, 901], []])
+async def test_create_product_template_rejects_unexpected_response_shapes(body: object) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(ConnectorError) as exc_info:
+        await _client(handler).create_product_template({"name": "A", "api_key": "secret"})
+    assert "unexpected response shape" in exc_info.value.safe_message
+    assert "secret" not in exc_info.value.safe_message
+
+
+async def test_create_supplierinfo_returns_created_id_via_vals_list() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/product.supplierinfo/create"
+        assert json.loads(request.content) == {
+            "vals_list": [{"partner_id": 1, "product_tmpl_id": 900, "product_code": "ABC"}]
+        }
+        return httpx.Response(200, json=4001)
+
+    result = await _client(handler).create_supplierinfo(
+        {"partner_id": 1, "product_tmpl_id": 900, "product_code": "ABC"}
+    )
+    assert result == 4001
+
+
+async def test_create_supplierinfo_accepts_dict_and_single_id_list_shapes() -> None:
+    async def dict_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 4002})
+
+    async def list_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[4003])
+
+    assert await _client(dict_handler).create_supplierinfo({"partner_id": 1}) == 4002
+    assert await _client(list_handler).create_supplierinfo({"partner_id": 1}) == 4003
+
+
+@pytest.mark.parametrize("body", [True, False, {"unexpected": True}, "4001", [4001, 4002], []])
+async def test_create_supplierinfo_rejects_unexpected_response_shapes(body: object) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(ConnectorError) as exc_info:
+        await _client(handler).create_supplierinfo({"partner_id": 1, "api_key": "secret"})
+    assert "unexpected response shape" in exc_info.value.safe_message
+    assert "secret" not in exc_info.value.safe_message
+
+
+async def test_search_read_allows_product_template_and_supplierinfo() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path in {"/json/2/product.template/search_read", "/json/2/product.supplierinfo/search_read"}
+        return httpx.Response(200, json=[])
+
+    assert await _client(handler).search_read(model="product.template", domain=[], fields=["id"]) == []
+    assert await _client(handler).search_read(model="product.supplierinfo", domain=[], fields=["id"]) == []
+
+
 async def test_search_read_allows_sale_order_and_product_pricelist() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path in {"/json/2/sale.order/search_read", "/json/2/product.pricelist/search_read"}

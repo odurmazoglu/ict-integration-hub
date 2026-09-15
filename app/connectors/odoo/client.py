@@ -23,6 +23,8 @@ READ_ONLY_MODELS = frozenset(
         "res.company",
         "res.partner",
         "product.product",
+        "product.template",
+        "product.supplierinfo",
         "account.tax",
         "res.currency",
         "account.journal",
@@ -113,6 +115,48 @@ class OdooJson2Client:
                 return result[0]
         raise ConnectorError(
             f"Odoo res.partner create returned an unexpected response shape: {_response_shape(result)}."
+        )
+
+    async def create_product_template(self, payload: dict[str, Any]) -> int:
+        """Create exactly one ``product.template`` and return its positive integer id.
+
+        This is the single sanctioned ``product.template`` write route, reserved for
+        the gated product remediation writer. It uses the hardened
+        ``{"vals_list": [values]}`` create shape and accepts only a bare int,
+        ``{"id": int}``, or a single-element ``[int]`` response; a boolean or any
+        other shape fails closed.
+        """
+
+        result = await self._post_json("/json/2/product.template/create", {"vals_list": [payload]})
+        if not isinstance(result, bool):
+            if isinstance(result, int):
+                return result
+            if isinstance(result, dict) and type(result.get("id")) is int:
+                return int(result["id"])
+            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
+                return result[0]
+        raise ConnectorError(
+            f"Odoo product.template create returned an unexpected response shape: {_response_shape(result)}."
+        )
+
+    async def create_supplierinfo(self, payload: dict[str, Any]) -> int:
+        """Create exactly one ``product.supplierinfo`` and return its positive integer id.
+
+        This is the single sanctioned ``product.supplierinfo`` write route, reserved
+        for the gated product remediation writer. Same hardened create/response-shape
+        handling as ``create_product_template``.
+        """
+
+        result = await self._post_json("/json/2/product.supplierinfo/create", {"vals_list": [payload]})
+        if not isinstance(result, bool):
+            if isinstance(result, int):
+                return result
+            if isinstance(result, dict) and type(result.get("id")) is int:
+                return int(result["id"])
+            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
+                return result[0]
+        raise ConnectorError(
+            f"Odoo product.supplierinfo create returned an unexpected response shape: {_response_shape(result)}."
         )
 
     async def write_account_move(self, *, record_id: int, values: dict[str, Any]) -> bool:

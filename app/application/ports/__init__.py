@@ -3,7 +3,9 @@
 from app.application.ports.customer_invoice_writer import CustomerInvoiceWriter
 from app.application.ports.decision_rule_repository import DecisionRuleRepository
 from app.application.ports.import_history import InvoiceImportHistory
+from app.application.ports.product_writer import ProductWriter
 from app.application.ports.rule_engine import RuleEngine
+from app.application.ports.supplier_info_writer import SupplierInfoWriter
 from app.application.ports.supplier_partner_writer import SupplierPartnerWriter
 from app.application.ports.vendor_bill_writer import VendorBillWriter
 
@@ -11,7 +13,9 @@ __all__ = [
     "CustomerInvoiceWriter",
     "DecisionRuleRepository",
     "InvoiceImportHistory",
+    "ProductWriter",
     "RuleEngine",
+    "SupplierInfoWriter",
     "SupplierPartnerWriter",
     "VendorBillWriter",
 ]
