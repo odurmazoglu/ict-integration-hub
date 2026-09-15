@@ -5,6 +5,12 @@ from app.application.dto.customer_invoice import CustomerInvoiceWriteResult
 from app.application.dto.decision import DecisionResult, RuleEvaluationResult
 from app.application.dto.import_invoice import ExistingInvoiceImport, ImportInvoiceResult
 from app.application.dto.import_session import ImportSessionResult, ImportSessionStatus
+from app.application.dto.product_remediation import (
+    ProductWriteResult,
+    ProductWriteStatus,
+    SupplierInfoWriteResult,
+    SupplierInfoWriteStatus,
+)
 from app.application.dto.supplier_partner import SupplierPartnerWriteResult, SupplierPartnerWriteStatus
 from app.application.dto.vendor_bill import VendorBillWriteResult
 from app.application.workflow import ManualReviewDecision, ManualReviewReason, ManualReviewReasonCode
@@ -20,7 +26,11 @@ __all__ = [
     "ManualReviewDecision",
     "ManualReviewReason",
     "ManualReviewReasonCode",
+    "ProductWriteResult",
+    "ProductWriteStatus",
     "RuleEvaluationResult",
+    "SupplierInfoWriteResult",
+    "SupplierInfoWriteStatus",
     "SupplierPartnerWriteResult",
     "SupplierPartnerWriteStatus",
     "VendorBillWriteResult",

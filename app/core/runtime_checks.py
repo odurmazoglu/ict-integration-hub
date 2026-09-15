@@ -157,6 +157,8 @@ def _validate_non_production_settings(settings: Settings, errors: list[str]) -> 
     staging_execute_sanctioned = staging_vendor_bill_execute and staging_host_approved
     if settings.supplier_remediation_write_enabled and not staging_host_approved:
         errors.append("SUPPLIER_REMEDIATION_WRITE_ENABLED=true requires ODOO_BASE_URL to be an approved staging host.")
+    if settings.product_remediation_write_enabled and not staging_host_approved:
+        errors.append("PRODUCT_REMEDIATION_WRITE_ENABLED=true requires ODOO_BASE_URL to be an approved staging host.")
     if settings.execution_execute_enabled and not staging_execute_sanctioned:
         errors.append("EXECUTION_EXECUTE_ENABLED must be false outside production.")
     if settings.customer_invoice_execute_enabled:
