@@ -1700,6 +1700,7 @@ def _evidence_model_from_review_evidence(evidence: ReviewExecutionEvidence) -> W
         product_match=payload["product_match"],
         tax_match=payload["tax_match"],
         operating_expense_match=payload["operating_expense_match"],
+        account_only_expense_match=payload["account_only_expense_match"],
     )
 
 
@@ -1717,6 +1718,7 @@ def _review_evidence_from_model(record: WorkbenchReviewExecutionEvidence) -> Rev
             "product_match": record.product_match,
             "tax_match": record.tax_match,
             "operating_expense_match": record.operating_expense_match,
+            "account_only_expense_match": record.account_only_expense_match,
         }
     )
     return _review_evidence_from_execution_source(source)
@@ -1785,6 +1787,7 @@ def _execution_source_from_review_evidence(evidence: ReviewExecutionEvidence) ->
         product_match=evidence.product_match,
         tax_match=evidence.tax_match,
         operating_expense_match=evidence.operating_expense_match,
+        account_only_expense_match=evidence.account_only_expense_match,
     )
 
 
@@ -1799,6 +1802,7 @@ def _review_evidence_from_execution_source(source: ExecutionSourceInvoice) -> Re
         product_match=source.product_match,
         tax_match=source.tax_match,
         operating_expense_match=source.operating_expense_match,
+        account_only_expense_match=source.account_only_expense_match,
     )
 
 
@@ -1914,15 +1918,18 @@ def _serialize_line_resolution(resolution: LineResolution) -> dict[str, Any]:
     return {
         "line_number": resolution.line_number,
         "selected_product_id": resolution.selected_product_id,
+        "account_only": resolution.account_only,
     }
 
 
 def _deserialize_line_resolution(value: Any) -> LineResolution:
     if not isinstance(value, dict):
         raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
+    selected_product_id = value.get("selected_product_id")
     return LineResolution(
         line_number=str(value["line_number"]),
-        selected_product_id=_required_int(value.get("selected_product_id")),
+        selected_product_id=None if selected_product_id is None else _required_int(selected_product_id),
+        account_only=bool(value.get("account_only", False)),
     )
 
 
@@ -2198,6 +2205,7 @@ def _review_evidence_fingerprint(evidence: ReviewExecutionEvidence) -> tuple[Any
         payload["product_match"],
         payload["tax_match"],
         payload["operating_expense_match"],
+        payload["account_only_expense_match"],
     )
 
 
@@ -2408,6 +2416,7 @@ def _evidence_fingerprint_from_model(record: ExecutionSourceInvoiceEvidence) -> 
             "product_match": record.product_match,
             "tax_match": record.tax_match,
             "operating_expense_match": record.operating_expense_match,
+            "account_only_expense_match": record.account_only_expense_match,
         }
     )
 

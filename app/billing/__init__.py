@@ -3,6 +3,7 @@
 from app.billing.builder import (
     CustomerInvoiceBuilder,
     VendorBillBuilder,
+    tax_lines_fully_matched,
     to_odoo_account_move_payload,
     to_odoo_customer_invoice_payload,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "VendorBillBuildError",
     "VendorBillBuilder",
     "VendorBillLine",
+    "tax_lines_fully_matched",
     "to_odoo_account_move_payload",
     "to_odoo_customer_invoice_payload",
 ]

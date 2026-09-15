@@ -8,7 +8,7 @@ from app.application.dto import ApplicationDTO
 from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.expense_mapping import OperatingExpenseMatchResult, operating_expense_evidence_errors
 from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationSet
-from app.application.workbench.dto import ReviewDecisionType
+from app.application.workbench.dto import LineResolution, ReviewDecisionType
 from app.application.workflow import WorkflowType
 from app.billing.dto import CustomerInvoiceBillingInstruction
 from app.domain.invoice import InternalInvoice
@@ -369,6 +369,18 @@ class ExecutionSourceInvoice(ApplicationDTO):
     product_match: InvoiceProductMatchResult
     tax_match: InvoiceTaxMappingResult
     operating_expense_match: OperatingExpenseMatchResult | None = None
+    # The same deterministic (company_id, partner_id) operating-expense lookup as
+    # ``operating_expense_match``, pinned verbatim from Stage-1/2 evidence even when
+    # the whole invoice is not product-identifier-free. Only consumed when a human
+    # explicitly marks a specific unmatched line ``account_only`` -- see
+    # ``line_resolutions`` below and ``VendorBillBuilder``, which still requires a
+    # clean ``MATCHED`` result before using it. Never recomputed at execution time.
+    account_only_expense_match: OperatingExpenseMatchResult | None = None
+    # The accepted decision's own explicit per-line resolutions (LineResolution),
+    # e.g. an operator's explicit account-only choice for a line with no Odoo
+    # product. Read-only facts about what the human decided; never re-derives or
+    # infers a resolution on its own.
+    line_resolutions: tuple[LineResolution, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -383,6 +395,10 @@ class ExecutionSourceInvoice(ApplicationDTO):
             raise ExecutionPlanningError("InvoiceProductMatchResult DTO is required.")
         if not isinstance(self.tax_match, InvoiceTaxMappingResult):
             raise ExecutionPlanningError("InvoiceTaxMappingResult DTO is required.")
+        if self.account_only_expense_match is not None and not isinstance(
+            self.account_only_expense_match, OperatingExpenseMatchResult
+        ):
+            raise ExecutionPlanningError("account_only_expense_match must be an OperatingExpenseMatchResult.")
         expense_errors = operating_expense_evidence_errors(
             operating_expense_match=self.operating_expense_match,
             company_id=self.company_id,
@@ -392,6 +408,16 @@ class ExecutionSourceInvoice(ApplicationDTO):
         )
         if expense_errors:
             raise ExecutionPlanningError(expense_errors[0])
+        line_resolutions = tuple(self.line_resolutions)
+        for resolution in line_resolutions:
+            if not isinstance(resolution, LineResolution):
+                raise ExecutionPlanningError("line_resolutions must contain LineResolution values.")
+        seen_lines: set[str] = set()
+        for resolution in line_resolutions:
+            if resolution.line_number in seen_lines:
+                raise ExecutionPlanningError("line_resolutions must have unique line_number values.")
+            seen_lines.add(resolution.line_number)
+        object.__setattr__(self, "line_resolutions", line_resolutions)
 
 
 def _reject_duplicate_step_keys(steps: tuple[ExecutionStep, ...]) -> None:

@@ -445,12 +445,6 @@ async def test_matched_import_persists_classification_evidence_atomically_when_p
         lambda: RuleEvaluationResult(
             workflow_decision=WorkflowDecision(WorkflowType.VENDOR_BILL, matched_rule="r", explanation="e"),
             partner_match=_partner_match(),
-            product_match=_product_match(ProductMatchStatus.NOT_FOUND),
-            tax_match=_tax_match(),
-        ),
-        lambda: RuleEvaluationResult(
-            workflow_decision=WorkflowDecision(WorkflowType.VENDOR_BILL, matched_rule="r", explanation="e"),
-            partner_match=_partner_match(),
             product_match=_product_match(),
             tax_match=_tax_match(TaxMatchStatus.NOT_FOUND),
         ),
@@ -458,13 +452,46 @@ async def test_matched_import_persists_classification_evidence_atomically_when_p
 )
 async def test_incomplete_match_vendor_bill_recommendation_gets_no_execution_evidence(rule_result_factory) -> None:
     # The recommendation strategy still runs (workflow is VENDOR_BILL) but the
-    # canonical completeness check fails, so no Stage-1 evidence is produced.
+    # canonical completeness check fails and the supplier or a tax line is not
+    # deterministically resolved, so no Stage-1 evidence is produced at all -- not even
+    # the raw-facts evidence covered by
+    # test_product_not_found_still_pins_raw_stage1_evidence_for_explicit_override below.
     service = RecordingReviewItemCreationService()
     await _import_use_case(rule_result=rule_result_factory(), service=service).execute(_command())
 
     assert service.execution_evidence is None
     assert service.created_item is not None  # a normal review item is still created
     assert "execution" not in service.calls
+
+
+async def test_product_not_found_still_pins_raw_stage1_evidence_for_explicit_override() -> None:
+    """Supplier matched and every tax line matched, but the product is unmatched.
+
+    The deterministic product-mode Vendor Bill is not valid, so no *decision* is made
+    here, but Stage-1 now pins the raw partner/product/tax facts (with
+    ``operating_expense_match=None``, leaving the existing whole-invoice expense gate
+    untouched) so that a later, explicit human account-only line decision (see
+    ``LineResolution.account_only``) has real evidence to execute against. Without such
+    a decision, ``VendorBillBuilder``'s existing per-line product-match requirement
+    still fails the automatic path exactly as before -- pinning evidence decides and
+    executes nothing by itself.
+    """
+    service = RecordingReviewItemCreationService()
+    rule_result = RuleEvaluationResult(
+        workflow_decision=WorkflowDecision(WorkflowType.VENDOR_BILL, matched_rule="r", explanation="e"),
+        partner_match=_partner_match(),
+        product_match=_product_match(ProductMatchStatus.NOT_FOUND),
+        tax_match=_tax_match(),
+    )
+    await _import_use_case(rule_result=rule_result, service=service).execute(_command())
+
+    assert service.calls == ["execution"]
+    evidence = service.execution_evidence
+    assert evidence is not None
+    assert evidence.operating_expense_match is None
+    assert evidence.partner_match == _partner_match()
+    assert evidence.product_match == _product_match(ProductMatchStatus.NOT_FOUND)
+    assert evidence.tax_match == _tax_match()
 
 
 async def test_manual_review_import_still_creates_review_item_without_execution_evidence() -> None:

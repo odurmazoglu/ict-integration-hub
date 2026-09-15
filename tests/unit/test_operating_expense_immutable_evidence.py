@@ -519,9 +519,16 @@ async def test_identifier_free_without_mapping_creates_no_stage1_execution_evide
     assert session.scalar(select(WorkbenchReviewItem)) is not None
 
 
-async def test_identifier_present_failed_product_with_expense_match_creates_no_stage1_evidence(
+async def test_identifier_present_failed_product_with_expense_match_pins_raw_stage1_evidence(
     session: Session,
 ) -> None:
+    """A mixed invoice (real product identifier, no Odoo product) is not the whole-invoice
+    expense mode's target, but Stage-1 now pins the raw facts anyway -- with
+    operating_expense_match staying None, so the whole-invoice gate above is untouched --
+    keeping decision_result.operating_expense_match available under a distinct name
+    (account_only_expense_match) for a later, explicit human account-only line decision.
+    See app.application.use_cases.review_classification_outcome.build_review_execution_evidence.
+    """
     invoice = _invoice([_line("1", buyer_item_code="SKU-1")])
     rule_result = RuleEvaluationResult(
         workflow_decision=WorkflowDecision(workflow=WorkflowType.VENDOR_BILL, matched_rule="r", explanation="e"),
@@ -532,7 +539,11 @@ async def test_identifier_present_failed_product_with_expense_match_creates_no_s
     )
     await _import_use_case(session, rule_result).execute(_command(invoice))
 
-    assert session.scalar(select(WorkbenchReviewExecutionEvidence)) is None
+    record = session.scalar(select(WorkbenchReviewExecutionEvidence))
+    assert record is not None
+    assert record.operating_expense_match is None
+    assert record.account_only_expense_match is not None
+    assert record.account_only_expense_match["expense_account_id"] == EXPENSE_ACCOUNT_ID
 
 
 # --------------------------------------------------------------------------- Stage-1 -> Stage-2 copy (25) + pin (30-31)
@@ -628,7 +639,16 @@ def test_execution_strategy_passes_operating_expense_match_to_builder() -> None:
             self.captured = None
 
         def build(
-            self, invoice_, partner_match, product_match, tax_match, *, company_id=None, operating_expense_match=None
+            self,
+            invoice_,
+            partner_match,
+            product_match,
+            tax_match,
+            *,
+            company_id=None,
+            operating_expense_match=None,
+            account_only_line_numbers=frozenset(),
+            account_only_expense_match=None,
         ):
             self.captured = operating_expense_match
             return VendorBill(

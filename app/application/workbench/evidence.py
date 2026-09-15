@@ -62,6 +62,14 @@ class ReviewExecutionEvidence(ApplicationDTO):
     product_match: InvoiceProductMatchResult
     tax_match: InvoiceTaxMappingResult
     operating_expense_match: OperatingExpenseMatchResult | None = None
+    # The same deterministic (company_id, partner_id) operating-expense lookup as
+    # ``operating_expense_match``, pinned here even when the whole invoice is not
+    # product-identifier-free (so ``operating_expense_evidence_errors`` below still
+    # rejects ``operating_expense_match`` itself in that case). Read-only fact, decides
+    # nothing by itself: only consumed later if a human explicitly marks a specific
+    # unmatched line ``account_only`` (see ``LineResolution.account_only``), at which
+    # point ``VendorBillBuilder`` still requires it to be a clean ``MATCHED`` result.
+    account_only_expense_match: OperatingExpenseMatchResult | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -76,6 +84,10 @@ class ReviewExecutionEvidence(ApplicationDTO):
             raise WorkbenchContractError("InvoiceProductMatchResult DTO is required.")
         if not isinstance(self.tax_match, InvoiceTaxMappingResult):
             raise WorkbenchContractError("InvoiceTaxMappingResult DTO is required.")
+        if self.account_only_expense_match is not None and not isinstance(
+            self.account_only_expense_match, OperatingExpenseMatchResult
+        ):
+            raise WorkbenchContractError("account_only_expense_match must be an OperatingExpenseMatchResult.")
         invoice_identity = self.invoice.header.ettn or self.invoice.header.invoice_uuid
         if self.source_invoice_id != invoice_identity:
             raise WorkbenchContractError("source_invoice_id must match InternalInvoice identity.")

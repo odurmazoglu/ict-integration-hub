@@ -563,6 +563,22 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_supplier_remediation_effects_review_version"
         in remediation_effect_unique_constraints_at_head
     )
+    assert "account_only_expense_match" in {
+        column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
+    }
+    assert "account_only_expense_match" in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "account_only_expense_match" not in {
+        column["name"] for column in inspector.get_columns("workbench_review_execution_evidence")
+    }
+    assert "account_only_expense_match" not in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+    assert "workbench_review_supplier_remediation_effects" in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))

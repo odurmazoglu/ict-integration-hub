@@ -61,6 +61,9 @@ class VendorBillExecutionStrategy:
                 decision_version=request.decision_version,
             )
             _validate_source(request=request, source=source)
+            account_only_line_numbers = frozenset(
+                resolution.line_number for resolution in source.line_resolutions if resolution.account_only
+            )
             vendor_bill = self._vendor_bill_builder.build(
                 source.invoice,
                 source.partner_match,
@@ -68,6 +71,10 @@ class VendorBillExecutionStrategy:
                 source.tax_match,
                 company_id=request.company_id,
                 operating_expense_match=source.operating_expense_match,
+                account_only_line_numbers=account_only_line_numbers,
+                # Pinned Stage-1/2 evidence, never recomputed here -- see
+                # ExecutionSourceInvoice.account_only_expense_match.
+                account_only_expense_match=source.account_only_expense_match,
             )
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,
