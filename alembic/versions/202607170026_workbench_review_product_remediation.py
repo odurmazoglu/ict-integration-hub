@@ -3,6 +3,13 @@
 Revision ID: 202607170026
 Revises: 202607170025
 Create Date: 2026-09-15 15:00:00.000000
+
+Constraint/index names use the abbreviated "wrpr_reservations" /
+"wrpr_identity_claims" prefixes and are kept under PostgreSQL's 63-byte
+NAMEDATALEN limit. The full "workbench_review_product_remediation_reservations"
+table name alone is 51 bytes, so longer, fully-spelled-out names silently
+truncate on Postgres (SQLite does not truncate, so this only surfaces against
+a real Postgres target) -- two such truncated names collided on first deploy.
 """
 
 from collections.abc import Sequence
@@ -47,45 +54,45 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "company_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_company_id_positive",
+            name="ck_wrpr_reservations_company_positive",
         ),
         sa.CheckConstraint(
             "review_version > 0",
-            name="ck_workbench_review_product_remediation_reservations_review_version_positive",
+            name="ck_wrpr_reservations_version_positive",
         ),
         sa.CheckConstraint(
             "resolved_supplier_partner_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_partner_id_positive",
+            name="ck_wrpr_reservations_partner_positive",
         ),
         sa.CheckConstraint(
             "status IN ('reserved', 'create_attempted', 'product_created', 'completed', "
             "'reused_existing_product', 'needs_reconciliation')",
-            name="ck_workbench_review_product_remediation_reservations_status",
+            name="ck_wrpr_reservations_status",
         ),
         sa.CheckConstraint(
             "product_template_id IS NULL OR product_template_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_template_id_positive",
+            name="ck_wrpr_reservations_template_id_positive",
         ),
         sa.CheckConstraint(
             "product_id IS NULL OR product_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_product_id_positive",
+            name="ck_wrpr_reservations_product_id_positive",
         ),
         sa.CheckConstraint(
             "supplierinfo_id IS NULL OR supplierinfo_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_supplierinfo_id_positive",
+            name="ck_wrpr_reservations_supplierinfo_id_positive",
         ),
         sa.CheckConstraint(
             "status IN ('reserved', 'create_attempted', 'needs_reconciliation') OR product_template_id IS NOT NULL",
-            name="ck_workbench_review_product_remediation_reservations_template_by_status",
+            name="ck_wrpr_reservations_template_by_status",
         ),
         sa.CheckConstraint(
             "status != 'completed' OR supplierinfo_id IS NOT NULL",
-            name="ck_workbench_review_product_remediation_reservations_supplierinfo_by_status",
+            name="ck_wrpr_reservations_supplierinfo_by_status",
         ),
         sa.ForeignKeyConstraint(
             ["review_id"],
             ["workbench_review_items.review_id"],
-            name="fk_workbench_review_product_remediation_reservations_review_id",
+            name="fk_wrpr_reservations_review_id",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -93,11 +100,11 @@ def upgrade() -> None:
             "company_id",
             "review_version",
             "line_number",
-            name="uq_workbench_review_product_remediation_reservations_line",
+            name="uq_wrpr_reservations_line",
         ),
     )
     op.create_index(
-        "ix_workbench_review_product_remediation_reservations_company_review",
+        "ix_wrpr_reservations_company_review",
         "workbench_review_product_remediation_reservations",
         ["company_id", "review_id"],
     )
@@ -115,19 +122,19 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint(
             "company_id > 0",
-            name="ck_workbench_review_product_identity_claims_company_id_positive",
+            name="ck_wrpr_identity_claims_company_positive",
         ),
         sa.CheckConstraint(
             "resolved_supplier_partner_id > 0",
-            name="ck_workbench_review_product_identity_claims_partner_id_positive",
+            name="ck_wrpr_identity_claims_partner_positive",
         ),
         sa.CheckConstraint(
             "owner_company_id > 0",
-            name="ck_workbench_review_product_identity_claims_owner_company_id_positive",
+            name="ck_wrpr_identity_claims_owner_company_positive",
         ),
         sa.CheckConstraint(
             "owner_review_version > 0",
-            name="ck_workbench_review_product_identity_claims_owner_review_version_positive",
+            name="ck_wrpr_identity_claims_owner_version_positive",
         ),
         sa.ForeignKeyConstraint(
             ["owner_review_id", "owner_company_id", "owner_review_version", "owner_line_number"],
@@ -137,14 +144,14 @@ def upgrade() -> None:
                 "workbench_review_product_remediation_reservations.review_version",
                 "workbench_review_product_remediation_reservations.line_number",
             ],
-            name="fk_workbench_review_product_identity_claims_owner",
+            name="fk_wrpr_identity_claims_owner",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "company_id",
             "resolved_supplier_partner_id",
             "seller_item_code",
-            name="uq_workbench_review_product_identity_claims_identity",
+            name="uq_wrpr_identity_claims_identity",
         ),
     )
 
@@ -152,7 +159,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("workbench_review_product_identity_claims")
     op.drop_index(
-        "ix_workbench_review_product_remediation_reservations_company_review",
+        "ix_wrpr_reservations_company_review",
         table_name="workbench_review_product_remediation_reservations",
     )
     op.drop_table("workbench_review_product_remediation_reservations")

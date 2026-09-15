@@ -599,12 +599,12 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         constraint["name"]
         for constraint in inspector.get_unique_constraints("workbench_review_product_remediation_reservations")
     }
-    assert "uq_workbench_review_product_remediation_reservations_line" in reservation_unique_constraints_at_head
+    assert "uq_wrpr_reservations_line" in reservation_unique_constraints_at_head
     identity_claim_unique_constraints_at_head = {
         constraint["name"]
         for constraint in inspector.get_unique_constraints("workbench_review_product_identity_claims")
     }
-    assert "uq_workbench_review_product_identity_claims_identity" in identity_claim_unique_constraints_at_head
+    assert "uq_wrpr_identity_claims_identity" in identity_claim_unique_constraints_at_head
 
     # One extra downgrade step consumes 202607170026 (the newest migration) so every
     # subsequent single-step "-1" walk below still lands on the same pre-existing
