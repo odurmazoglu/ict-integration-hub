@@ -127,6 +127,40 @@ class SqlAlchemyReviewSupplierRemediationEffectRepository:
             raise SupplierResolutionError(SAFE_REMEDIATION_EFFECT_PERSISTENCE_ERROR) from exc
         return remediation_effect_from_model(record) if record is not None else None
 
+    def find_latest_remediation_effect(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> SupplierRemediationEffect | None:
+        """The most recently recorded effect for this review, regardless of exact version.
+
+        A supplier remediation effect is recorded at the review version *before* the
+        SUPPLIER_RESOLUTION reclassification bumps it (N -> N+1); a later remediation
+        (e.g. CREATE_NEW_PRODUCT) that needs "the currently accepted supplier" reads at
+        the review's *current* version and must not require an exact version match.
+        A review has at most one effective supplier for its lifetime, so the latest
+        row by review_version is unambiguous.
+        """
+
+        if not isinstance(review_id, str) or not review_id.strip():
+            raise SupplierResolutionContractError("review_id is required.")
+        if type(company_id) is not int or company_id <= 0:
+            raise SupplierResolutionContractError("company_id must be positive.")
+        try:
+            record = self._session.scalar(
+                select(WorkbenchReviewSupplierRemediationEffect)
+                .where(
+                    WorkbenchReviewSupplierRemediationEffect.review_id == review_id,
+                    WorkbenchReviewSupplierRemediationEffect.company_id == company_id,
+                )
+                .order_by(WorkbenchReviewSupplierRemediationEffect.review_version.desc())
+                .limit(1)
+            )
+        except SQLAlchemyError as exc:
+            raise SupplierResolutionError(SAFE_REMEDIATION_EFFECT_PERSISTENCE_ERROR) from exc
+        return remediation_effect_from_model(record) if record is not None else None
+
     def _find(
         self,
         *,

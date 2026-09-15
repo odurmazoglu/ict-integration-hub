@@ -10,6 +10,12 @@ from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBilli
 from app.persistence.review_classification_evidence_reader import SqlAlchemyReviewClassificationEvidenceReader
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from app.persistence.workbench_review_product_identity_claim_repository import (
+    SqlAlchemyReviewProductIdentityClaimRepository,
+)
+from app.persistence.workbench_review_product_remediation_reservation_repository import (
+    SqlAlchemyReviewProductRemediationReservationRepository,
+)
 from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
 from app.persistence.workbench_review_source_invoice_reader import SqlAlchemyReviewSourceInvoiceEvidenceReader
 from app.persistence.workbench_review_supplier_remediation_effect_reader import (
@@ -27,6 +33,8 @@ __all__ = [
     "SqlAlchemyReviewBillingEvidenceReader",
     "SqlAlchemyReviewClassificationEvidenceReader",
     "SqlAlchemyReviewExecutionEvidenceReader",
+    "SqlAlchemyReviewProductIdentityClaimRepository",
+    "SqlAlchemyReviewProductRemediationReservationRepository",
     "SqlAlchemyReviewSourceInvoiceEvidenceReader",
     "SqlAlchemyReviewSupplierRemediationEffectRepository",
     "SqlAlchemyReviewSupplierResolutionRepository",
