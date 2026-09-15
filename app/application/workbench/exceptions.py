@@ -209,3 +209,67 @@ class WorkbenchErpReferenceUnsupportedError(WorkbenchErpReferenceValidationError
     """Safe error raised when semantic validation for a non-null reference is unsupported."""
 
     error_category = "workbench_erp_reference_unsupported"
+
+
+class ProductRemediationError(ApplicationError):
+    """Safe base error for the CREATE_NEW_PRODUCT remediation orchestration (P0-PROD-07G)."""
+
+    error_category = "product_remediation_error"
+
+
+class ProductRemediationContractError(ProductRemediationError):
+    """Safe error raised when a CreateNewProductCommand is structurally invalid."""
+
+    error_category = "product_remediation_contract_error"
+
+
+class ProductRemediationEligibilityError(ProductRemediationError):
+    """Safe error raised when the review/line is not eligible for CREATE_NEW_PRODUCT.
+
+    Covers a stale ``expected_version``, a review that is no longer pending, a line
+    that no longer carries PRODUCT_NOT_FOUND, and a source line with no usable
+    ``seller_item_code`` -- every case where v1 must fail closed before any write.
+    """
+
+    error_category = "product_remediation_eligibility_error"
+
+
+class ProductRemediationSupplierUnresolvedError(ProductRemediationError):
+    """Safe error raised when no accepted supplier resolution yields a resolved partner_id."""
+
+    error_category = "product_remediation_supplier_unresolved"
+
+
+class ProductRemediationConflictError(ProductRemediationError):
+    """Safe error raised when persisted state disagrees with the current request.
+
+    Covers both a different reservation already recorded for this exact review
+    line, and a supplier-product identity claim/supplierinfo that resolves to a
+    different product than expected -- both are terminal, not retryable.
+    """
+
+    error_category = "product_remediation_conflict"
+
+
+class ProductRemediationRaceError(ProductRemediationError):
+    """Safe error raised when a concurrent request currently owns this identity claim.
+
+    The identity (company_id, resolved_supplier_partner_id, seller_item_code) is
+    being created by another in-flight request right now; this loser must not
+    create a second product. Retryable: a later retry will either observe the
+    identity resolved (and reuse it) or race again.
+    """
+
+    error_category = "product_remediation_race"
+
+
+class ProductRemediationIdentityAmbiguousError(ProductRemediationError):
+    """Safe error raised when an existing supplierinfo identity is ambiguous/inconsistent."""
+
+    error_category = "product_remediation_identity_ambiguous"
+
+
+class ProductRemediationDataIntegrityError(ProductRemediationError):
+    """Safe error raised when persisted product remediation state cannot hydrate into contracts."""
+
+    error_category = "product_remediation_data_integrity_error"

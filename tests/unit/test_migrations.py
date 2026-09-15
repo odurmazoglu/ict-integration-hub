@@ -569,6 +569,50 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     assert "account_only_expense_match" in {
         column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
     }
+    assert "workbench_review_product_remediation_reservations" in inspector.get_table_names()
+    assert "workbench_review_product_identity_claims" in inspector.get_table_names()
+    reservation_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_product_remediation_reservations")
+    }
+    assert {
+        "id",
+        "review_id",
+        "company_id",
+        "review_version",
+        "line_number",
+        "status",
+        "resolved_supplier_partner_id",
+        "seller_item_code",
+        "product_name",
+        "is_storable",
+        "internal_reference",
+        "approved_by",
+        "note",
+        "idempotency_key",
+        "product_template_id",
+        "product_id",
+        "supplierinfo_id",
+        "created_at",
+        "updated_at",
+    }.issubset(reservation_columns_at_head)
+    reservation_unique_constraints_at_head = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("workbench_review_product_remediation_reservations")
+    }
+    assert "uq_workbench_review_product_remediation_reservations_line" in reservation_unique_constraints_at_head
+    identity_claim_unique_constraints_at_head = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("workbench_review_product_identity_claims")
+    }
+    assert "uq_workbench_review_product_identity_claims_identity" in identity_claim_unique_constraints_at_head
+
+    # One extra downgrade step consumes 202607170026 (the newest migration) so every
+    # subsequent single-step "-1" walk below still lands on the same pre-existing
+    # revision it always has -- this test intentionally walks the *entire* history.
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_product_remediation_reservations" not in inspector.get_table_names()
+    assert "workbench_review_product_identity_claims" not in inspector.get_table_names()
 
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))

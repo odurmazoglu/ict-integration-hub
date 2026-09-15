@@ -14,6 +14,7 @@ from app.composition.imports import (
     build_odoo_workbench_projection_publisher,
     build_uyumsoft_canonical_invoice_importer,
 )
+from app.composition.product_remediation import build_create_new_product_use_case
 from app.composition.quotation import (
     build_capture_and_persist_accepted_quotation_scenarios_use_case,
     build_workbench_quotation_scenario_evidence_workflow,
@@ -22,6 +23,7 @@ from app.composition.supplier_remediation import build_resolve_workbench_supplie
 
 __all__ = [
     "build_capture_and_persist_accepted_quotation_scenarios_use_case",
+    "build_create_new_product_use_case",
     "build_customer_quotation_execution_use_case",
     "build_deterministic_decision_engine",
     "build_import_invoice_use_case",

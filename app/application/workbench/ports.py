@@ -14,6 +14,11 @@ from app.application.workbench.evidence import (
     ReviewExecutionEvidence,
     ReviewSourceInvoiceEvidence,
 )
+from app.application.workbench.product_remediation import (
+    ProductIdentityClaim,
+    ProductRemediationReservation,
+    ProductReservationStatus,
+)
 from app.application.workbench.projection import (
     OdooWorkbenchDecisionCandidate,
     ProjectionPublishResult,
@@ -174,6 +179,14 @@ class SupplierRemediationEffectWriter(Protocol):
     ) -> SupplierRemediationEffect | None:
         pass
 
+    def find_latest_remediation_effect(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> SupplierRemediationEffect | None:
+        """The most recently recorded effect for this review, regardless of exact version."""
+
 
 class ReviewDecisionWriter(Protocol):
     """Write port for explicit user decision submission against a pending review item."""
@@ -291,6 +304,64 @@ class WorkbenchProjectionPublisher(Protocol):
         idempotency_key: str | None = None,
         clear_ready: bool = False,
     ) -> ProjectionPublishResult:
+        pass
+
+
+class ProductRemediationReservationWriter(Protocol):
+    """Durable state-machine persistence for one review-line CREATE_NEW_PRODUCT reservation.
+
+    ``reserve`` is the single-winner cross-process barrier for identity A
+    (``review_id, company_id, review_version, line_number``); the concurrent
+    INSERT-race loser must be raised out, never returned (mirrors
+    ``SupplierResolutionWriter.reserve_supplier_resolution``). ``advance`` performs
+    a compare-and-swap status transition guarded by ``expected_status`` so a stray
+    duplicate advancement can never silently overwrite already-persisted Odoo identity.
+    """
+
+    def reserve(self, reservation: ProductRemediationReservation) -> ProductRemediationReservation:
+        """Single-winner reservation: the concurrent INSERT-race loser is raised out, never returned."""
+
+    def find(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+        line_number: str,
+    ) -> ProductRemediationReservation | None:
+        pass
+
+    def advance(
+        self,
+        reservation: ProductRemediationReservation,
+        *,
+        expected_status: ProductReservationStatus,
+        new_status: ProductReservationStatus,
+        product_template_id: int | None = None,
+        product_id: int | None = None,
+        supplierinfo_id: int | None = None,
+    ) -> ProductRemediationReservation:
+        pass
+
+
+class ProductIdentityClaimWriter(Protocol):
+    """Durable cross-review lock for one supplier-product identity.
+
+    ``claim`` is the single-winner cross-process barrier for identity B
+    (``company_id, resolved_supplier_partner_id, seller_item_code``); the
+    concurrent INSERT-race loser is raised out, never returned.
+    """
+
+    def claim(self, claim: ProductIdentityClaim) -> ProductIdentityClaim:
+        """Single-winner claim: the concurrent INSERT-race loser is raised out, never returned."""
+
+    def find(
+        self,
+        *,
+        company_id: int,
+        resolved_supplier_partner_id: int,
+        seller_item_code: str,
+    ) -> ProductIdentityClaim | None:
         pass
 
 
