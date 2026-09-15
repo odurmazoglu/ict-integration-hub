@@ -24,6 +24,7 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationProposal,
     ReviewReclassificationResult,
 )
+from app.application.workbench.selected_product_resolution import ResolutionProductRecord
 from app.application.workbench.supplier_remediation import SupplierRemediationEffect
 from app.application.workbench.supplier_resolution import ResolutionPartnerRecord, SupplierResolution
 from app.billing.dto import CustomerInvoiceBillingInstruction
@@ -125,6 +126,17 @@ class SupplierResolutionPartnerReader(Protocol):
     """Read-only port for reading one Odoo ``res.partner`` when validating MATCH_EXISTING."""
 
     def find_partner_by_id(self, partner_id: int) -> ResolutionPartnerRecord | None:
+        pass
+
+
+class SelectedProductReader(Protocol):
+    """Read-only port for reading Odoo ``product.product`` records by id.
+
+    Used only to validate an explicit ``LineResolution.selected_product_id`` before
+    it is pinned as accepted execution evidence -- never during Vendor Bill execution.
+    """
+
+    def find_products_by_ids(self, product_ids: tuple[int, ...]) -> tuple[ResolutionProductRecord, ...]:
         pass
 
 

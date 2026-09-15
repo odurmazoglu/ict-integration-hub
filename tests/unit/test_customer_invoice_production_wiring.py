@@ -32,7 +32,6 @@ from app.application.workbench import (
     BusinessContextAllocation,
     BusinessContextAllocationSet,
     BusinessContextAllocationType,
-    LineResolution,
     ReviewDecisionCommand,
     ReviewDecisionType,
     ReviewExecutionBillingEvidence,
@@ -516,7 +515,6 @@ def _command(*allocations: BusinessContextAllocation) -> ReviewDecisionCommand:
         decision=ReviewDecisionType.SELECT_WORKFLOW,
         selected_workflow=WorkflowType.VENDOR_BILL,
         selected_partner_id=501,
-        line_resolutions=(LineResolution(line_number="1", selected_product_id=701),),
         tax_resolutions=(TaxResolution(line_number="1", tax_index=0, selected_tax_id=801),),
         business_context_allocations=BusinessContextAllocationSet(
             allocations=allocations,

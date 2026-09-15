@@ -36,6 +36,7 @@ from app.erp.odoo.company_repository import OdooCompanyRepository
 from app.erp.odoo.currency_repository import OdooCurrencyRepository
 from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
+from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.erp.odoo.tax_repository import OdooTaxRepository
 from app.erp.odoo.workbench_reference_repositories import (
     OdooAnalyticAccountReferenceRepository,
@@ -137,6 +138,9 @@ def build_odoo_workbench_decision_ingestion_workflow(
             review_decision_writer=SqlAlchemyReviewRepository(session),
             execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
             billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
+            selected_product_reader=OdooSelectedProductReader(
+                product_repository=OdooProductRepository(adapter=read_adapter),
+            ),
         ),
         acknowledgement_publisher=OdooWorkbenchProjectionPublisher(
             adapter=projection_adapter,
