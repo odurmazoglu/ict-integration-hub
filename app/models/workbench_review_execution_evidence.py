@@ -54,4 +54,7 @@ class WorkbenchReviewExecutionEvidence(Base):
     product_match: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     tax_match: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     operating_expense_match: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Same shape as operating_expense_match, pinned separately so it survives even when
+    # the invoice is not product-identifier-free (see ReviewExecutionEvidence).
+    account_only_expense_match: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime(), server_default=func.now(), nullable=False)

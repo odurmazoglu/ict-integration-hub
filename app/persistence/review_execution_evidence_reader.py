@@ -112,6 +112,7 @@ def _source_from_review_evidence(
             "product_match": _require_dict(record.product_match),
             "tax_match": _require_dict(record.tax_match),
             "operating_expense_match": record.operating_expense_match,
+            "account_only_expense_match": record.account_only_expense_match,
         }
     )
 
@@ -140,6 +141,7 @@ def _validate_stage_one_linkage(
         product_match=source.product_match,
         tax_match=source.tax_match,
         operating_expense_match=source.operating_expense_match,
+        account_only_expense_match=source.account_only_expense_match,
     )
 
 

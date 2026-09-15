@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -15,6 +16,7 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceNotFoundError,
 )
 from app.application.expense_mapping import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
+from app.application.workbench.dto import LineResolution
 from app.domain.invoice import (
     Address,
     Attachment,
@@ -69,7 +71,8 @@ class SqlAlchemyExecutionSourceInvoiceReader:
             evidence = self._evidence_for_decision(decision)
             source = _source_from_evidence(evidence)
             _validate_source_linkage(source=source, decision=decision, review_item=review_item, evidence=evidence)
-            return source
+            line_resolutions = tuple(_line_resolution_from_data(item) for item in decision.line_resolutions)
+            return replace(source, line_resolutions=line_resolutions)
         except ExecutionSourceInvoiceError:
             raise
         except SQLAlchemyError as exc:
@@ -164,6 +167,7 @@ def serialize_execution_source_invoice_payload(source: ExecutionSourceInvoice) -
         "product_match": _product_match_to_data(source.product_match),
         "tax_match": _tax_match_to_data(source.tax_match),
         "operating_expense_match": _operating_expense_match_to_data(source.operating_expense_match),
+        "account_only_expense_match": _operating_expense_match_to_data(source.account_only_expense_match),
     }
 
 
@@ -180,6 +184,7 @@ def deserialize_execution_source_invoice_payload(data: dict[str, Any]) -> Execut
         product_match=_product_match_from_data(_require_dict(data.get("product_match"))),
         tax_match=_tax_match_from_data(_require_dict(data.get("tax_match"))),
         operating_expense_match=_operating_expense_match_from_data(data.get("operating_expense_match")),
+        account_only_expense_match=_operating_expense_match_from_data(data.get("account_only_expense_match")),
     )
     invoice_identity = source.invoice.header.ettn or source.invoice.header.invoice_uuid
     if source.source_invoice_id != invoice_identity:
@@ -209,6 +214,7 @@ def _source_from_evidence(evidence: ExecutionSourceInvoiceEvidence) -> Execution
             "product_match": evidence.product_match,
             "tax_match": evidence.tax_match,
             "operating_expense_match": evidence.operating_expense_match,
+            "account_only_expense_match": evidence.account_only_expense_match,
         }
     )
 
@@ -427,6 +433,16 @@ def _attachment_from_data(data: dict[str, Any]) -> Attachment:
         mime_type=_optional_text(data.get("mime_type")),
         sha256=_optional_text(data.get("sha256")),
         size=_optional_int(data.get("size")),
+    )
+
+
+def _line_resolution_from_data(data: Any) -> LineResolution:
+    data = _require_dict(data)
+    selected_product_id = data.get("selected_product_id")
+    return LineResolution(
+        line_number=_required_text(data.get("line_number")),
+        selected_product_id=None if selected_product_id is None else _required_int(selected_product_id),
+        account_only=bool(data.get("account_only", False)),
     )
 
 

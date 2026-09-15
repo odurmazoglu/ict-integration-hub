@@ -34,7 +34,18 @@ class VendorBillBuilder:
         *,
         company_id: int | None = None,
         operating_expense_match: OperatingExpenseMatchResult | None = None,
+        account_only_line_numbers: frozenset[str] = frozenset(),
+        account_only_expense_match: OperatingExpenseMatchResult | None = None,
     ) -> VendorBill:
+        """Build a deterministic Vendor Bill.
+
+        ``account_only_line_numbers``/``account_only_expense_match`` carry an explicit
+        human per-line account-only decision (``LineResolution.account_only``) for lines
+        that otherwise have no matched Odoo product. They apply per line and are
+        independent of the whole-invoice ``operating_expense_match`` path, which is
+        unchanged and still takes priority when it applies.
+        """
+
         validation = validate_vendor_bill_inputs(
             invoice,
             partner_match,
@@ -42,6 +53,8 @@ class VendorBillBuilder:
             tax_match,
             company_id=company_id,
             operating_expense_match=operating_expense_match,
+            account_only_line_numbers=account_only_line_numbers,
+            account_only_expense_match=account_only_expense_match,
         )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
@@ -59,8 +72,14 @@ class VendorBillBuilder:
             )
         else:
             product_by_line = _product_results_by_line(product_match)
+            resolved_account_only_account_id = _resolved_account_only_account_id(
+                account_only_line_numbers, account_only_expense_match
+            )
             invoice_lines = tuple(
-                _vendor_bill_line(line, product_by_line[line.line_number], tax_ids_by_line) for line in invoice.lines
+                _expense_vendor_bill_line(line, resolved_account_only_account_id, tax_ids_by_line)
+                if line.line_number in account_only_line_numbers and resolved_account_only_account_id is not None
+                else _vendor_bill_line(line, product_by_line[line.line_number], tax_ids_by_line)
+                for line in invoice.lines
             )
         return VendorBill(
             supplier_id=partner_match.partner_id,
@@ -149,7 +168,21 @@ def validate_vendor_bill_inputs(
     *,
     company_id: int | None = None,
     operating_expense_match: object | None = None,
+    account_only_line_numbers: frozenset[str] = frozenset(),
+    account_only_expense_match: object | None = None,
 ) -> VendorBillValidationResult:
+    """Validate deterministic Vendor Bill inputs.
+
+    ``account_only_line_numbers`` names invoice lines carrying an explicit human
+    ``LineResolution.account_only`` decision (see ``app.application.workbench.dto``):
+    those specific lines are exempted from the normal per-line product-match
+    requirement and instead require ``account_only_expense_match`` to resolve to one
+    deterministic expense account (via ``_resolved_account_only_account_id``). This is
+    independent of, and does not relax, the existing whole-invoice
+    ``operating_expense_match``/``expense_mode`` path below, which still requires every
+    line to be free of product identifiers.
+    """
+
     errors: list[str] = []
     if company_id is not None and (type(company_id) is not int or company_id <= 0):
         errors.append("company_id must be a positive integer when provided.")
@@ -163,6 +196,12 @@ def validate_vendor_bill_inputs(
         return validation_result(["InvoiceTaxMappingResult DTO is required."])
 
     expense_mode = _operating_expense_mode(invoice, operating_expense_match)
+    account_only_line_numbers = account_only_line_numbers if not expense_mode else frozenset()
+    resolved_account_only_account_id = _resolved_account_only_account_id(
+        account_only_line_numbers, account_only_expense_match
+    )
+    if account_only_line_numbers and resolved_account_only_account_id is None:
+        errors.append("Explicit account-only line resolution requires a deterministic expense account mapping.")
 
     if partner_match.status is not PartnerMatchStatus.MATCHED or partner_match.partner_id is None:
         errors.append("Supplier partner must be matched before building a vendor bill.")
@@ -179,7 +218,9 @@ def validate_vendor_bill_inputs(
         product_by_line = {}
         errors.extend(_operating_expense_product_shape_errors(invoice, product_match))
     else:
-        product_by_line, product_errors = _validated_product_results(product_match)
+        product_by_line, product_errors = _validated_product_results(
+            product_match, skip_line_numbers=account_only_line_numbers
+        )
         errors.extend(product_errors)
     tax_by_line, tax_errors = _validated_tax_results(tax_match)
     errors.extend(tax_errors)
@@ -189,7 +230,8 @@ def validate_vendor_bill_inputs(
         if line.line_number is None or not line.line_number.strip():
             errors.append(f"{line_path}.line_number is required.")
             continue
-        if not expense_mode and line.line_number not in product_by_line:
+        line_is_account_only = line.line_number in account_only_line_numbers
+        if not expense_mode and not line_is_account_only and line.line_number not in product_by_line:
             errors.append(f"{line_path}.product must be matched.")
         if line.quantity is None or line.quantity <= Decimal("0"):
             errors.append(f"{line_path}.quantity must be greater than zero.")
@@ -223,6 +265,32 @@ def _operating_expense_mode(invoice: InternalInvoice, operating_expense_match: o
     if type(account_id) is not int or account_id <= 0:
         return False
     return invoice_is_product_identifier_free(invoice)
+
+
+def _resolved_account_only_account_id(
+    account_only_line_numbers: frozenset[str],
+    account_only_expense_match: object | None,
+) -> int | None:
+    """The single deterministic expense account for explicit account-only lines, if any.
+
+    Returns ``None`` whenever there is nothing to resolve (``account_only_line_numbers``
+    is empty) or the resolution is not a clean ``MATCHED`` result with a positive account
+    id -- callers must fail closed on ``None`` rather than guess an account.
+    """
+
+    if not account_only_line_numbers:
+        return None
+
+    from app.application.expense_mapping import OperatingExpenseMatchStatus
+
+    if account_only_expense_match is None or getattr(account_only_expense_match, "status", None) is not (
+        OperatingExpenseMatchStatus.MATCHED
+    ):
+        return None
+    account_id = getattr(account_only_expense_match, "expense_account_id", None)
+    if type(account_id) is not int or account_id <= 0:
+        return None
+    return account_id
 
 
 def _operating_expense_product_shape_errors(
@@ -374,11 +442,23 @@ def _customer_invoice_reference(
 
 def _validated_product_results(
     product_match: InvoiceProductMatchResult,
+    *,
+    skip_line_numbers: frozenset[str] = frozenset(),
 ) -> tuple[dict[str | None, Any], tuple[str, ...]]:
+    """Matched product results by line, skipping ``skip_line_numbers`` entirely.
+
+    A skipped line is neither required to be matched nor reported as unmatched -- it is
+    reserved for an explicit, separately-validated resolution instead (see
+    ``account_only_line_numbers`` in ``validate_vendor_bill_inputs``). The default is
+    empty, so existing callers see unchanged behavior.
+    """
+
     errors = list(product_match.errors)
     product_by_line: dict[str | None, Any] = {}
     for line_result in product_match.line_results:
         line_number = line_result.line_number
+        if line_number in skip_line_numbers:
+            continue
         if line_number in product_by_line:
             errors.append(f"Duplicate product mapping for line {line_number}.")
             continue
@@ -406,6 +486,28 @@ def _validated_tax_results(
             continue
         tax_by_line[key] = result
     return tax_by_line, tuple(errors)
+
+
+def tax_lines_fully_matched(invoice: InternalInvoice, tax_match: InvoiceTaxMappingResult) -> bool:
+    """True only when every tax on every invoice line resolves to a matched Odoo tax id.
+
+    Used to decide whether Stage-1 execution evidence may be pinned for a review whose
+    product lines are not (yet) fully resolved -- e.g. pending an explicit human
+    account-only decision (``LineResolution.account_only``) -- without weakening the
+    existing product-mode or whole-invoice operating-expense validation paths, which
+    are unchanged and still evaluated first.
+    """
+
+    if not isinstance(invoice, InternalInvoice) or not isinstance(tax_match, InvoiceTaxMappingResult):
+        return False
+    tax_by_line, tax_errors = _validated_tax_results(tax_match)
+    if tax_errors:
+        return False
+    for line in invoice.lines:
+        for tax_index, _tax in enumerate(line.taxes):
+            if (line.line_number, tax_index) not in tax_by_line:
+                return False
+    return True
 
 
 def _product_results_by_line(product_match: InvoiceProductMatchResult) -> dict[str | None, Any]:

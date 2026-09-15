@@ -28,14 +28,28 @@ class ReviewDecisionType(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class LineResolution(ApplicationDTO):
-    """Explicit user-selected product resolution for one invoice line."""
+    """Explicit user-selected resolution for one invoice line.
+
+    Exactly one of two explicit human choices: ``selected_product_id`` (a specific
+    Odoo product) or ``account_only=True`` (an explicit decision that this line does
+    not map to ``product.product`` and must be posted using the approved deterministic
+    account-only accounting treatment instead). Never inferred from an unmatched
+    product -- a line with neither set is not a resolution at all.
+    """
 
     line_number: str
-    selected_product_id: int
+    selected_product_id: int | None = None
+    account_only: bool = False
 
     def __post_init__(self) -> None:
         _require_text(self.line_number, "line_number is required.")
-        _require_positive_int(self.selected_product_id, "selected_product_id must be a positive ERP id.")
+        if type(self.account_only) is not bool:
+            raise WorkbenchContractError("account_only must be boolean.")
+        if self.account_only:
+            if self.selected_product_id is not None:
+                raise WorkbenchContractError("An account-only line resolution must not also select a product.")
+        else:
+            _require_positive_int(self.selected_product_id, "selected_product_id must be a positive ERP id.")
 
 
 @dataclass(frozen=True, slots=True)
