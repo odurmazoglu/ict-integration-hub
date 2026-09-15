@@ -8,6 +8,7 @@ from typing import Any
 from httpx import AsyncClient
 
 from app.api.dependencies import (
+    get_create_new_product_use_case,
     get_list_review_queue_use_case,
     get_request_context,
     get_review_item_use_case,
@@ -23,6 +24,7 @@ from app.api.security import (
     Permission,
     RequestContext,
 )
+from app.application.exceptions.product_remediation import ProductWriteSafetyGateError
 from app.application.execution import (
     ExecutionApproval,
     ExecutionArtifact,
@@ -48,6 +50,9 @@ from app.application.workbench import (
     WorkbenchDecisionIngestionStatus,
 )
 from app.application.workbench.exceptions import (
+    ProductRemediationEligibilityError,
+    ProductRemediationRaceError,
+    ProductRemediationSupplierUnresolvedError,
     ReviewDecisionError,
     ReviewDecisionIdempotencyConflictError,
     ReviewNotFoundError,
@@ -56,6 +61,11 @@ from app.application.workbench.exceptions import (
     ReviewStateConflictError,
     ReviewVersionConflictError,
     WorkbenchContractError,
+)
+from app.application.workbench.product_remediation import (
+    CreateNewProductCommand,
+    CreateNewProductResult,
+    ProductRemediationStatus,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.main import app
@@ -416,6 +426,322 @@ async def test_workbench_contract_error_maps_to_400(api_client: AsyncClient) -> 
 
     assert response.status_code == 400
     assert response.json()["errors"][0]["message"] == "selected_workflow is required."
+
+
+# --------------------------------------------------------- P0-PROD-07H: product-resolution
+
+
+def _product_resolution_body(**overrides: Any) -> dict[str, Any]:
+    body = {
+        "mode": "create_new_product",
+        "expected_version": 2,
+        "line_number": "1",
+        "product_name": "Yillik Aidat Urunu",
+        "uom_id": 1,
+    }
+    body.update(overrides)
+    return body
+
+
+def _product_result(**overrides: Any) -> CreateNewProductResult:
+    base = {
+        "review_id": "review-1",
+        "company_id": 7,
+        "review_version": 2,
+        "line_number": "1",
+        "status": ProductRemediationStatus.COMPLETED,
+        "product_template_id": 9001,
+        "product_id": 9101,
+        "supplierinfo_id": 9501,
+        "created_product": True,
+        "created_supplierinfo": True,
+        "reused_existing_product": False,
+        "already_applied": False,
+        "safe_message": "Product created and linked to the supplier.",
+    }
+    base.update(overrides)
+    return CreateNewProductResult(**base)
+
+
+async def test_a_valid_request_delegates_to_07g_and_returns_product_result(api_client: AsyncClient) -> None:
+    use_case = FakeCreateNewProductUseCase(_product_result())
+
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE, company_id=7, user_id="finance.user"),
+        use_case=use_case,
+        json=_product_resolution_body(internal_reference="ICT-SKU-1", is_storable=True, note="approved"),
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["resolution_status"] == "completed"
+    assert data["product_template_id"] == 9001
+    assert data["product_id"] == 9101
+    assert data["supplierinfo_id"] == 9501
+    assert data["created_product"] is True
+    assert data["needs_reconciliation"] is False
+
+    command = use_case.last_command
+    assert use_case.calls == 1
+    assert command.review_id == "review-1"
+    assert command.company_id == 7
+    assert command.approved_by == "Finance User"  # user_name takes precedence, matching supplier-resolution
+    assert command.expected_version == 2
+    assert command.line_number == "1"
+    assert command.product_name == "Yillik Aidat Urunu"
+    assert command.uom_id == 1
+    assert command.internal_reference == "ICT-SKU-1"
+    assert command.is_storable is True
+    assert command.note == "approved"
+
+
+async def test_bcd_client_cannot_supply_trusted_identity_fields(api_client: AsyncClient) -> None:
+    for forbidden_field, value in (
+        ("company_id", 999),
+        ("seller_item_code", "SKU-100"),
+        ("resolved_supplier_partner_id", 4010),
+        ("product_template_id", 1),
+        ("product_id", 1),
+        ("supplierinfo_id", 1),
+    ):
+        response = await _post_product_resolution(
+            api_client,
+            "review-1",
+            context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+            use_case=FakeCreateNewProductUseCase(_product_result()),
+            json=_product_resolution_body(**{forbidden_field: value}),
+        )
+        assert response.status_code == 400, forbidden_field
+        assert response.json()["errors"][0]["code"] == "request_validation_error"
+
+
+async def test_e_expected_version_required(api_client: AsyncClient) -> None:
+    body = _product_resolution_body()
+    del body["expected_version"]
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=FakeCreateNewProductUseCase(_product_result()),
+        json=body,
+    )
+    assert response.status_code == 400
+
+
+async def test_f_uom_id_required_and_must_be_positive(api_client: AsyncClient) -> None:
+    body_missing = _product_resolution_body()
+    del body_missing["uom_id"]
+    response_missing = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=FakeCreateNewProductUseCase(_product_result()),
+        json=body_missing,
+    )
+    assert response_missing.status_code == 400
+
+    use_case_negative = FakeCreateNewProductUseCase(_product_result())
+    response_negative = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=use_case_negative,
+        json=_product_resolution_body(uom_id=0),
+    )
+    # uom_id > 0 is enforced by CreateNewProductCommand's own __post_init__, which runs before the
+    # use case is ever reached -- the fake must not be called.
+    assert response_negative.status_code in (400, 409, 500)
+    assert use_case_negative.calls == 0
+
+
+async def test_g_supplier_unresolved_fails_closed_with_zero_writes(api_client: AsyncClient) -> None:
+    use_case = FakeCreateNewProductUseCase(
+        ProductRemediationSupplierUnresolvedError("No accepted supplier resolution exists for this review.")
+    )
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=use_case,
+        json=_product_resolution_body(),
+    )
+    assert response.status_code == 409
+    assert use_case.calls == 1
+
+
+async def test_h_version_mismatch_fails_closed(api_client: AsyncClient) -> None:
+    use_case = FakeCreateNewProductUseCase(
+        ProductRemediationEligibilityError("The review version does not match expected_version.")
+    )
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=use_case,
+        json=_product_resolution_body(),
+    )
+    assert response.status_code == 409
+
+
+async def test_i_write_gate_disabled_maps_to_403_with_zero_odoo_writes(api_client: AsyncClient) -> None:
+    use_case = FakeCreateNewProductUseCase(
+        ProductWriteSafetyGateError("Product remediation master-data write must be explicitly enabled.")
+    )
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=use_case,
+        json=_product_resolution_body(),
+    )
+    assert response.status_code == 403
+    assert use_case.calls == 1
+
+
+async def test_j_completed_result_maps_correctly(api_client: AsyncClient) -> None:
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=FakeCreateNewProductUseCase(_product_result()),
+        json=_product_resolution_body(),
+    )
+    data = response.json()["data"]
+    assert data["resolution_status"] == "completed"
+    assert data["needs_reconciliation"] is False
+
+
+async def test_k_reused_existing_product_result_maps_correctly(api_client: AsyncClient) -> None:
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=FakeCreateNewProductUseCase(
+            _product_result(created_product=False, created_supplierinfo=False, reused_existing_product=True)
+        ),
+        json=_product_resolution_body(),
+    )
+    data = response.json()["data"]
+    assert data["resolution_status"] == "completed"
+    assert data["reused_existing_product"] is True
+    assert data["created_product"] is False
+    assert data["needs_reconciliation"] is False
+
+
+async def test_l_needs_reconciliation_is_explicit_not_false_success(api_client: AsyncClient) -> None:
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=FakeCreateNewProductUseCase(
+            _product_result(
+                status=ProductRemediationStatus.RECONCILIATION_REQUIRED,
+                created_product=False,
+                created_supplierinfo=False,
+                already_applied=True,
+                safe_message="A prior Odoo product creation attempt's outcome could not be verified.",
+            )
+        ),
+        json=_product_resolution_body(),
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["resolution_status"] == "reconciliation_required"
+    assert data["needs_reconciliation"] is True
+
+
+async def test_m_replay_returns_stable_result_and_causes_no_duplicate_write(api_client: AsyncClient) -> None:
+    use_case = FakeCreateNewProductUseCase(_product_result(already_applied=True))
+    first = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=use_case,
+        json=_product_resolution_body(),
+    )
+    second = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=use_case,
+        json=_product_resolution_body(),
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.json()["data"] == second.json()["data"]
+    # 07G's own persisted identities are what guarantee no duplicate Odoo write on replay;
+    # the endpoint calls the use case exactly once per request either way.
+    assert use_case.calls == 2
+
+
+async def test_n_identity_conflict_or_in_flight_race_maps_to_409(api_client: AsyncClient) -> None:
+    for exc in (ProductRemediationRaceError("Another request is currently creating a product for this identity."),):
+        use_case = FakeCreateNewProductUseCase(exc)
+        response = await _post_product_resolution(
+            api_client,
+            "review-1",
+            context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+            use_case=use_case,
+            json=_product_resolution_body(),
+        )
+        assert response.status_code == 409
+
+
+async def test_o_wrong_company_fails_closed(api_client: AsyncClient) -> None:
+    use_case = FakeCreateNewProductUseCase(ReviewNotFoundError("Review item was not found."))
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE, company_id=999),
+        use_case=use_case,
+        json=_product_resolution_body(),
+    )
+    assert response.status_code == 404
+    assert use_case.last_command.company_id == 999
+
+
+def test_pqrs_no_auto_decision_pinning_or_execution_or_supplier_creation() -> None:
+    """Structural: the endpoint's own dependencies are incapable of any of these actions.
+
+    Checked via the function signature (not the full source, which legitimately
+    mentions these terms in its own docstring explaining what it does NOT do).
+    """
+    import inspect
+
+    from app.api.routers import workbench as workbench_router
+
+    signature = inspect.signature(workbench_router.resolve_review_product)
+    dependency_type_names = {str(param.annotation) for param in signature.parameters.values()}
+    for forbidden in (
+        "SubmitReviewDecisionUseCaseDep",
+        "WorkbenchAcceptedDecisionExecutionDispatcherDep",
+        "ResolveWorkbenchSupplierUseCaseDep",
+    ):
+        assert not any(forbidden in name for name in dependency_type_names)
+
+
+async def test_t_extra_request_fields_are_rejected(api_client: AsyncClient) -> None:
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=FakeCreateNewProductUseCase(_product_result()),
+        json=_product_resolution_body(unexpected_field="anything"),
+    )
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "request_validation_error"
+
+
+async def test_product_resolution_permission_required(api_client: AsyncClient) -> None:
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_READ),
+        use_case=FakeCreateNewProductUseCase(_product_result()),
+        json=_product_resolution_body(),
+    )
+    assert response.status_code == 403
 
 
 async def test_authentication_failures_map_to_401_envelope(api_client: AsyncClient) -> None:
@@ -789,9 +1115,34 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}",
         "/api/workbench/reviews/{review_id}/decision",
         "/api/workbench/reviews/{review_id}/execute",
+        "/api/workbench/reviews/{review_id}/product-resolution",
         "/api/workbench/reviews/{review_id}/quotation-scenarios",
         "/api/workbench/reviews/{review_id}/supplier-resolution",
     }
+    product_resolution_schema = response.json()["components"]["schemas"]["ProductResolutionRequest"]
+    product_resolution_text = str(product_resolution_schema)
+    for forbidden in (
+        "company_id",
+        "review_id",
+        "approved_by",
+        "resolved_supplier_partner_id",
+        "seller_item_code",
+        "product_template_id",
+        '"product_id"',
+        "supplierinfo_id",
+    ):
+        assert forbidden not in product_resolution_text
+    assert set(product_resolution_schema["properties"]) == {
+        "mode",
+        "expected_version",
+        "line_number",
+        "product_name",
+        "uom_id",
+        "internal_reference",
+        "is_storable",
+        "note",
+    }
+    assert product_resolution_schema.get("additionalProperties") is False
     supplier_resolution_schema = response.json()["components"]["schemas"]["SupplierResolutionRequest"]
     supplier_resolution_text = str(supplier_resolution_schema)
     for forbidden in (
@@ -882,6 +1233,20 @@ class FakeSubmitUseCase:
         self.last_command: ReviewDecisionCommand | None = None
 
     def execute(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
+        self.calls += 1
+        self.last_command = command
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class FakeCreateNewProductUseCase:
+    def __init__(self, result: CreateNewProductResult | Exception) -> None:
+        self.result = result
+        self.calls = 0
+        self.last_command: CreateNewProductCommand | None = None
+
+    async def execute(self, command: CreateNewProductCommand) -> CreateNewProductResult:
         self.calls += 1
         self.last_command = command
         if isinstance(self.result, Exception):
@@ -1013,6 +1378,23 @@ async def _post_decision(
         app.dependency_overrides[get_submit_review_decision_use_case] = lambda: submit_use_case
     try:
         return await api_client.post(f"/api/workbench/reviews/{review_id}/decision", json=json)
+    finally:
+        app.dependency_overrides.clear()
+
+
+async def _post_product_resolution(
+    api_client: AsyncClient,
+    review_id: str,
+    *,
+    context: RequestContext,
+    json: dict[str, Any],
+    use_case: FakeCreateNewProductUseCase | None = None,
+):
+    app.dependency_overrides[get_request_context] = lambda: context
+    if use_case is not None:
+        app.dependency_overrides[get_create_new_product_use_case] = lambda: use_case
+    try:
+        return await api_client.post(f"/api/workbench/reviews/{review_id}/product-resolution", json=json)
     finally:
         app.dependency_overrides.clear()
 

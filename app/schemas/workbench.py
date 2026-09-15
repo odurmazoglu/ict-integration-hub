@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -11,6 +12,7 @@ from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
+from app.application.workbench.product_remediation import ProductRemediationStatus
 from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
@@ -213,6 +215,52 @@ class SupplierRemediationResponse(BaseModel):
 
 
 SupplierRemediationEnvelope = ApiEnvelope[SupplierRemediationResponse]
+
+
+class ProductResolutionMode(StrEnum):
+    """Explicit operator choices for resolving a review line whose product is not matched.
+
+    A policy enum mirroring ``SupplierResolutionMode`` -- not an Odoo/HTTP implementation
+    detail. Exactly one member today; the shape leaves room for a future mode (e.g.
+    matching an existing product) without a breaking request schema change.
+    """
+
+    CREATE_NEW_PRODUCT = "create_new_product"
+
+
+class ProductResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: ProductResolutionMode
+    expected_version: int
+    line_number: str
+    product_name: str
+    uom_id: int
+    internal_reference: str | None = None
+    is_storable: bool = False
+    note: str | None = None
+
+
+class ProductRemediationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    review_version: int
+    line_number: str
+    resolution_status: ProductRemediationStatus
+    product_template_id: int | None = None
+    product_id: int | None = None
+    supplierinfo_id: int | None = None
+    created_product: bool
+    created_supplierinfo: bool
+    reused_existing_product: bool
+    already_applied: bool
+    needs_reconciliation: bool
+    safe_message: str | None = None
+
+
+ProductRemediationEnvelope = ApiEnvelope[ProductRemediationResponse]
 
 
 class WorkbenchDecisionIngestionCandidateResponse(BaseModel):

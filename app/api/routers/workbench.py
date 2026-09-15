@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 
 from app.api.dependencies import (
+    CreateNewProductUseCaseDep,
     GetReviewItemUseCaseDep,
     ListReviewQueueUseCaseDep,
     RequestContextDep,
@@ -20,6 +21,11 @@ from app.api.dependencies import (
 )
 from app.api.error_handling import error_response_factory
 from app.api.security import Permission, PermissionDeniedError, require_permission
+from app.application.exceptions.product_remediation import (
+    ProductWriteError,
+    ProductWriteSafetyGateError,
+    SupplierInfoWriteError,
+)
 from app.application.exceptions.supplier_partner import (
     SupplierPartnerWriteError,
     SupplierPartnerWriteSafetyGateError,
@@ -46,6 +52,13 @@ from app.application.workbench import (
     WorkbenchDecisionIngestionResult,
 )
 from app.application.workbench.exceptions import (
+    ProductRemediationConflictError,
+    ProductRemediationContractError,
+    ProductRemediationDataIntegrityError,
+    ProductRemediationEligibilityError,
+    ProductRemediationIdentityAmbiguousError,
+    ProductRemediationRaceError,
+    ProductRemediationSupplierUnresolvedError,
     ReviewDataIntegrityError,
     ReviewDecisionDataIntegrityError,
     ReviewDecisionError,
@@ -65,6 +78,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionRaceError,
     WorkbenchContractError,
 )
+from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.schemas.workbench import (
@@ -75,6 +89,9 @@ from app.schemas.workbench import (
     ExecutionArtifactResponse,
     LineResolutionRequest,
     ManualReviewReasonResponse,
+    ProductRemediationEnvelope,
+    ProductRemediationResponse,
+    ProductResolutionRequest,
     ReviewDecisionAcknowledgementEnvelope,
     ReviewDecisionAcknowledgementResponse,
     ReviewDecisionRequest,
@@ -354,6 +371,72 @@ async def resolve_review_supplier(
         return _raise_error(exc, trace_id=context.trace_id)
 
 
+@router.post(
+    "/reviews/{review_id}/product-resolution",
+    response_model=ProductRemediationEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Create/remediate an Odoo product for a missing-product Import Workbench review line",
+    description=(
+        "Requires workbench_review_decide. For one review line whose reasons include PRODUCT_NOT_FOUND, delegates "
+        "to the crash-safe CREATE_NEW_PRODUCT orchestration to create a new Odoo product.template/supplierinfo, or "
+        "safely reuse/reconcile an existing one. Requires the review's supplier to already be resolved (see the "
+        "supplier-resolution endpoint) -- this endpoint never creates or resolves a supplier itself. Gated by "
+        "PRODUCT_REMEDIATION_WRITE_ENABLED. It never submits a review decision, pins selected_product_id, or "
+        "executes a Vendor Bill -- those remain separate explicit operator actions."
+    ),
+)
+async def resolve_review_product(
+    review_id: str,
+    request_body: ProductResolutionRequest,
+    response: Response,
+    context: RequestContextDep,
+    use_case: CreateNewProductUseCaseDep,
+) -> ProductRemediationEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
+        result = await use_case.execute(
+            CreateNewProductCommand(
+                review_id=review_id,
+                company_id=context.company_id,
+                expected_version=request_body.expected_version,
+                line_number=request_body.line_number,
+                product_name=request_body.product_name,
+                uom_id=request_body.uom_id,
+                approved_by=context.user_name or context.user_id,
+                is_storable=request_body.is_storable,
+                internal_reference=request_body.internal_reference,
+                note=request_body.note,
+            )
+        )
+        return _success(
+            response,
+            context.trace_id,
+            _product_remediation_response(result),
+            warnings=[],
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+def _product_remediation_response(result) -> ProductRemediationResponse:
+    return ProductRemediationResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        review_version=result.review_version,
+        line_number=result.line_number,
+        resolution_status=result.status,
+        product_template_id=result.product_template_id,
+        product_id=result.product_id,
+        supplierinfo_id=result.supplierinfo_id,
+        created_product=result.created_product,
+        created_supplierinfo=result.created_supplierinfo,
+        reused_existing_product=result.reused_existing_product,
+        already_applied=result.already_applied,
+        needs_reconciliation=result.status is ProductRemediationStatus.RECONCILIATION_REQUIRED,
+        safe_message=result.safe_message,
+    )
+
+
 def _supplier_remediation_response(result) -> SupplierRemediationResponse:
     return SupplierRemediationResponse(
         review_id=result.review_id,
@@ -604,7 +687,11 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, SupplierResolutionContractError):
         return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, ProductRemediationContractError):
+        return HTTPStatus.BAD_REQUEST
     if isinstance(exc, SupplierPartnerWriteSafetyGateError):
+        return HTTPStatus.FORBIDDEN
+    if isinstance(exc, ProductWriteSafetyGateError):
         return HTTPStatus.FORBIDDEN
     if isinstance(exc, PermissionDeniedError):
         return HTTPStatus.FORBIDDEN
@@ -620,6 +707,10 @@ def _status_code_for_exception(exc: Exception) -> int:
             SupplierResolutionRaceError,
             SupplierResolutionPartnerMismatchError,
             SupplierResolutionPartnerInactiveError,
+            ProductRemediationEligibilityError,
+            ProductRemediationSupplierUnresolvedError,
+            ProductRemediationConflictError,
+            ProductRemediationRaceError,
         ),
     ):
         return HTTPStatus.CONFLICT
@@ -634,6 +725,10 @@ def _status_code_for_exception(exc: Exception) -> int:
             SupplierResolutionDataIntegrityError,
             SupplierResolutionError,
             SupplierPartnerWriteError,
+            ProductRemediationDataIntegrityError,
+            ProductRemediationIdentityAmbiguousError,
+            ProductWriteError,
+            SupplierInfoWriteError,
         ),
     ):
         return HTTPStatus.INTERNAL_SERVER_ERROR
