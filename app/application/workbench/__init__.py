@@ -98,6 +98,7 @@ from app.application.workbench.ports import (
     ReviewQueueReader,
     ReviewReclassificationWriter,
     ReviewSourceInvoiceEvidenceReader,
+    SelectedProductReader,
     SupplierRemediationEffectWriter,
     SupplierResolutionPartnerReader,
     SupplierResolutionWriter,
@@ -122,6 +123,12 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationProposal,
     ReviewReclassificationResult,
     ReviewReclassificationTrigger,
+)
+from app.application.workbench.selected_product_resolution import (
+    HUMAN_SELECTED_MATCHED_BY,
+    ResolutionProductRecord,
+    apply_selected_product_resolutions,
+    selected_product_ids,
 )
 from app.application.workbench.services import ReviewItemCreationService
 from app.application.workbench.supplier_remediation import (
@@ -200,9 +207,12 @@ __all__ = [
     "ReviewQueueReader",
     "ReviewQueueResult",
     "ReviewStatus",
+    "HUMAN_SELECTED_MATCHED_BY",
     "ResolutionPartnerRecord",
+    "ResolutionProductRecord",
     "ResolveWorkbenchSupplierCommand",
     "ResolveWorkbenchSupplierUseCase",
+    "SelectedProductReader",
     "SupplierPartnerWriteEffectStatus",
     "SupplierRemediationEffect",
     "SupplierRemediationEffectWriter",
@@ -215,7 +225,9 @@ __all__ = [
     "SupplierResolutionValidationStatus",
     "SupplierResolutionWriter",
     "ValidateSupplierResolutionUseCase",
+    "apply_selected_product_resolutions",
     "normalize_supplier_vat",
+    "selected_product_ids",
     "SalesOrderLineReference",
     "SalesOrderLineReferenceRepository",
     "SalesOrderReference",

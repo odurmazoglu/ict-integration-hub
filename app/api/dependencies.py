@@ -44,6 +44,9 @@ from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
 from app.db.session import SessionLocal
+from app.erp.odoo.adapter import OdooReadOnlyAdapter
+from app.erp.odoo.product_repository import OdooProductRepository
+from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBillingEvidenceReader
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
@@ -153,11 +156,16 @@ def get_review_item_use_case(reader: ReviewQueueReaderDep) -> GetReviewItemUseCa
 def get_submit_review_decision_use_case(
     writer: ReviewDecisionWriterDep,
     session: DbSessionDep,
+    odoo_client: OdooClientDep,
 ) -> SubmitReviewDecisionUseCase:
+    read_adapter = OdooReadOnlyAdapter(client=odoo_client)
     return SubmitReviewDecisionUseCase(
         review_decision_writer=writer,
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
+        selected_product_reader=OdooSelectedProductReader(
+            product_repository=OdooProductRepository(adapter=read_adapter),
+        ),
     )
 
 

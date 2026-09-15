@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from app.application.exceptions import ApplicationError
 from app.application.workbench.allocations import BusinessContextAllocationType
@@ -11,6 +12,11 @@ from app.application.workbench.ports import (
     ReviewBillingEvidenceReader,
     ReviewDecisionWriter,
     ReviewExecutionEvidenceReader,
+    SelectedProductReader,
+)
+from app.application.workbench.selected_product_resolution import (
+    apply_selected_product_resolutions,
+    selected_product_ids,
 )
 from app.application.workflow import WorkflowType
 from app.billing.dto import CustomerInvoiceBillingInstruction
@@ -25,10 +31,12 @@ class SubmitReviewDecisionUseCase:
         review_decision_writer: ReviewDecisionWriter,
         execution_evidence_reader: ReviewExecutionEvidenceReader | None = None,
         billing_evidence_reader: ReviewBillingEvidenceReader | None = None,
+        selected_product_reader: SelectedProductReader | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
         self._execution_evidence_reader = execution_evidence_reader
         self._billing_evidence_reader = billing_evidence_reader
+        self._selected_product_reader = selected_product_reader
 
     def execute(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         if not isinstance(command, ReviewDecisionCommand):
@@ -46,6 +54,7 @@ class SubmitReviewDecisionUseCase:
                 ),
                 "Execution source evidence could not be loaded safely.",
             )
+            evidence = self._apply_selected_product_resolutions(command, evidence)
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
                 return _translate_decision_failure(
@@ -74,6 +83,31 @@ class SubmitReviewDecisionUseCase:
         if not isinstance(command, ReviewDecisionCommand):
             raise WorkbenchContractError("ReviewDecisionCommand is required.")
         return self._review_decision_writer.has_matching_review_decision(command)
+
+    def _apply_selected_product_resolutions(self, command: ReviewDecisionCommand, evidence):
+        """Validate and pin any explicit ``LineResolution.selected_product_id`` overrides.
+
+        The read-only lookup happens here, once, at decision-acceptance time -- never
+        during Vendor Bill execution. A no-op when no line names an explicit selection.
+        """
+
+        product_ids = selected_product_ids(command.line_resolutions)
+        if not product_ids:
+            return evidence
+        if self._selected_product_reader is None:
+            raise ReviewDecisionError("Selected product resolution is required but not configured.")
+        products = _translate_decision_failure(
+            lambda: self._selected_product_reader.find_products_by_ids(product_ids),
+            "Selected product evidence could not be loaded safely.",
+        )
+        products_by_id = {product.id: product for product in products}
+        new_product_match = apply_selected_product_resolutions(
+            evidence.product_match,
+            line_resolutions=command.line_resolutions,
+            company_id=command.company_id,
+            products_by_id=products_by_id,
+        )
+        return replace(evidence, product_match=new_product_match)
 
     def _billing_instructions(
         self,
