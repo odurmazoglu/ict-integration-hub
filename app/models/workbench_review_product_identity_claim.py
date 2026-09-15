@@ -21,6 +21,10 @@ class WorkbenchReviewProductIdentityClaim(Base):
 
     __tablename__ = "workbench_review_product_identity_claims"
     __table_args__ = (
+        # Abbreviated ("wrpr_identity_claims") and kept under PostgreSQL's 63-byte
+        # NAMEDATALEN limit -- see workbench_review_product_remediation_reservation.py
+        # for why: two similarly-long names on that table silently truncated to an
+        # identical prefix on real Postgres and collided.
         ForeignKeyConstraint(
             ["owner_review_id", "owner_company_id", "owner_review_version", "owner_line_number"],
             [
@@ -29,29 +33,29 @@ class WorkbenchReviewProductIdentityClaim(Base):
                 "workbench_review_product_remediation_reservations.review_version",
                 "workbench_review_product_remediation_reservations.line_number",
             ],
-            name="fk_workbench_review_product_identity_claims_owner",
+            name="fk_wrpr_identity_claims_owner",
         ),
         CheckConstraint(
             "company_id > 0",
-            name="ck_workbench_review_product_identity_claims_company_id_positive",
+            name="ck_wrpr_identity_claims_company_positive",
         ),
         CheckConstraint(
             "resolved_supplier_partner_id > 0",
-            name="ck_workbench_review_product_identity_claims_partner_id_positive",
+            name="ck_wrpr_identity_claims_partner_positive",
         ),
         CheckConstraint(
             "owner_company_id > 0",
-            name="ck_workbench_review_product_identity_claims_owner_company_id_positive",
+            name="ck_wrpr_identity_claims_owner_company_positive",
         ),
         CheckConstraint(
             "owner_review_version > 0",
-            name="ck_workbench_review_product_identity_claims_owner_review_version_positive",
+            name="ck_wrpr_identity_claims_owner_version_positive",
         ),
         UniqueConstraint(
             "company_id",
             "resolved_supplier_partner_id",
             "seller_item_code",
-            name="uq_workbench_review_product_identity_claims_identity",
+            name="uq_wrpr_identity_claims_identity",
         ),
     )
 

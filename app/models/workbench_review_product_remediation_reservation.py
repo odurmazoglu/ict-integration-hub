@@ -27,57 +27,63 @@ class WorkbenchReviewProductRemediationReservation(Base):
 
     __tablename__ = "workbench_review_product_remediation_reservations"
     __table_args__ = (
+        # Constraint/index names below are deliberately abbreviated ("wrpr_reservations")
+        # and kept under PostgreSQL's 63-byte NAMEDATALEN limit. The full
+        # "workbench_review_product_remediation_reservations" prefix alone is 51 bytes,
+        # so longer suffixes silently truncate on Postgres (SQLite does not truncate,
+        # so this only surfaces against a real Postgres target) -- two truncated names
+        # collided in production. See PR fixing this for the incident detail.
         ForeignKeyConstraint(
             ["review_id"],
             ["workbench_review_items.review_id"],
-            name="fk_workbench_review_product_remediation_reservations_review_id",
+            name="fk_wrpr_reservations_review_id",
         ),
         CheckConstraint(
             "company_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_company_id_positive",
+            name="ck_wrpr_reservations_company_positive",
         ),
         CheckConstraint(
             "review_version > 0",
-            name="ck_workbench_review_product_remediation_reservations_review_version_positive",
+            name="ck_wrpr_reservations_version_positive",
         ),
         CheckConstraint(
             "resolved_supplier_partner_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_partner_id_positive",
+            name="ck_wrpr_reservations_partner_positive",
         ),
         CheckConstraint(
             "status IN ('reserved', 'create_attempted', 'product_created', 'completed', "
             "'reused_existing_product', 'needs_reconciliation')",
-            name="ck_workbench_review_product_remediation_reservations_status",
+            name="ck_wrpr_reservations_status",
         ),
         CheckConstraint(
             "product_template_id IS NULL OR product_template_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_template_id_positive",
+            name="ck_wrpr_reservations_template_id_positive",
         ),
         CheckConstraint(
             "product_id IS NULL OR product_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_product_id_positive",
+            name="ck_wrpr_reservations_product_id_positive",
         ),
         CheckConstraint(
             "supplierinfo_id IS NULL OR supplierinfo_id > 0",
-            name="ck_workbench_review_product_remediation_reservations_supplierinfo_id_positive",
+            name="ck_wrpr_reservations_supplierinfo_id_positive",
         ),
         CheckConstraint(
             "status IN ('reserved', 'create_attempted', 'needs_reconciliation') OR product_template_id IS NOT NULL",
-            name="ck_workbench_review_product_remediation_reservations_template_by_status",
+            name="ck_wrpr_reservations_template_by_status",
         ),
         CheckConstraint(
             "status != 'completed' OR supplierinfo_id IS NOT NULL",
-            name="ck_workbench_review_product_remediation_reservations_supplierinfo_by_status",
+            name="ck_wrpr_reservations_supplierinfo_by_status",
         ),
         UniqueConstraint(
             "review_id",
             "company_id",
             "review_version",
             "line_number",
-            name="uq_workbench_review_product_remediation_reservations_line",
+            name="uq_wrpr_reservations_line",
         ),
         Index(
-            "ix_workbench_review_product_remediation_reservations_company_review",
+            "ix_wrpr_reservations_company_review",
             "company_id",
             "review_id",
         ),
