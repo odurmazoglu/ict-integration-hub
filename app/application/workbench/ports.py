@@ -14,6 +14,7 @@ from app.application.workbench.evidence import (
     ReviewExecutionEvidence,
     ReviewSourceInvoiceEvidence,
 )
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirement, OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import (
     ProductIdentityClaim,
     ProductRemediationReservation,
@@ -199,6 +200,61 @@ class SupplierRemediationEffectWriter(Protocol):
         company_id: int,
     ) -> SupplierRemediationEffect | None:
         """The most recently recorded effect for this review, regardless of exact version."""
+
+    def find_one_off_vendor_effect_by_partner_id(
+        self,
+        *,
+        company_id: int,
+        resolved_partner_id: int,
+    ) -> SupplierRemediationEffect | None:
+        """The (at most one, by construction) ONE_OFF_VENDOR effect that created/reused this
+        exact Odoo partner, if any (P0-PROD-08H).
+
+        This is the Hub's sole source of truth for "did we create/own this partner via
+        ONE_OFF_VENDOR" -- an exact-VAT match against a partner with no such effect is a
+        pre-existing partner (e.g. a permanent supplier) the Hub must never silently
+        adopt as retirement-eligible. Read-only; never used to decide anything about
+        MATCH_EXISTING or CREATE_PERMANENT_SUPPLIER partners.
+        """
+
+
+class OneOffVendorRetirementWriter(Protocol):
+    """Durable state-machine persistence for one review's ONE_OFF_VENDOR archive lifecycle."""
+
+    def create_retirement(self, retirement: OneOffVendorRetirement) -> OneOffVendorRetirement:
+        pass
+
+    def find(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> OneOffVendorRetirement | None:
+        pass
+
+    def advance(
+        self,
+        retirement: OneOffVendorRetirement,
+        *,
+        expected_status: OneOffVendorRetirementStatus,
+        new_status: OneOffVendorRetirementStatus,
+    ) -> OneOffVendorRetirement:
+        pass
+
+
+class VendorBillExecutionEvidenceReader(Protocol):
+    """Read-only port for durable Vendor Bill execution evidence (P0-PROD-08H).
+
+    Answers exactly one question: does a terminal, successful VENDOR_BILL
+    execution step already exist for this review, with a known produced Odoo
+    identity? Backed by the existing ``workflow_executions``/
+    ``workflow_execution_steps`` persistence -- no new tracking is introduced for
+    this fact, it already exists durably.
+    """
+
+    def has_successful_vendor_bill(self, *, review_id: str, company_id: int) -> bool:
+        pass
 
 
 class ReviewDecisionWriter(Protocol):

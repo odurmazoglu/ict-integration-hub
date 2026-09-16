@@ -14,6 +14,7 @@ from app.models.workbench_review_classification_evidence import WorkbenchReviewC
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_one_off_vendor_retirement import WorkbenchReviewOneOffVendorRetirement
 from app.models.workbench_review_product_identity_claim import WorkbenchReviewProductIdentityClaim
 from app.models.workbench_review_product_remediation_reservation import (
     WorkbenchReviewProductRemediationReservation,
@@ -42,6 +43,7 @@ __all__ = [
     "UyumsoftSyncRun",
     "WorkbenchReviewDecision",
     "WorkbenchReviewItem",
+    "WorkbenchReviewOneOffVendorRetirement",
     "WorkbenchReviewProductIdentityClaim",
     "WorkbenchReviewProductRemediationReservation",
     "WorkbenchReviewReclassification",

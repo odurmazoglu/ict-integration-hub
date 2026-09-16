@@ -127,6 +127,18 @@ class SupplierResolutionRaceError(SupplierResolutionError):
     error_category = "supplier_resolution_race"
 
 
+class SupplierResolutionOneOffVendorNotHubOwnedError(SupplierResolutionError):
+    """Safe error raised when ONE_OFF_VENDOR's exact-VAT lookup matches an existing Odoo
+    partner the Hub never created/owns via ONE_OFF_VENDOR (P0-PROD-08H).
+
+    Fails closed rather than silently adopting a pre-existing permanent supplier (or
+    any other partner not provably created by this lifecycle) as retirement-eligible.
+    Use MATCH_EXISTING or CREATE_PERMANENT_SUPPLIER for this vendor instead.
+    """
+
+    error_category = "supplier_resolution_one_off_vendor_not_hub_owned"
+
+
 class WorkbenchCandidateReadError(ApplicationError):
     """Safe base error for reading Workbench decision candidates from an ERP UI projection."""
 
@@ -273,3 +285,27 @@ class ProductRemediationDataIntegrityError(ProductRemediationError):
     """Safe error raised when persisted product remediation state cannot hydrate into contracts."""
 
     error_category = "product_remediation_data_integrity_error"
+
+
+class OneOffVendorRetirementError(ApplicationError):
+    """Safe base error for the ONE_OFF_VENDOR archive-last lifecycle (P0-PROD-08H)."""
+
+    error_category = "one_off_vendor_retirement_error"
+
+
+class OneOffVendorRetirementContractError(OneOffVendorRetirementError):
+    """Safe error raised when an ArchiveOneOffVendorCommand is structurally invalid."""
+
+    error_category = "one_off_vendor_retirement_contract_error"
+
+
+class OneOffVendorRetirementConflictError(OneOffVendorRetirementError):
+    """Safe error raised when a different retirement row already exists for this review version."""
+
+    error_category = "one_off_vendor_retirement_conflict"
+
+
+class OneOffVendorRetirementDataIntegrityError(OneOffVendorRetirementError):
+    """Safe error raised when persisted retirement state cannot hydrate into contracts."""
+
+    error_category = "one_off_vendor_retirement_data_integrity_error"

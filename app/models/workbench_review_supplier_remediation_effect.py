@@ -44,7 +44,8 @@ class WorkbenchReviewSupplierRemediationEffect(Base):
         ),
         CheckConstraint(
             "(mode = 'create_permanent_supplier' AND partner_write_status IN ('created', 'already_exists')) "
-            "OR (mode = 'match_existing' AND partner_write_status = 'selected')",
+            "OR (mode = 'match_existing' AND partner_write_status = 'selected') "
+            "OR (mode = 'one_off_vendor' AND partner_write_status IN ('created', 'already_exists'))",
             name="ck_workbench_review_supplier_remediation_effects_status_by_mode",
         ),
         UniqueConstraint(

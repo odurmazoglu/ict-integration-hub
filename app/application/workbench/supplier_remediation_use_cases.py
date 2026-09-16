@@ -9,6 +9,9 @@ PR #129) without ever manufacturing a matched ``PartnerMatchResult``:
     -> MATCH_EXISTING: validate the selected partner's exact VAT
        CREATE_PERMANENT_SUPPLIER: derive name/VAT from source, call the gated
        controlled writer, then validate the resulting partner
+       ONE_OFF_VENDOR: same derive/create-or-reuse as CREATE_PERMANENT_SUPPLIER,
+       plus a Hub-ownership check on any exact-VAT reuse and a retirement row for
+       the archive-last lifecycle (see one_off_vendor_use_cases.ArchiveOneOffVendorUseCase)
        USE_ONE_OFF_SUPPLIER: record intent only; no partner, no reclassification
     -> persist the immutable remediation effect (effective partner + write status)
     -> trigger the existing SUPPLIER_RESOLUTION reclassification (N -> N+1), which
@@ -39,12 +42,15 @@ from app.application.workbench.exceptions import (
     SupplierResolutionDataIntegrityError,
     SupplierResolutionError,
     SupplierResolutionNotFoundError,
+    SupplierResolutionOneOffVendorNotHubOwnedError,
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateReadError,
     WorkbenchContractError,
     WorkbenchProjectionPublishError,
 )
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirement, OneOffVendorRetirementStatus
 from app.application.workbench.ports import (
+    OneOffVendorRetirementWriter,
     ReviewQueueReader,
     ReviewSourceInvoiceEvidenceReader,
     SupplierRemediationEffectWriter,
@@ -131,6 +137,7 @@ class ResolveWorkbenchSupplierUseCase:
         reclassifier: SupplierReclassifier,
         unit_of_work: UnitOfWork,
         workbench_republisher: WorkbenchReviewRepublisher | None = None,
+        retirement_writer: OneOffVendorRetirementWriter | None = None,
         _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
@@ -144,6 +151,9 @@ class ResolveWorkbenchSupplierUseCase:
         # Optional: present only when odoo_workbench_projection_publish_enabled is set.
         # None -> republish is not attempted and every result reports republished=False.
         self._workbench_republisher = workbench_republisher
+        # Optional: required only for ONE_OFF_VENDOR (P0-PROD-08H); every other mode
+        # never touches it. None -> ONE_OFF_VENDOR fails closed with a clear error.
+        self._retirement_writer = retirement_writer
         # Test-only seam: invoked on the fresh path just before the reservation INSERT,
         # so a test can commit a competing reservation in another transaction in between.
         self._after_precheck_hook = _after_precheck_hook
@@ -286,6 +296,22 @@ class ResolveWorkbenchSupplierUseCase:
             self._resolution_validator.execute(
                 self._resolution(command, source, resolved_partner_id=effective_partner_id, force_mode_match=True)
             )
+        elif command.mode is SupplierResolutionMode.ONE_OFF_VENDOR:
+            write_result = await self._create_or_reuse_one_off_vendor_partner(command, source)
+            effective_partner_id = write_result.partner_id
+            write_status = (
+                SupplierPartnerWriteEffectStatus.CREATED
+                if write_result.status is SupplierPartnerWriteStatus.CREATED
+                else SupplierPartnerWriteEffectStatus.ALREADY_EXISTS
+            )
+            # No MATCH_EXISTING-shaped re-validation here on purpose: that check
+            # requires the partner to be *active*, which is correct for an operator
+            # selecting an existing partner but wrong here -- reusing a partner this
+            # Hub already archived from an earlier ONE_OFF_VENDOR lifecycle (case
+            # B/F) is a legitimate, expected state, not an error. The exact-VAT
+            # identity is already proven by the writer's own read-before-write (on
+            # create) or by the exact-VAT lookup that found it (on reuse); ownership
+            # is proven by _create_or_reuse_one_off_vendor_partner's own check above.
         else:
             effective_partner_id = command.resolved_partner_id
             write_status = SupplierPartnerWriteEffectStatus.SELECTED
@@ -303,6 +329,22 @@ class ResolveWorkbenchSupplierUseCase:
                 approved_by=command.approved_by,
             )
         )
+
+        if command.mode is SupplierResolutionMode.ONE_OFF_VENDOR:
+            if self._retirement_writer is None:
+                raise SupplierResolutionError(SAFE_SUPPLIER_REMEDIATION_ERROR)
+            # Idempotent by construction: a byte-identical retry (same partner_id)
+            # returns the existing row; a genuinely different partner_id for the same
+            # review version fails closed (OneOffVendorRetirementConflictError).
+            self._retirement_writer.create_retirement(
+                OneOffVendorRetirement(
+                    review_id=command.review_id,
+                    company_id=command.company_id,
+                    review_version=command.expected_version,
+                    resolved_partner_id=effective_partner_id,
+                    status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL,
+                )
+            )
 
         reclass = await self._reclassify(command)
         self._unit_of_work.commit()
@@ -334,6 +376,47 @@ class ResolveWorkbenchSupplierUseCase:
                 approved_by=command.approved_by,
             )
         )
+
+    async def _create_or_reuse_one_off_vendor_partner(
+        self,
+        command: ResolveWorkbenchSupplierCommand,
+        source,
+    ):
+        """Same minimal name+VAT create-or-reuse as CREATE_PERMANENT_SUPPLIER (P0-PROD-08H).
+
+        The underlying writer's exact-VAT read-before-write already covers idempotent
+        replay (case B/F) and ambiguous-match fail-closed (case C). The one thing it
+        cannot know is *ownership*: an exact-VAT match may be a pre-existing partner
+        the Hub never created via ONE_OFF_VENDOR (e.g. a permanent supplier, case A) --
+        silently treating that as retirement-eligible would risk archiving a normal
+        active ICT supplier. Only a partner with its own prior ONE_OFF_VENDOR effect
+        is ever reused here.
+        """
+
+        # Legal identity is derived ONLY from immutable source evidence, never from the request body.
+        write_result = await self._supplier_partner_writer.create_supplier(
+            CreateSupplierPartnerCommand(
+                company_id=command.company_id,
+                supplier_name=(source.invoice.supplier.name or "").strip() or _missing("supplier legal name"),
+                supplier_tax_number=(source.invoice.supplier.tax_number or "").strip()
+                or _missing("supplier tax number"),
+                idempotency_key=(
+                    f"one-off-vendor:{command.company_id}:{source.source_invoice_id}:{command.expected_version}"
+                ),
+                approved_by=command.approved_by,
+            )
+        )
+        if write_result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS:
+            owned = self._remediation_effect_writer.find_one_off_vendor_effect_by_partner_id(
+                company_id=command.company_id,
+                resolved_partner_id=write_result.partner_id,
+            )
+            if owned is None:
+                raise SupplierResolutionOneOffVendorNotHubOwnedError(
+                    "An existing Odoo partner for this exact VAT is not Hub-owned by ONE_OFF_VENDOR; "
+                    "use MATCH_EXISTING or CREATE_PERMANENT_SUPPLIER for this vendor instead."
+                )
+        return write_result
 
     async def _reclassify(self, command: ResolveWorkbenchSupplierCommand):
         try:

@@ -259,11 +259,14 @@ def test_no_uyumsoft_action_post_or_related_record_creation() -> None:
     assert "uyumsoft" not in service_source.lower()
     assert "action_post" not in combined
     # The draft-invoice service creates no master data. The JSON-2 client's only
-    # sanctioned res.partner write is the gated supplier-partner create (P0-3D2C);
-    # there is still no partner write/unlink and no product/tax create anywhere.
+    # sanctioned res.partner writes are the gated supplier-partner create (P0-3D2C)
+    # and the gated ONE_OFF_VENDOR archive-only write (P0-PROD-08H, hardcoded to
+    # {"active": False}); there is still no partner unlink and no product/tax
+    # create anywhere.
     assert "res.partner/create" not in service_source
     assert connector_source.count("res.partner/create") == 1
-    assert "res.partner/write" not in combined
+    assert "res.partner/write" not in service_source
+    assert connector_source.count("res.partner/write") == 1
     assert "product.product/create" not in combined
     assert "account.tax/create" not in combined
 

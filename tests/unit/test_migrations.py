@@ -606,9 +606,27 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     }
     assert "uq_wrpr_identity_claims_identity" in identity_claim_unique_constraints_at_head
 
-    # One extra downgrade step consumes 202607170026 (the newest migration) so every
+    retirement_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_one_off_vendor_retirements")
+    }
+    assert {"review_id", "company_id", "review_version", "resolved_partner_id", "status"}.issubset(
+        retirement_columns_at_head
+    )
+    retirement_unique_constraints_at_head = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("workbench_review_one_off_vendor_retirements")
+    }
+    assert "uq_wrov_retirements_review_version" in retirement_unique_constraints_at_head
+
+    # One extra downgrade step consumes 202607170027 (the newest migration) so every
     # subsequent single-step "-1" walk below still lands on the same pre-existing
     # revision it always has -- this test intentionally walks the *entire* history.
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_one_off_vendor_retirements" not in inspector.get_table_names()
+
+    # One further extra downgrade step consumes 202607170026 so the walk below still
+    # lands on the same pre-existing revision it always has.
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
     assert "workbench_review_product_remediation_reservations" not in inspector.get_table_names()

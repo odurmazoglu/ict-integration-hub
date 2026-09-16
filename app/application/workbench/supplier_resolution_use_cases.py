@@ -75,6 +75,18 @@ class ValidateSupplierResolutionUseCase:
                 ),
             )
 
+        if resolution.mode is SupplierResolutionMode.ONE_OFF_VENDOR:
+            return SupplierResolutionValidation(
+                status=SupplierResolutionValidationStatus.PENDING_ONE_OFF_VENDOR,
+                mode=resolution.mode,
+                review_id=resolution.review_id,
+                company_id=resolution.company_id,
+                source_supplier_tax_number=source_vat,
+                safe_message=(
+                    "One-off vendor creation/reuse is a separate controlled capability; no partner is written here."
+                ),
+            )
+
         if resolution.mode is SupplierResolutionMode.USE_ONE_OFF_SUPPLIER:
             return SupplierResolutionValidation(
                 status=SupplierResolutionValidationStatus.ONE_OFF_EXECUTION_NOT_SUPPORTED,

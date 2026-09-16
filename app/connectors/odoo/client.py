@@ -168,6 +168,21 @@ class OdooJson2Client:
             return result
         raise ConnectorError("Odoo account.move write returned an unexpected response.")
 
+    async def archive_res_partner(self, *, partner_id: int) -> bool:
+        """Set exactly one ``res.partner.active = False``. No other field is ever written.
+
+        The single sanctioned ``res.partner`` write route for ONE_OFF_VENDOR retirement
+        (P0-PROD-08H) -- hardcoded to ``active: False`` only, never a caller-supplied
+        values dict. No unlink/delete capability exists anywhere on this client.
+        """
+
+        if type(partner_id) is not int or partner_id <= 0:
+            raise ConnectorError("Odoo res.partner record id is invalid.")
+        result = await self._post_json("/json/2/res.partner/write", {"ids": [partner_id], "values": {"active": False}})
+        if isinstance(result, bool):
+            return result
+        raise ConnectorError("Odoo res.partner archive write returned an unexpected response.")
+
     async def call_model_method(
         self,
         *,

@@ -20,6 +20,13 @@ class SupplierResolutionMode(StrEnum):
     MATCH_EXISTING = "match_existing"
     USE_ONE_OFF_SUPPLIER = "use_one_off_supplier"
     CREATE_PERMANENT_SUPPLIER = "create_permanent_supplier"
+    #: P0-PROD-08H. Distinct from USE_ONE_OFF_SUPPLIER (a deferred, never-completed,
+    #: shared/pooled-partner concept -- see that mode's own docstring) and from
+    #: CREATE_PERMANENT_SUPPLIER (never retired). Creates/reuses the real legal
+    #: vendor identity for exactly this invoice lifecycle, then retires it from
+    #: ICT's active vendor population once a Vendor Bill has durably succeeded --
+    #: see app.application.workbench.one_off_vendor_retirement.
+    ONE_OFF_VENDOR = "one_off_vendor"
 
 
 class SupplierResolutionValidationStatus(StrEnum):
@@ -32,6 +39,9 @@ class SupplierResolutionValidationStatus(StrEnum):
     #: USE_ONE_OFF_SUPPLIER -- recorded as intent; execution is deferred pending an
     #: Odoo accounting model that does not pool payables/aging under one partner.
     ONE_OFF_EXECUTION_NOT_SUPPORTED = "one_off_execution_not_supported"
+    #: ONE_OFF_VENDOR -- a separate controlled capability creates/reuses the real
+    #: legal partner later (see SupplierResolutionMode.ONE_OFF_VENDOR).
+    PENDING_ONE_OFF_VENDOR = "pending_one_off_vendor"
 
 
 @dataclass(frozen=True, slots=True)

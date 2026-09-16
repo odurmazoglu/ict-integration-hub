@@ -161,6 +161,30 @@ class SqlAlchemyReviewSupplierRemediationEffectRepository:
             raise SupplierResolutionError(SAFE_REMEDIATION_EFFECT_PERSISTENCE_ERROR) from exc
         return remediation_effect_from_model(record) if record is not None else None
 
+    def find_one_off_vendor_effect_by_partner_id(
+        self,
+        *,
+        company_id: int,
+        resolved_partner_id: int,
+    ) -> SupplierRemediationEffect | None:
+        if type(company_id) is not int or company_id <= 0:
+            raise SupplierResolutionContractError("company_id must be positive.")
+        if type(resolved_partner_id) is not int or resolved_partner_id <= 0:
+            raise SupplierResolutionContractError("resolved_partner_id must be positive.")
+        try:
+            record = self._session.scalar(
+                select(WorkbenchReviewSupplierRemediationEffect)
+                .where(
+                    WorkbenchReviewSupplierRemediationEffect.company_id == company_id,
+                    WorkbenchReviewSupplierRemediationEffect.resolved_partner_id == resolved_partner_id,
+                    WorkbenchReviewSupplierRemediationEffect.mode == SupplierResolutionMode.ONE_OFF_VENDOR.value,
+                )
+                .limit(1)
+            )
+        except SQLAlchemyError as exc:
+            raise SupplierResolutionError(SAFE_REMEDIATION_EFFECT_PERSISTENCE_ERROR) from exc
+        return remediation_effect_from_model(record) if record is not None else None
+
     def _find(
         self,
         *,
