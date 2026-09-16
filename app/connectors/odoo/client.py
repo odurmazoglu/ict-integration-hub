@@ -28,6 +28,7 @@ READ_ONLY_MODELS = frozenset(
         "account.tax",
         "res.currency",
         "account.journal",
+        "account.account",
     }
 )
 

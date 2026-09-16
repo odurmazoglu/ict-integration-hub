@@ -500,22 +500,33 @@ def _optional_positive_record_id(value: Any) -> int | None:
 def _line_resolutions(value: Any) -> tuple[LineResolution, ...]:
     """Parse each JSON line item as either an explicit product selection
     (``selected_product_id``) or an explicit "no product -- post as expense"
-    decision (``account_only: true``; business label POST_AS_EXPENSE). Exactly
-    one of the two must be present -- ``LineResolution.__post_init__`` is the
-    single source of truth for that mutual-exclusivity contract, never
-    duplicated here.
+    decision (``account_only: true`` + ``expense_account_id``; business label
+    POST_AS_EXPENSE). Mutual exclusivity of ``selected_product_id``/``account_only``
+    is ``LineResolution.__post_init__``'s single source of truth, never duplicated
+    here. ``expense_account_id`` is the operator-confirmed Odoo ``account.account``
+    id for the line's expense posting (P0-PROD-08G) -- this Studio contract, like
+    the REST one, requires it on every *new* ``account_only`` submission (checked
+    here, not in the domain DTO, so replaying already-persisted legacy evidence
+    without it still deserializes -- see ``LineResolution``'s own docstring).
     """
 
     if _is_empty_optional(value):
         return ()
-    return tuple(
-        LineResolution(
-            line_number=_required_text_value(item.get("line_number")),
-            selected_product_id=_optional_many2one_id(item.get("selected_product_id")),
-            account_only=_optional_account_only_flag(item.get("account_only")),
+    resolutions = []
+    for item in _json_list(value):
+        account_only = _optional_account_only_flag(item.get("account_only"))
+        expense_account_id = _optional_many2one_id(item.get("expense_account_id"))
+        if account_only and expense_account_id is None:
+            raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+        resolutions.append(
+            LineResolution(
+                line_number=_required_text_value(item.get("line_number")),
+                selected_product_id=_optional_many2one_id(item.get("selected_product_id")),
+                account_only=account_only,
+                expense_account_id=expense_account_id,
+            )
         )
-        for item in _json_list(value)
-    )
+    return tuple(resolutions)
 
 
 def _optional_account_only_flag(value: Any) -> bool:

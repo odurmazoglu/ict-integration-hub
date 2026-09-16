@@ -160,7 +160,11 @@ def test_parent_fields_and_many2one_ids_are_parsed() -> None:
 def test_account_only_line_resolution_is_parsed() -> None:
     reader = OdooWorkbenchDecisionCandidateReader(
         adapter=RecordingAdapter(
-            parent_records=[_parent_record(x_line_resolutions='[{"line_number": "1", "account_only": true}]')],
+            parent_records=[
+                _parent_record(
+                    x_line_resolutions='[{"line_number": "1", "account_only": true, "expense_account_id": 9001}]'
+                )
+            ],
             allocation_records=_allocation_records(),
         ),
         mapping=_mapping(),
@@ -171,6 +175,7 @@ def test_account_only_line_resolution_is_parsed() -> None:
     resolution = candidate.line_resolutions[0]
     assert resolution.account_only is True
     assert resolution.selected_product_id is None
+    assert resolution.expense_account_id == 9001
 
 
 def test_mixed_selected_product_and_account_only_line_resolutions_are_parsed() -> None:
@@ -179,7 +184,8 @@ def test_mixed_selected_product_and_account_only_line_resolutions_are_parsed() -
             parent_records=[
                 _parent_record(
                     x_line_resolutions=(
-                        '[{"line_number": "1", "selected_product_id": 800}, {"line_number": "2", "account_only": true}]'
+                        '[{"line_number": "1", "selected_product_id": 800},'
+                        ' {"line_number": "2", "account_only": true, "expense_account_id": 9001}]'
                     )
                 )
             ],
@@ -193,8 +199,10 @@ def test_mixed_selected_product_and_account_only_line_resolutions_are_parsed() -
     resolutions = {r.line_number: r for r in candidate.line_resolutions}
     assert resolutions["1"].selected_product_id == 800
     assert resolutions["1"].account_only is False
+    assert resolutions["1"].expense_account_id is None
     assert resolutions["2"].account_only is True
     assert resolutions["2"].selected_product_id is None
+    assert resolutions["2"].expense_account_id == 9001
 
 
 def test_line_resolution_with_both_selected_product_id_and_account_only_fails_closed() -> None:
@@ -244,6 +252,59 @@ def test_line_resolution_with_non_boolean_account_only_fails_closed() -> None:
     reader = OdooWorkbenchDecisionCandidateReader(
         adapter=RecordingAdapter(
             parent_records=[_parent_record(x_line_resolutions='[{"line_number": "1", "account_only": "yes"}]')],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_line_resolution_account_only_without_expense_account_id_fails_closed() -> None:
+    """New-decision contract (P0-PROD-08G): every fresh account_only submission needs
+    its own explicit expense_account_id -- checked here, not in the domain DTO, so
+    replaying pre-08G persisted evidence (no expense_account_id key at all) is
+    unaffected. See test_g_no_automatic_product_not_found_to_expense_conversion and
+    the legacy-fallback tests in test_account_only_line_override.py.
+    """
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_line_resolutions='[{"line_number": "1", "account_only": true}]')],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_line_resolution_expense_account_id_without_account_only_fails_closed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[
+                _parent_record(
+                    x_line_resolutions='[{"line_number": "1", "selected_product_id": 800, "expense_account_id": 9001}]'
+                )
+            ],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_line_resolution_with_non_positive_expense_account_id_fails_closed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[
+                _parent_record(
+                    x_line_resolutions='[{"line_number": "1", "account_only": true, "expense_account_id": 0}]'
+                )
+            ],
             allocation_records=_allocation_records(),
         ),
         mapping=_mapping(),

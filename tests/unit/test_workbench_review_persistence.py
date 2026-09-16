@@ -418,7 +418,9 @@ def test_repository_submits_select_workflow_decision_and_persists_explicit_conte
     assert record.decision_type == ReviewDecisionType.SELECT_WORKFLOW.value
     assert record.selected_workflow == WorkflowType.RFQ.value
     assert record.selected_partner_id == 50
-    assert record.line_resolutions == [{"line_number": "1", "selected_product_id": 10, "account_only": False}]
+    assert record.line_resolutions == [
+        {"line_number": "1", "selected_product_id": 10, "account_only": False, "expense_account_id": None}
+    ]
     assert record.tax_resolutions == [{"line_number": "1", "tax_index": 0, "selected_tax_id": 20}]
     assert record.business_context is None
     assert record.business_context_allocations == {

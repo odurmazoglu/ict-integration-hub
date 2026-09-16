@@ -439,10 +439,14 @@ def _attachment_from_data(data: dict[str, Any]) -> Attachment:
 def _line_resolution_from_data(data: Any) -> LineResolution:
     data = _require_dict(data)
     selected_product_id = data.get("selected_product_id")
+    expense_account_id = data.get("expense_account_id")
     return LineResolution(
         line_number=_required_text(data.get("line_number")),
         selected_product_id=None if selected_product_id is None else _required_int(selected_product_id),
         account_only=bool(data.get("account_only", False)),
+        # Absent on any decision persisted before P0-PROD-08G -- .get() default keeps
+        # that legacy data reading back exactly as before.
+        expense_account_id=None if expense_account_id is None else _required_int(expense_account_id),
     )
 
 

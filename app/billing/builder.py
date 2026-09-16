@@ -36,6 +36,7 @@ class VendorBillBuilder:
         operating_expense_match: OperatingExpenseMatchResult | None = None,
         account_only_line_numbers: frozenset[str] = frozenset(),
         account_only_expense_match: OperatingExpenseMatchResult | None = None,
+        explicit_account_only_accounts: dict[str, int] | None = None,
     ) -> VendorBill:
         """Build a deterministic Vendor Bill.
 
@@ -44,6 +45,15 @@ class VendorBillBuilder:
         that otherwise have no matched Odoo product. They apply per line and are
         independent of the whole-invoice ``operating_expense_match`` path, which is
         unchanged and still takes priority when it applies.
+
+        ``explicit_account_only_accounts`` (P0-PROD-08G) is an optional
+        ``{line_number: expense_account_id}`` map of operator-confirmed, per-line
+        explicit accounts (``LineResolution.expense_account_id``), pinned once at
+        decision-acceptance time -- never re-queried here. Per line, it takes
+        precedence over ``account_only_expense_match``, which remains the fallback
+        for account-only lines with no explicit account of their own (the legacy
+        whole-vendor ``OperatingExpenseMappingRecord`` flow, unchanged). Omitting it
+        entirely reproduces the pre-08G behavior exactly.
         """
 
         validation = validate_vendor_bill_inputs(
@@ -55,6 +65,7 @@ class VendorBillBuilder:
             operating_expense_match=operating_expense_match,
             account_only_line_numbers=account_only_line_numbers,
             account_only_expense_match=account_only_expense_match,
+            explicit_account_only_accounts=explicit_account_only_accounts,
         )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
@@ -72,12 +83,12 @@ class VendorBillBuilder:
             )
         else:
             product_by_line = _product_results_by_line(product_match)
-            resolved_account_only_account_id = _resolved_account_only_account_id(
-                account_only_line_numbers, account_only_expense_match
+            resolved_account_only_account_ids = _resolved_account_only_account_ids(
+                account_only_line_numbers, account_only_expense_match, explicit_account_only_accounts
             )
             invoice_lines = tuple(
-                _expense_vendor_bill_line(line, resolved_account_only_account_id, tax_ids_by_line)
-                if line.line_number in account_only_line_numbers and resolved_account_only_account_id is not None
+                _expense_vendor_bill_line(line, resolved_account_only_account_ids[line.line_number], tax_ids_by_line)
+                if line.line_number in resolved_account_only_account_ids
                 else _vendor_bill_line(line, product_by_line[line.line_number], tax_ids_by_line)
                 for line in invoice.lines
             )
@@ -170,15 +181,19 @@ def validate_vendor_bill_inputs(
     operating_expense_match: object | None = None,
     account_only_line_numbers: frozenset[str] = frozenset(),
     account_only_expense_match: object | None = None,
+    explicit_account_only_accounts: dict[str, int] | None = None,
 ) -> VendorBillValidationResult:
     """Validate deterministic Vendor Bill inputs.
 
     ``account_only_line_numbers`` names invoice lines carrying an explicit human
     ``LineResolution.account_only`` decision (see ``app.application.workbench.dto``):
     those specific lines are exempted from the normal per-line product-match
-    requirement and instead require ``account_only_expense_match`` to resolve to one
-    deterministic expense account (via ``_resolved_account_only_account_id``). This is
-    independent of, and does not relax, the existing whole-invoice
+    requirement and instead require a deterministic expense account to be
+    resolvable for every one of them -- per line, either an explicit
+    ``LineResolution.expense_account_id`` (``explicit_account_only_accounts``,
+    P0-PROD-08G, takes precedence) or the legacy whole-vendor
+    ``account_only_expense_match`` fallback (via ``_resolved_account_only_account_ids``).
+    This is independent of, and does not relax, the existing whole-invoice
     ``operating_expense_match``/``expense_mode`` path below, which still requires every
     line to be free of product identifiers.
     """
@@ -197,10 +212,10 @@ def validate_vendor_bill_inputs(
 
     expense_mode = _operating_expense_mode(invoice, operating_expense_match)
     account_only_line_numbers = account_only_line_numbers if not expense_mode else frozenset()
-    resolved_account_only_account_id = _resolved_account_only_account_id(
-        account_only_line_numbers, account_only_expense_match
+    resolved_account_only_account_ids = _resolved_account_only_account_ids(
+        account_only_line_numbers, account_only_expense_match, explicit_account_only_accounts
     )
-    if account_only_line_numbers and resolved_account_only_account_id is None:
+    if account_only_line_numbers - resolved_account_only_account_ids.keys():
         errors.append("Explicit account-only line resolution requires a deterministic expense account mapping.")
 
     if partner_match.status is not PartnerMatchStatus.MATCHED or partner_match.partner_id is None:
@@ -267,19 +282,43 @@ def _operating_expense_mode(invoice: InternalInvoice, operating_expense_match: o
     return invoice_is_product_identifier_free(invoice)
 
 
-def _resolved_account_only_account_id(
+def _resolved_account_only_account_ids(
     account_only_line_numbers: frozenset[str],
     account_only_expense_match: object | None,
-) -> int | None:
-    """The single deterministic expense account for explicit account-only lines, if any.
+    explicit_account_only_accounts: dict[str, int] | None,
+) -> dict[str, int]:
+    """The deterministic expense account for each explicit account-only line, if any.
 
-    Returns ``None`` whenever there is nothing to resolve (``account_only_line_numbers``
-    is empty) or the resolution is not a clean ``MATCHED`` result with a positive account
-    id -- callers must fail closed on ``None`` rather than guess an account.
+    Precedence is per line: an explicit, decision-time-pinned
+    ``LineResolution.expense_account_id`` (P0-PROD-08G) always wins; the legacy
+    whole-vendor ``account_only_expense_match`` is the fallback for any account-only
+    line that carries no explicit account of its own. A line resolved by neither is
+    simply absent from the returned mapping -- callers must fail closed on that
+    absence rather than guess an account.
     """
 
     if not account_only_line_numbers:
-        return None
+        return {}
+
+    fallback_account_id = _fallback_account_only_account_id(account_only_expense_match)
+    explicit_accounts = explicit_account_only_accounts or {}
+
+    resolved: dict[str, int] = {}
+    for line_number in account_only_line_numbers:
+        explicit_account_id = explicit_accounts.get(line_number)
+        if type(explicit_account_id) is int and not isinstance(explicit_account_id, bool) and explicit_account_id > 0:
+            resolved[line_number] = explicit_account_id
+        elif fallback_account_id is not None:
+            resolved[line_number] = fallback_account_id
+    return resolved
+
+
+def _fallback_account_only_account_id(account_only_expense_match: object | None) -> int | None:
+    """The legacy whole-vendor expense account, if the pinned mapping is a clean match.
+
+    Returns ``None`` unless the resolution is a clean ``MATCHED`` result with a
+    positive account id.
+    """
 
     from app.application.expense_mapping import OperatingExpenseMatchStatus
 

@@ -29,6 +29,7 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationProposal,
     ReviewReclassificationResult,
 )
+from app.application.workbench.selected_expense_account_resolution import ResolutionAccountRecord
 from app.application.workbench.selected_product_resolution import ResolutionProductRecord
 from app.application.workbench.supplier_remediation import SupplierRemediationEffect
 from app.application.workbench.supplier_resolution import ResolutionPartnerRecord, SupplierResolution
@@ -142,6 +143,18 @@ class SelectedProductReader(Protocol):
     """
 
     def find_products_by_ids(self, product_ids: tuple[int, ...]) -> tuple[ResolutionProductRecord, ...]:
+        pass
+
+
+class SelectedAccountReader(Protocol):
+    """Read-only port for reading Odoo ``account.account`` records by id.
+
+    Used only to validate an explicit ``LineResolution.expense_account_id`` (P0-PROD-08G)
+    before it is accepted as part of a review decision -- never during Vendor Bill
+    execution, and never used to write.
+    """
+
+    def find_accounts_by_ids(self, account_ids: tuple[int, ...]) -> tuple[ResolutionAccountRecord, ...]:
         pass
 
 

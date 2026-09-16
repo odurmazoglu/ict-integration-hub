@@ -80,8 +80,17 @@ class LineResolutionRequest(BaseModel):
     """One explicit per-line resolution: a specific Odoo product, or an explicit
     "no product -- post as expense" decision (business label: POST_AS_EXPENSE /
     "Post as Expense" / "Ürün oluşturmadan gider olarak işle"). The internal/domain
-    field name stays ``account_only`` -- see ``app.application.workbench.dto.LineResolution``,
-    which this mirrors exactly. Never both, never neither.
+    field names stay ``account_only``/``expense_account_id`` -- see
+    ``app.application.workbench.dto.LineResolution``, which this mirrors exactly.
+
+    ``expense_account_id`` (P0-PROD-08G) is the operator-confirmed Odoo
+    ``account.account`` id for this specific line's expense posting -- required
+    whenever ``account_only=true``. This REST contract is deliberately stricter
+    than the domain DTO's own validation: every *new* account-only submission must
+    name its own account explicitly; there is no bare ``account_only=true`` path
+    left reachable from this endpoint (the legacy whole-vendor expense-mapping
+    fallback still exists for already-persisted historical decisions -- see
+    ``app.billing.builder`` -- it just cannot be freshly initiated here anymore).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -89,13 +98,20 @@ class LineResolutionRequest(BaseModel):
     line_number: str
     selected_product_id: int | None = None
     account_only: bool = False
+    expense_account_id: int | None = None
 
     @model_validator(mode="after")
     def _validate_mutually_exclusive_resolution(self) -> LineResolutionRequest:
-        if self.account_only and self.selected_product_id is not None:
-            raise ValueError("An account-only line resolution must not also select a product.")
-        if not self.account_only and self.selected_product_id is None:
-            raise ValueError("A line resolution requires either selected_product_id or account_only=true.")
+        if self.account_only:
+            if self.selected_product_id is not None:
+                raise ValueError("An account-only line resolution must not also select a product.")
+            if self.expense_account_id is None:
+                raise ValueError("An account-only line resolution requires an explicit expense_account_id.")
+        else:
+            if self.selected_product_id is None:
+                raise ValueError("A line resolution requires either selected_product_id or account_only=true.")
+            if self.expense_account_id is not None:
+                raise ValueError("expense_account_id is only valid for an account-only line resolution.")
         return self
 
 
