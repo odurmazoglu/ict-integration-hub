@@ -649,6 +649,7 @@ def test_execution_strategy_passes_operating_expense_match_to_builder() -> None:
             operating_expense_match=None,
             account_only_line_numbers=frozenset(),
             account_only_expense_match=None,
+            explicit_account_only_accounts=None,
         ):
             self.captured = operating_expense_match
             return VendorBill(

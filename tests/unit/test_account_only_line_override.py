@@ -196,6 +196,53 @@ def test_line_resolution_default_requires_positive_product_id() -> None:
         LineResolution(line_number="1")
 
 
+# ------------------------------------------------- LineResolution.expense_account_id (P0-PROD-08G)
+# Domain-contract truth table A-G. Case C (account_only=True, expense_account_id=None)
+# stays VALID at this layer on purpose -- legacy/vendor-wide account_only evidence
+# persisted before this field existed must keep deserializing (see LineResolution's
+# own docstring); the stricter "always require it for new submissions" rule lives at
+# the REST/Studio ingestion boundary, not here.
+
+
+def test_a_selected_product_only_is_valid() -> None:
+    resolution = LineResolution(line_number="1", selected_product_id=10)
+    assert resolution.expense_account_id is None
+
+
+def test_b_account_only_with_explicit_expense_account_is_valid() -> None:
+    resolution = LineResolution(line_number="1", account_only=True, expense_account_id=9001)
+    assert resolution.selected_product_id is None
+    assert resolution.expense_account_id == 9001
+
+
+def test_c_account_only_without_expense_account_remains_valid_at_domain_layer() -> None:
+    """Legacy compatibility: old persisted evidence has no expense_account_id at all."""
+    resolution = LineResolution(line_number="1", account_only=True)
+    assert resolution.expense_account_id is None
+
+
+def test_d_expense_account_id_without_account_only_is_rejected() -> None:
+    with pytest.raises(WorkbenchContractError):
+        LineResolution(line_number="1", selected_product_id=10, expense_account_id=9001)
+
+
+def test_e_selected_product_and_account_only_together_is_rejected() -> None:
+    with pytest.raises(WorkbenchContractError):
+        LineResolution(line_number="1", selected_product_id=10, account_only=True)
+
+
+def test_f_selected_product_and_expense_account_id_together_is_rejected() -> None:
+    with pytest.raises(WorkbenchContractError):
+        LineResolution(line_number="1", selected_product_id=10, expense_account_id=9001)
+
+
+def test_g_non_positive_expense_account_id_is_rejected() -> None:
+    with pytest.raises(WorkbenchContractError):
+        LineResolution(line_number="1", account_only=True, expense_account_id=0)
+    with pytest.raises(WorkbenchContractError):
+        LineResolution(line_number="1", account_only=True, expense_account_id=-1)
+
+
 # --------------------------------------------------------------------------- A. no override: unchanged failure
 
 
@@ -315,6 +362,113 @@ def test_d_matched_product_is_unaffected_by_an_unused_account_only_expense_match
     assert bill.invoice_lines[0].account_id is None
 
 
+# --------------------------------------- Explicit per-line expense account (P0-PROD-08G)
+# P. explicit wins over the legacy pinned account_only_expense_match
+# Q. legacy vendor-wide account_only_expense_match still executes unchanged with no
+#    explicit_account_only_accounts at all (already proven by test_b/test_d above --
+#    neither passes explicit_account_only_accounts, and both still pass)
+
+
+EXPLICIT_LINE_ACCOUNT_ID = 8801
+
+
+def test_p_explicit_per_line_account_wins_over_legacy_vendor_wide_mapping() -> None:
+    invoice = _invoice([_line("1", seller_item_code=SELLER_ITEM_CODE)])
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=_expense_match(),  # would resolve to EXPENSE_ACCOUNT_ID
+        explicit_account_only_accounts={"1": EXPLICIT_LINE_ACCOUNT_ID},
+    )
+
+    assert bill.invoice_lines[0].account_id == EXPLICIT_LINE_ACCOUNT_ID
+    assert bill.invoice_lines[0].account_id != EXPENSE_ACCOUNT_ID
+    assert bill.invoice_lines[0].product_id is None
+
+
+def test_p_explicit_per_line_account_works_with_no_legacy_mapping_at_all() -> None:
+    """The whole point of P0-PROD-08G: D-Market gets no vendor-wide mapping."""
+    invoice = _invoice([_line("1", seller_item_code=SELLER_ITEM_CODE)])
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=None,  # no vendor-wide mapping exists
+        explicit_account_only_accounts={"1": EXPLICIT_LINE_ACCOUNT_ID},
+    )
+
+    assert bill.invoice_lines[0].account_id == EXPLICIT_LINE_ACCOUNT_ID
+    assert bill.invoice_lines[0].product_id is None
+
+
+def test_s_mixed_invoice_product_plus_explicit_account_only_line() -> None:
+    invoice = _invoice(
+        [
+            _line("1", seller_item_code="SKU-1"),
+            _line("2", seller_item_code=SELLER_ITEM_CODE, unit_price=Decimal("30.00")),
+        ]
+    )
+    product_match = _products(
+        [
+            _product_line("1", ProductMatchStatus.MATCHED, product_id=111),
+            _product_line("2", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE),
+        ]
+    )
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"2"}),
+        explicit_account_only_accounts={"2": EXPLICIT_LINE_ACCOUNT_ID},
+    )
+
+    line1, line2 = bill.invoice_lines
+    assert line1.product_id == 111 and line1.account_id is None
+    assert line2.product_id is None and line2.account_id == EXPLICIT_LINE_ACCOUNT_ID
+
+
+def test_explicit_account_missing_for_one_of_two_account_only_lines_fails_closed() -> None:
+    invoice = _invoice(
+        [
+            _line("1", seller_item_code=SELLER_ITEM_CODE),
+            _line("2", seller_item_code="HBV999", unit_price=Decimal("10.00")),
+        ]
+    )
+    product_match = _products(
+        [
+            _product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE),
+            _product_line("2", ProductMatchStatus.NOT_FOUND, seller_item_code="HBV999"),
+        ]
+    )
+
+    result = validate_vendor_bill_inputs(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1", "2"}),
+        account_only_expense_match=None,
+        explicit_account_only_accounts={"1": EXPLICIT_LINE_ACCOUNT_ID},  # line 2 has none
+    )
+    assert not result.is_valid
+    assert "Explicit account-only line resolution requires a deterministic expense account mapping." in result.errors
+
+
 # --------------------------------------------------------------------------- Mixed invoice (requirement 7)
 
 
@@ -401,6 +555,7 @@ class _RecordingBuilder(VendorBillBuilder):
         self.calls = 0
         self.last_account_only_line_numbers: frozenset[str] | None = None
         self.last_account_only_expense_match = None
+        self.last_explicit_account_only_accounts = None
 
     def build(
         self,
@@ -413,10 +568,12 @@ class _RecordingBuilder(VendorBillBuilder):
         operating_expense_match=None,
         account_only_line_numbers: frozenset[str] = frozenset(),
         account_only_expense_match=None,
+        explicit_account_only_accounts=None,
     ):
         self.calls += 1
         self.last_account_only_line_numbers = account_only_line_numbers
         self.last_account_only_expense_match = account_only_expense_match
+        self.last_explicit_account_only_accounts = explicit_account_only_accounts
         from app.billing.dto import VendorBill
 
         return VendorBill(

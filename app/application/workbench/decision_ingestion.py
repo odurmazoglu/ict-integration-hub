@@ -282,6 +282,8 @@ def decision_idempotency_key(candidate: OdooWorkbenchDecisionCandidate) -> str:
             {
                 "line_number": resolution.line_number,
                 "selected_product_id": resolution.selected_product_id,
+                "account_only": resolution.account_only,
+                "expense_account_id": resolution.expense_account_id,
             }
             for resolution in candidate.line_resolutions
         ],

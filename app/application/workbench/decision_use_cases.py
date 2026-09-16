@@ -12,7 +12,12 @@ from app.application.workbench.ports import (
     ReviewBillingEvidenceReader,
     ReviewDecisionWriter,
     ReviewExecutionEvidenceReader,
+    SelectedAccountReader,
     SelectedProductReader,
+)
+from app.application.workbench.selected_expense_account_resolution import (
+    selected_expense_account_ids,
+    validate_selected_expense_accounts,
 )
 from app.application.workbench.selected_product_resolution import (
     apply_selected_product_resolutions,
@@ -32,11 +37,13 @@ class SubmitReviewDecisionUseCase:
         execution_evidence_reader: ReviewExecutionEvidenceReader | None = None,
         billing_evidence_reader: ReviewBillingEvidenceReader | None = None,
         selected_product_reader: SelectedProductReader | None = None,
+        selected_account_reader: SelectedAccountReader | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
         self._execution_evidence_reader = execution_evidence_reader
         self._billing_evidence_reader = billing_evidence_reader
         self._selected_product_reader = selected_product_reader
+        self._selected_account_reader = selected_account_reader
 
     def execute(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         if not isinstance(command, ReviewDecisionCommand):
@@ -55,6 +62,7 @@ class SubmitReviewDecisionUseCase:
                 "Execution source evidence could not be loaded safely.",
             )
             evidence = self._apply_selected_product_resolutions(command, evidence)
+            self._validate_selected_expense_accounts(command)
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
                 return _translate_decision_failure(
@@ -108,6 +116,31 @@ class SubmitReviewDecisionUseCase:
             products_by_id=products_by_id,
         )
         return replace(evidence, product_match=new_product_match)
+
+    def _validate_selected_expense_accounts(self, command: ReviewDecisionCommand) -> None:
+        """Validate any explicit ``LineResolution.expense_account_id`` overrides (P0-PROD-08G).
+
+        Read-only lookup at decision-acceptance time only -- never during Vendor Bill
+        execution. There is nothing to substitute: the operator's own account id is
+        never replaced, only proven real and company-scoped before the decision is
+        persisted. A no-op when no line names an explicit expense account.
+        """
+
+        account_ids = selected_expense_account_ids(command.line_resolutions)
+        if not account_ids:
+            return
+        if self._selected_account_reader is None:
+            raise ReviewDecisionError("Selected expense account resolution is required but not configured.")
+        accounts = _translate_decision_failure(
+            lambda: self._selected_account_reader.find_accounts_by_ids(account_ids),
+            "Selected expense account evidence could not be loaded safely.",
+        )
+        accounts_by_id = {account.id: account for account in accounts}
+        validate_selected_expense_accounts(
+            line_resolutions=command.line_resolutions,
+            company_id=command.company_id,
+            accounts_by_id=accounts_by_id,
+        )
 
     def _billing_instructions(
         self,

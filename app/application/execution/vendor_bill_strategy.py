@@ -64,6 +64,13 @@ class VendorBillExecutionStrategy:
             account_only_line_numbers = frozenset(
                 resolution.line_number for resolution in source.line_resolutions if resolution.account_only
             )
+            # Pinned at decision-acceptance time (P0-PROD-08G), never recomputed here --
+            # see LineResolution.expense_account_id and SubmitReviewDecisionUseCase.
+            explicit_account_only_accounts = {
+                resolution.line_number: resolution.expense_account_id
+                for resolution in source.line_resolutions
+                if resolution.account_only and resolution.expense_account_id is not None
+            }
             vendor_bill = self._vendor_bill_builder.build(
                 source.invoice,
                 source.partner_match,
@@ -75,6 +82,7 @@ class VendorBillExecutionStrategy:
                 # Pinned Stage-1/2 evidence, never recomputed here -- see
                 # ExecutionSourceInvoice.account_only_expense_match.
                 account_only_expense_match=source.account_only_expense_match,
+                explicit_account_only_accounts=explicit_account_only_accounts,
             )
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,

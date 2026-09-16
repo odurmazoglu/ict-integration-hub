@@ -49,6 +49,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import SessionLocal
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.product_repository import OdooProductRepository
+from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountReader
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBillingEvidenceReader
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
@@ -169,6 +170,7 @@ def get_submit_review_decision_use_case(
         selected_product_reader=OdooSelectedProductReader(
             product_repository=OdooProductRepository(adapter=read_adapter),
         ),
+        selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
     )
 
 

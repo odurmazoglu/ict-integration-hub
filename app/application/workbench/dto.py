@@ -32,14 +32,27 @@ class LineResolution(ApplicationDTO):
 
     Exactly one of two explicit human choices: ``selected_product_id`` (a specific
     Odoo product) or ``account_only=True`` (an explicit decision that this line does
-    not map to ``product.product`` and must be posted using the approved deterministic
+    not map to ``product.product`` and must be posted using an approved deterministic
     account-only accounting treatment instead). Never inferred from an unmatched
     product -- a line with neither set is not a resolution at all.
+
+    ``expense_account_id`` (P0-PROD-08G) is an optional, operator-confirmed explicit
+    per-line Odoo ``account.account`` id, valid only alongside ``account_only=True``.
+    It is never required by this domain contract: an ``account_only`` line with no
+    explicit ``expense_account_id`` remains valid here so that historical decisions
+    persisted before this field existed -- and rely on the legacy whole-vendor
+    ``OperatingExpenseMappingRecord`` fallback -- continue to deserialize and execute
+    unchanged. The *new* decision contract (every fresh ``account_only`` submission
+    must carry its own ``expense_account_id``) is enforced one layer up, at the REST
+    and Odoo Studio ingestion boundaries (their respective request/parsing code) --
+    not here, so
+    that replaying old persisted evidence never fails validation retroactively.
     """
 
     line_number: str
     selected_product_id: int | None = None
     account_only: bool = False
+    expense_account_id: int | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.line_number, "line_number is required.")
@@ -48,8 +61,12 @@ class LineResolution(ApplicationDTO):
         if self.account_only:
             if self.selected_product_id is not None:
                 raise WorkbenchContractError("An account-only line resolution must not also select a product.")
+            if self.expense_account_id is not None:
+                _require_positive_int(self.expense_account_id, "expense_account_id must be a positive ERP id.")
         else:
             _require_positive_int(self.selected_product_id, "selected_product_id must be a positive ERP id.")
+            if self.expense_account_id is not None:
+                raise WorkbenchContractError("expense_account_id is only valid for an account-only line resolution.")
 
 
 @dataclass(frozen=True, slots=True)

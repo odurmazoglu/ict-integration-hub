@@ -36,6 +36,7 @@ from app.erp.odoo.company_repository import OdooCompanyRepository
 from app.erp.odoo.currency_repository import OdooCurrencyRepository
 from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
+from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountReader
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.erp.odoo.tax_repository import OdooTaxRepository
 from app.erp.odoo.workbench_reference_repositories import (
@@ -141,6 +142,7 @@ def build_odoo_workbench_decision_ingestion_workflow(
             selected_product_reader=OdooSelectedProductReader(
                 product_repository=OdooProductRepository(adapter=read_adapter),
             ),
+            selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
         ),
         acknowledgement_publisher=OdooWorkbenchProjectionPublisher(
             adapter=projection_adapter,

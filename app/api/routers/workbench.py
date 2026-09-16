@@ -485,6 +485,7 @@ def _line_resolution(value: LineResolutionRequest) -> LineResolution:
         line_number=value.line_number,
         selected_product_id=value.selected_product_id,
         account_only=value.account_only,
+        expense_account_id=value.expense_account_id,
     )
 
 

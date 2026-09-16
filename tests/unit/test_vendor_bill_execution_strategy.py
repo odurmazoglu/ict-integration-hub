@@ -508,11 +508,13 @@ class RecordingVendorBillBuilder(VendorBillBuilder):
         operating_expense_match=None,
         account_only_line_numbers: frozenset[str] = frozenset(),
         account_only_expense_match=None,
+        explicit_account_only_accounts=None,
     ) -> VendorBill:
         self.calls += 1
         self.last_operating_expense_match = operating_expense_match
         self.last_account_only_line_numbers = account_only_line_numbers
         self.last_account_only_expense_match = account_only_expense_match
+        self.last_explicit_account_only_accounts = explicit_account_only_accounts
         return self.vendor_bill
 
 

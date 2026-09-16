@@ -225,7 +225,7 @@ async def test_post_select_workflow_accepts_account_only_line_resolution(api_cli
         submit_use_case=use_case,
         json={
             **_select_workflow_payload(),
-            "line_resolutions": [{"line_number": "1", "account_only": True}],
+            "line_resolutions": [{"line_number": "1", "account_only": True, "expense_account_id": 9001}],
         },
     )
 
@@ -233,6 +233,7 @@ async def test_post_select_workflow_accepts_account_only_line_resolution(api_cli
     resolution = use_case.last_command.line_resolutions[0]
     assert resolution.account_only is True
     assert resolution.selected_product_id is None
+    assert resolution.expense_account_id == 9001
 
 
 async def test_post_select_workflow_accepts_mixed_line_resolutions(api_client: AsyncClient) -> None:
@@ -247,7 +248,7 @@ async def test_post_select_workflow_accepts_mixed_line_resolutions(api_client: A
             **_select_workflow_payload(),
             "line_resolutions": [
                 {"line_number": "1", "selected_product_id": 800},
-                {"line_number": "2", "account_only": True},
+                {"line_number": "2", "account_only": True, "expense_account_id": 9001},
             ],
         },
     )
@@ -256,8 +257,10 @@ async def test_post_select_workflow_accepts_mixed_line_resolutions(api_client: A
     resolutions = {r.line_number: r for r in use_case.last_command.line_resolutions}
     assert resolutions["1"].selected_product_id == 800
     assert resolutions["1"].account_only is False
+    assert resolutions["1"].expense_account_id is None
     assert resolutions["2"].account_only is True
     assert resolutions["2"].selected_product_id is None
+    assert resolutions["2"].expense_account_id == 9001
 
 
 async def test_line_resolution_rejects_both_selected_product_id_and_account_only(api_client: AsyncClient) -> None:
@@ -301,6 +304,38 @@ async def test_line_resolution_rejects_explicit_account_only_false_without_produ
         json={
             **_select_workflow_payload(),
             "line_resolutions": [{"line_number": "1", "account_only": False}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "request_validation_error"
+
+
+async def test_line_resolution_rejects_account_only_without_expense_account_id(api_client: AsyncClient) -> None:
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json={
+            **_select_workflow_payload(),
+            "line_resolutions": [{"line_number": "1", "account_only": True}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "request_validation_error"
+
+
+async def test_line_resolution_rejects_expense_account_id_without_account_only(api_client: AsyncClient) -> None:
+    response = await _post_decision(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        submit_use_case=FakeSubmitUseCase(_acknowledgement(ReviewDecisionType.SELECT_WORKFLOW)),
+        json={
+            **_select_workflow_payload(),
+            "line_resolutions": [{"line_number": "1", "selected_product_id": 800, "expense_account_id": 9001}],
         },
     )
 

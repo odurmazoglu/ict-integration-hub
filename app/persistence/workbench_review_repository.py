@@ -1919,6 +1919,7 @@ def _serialize_line_resolution(resolution: LineResolution) -> dict[str, Any]:
         "line_number": resolution.line_number,
         "selected_product_id": resolution.selected_product_id,
         "account_only": resolution.account_only,
+        "expense_account_id": resolution.expense_account_id,
     }
 
 
@@ -1926,10 +1927,14 @@ def _deserialize_line_resolution(value: Any) -> LineResolution:
     if not isinstance(value, dict):
         raise ReviewDecisionDataIntegrityError("Persisted review decision data is invalid.")
     selected_product_id = value.get("selected_product_id")
+    expense_account_id = value.get("expense_account_id")
     return LineResolution(
         line_number=str(value["line_number"]),
         selected_product_id=None if selected_product_id is None else _required_int(selected_product_id),
         account_only=bool(value.get("account_only", False)),
+        # Absent on any decision persisted before P0-PROD-08G -- .get() default keeps
+        # that legacy data deserializing exactly as before.
+        expense_account_id=None if expense_account_id is None else _required_int(expense_account_id),
     )
 
 
