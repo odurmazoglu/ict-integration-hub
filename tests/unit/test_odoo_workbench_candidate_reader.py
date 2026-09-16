@@ -157,6 +157,102 @@ def test_parent_fields_and_many2one_ids_are_parsed() -> None:
         candidate.review_id = "changed"  # type: ignore[misc]
 
 
+def test_account_only_line_resolution_is_parsed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_line_resolutions='[{"line_number": "1", "account_only": true}]')],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    candidate = reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    resolution = candidate.line_resolutions[0]
+    assert resolution.account_only is True
+    assert resolution.selected_product_id is None
+
+
+def test_mixed_selected_product_and_account_only_line_resolutions_are_parsed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[
+                _parent_record(
+                    x_line_resolutions=(
+                        '[{"line_number": "1", "selected_product_id": 800}, {"line_number": "2", "account_only": true}]'
+                    )
+                )
+            ],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    candidate = reader.get_ready_decision(review_id="review-1", company_id=7)
+
+    resolutions = {r.line_number: r for r in candidate.line_resolutions}
+    assert resolutions["1"].selected_product_id == 800
+    assert resolutions["1"].account_only is False
+    assert resolutions["2"].account_only is True
+    assert resolutions["2"].selected_product_id is None
+
+
+def test_line_resolution_with_both_selected_product_id_and_account_only_fails_closed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[
+                _parent_record(
+                    x_line_resolutions='[{"line_number": "1", "selected_product_id": 800, "account_only": true}]'
+                )
+            ],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_line_resolution_with_neither_selected_product_id_nor_account_only_fails_closed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_line_resolutions='[{"line_number": "1"}]')],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_line_resolution_with_account_only_false_and_no_product_fails_closed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_line_resolutions='[{"line_number": "1", "account_only": false}]')],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
+def test_line_resolution_with_non_boolean_account_only_fails_closed() -> None:
+    reader = OdooWorkbenchDecisionCandidateReader(
+        adapter=RecordingAdapter(
+            parent_records=[_parent_record(x_line_resolutions='[{"line_number": "1", "account_only": "yes"}]')],
+            allocation_records=_allocation_records(),
+        ),
+        mapping=_mapping(),
+    )
+
+    with pytest.raises(WorkbenchCandidateDataError):
+        reader.get_ready_decision(review_id="review-1", company_id=7)
+
+
 def test_existing_purchase_order_selected_workflow_requires_explicit_allocation_intent() -> None:
     reader = OdooWorkbenchDecisionCandidateReader(
         adapter=RecordingAdapter(

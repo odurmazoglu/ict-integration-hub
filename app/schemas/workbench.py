@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.application.execution import ExecutionArtifactType, ExecutionMode, WorkbenchVendorBillExecutionStatus
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
@@ -77,10 +77,26 @@ class ReviewQueueResponse(BaseModel):
 
 
 class LineResolutionRequest(BaseModel):
+    """One explicit per-line resolution: a specific Odoo product, or an explicit
+    "no product -- post as expense" decision (business label: POST_AS_EXPENSE /
+    "Post as Expense" / "Ürün oluşturmadan gider olarak işle"). The internal/domain
+    field name stays ``account_only`` -- see ``app.application.workbench.dto.LineResolution``,
+    which this mirrors exactly. Never both, never neither.
+    """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     line_number: str
-    selected_product_id: int
+    selected_product_id: int | None = None
+    account_only: bool = False
+
+    @model_validator(mode="after")
+    def _validate_mutually_exclusive_resolution(self) -> LineResolutionRequest:
+        if self.account_only and self.selected_product_id is not None:
+            raise ValueError("An account-only line resolution must not also select a product.")
+        if not self.account_only and self.selected_product_id is None:
+            raise ValueError("A line resolution requires either selected_product_id or account_only=true.")
+        return self
 
 
 class TaxResolutionRequest(BaseModel):
