@@ -401,6 +401,7 @@ async def resolve_review_product(
                 expected_version=request_body.expected_version,
                 line_number=request_body.line_number,
                 product_name=request_body.product_name,
+                product_type=request_body.product_type,
                 uom_id=request_body.uom_id,
                 approved_by=context.user_name or context.user_id,
                 is_storable=request_body.is_storable,

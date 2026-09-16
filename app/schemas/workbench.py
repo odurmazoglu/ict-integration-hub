@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -235,6 +235,10 @@ class ProductResolutionRequest(BaseModel):
     expected_version: int
     line_number: str
     product_name: str
+    # No default: the operator must explicitly choose goods vs. service. Never inferred
+    # from product_name, seller_item_code, supplier, invoice description, uom_id, or
+    # historical matching (P0-PROD-07F product-standard audit finding).
+    product_type: Literal["consu", "service"]
     uom_id: int
     internal_reference: str | None = None
     is_storable: bool = False

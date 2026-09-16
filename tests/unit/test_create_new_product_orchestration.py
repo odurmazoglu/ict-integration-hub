@@ -32,6 +32,7 @@ from app.application.exceptions.product_remediation import (
 from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import (
+    ProductRemediationContractError,
     ProductRemediationEligibilityError,
     ProductRemediationIdentityAmbiguousError,
     ProductRemediationRaceError,
@@ -354,6 +355,7 @@ class _Harness:
             "expected_version": 2,
             "line_number": "1",
             "product_name": "Yillik Aidat Urunu",
+            "product_type": "service",
             "uom_id": 1,
             "approved_by": ACTOR,
         }
@@ -396,6 +398,30 @@ async def test_o_explicit_internal_reference_preserved_exactly(session: Session)
     h = _Harness(session)
     await h.use_case.execute(h.command(internal_reference="ICT-SKU-0099"))
     assert h.product_writer.calls[0].default_code == "ICT-SKU-0099"
+
+
+async def test_operator_confirmed_product_type_service_reaches_odoo_command(session: Session) -> None:
+    h = _Harness(session)
+    result = await h.use_case.execute(h.command(product_type="service"))
+    assert result.status is ProductRemediationStatus.COMPLETED
+    assert h.product_writer.calls[0].type == "service"
+
+
+async def test_operator_confirmed_product_type_consu_reaches_odoo_command(session: Session) -> None:
+    h = _Harness(session)
+    result = await h.use_case.execute(h.command(product_type="consu"))
+    assert result.status is ProductRemediationStatus.COMPLETED
+    assert h.product_writer.calls[0].type == "consu"
+
+
+async def test_product_type_is_never_guessed_invalid_value_fails_closed_before_any_write(session: Session) -> None:
+    h = _Harness(session)
+    with pytest.raises(ProductRemediationContractError):
+        await h.use_case.execute(h.command(product_type="combo"))
+    assert h.product_writer.calls == []
+    assert (
+        h.reservation_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=2, line_number="1") is None
+    )
 
 
 # --------------------------------------------------------------------------- B

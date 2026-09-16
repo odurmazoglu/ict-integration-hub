@@ -437,6 +437,7 @@ def _product_resolution_body(**overrides: Any) -> dict[str, Any]:
         "expected_version": 2,
         "line_number": "1",
         "product_name": "Yillik Aidat Urunu",
+        "product_type": "service",
         "uom_id": 1,
     }
     body.update(overrides)
@@ -491,6 +492,7 @@ async def test_a_valid_request_delegates_to_07g_and_returns_product_result(api_c
     assert command.expected_version == 2
     assert command.line_number == "1"
     assert command.product_name == "Yillik Aidat Urunu"
+    assert command.product_type == "service"
     assert command.uom_id == 1
     assert command.internal_reference == "ICT-SKU-1"
     assert command.is_storable is True
@@ -528,6 +530,48 @@ async def test_e_expected_version_required(api_client: AsyncClient) -> None:
         json=body,
     )
     assert response.status_code == 400
+
+
+async def test_product_type_is_required_by_the_api(api_client: AsyncClient) -> None:
+    body = _product_resolution_body()
+    del body["product_type"]
+    response = await _post_product_resolution(
+        api_client,
+        "review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+        use_case=FakeCreateNewProductUseCase(_product_result()),
+        json=body,
+    )
+    assert response.status_code == 400
+    assert response.json()["errors"][0]["code"] == "request_validation_error"
+
+
+async def test_product_type_has_no_default_and_only_accepts_consu_or_service(api_client: AsyncClient) -> None:
+    for invalid_value in ("combo", "goods", "SERVICE", "", None):
+        use_case = FakeCreateNewProductUseCase(_product_result())
+        response = await _post_product_resolution(
+            api_client,
+            "review-1",
+            context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+            use_case=use_case,
+            json=_product_resolution_body(product_type=invalid_value),
+        )
+        assert response.status_code == 400, invalid_value
+        assert use_case.calls == 0
+
+
+async def test_product_type_consu_and_service_are_both_accepted_and_forwarded(api_client: AsyncClient) -> None:
+    for value in ("consu", "service"):
+        use_case = FakeCreateNewProductUseCase(_product_result())
+        response = await _post_product_resolution(
+            api_client,
+            "review-1",
+            context=_context(Permission.WORKBENCH_REVIEW_DECIDE),
+            use_case=use_case,
+            json=_product_resolution_body(product_type=value),
+        )
+        assert response.status_code == 200, value
+        assert use_case.last_command.product_type == value
 
 
 async def test_f_uom_id_required_and_must_be_positive(api_client: AsyncClient) -> None:
@@ -1137,12 +1181,15 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "expected_version",
         "line_number",
         "product_name",
+        "product_type",
         "uom_id",
         "internal_reference",
         "is_storable",
         "note",
     }
     assert product_resolution_schema.get("additionalProperties") is False
+    assert "product_type" in product_resolution_schema.get("required", [])
+    assert product_resolution_schema["properties"]["product_type"]["enum"] == ["consu", "service"]
     supplier_resolution_schema = response.json()["components"]["schemas"]["SupplierResolutionRequest"]
     supplier_resolution_text = str(supplier_resolution_schema)
     for forbidden in (

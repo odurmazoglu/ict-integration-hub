@@ -54,7 +54,6 @@ from app.application.workbench.ports import (
     SupplierRemediationEffectWriter,
 )
 from app.application.workbench.product_remediation import (
-    PRODUCT_TEMPLATE_TYPE,
     CreateNewProductCommand,
     CreateNewProductResult,
     ExistingSupplierInfo,
@@ -386,7 +385,7 @@ class CreateNewProductUseCase:
             write_result = await self._product_writer.create_product(
                 CreateProductCommand(
                     name=attempted.product_name,
-                    type=PRODUCT_TEMPLATE_TYPE,
+                    type=command.product_type,
                     uom_id=command.uom_id,
                     is_storable=attempted.is_storable,
                     default_code=attempted.internal_reference,

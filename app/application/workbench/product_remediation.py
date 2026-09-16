@@ -27,10 +27,12 @@ from enum import StrEnum
 from app.application.dto import ApplicationDTO
 from app.application.workbench.exceptions import ProductRemediationContractError
 
-# Odoo v19 product.template.type selection. Mirrors ALLOWED_PRODUCT_TEMPLATE_TYPES in
-# app.application.commands.product_remediation; v1 CREATE_NEW_PRODUCT always builds a
-# simple no-attribute consumable/service product.
-PRODUCT_TEMPLATE_TYPE = "consu"
+# Odoo v19 product.template.type choices exposed to the operator for CREATE_NEW_PRODUCT
+# v1. A strict subset of ALLOWED_PRODUCT_TEMPLATE_TYPES in
+# app.application.commands.product_remediation (#140's underlying writer also accepts
+# "combo") -- "combo" is not yet a supported remediation outcome and must never be
+# guessed/defaulted here; the operator explicitly picks goods vs. service.
+ALLOWED_REMEDIATION_PRODUCT_TYPES = frozenset({"consu", "service"})
 
 
 class ProductReservationStatus(StrEnum):
@@ -75,12 +77,18 @@ class ProductRemediationStatus(StrEnum):
 class CreateNewProductCommand(ApplicationDTO):
     """An authenticated operator's explicit choice to create a new Odoo product for one review line.
 
-    Only ``product_name``/``is_storable``/``internal_reference``/``note`` are operator
-    input carried into the Odoo write. Immutable source identity (``seller_item_code``,
-    company, the resolved supplier partner) is never carried here -- it is derived from
-    the review's persisted source evidence and accepted ``SupplierResolution`` by the
-    use case. ``approved_by`` is the authenticated actor supplied by the API security
-    context, never a body field (mirrors ``ResolveWorkbenchSupplierCommand``).
+    Only ``product_name``/``product_type``/``is_storable``/``internal_reference``/``note``
+    are operator input carried into the Odoo write. Immutable source identity
+    (``seller_item_code``, company, the resolved supplier partner) is never carried here
+    -- it is derived from the review's persisted source evidence and accepted
+    ``SupplierResolution`` by the use case. ``approved_by`` is the authenticated actor
+    supplied by the API security context, never a body field (mirrors
+    ``ResolveWorkbenchSupplierCommand``).
+
+    ``product_type`` has no default: the operator must explicitly choose goods
+    (``"consu"``) vs. service (``"service"``) -- it is never inferred from
+    ``product_name``, ``seller_item_code``, the supplier, the invoice description, or
+    ``uom_id`` (see PR fixing the P0-PROD-07F product-standard audit finding).
     """
 
     review_id: str
@@ -88,6 +96,7 @@ class CreateNewProductCommand(ApplicationDTO):
     expected_version: int
     line_number: str
     product_name: str
+    product_type: str
     uom_id: int
     approved_by: str
     is_storable: bool = False
@@ -101,6 +110,10 @@ class CreateNewProductCommand(ApplicationDTO):
         _require_positive_int(self.expected_version, "expected_version must be positive.")
         _require_text(self.line_number, "line_number is required.")
         _require_text(self.product_name, "product_name is required.")
+        if self.product_type not in ALLOWED_REMEDIATION_PRODUCT_TYPES:
+            raise ProductRemediationContractError(
+                "product_type must be explicitly one of: " + ", ".join(sorted(ALLOWED_REMEDIATION_PRODUCT_TYPES))
+            )
         _require_positive_int(self.uom_id, "A positive uom_id is required.")
         _require_text(self.approved_by, "approved_by (authenticated actor) is required.")
         if type(self.is_storable) is not bool:
@@ -267,7 +280,7 @@ def _require_positive_int(value: int | None, message: str) -> None:
 
 
 __all__ = [
-    "PRODUCT_TEMPLATE_TYPE",
+    "ALLOWED_REMEDIATION_PRODUCT_TYPES",
     "CreateNewProductCommand",
     "CreateNewProductResult",
     "ExistingSupplierInfo",
