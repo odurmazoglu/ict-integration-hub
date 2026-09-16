@@ -282,10 +282,14 @@ def test_provider_independence_and_no_write_operations() -> None:
     assert "/write" not in service_source
     assert "/unlink" not in service_source
     # The resolution service is read-only; the JSON-2 client exposes exactly one
-    # sanctioned res.partner write (the gated supplier-partner create from P0-3D2C)
-    # and still no partner write/unlink, nor product.product / account.tax creates.
+    # sanctioned res.partner create (the gated supplier-partner create from P0-3D2C)
+    # and exactly one sanctioned res.partner write -- the ONE_OFF_VENDOR archive-only
+    # write from P0-PROD-08H, hardcoded to {"active": False} with no caller-supplied
+    # values (see OdooJson2Client.archive_res_partner and its own docstring). Still
+    # no partner unlink, nor product.product / account.tax creates.
     assert client_source.count("res.partner/create") == 1
-    assert "res.partner/write" not in client_source
+    assert client_source.count("res.partner/write") == 1
+    assert '"active": False' in client_source
     assert "res.partner/unlink" not in client_source
     assert "product.product/create" not in client_source
     assert "account.tax/create" not in client_source

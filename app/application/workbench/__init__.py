@@ -96,6 +96,14 @@ from app.application.workbench.odoo_submission_use_cases import (
     SubmitOdooWorkbenchCandidateCommand,
     SubmitOdooWorkbenchCandidateUseCase,
 )
+from app.application.workbench.one_off_vendor_retirement import (
+    ArchiveOneOffVendorCommand,
+    ArchiveOneOffVendorResult,
+    ArchiveOneOffVendorStatus,
+    OneOffVendorRetirement,
+    OneOffVendorRetirementStatus,
+)
+from app.application.workbench.one_off_vendor_use_cases import ArchiveOneOffVendorUseCase
 from app.application.workbench.ports import (
     ProductIdentityClaimWriter,
     ProductRemediationReservationWriter,
@@ -174,6 +182,10 @@ __all__ = [
     "AllocationCompleteness",
     "AnalyticAccountReference",
     "AnalyticAccountReferenceRepository",
+    "ArchiveOneOffVendorCommand",
+    "ArchiveOneOffVendorResult",
+    "ArchiveOneOffVendorStatus",
+    "ArchiveOneOffVendorUseCase",
     "BusinessContextDecision",
     "BusinessContextAllocation",
     "BusinessContextAllocationSet",
@@ -197,6 +209,8 @@ __all__ = [
     "OdooWorkbenchDecisionCandidate",
     "OdooWorkbenchSubmissionResult",
     "OdooWorkbenchSubmissionStatus",
+    "OneOffVendorRetirement",
+    "OneOffVendorRetirementStatus",
     "OpportunityReference",
     "OpportunityReferenceRepository",
     "PartnerReference",

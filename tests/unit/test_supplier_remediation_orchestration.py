@@ -29,6 +29,7 @@ from app.application.workbench.exceptions import (
     ReviewVersionConflictError,
     SupplierResolutionConflictError,
     SupplierResolutionContractError,
+    SupplierResolutionOneOffVendorNotHubOwnedError,
     SupplierResolutionPartnerInactiveError,
     SupplierResolutionPartnerMismatchError,
     SupplierResolutionPartnerNotFoundError,
@@ -36,6 +37,7 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
     WorkbenchProjectionPublishError,
 )
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.projection import ProjectionPublishResult, WorkbenchProjection
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import (
@@ -55,9 +57,11 @@ from app.application.workflow import ManualReviewReason, ManualReviewReasonCode,
 from app.db.base import Base
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_one_off_vendor_retirement import WorkbenchReviewOneOffVendorRetirement
 from app.models.workbench_review_supplier_remediation_effect import WorkbenchReviewSupplierRemediationEffect
 from app.models.workbench_review_supplier_resolution import WorkbenchReviewSupplierResolution
 from app.persistence import (
+    SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyReviewSupplierResolutionRepository,
     SqlAlchemyUnitOfWork,
@@ -270,6 +274,7 @@ def session() -> Session:
             WorkbenchReviewItem.__table__,
             WorkbenchReviewSupplierResolution.__table__,
             WorkbenchReviewSupplierRemediationEffect.__table__,
+            WorkbenchReviewOneOffVendorRetirement.__table__,
         ],
     )
     factory = sessionmaker(bind=engine)
@@ -358,6 +363,7 @@ class _Harness:
         self.republisher = republisher
         self.resolution_repo = SqlAlchemyReviewSupplierResolutionRepository(session)
         self.effect_repo = SqlAlchemyReviewSupplierRemediationEffectRepository(session)
+        self.retirement_repo = SqlAlchemyReviewOneOffVendorRetirementRepository(session)
         self.use_case = ResolveWorkbenchSupplierUseCase(
             review_reader=self.reader,
             source_invoice_reader=self.source_reader,
@@ -371,6 +377,7 @@ class _Harness:
             reclassifier=self.reclassifier,
             unit_of_work=SqlAlchemyUnitOfWork(session),
             workbench_republisher=republisher,
+            retirement_writer=self.retirement_repo,
             _after_precheck_hook=after_precheck_hook,
         )
 
@@ -612,6 +619,7 @@ def shared_db_factory(tmp_path):
             WorkbenchReviewItem.__table__,
             WorkbenchReviewSupplierResolution.__table__,
             WorkbenchReviewSupplierRemediationEffect.__table__,
+            WorkbenchReviewOneOffVendorRetirement.__table__,
         ],
     )
     factory = sessionmaker(bind=engine)
@@ -1056,3 +1064,161 @@ def test_import_and_reclassification_never_reach_the_supplier_writer(module_path
         assert "supplier_partner_writer" not in name
         assert "supplier_remediation" not in name
         assert "odoo_supplier_partner_writer" not in name
+
+
+# --------------------------------------------------------- Phase 32: ONE_OFF_VENDOR (P0-PROD-08H)
+#
+# Scenarios A/D/E/F/G/H from the P0-PROD-08H specification. B (USE_ONE_OFF_SUPPLIER
+# unchanged), C (CREATE_PERMANENT_SUPPLIER unchanged), X (MATCH_EXISTING unaffected)
+# and Y (permanent supplier flow unaffected) are proven by every pre-existing test
+# above in this file still passing unmodified with the extended harness.
+
+
+async def test_a_one_off_vendor_mode_resolves_creates_partner_and_reclassifies(session: Session) -> None:
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_name="D-MARKET ELEKTRONIK", supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN),
+        writer=_FakeSupplierPartnerWriter(new_partner_id=6001),
+    )
+    result = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+
+    assert result.status is SupplierRemediationStatus.RESOLVED
+    assert result.effective_partner_id == 6001
+    assert result.partner_write_status is SupplierPartnerWriteEffectStatus.CREATED
+    assert result.reclassified is True
+    effect = h.effect_repo.find_remediation_effect(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1)
+    assert effect.mode is SupplierResolutionMode.ONE_OFF_VENDOR
+    retirement = h.retirement_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1)
+    assert retirement is not None
+    assert retirement.resolved_partner_id == 6001
+    assert retirement.status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+
+
+async def test_d_one_off_vendor_identity_comes_only_from_source_never_the_request(session: Session) -> None:
+    """ResolveWorkbenchSupplierCommand carries no name/VAT field at all for
+    ONE_OFF_VENDOR -- there is structurally no request field to override identity
+    with. This proves the writer only ever receives the source's own name/VAT."""
+
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_name="D-MARKET ELEKTRONIK HIZMETLER", supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN),
+        writer=_FakeSupplierPartnerWriter(new_partner_id=6001),
+    )
+    await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+
+    assert len(h.writer.calls) == 1
+    call = h.writer.calls[0]
+    assert call.supplier_name == "D-MARKET ELEKTRONIK HIZMETLER"
+    assert call.supplier_tax_number == VKN
+    assert not hasattr(h.command(), "supplier_name")
+
+
+async def test_e_one_off_vendor_exact_active_hub_owned_match_does_not_duplicate(session: Session) -> None:
+    """Replaying the identical decision reuses the same partner -- no second create,
+    no second retirement row."""
+
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN),
+        writer=_FakeSupplierPartnerWriter(new_partner_id=6001),
+    )
+    first = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+    second = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+
+    assert first.effective_partner_id == second.effective_partner_id == 6001
+    assert second.already_applied is True
+    assert session.query(WorkbenchReviewOneOffVendorRetirement).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
+
+
+async def test_f_one_off_vendor_reuses_existing_hub_owned_archived_partner(session: Session) -> None:
+    """A partner already archived by a PRIOR ONE_OFF_VENDOR review for the same VAT
+    (case B/F) is reused, not duplicated and not un-archived."""
+
+    prior_effect_repo = SqlAlchemyReviewSupplierRemediationEffectRepository(session)
+    session.add(
+        WorkbenchReviewItem(
+            review_id="review:prior-one-off",
+            company_id=COMPANY_ID,
+            invoice_id="prior-ettn",
+            invoice_number="PRIOR-1",
+            supplier_tax_number=VKN,
+            supplier_name="D-MARKET",
+            invoice_date=date(2026, 8, 1),
+            currency="TRY",
+            total_amount=Decimal("10.00"),
+            workflow="vendor_bill",
+            status="decision_submitted",
+            review_reasons=[],
+            warnings=[],
+            version=2,
+            idempotency_key="uyumsoft:7:prior-ettn",
+        )
+    )
+    session.flush()
+    from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus as _Status
+    from app.application.workbench.supplier_remediation import SupplierRemediationEffect as _Effect
+
+    prior_effect_repo.create_remediation_effect(
+        _Effect(
+            review_id="review:prior-one-off",
+            company_id=COMPANY_ID,
+            review_version=1,
+            source_invoice_id="prior-ettn",
+            mode=SupplierResolutionMode.ONE_OFF_VENDOR,
+            resolved_partner_id=6001,
+            partner_write_status=_Status.CREATED,
+            source_supplier_tax_number=VKN,
+            approved_by=ACTOR,
+        )
+    )
+
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN, active=False),
+        writer=_FakeSupplierPartnerWriter(existing_vat=VKN, existing_partner_id=6001),
+    )
+    result = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+
+    assert result.effective_partner_id == 6001
+    assert result.partner_write_status is SupplierPartnerWriteEffectStatus.ALREADY_EXISTS
+    retirement = h.retirement_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1)
+    assert retirement.resolved_partner_id == 6001
+
+
+async def test_g_ambiguous_exact_vat_match_fails_closed(session: Session) -> None:
+    class _AmbiguousWriter(_FakeSupplierPartnerWriter):
+        async def create_supplier(self, command):
+            from app.application.exceptions.supplier_partner import SupplierPartnerAmbiguityError
+
+            raise SupplierPartnerAmbiguityError("Multiple Odoo supplier partners share this exact tax number.")
+
+    h = _Harness(session, source=_source_evidence(supplier_vat=VKN), writer=_AmbiguousWriter())
+    with pytest.raises(Exception) as exc_info:
+        await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+    assert "ambiguity" in type(exc_info.value).__name__.lower() or "Ambiguity" in str(exc_info.value)
+    assert session.query(WorkbenchReviewOneOffVendorRetirement).count() == 0
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 0
+
+
+async def test_h_existing_permanent_partner_is_never_adopted_as_one_off(session: Session) -> None:
+    """An exact-VAT match against a partner the Hub never created via ONE_OFF_VENDOR
+    (e.g. a normal CREATE_PERMANENT_SUPPLIER partner, or one created outside the Hub
+    entirely) must fail closed -- never silently treated as retirement-eligible."""
+
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN),
+        writer=_FakeSupplierPartnerWriter(existing_vat=VKN, existing_partner_id=6001),
+    )
+    with pytest.raises(SupplierResolutionOneOffVendorNotHubOwnedError):
+        await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+    assert session.query(WorkbenchReviewOneOffVendorRetirement).count() == 0
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 0
+    # The pre-existing permanent partner itself is never touched by this failure.
+    assert h.writer.calls[0].supplier_tax_number == VKN

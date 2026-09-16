@@ -192,11 +192,15 @@ def _seed_supplier_not_found_review(session: Session) -> None:
 # --------------------------------------------------------- Phase 19: mode contract
 
 
-def test_supplier_resolution_mode_has_exactly_three_business_options() -> None:
+def test_supplier_resolution_mode_has_exactly_four_business_options() -> None:
+    # P0-PROD-08H adds ONE_OFF_VENDOR, distinct from and never a replacement for
+    # USE_ONE_OFF_SUPPLIER (a deferred, never-completed, shared-partner concept that
+    # remains unchanged -- see both modes' own docstrings).
     assert {mode.value for mode in SupplierResolutionMode} == {
         "match_existing",
         "use_one_off_supplier",
         "create_permanent_supplier",
+        "one_off_vendor",
     }
 
 

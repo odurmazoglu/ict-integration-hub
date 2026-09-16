@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
 from app.application.workbench import (
+    ArchiveOneOffVendorUseCase,
     ResolveWorkbenchSupplierUseCase,
     ValidateSupplierResolutionUseCase,
 )
@@ -13,17 +14,20 @@ from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.supplier_resolution_partner_reader import OdooSupplierResolutionPartnerReader
+from app.erp.write.odoo_one_off_vendor_retirement_writer import OdooOneOffVendorRetirementWriter
 from app.erp.write.odoo_supplier_partner_writer import (
     OdooSupplierPartnerRepository,
     OdooSupplierPartnerWritePolicy,
     OdooSupplierPartnerWriter,
 )
 from app.persistence import (
+    SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyReviewSupplierResolutionRepository,
     SqlAlchemyUnitOfWork,
+    SqlAlchemyVendorBillExecutionEvidenceReader,
 )
 
 
@@ -92,4 +96,36 @@ def build_resolve_workbench_supplier_use_case(
         reclassifier=reclassifier,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         workbench_republisher=workbench_republisher,
+        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+    )
+
+
+def build_archive_one_off_vendor_use_case(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+    approved_by: str | None = None,
+) -> ArchiveOneOffVendorUseCase:
+    """Compose the ONE_OFF_VENDOR archive-last orchestration (P0-PROD-08H).
+
+    Reuses the exact same gated, controlled ``OdooSupplierPartnerRepository``/
+    ``OdooSupplierPartnerWritePolicy`` as supplier-partner creation -- archiving a
+    Hub-owned one-off partner is protected by the same
+    ``SUPPLIER_REMEDIATION_WRITE_ENABLED`` authorization, not a new or broader one.
+    Not wired to any REST endpoint in this PR -- see the PR description for why.
+    """
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    retirement_port = OdooOneOffVendorRetirementWriter(
+        repository=OdooSupplierPartnerRepository(client=resolved_odoo_client),
+        client=resolved_odoo_client,
+        policy=OdooSupplierPartnerWritePolicy.from_settings(settings),
+    )
+    return ArchiveOneOffVendorUseCase(
+        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+        vendor_bill_evidence_reader=SqlAlchemyVendorBillExecutionEvidenceReader(session),
+        retirement_port=retirement_port,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
+        approved_by=approved_by,
     )
