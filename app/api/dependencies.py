@@ -19,6 +19,7 @@ from app.application.execution import (
 )
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceWorkflow
 from app.application.workbench import (
+    CreateNewProductUseCase,
     GetReviewItemUseCase,
     ListReviewQueueUseCase,
     ResolveWorkbenchSupplierUseCase,
@@ -27,11 +28,13 @@ from app.application.workbench import (
     SubmitReviewDecisionUseCase,
     WorkbenchDecisionIngestionWorkflow,
 )
+from app.application.workbench.product_remediation import CreateNewProductCommand, CreateNewProductResult
 from app.application.workbench.supplier_remediation import (
     ResolveWorkbenchSupplierCommand,
     SupplierRemediationResult,
 )
 from app.composition import (
+    build_create_new_product_use_case,
     build_odoo_workbench_decision_ingestion_workflow,
     build_resolve_workbench_supplier_use_case,
     build_uyumsoft_canonical_invoice_importer,
@@ -348,4 +351,35 @@ class _LazyResolveWorkbenchSupplierUseCase:
 ResolveWorkbenchSupplierUseCaseDep = Annotated[
     ResolveWorkbenchSupplierUseCase,
     Depends(get_resolve_workbench_supplier_use_case),
+]
+
+
+def get_create_new_product_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> CreateNewProductUseCase:
+    return _LazyCreateNewProductUseCase(session=session, settings=settings)
+
+
+class _LazyCreateNewProductUseCase:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._use_case: CreateNewProductUseCase | None = None
+
+    async def execute(self, command: CreateNewProductCommand) -> CreateNewProductResult:
+        return await self._get_use_case().execute(command)
+
+    def _get_use_case(self) -> CreateNewProductUseCase:
+        if self._use_case is None:
+            self._use_case = build_create_new_product_use_case(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._use_case
+
+
+CreateNewProductUseCaseDep = Annotated[
+    CreateNewProductUseCase,
+    Depends(get_create_new_product_use_case),
 ]
