@@ -498,15 +498,32 @@ def _optional_positive_record_id(value: Any) -> int | None:
 
 
 def _line_resolutions(value: Any) -> tuple[LineResolution, ...]:
+    """Parse each JSON line item as either an explicit product selection
+    (``selected_product_id``) or an explicit "no product -- post as expense"
+    decision (``account_only: true``; business label POST_AS_EXPENSE). Exactly
+    one of the two must be present -- ``LineResolution.__post_init__`` is the
+    single source of truth for that mutual-exclusivity contract, never
+    duplicated here.
+    """
+
     if _is_empty_optional(value):
         return ()
     return tuple(
         LineResolution(
             line_number=_required_text_value(item.get("line_number")),
-            selected_product_id=_required_many2one_id(item.get("selected_product_id")),
+            selected_product_id=_optional_many2one_id(item.get("selected_product_id")),
+            account_only=_optional_account_only_flag(item.get("account_only")),
         )
         for item in _json_list(value)
     )
+
+
+def _optional_account_only_flag(value: Any) -> bool:
+    if _is_empty_optional(value):
+        return False
+    if type(value) is bool:
+        return value
+    raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
 
 
 def _tax_resolutions(value: Any) -> tuple[TaxResolution, ...]:
