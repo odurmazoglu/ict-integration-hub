@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from app.application.exceptions import ApplicationError
 from app.application.workbench.allocations import BusinessContextAllocationType
@@ -24,7 +25,11 @@ from app.application.workbench.selected_product_resolution import (
     selected_product_ids,
 )
 from app.application.workflow import WorkflowType
+from app.billing.builder import validate_vendor_bill_inputs
 from app.billing.dto import CustomerInvoiceBillingInstruction
+
+if TYPE_CHECKING:
+    from app.application.execution.contracts import ExecutionSourceInvoice
 
 
 class SubmitReviewDecisionUseCase:
@@ -63,6 +68,11 @@ class SubmitReviewDecisionUseCase:
             )
             evidence = self._apply_selected_product_resolutions(command, evidence)
             self._validate_selected_expense_accounts(command)
+            is_replay = _translate_decision_failure(
+                lambda: self.has_matching_decision(command), "Review decision replay could not be checked safely."
+            )
+            if not is_replay:
+                _validate_resolved_execution_inputs(command, evidence)
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
                 return _translate_decision_failure(
@@ -221,3 +231,36 @@ def _validate_billing_coverage(
         raise ReviewDecisionError("Customer billing evidence duplicates allocation coverage.")
     if set(covered) != set(allocation_by_key):
         raise ReviewDecisionError("Customer billing evidence must cover every creation allocation exactly.")
+
+
+def _validate_resolved_execution_inputs(
+    command: ReviewDecisionCommand,
+    evidence: ExecutionSourceInvoice,
+) -> None:
+    """Validate fresh decisions; historical replay keeps its original contract."""
+
+    invoice_lines = {line.line_number for line in evidence.invoice.lines}
+    if any(resolution.line_number not in invoice_lines for resolution in command.line_resolutions):
+        raise ReviewDecisionError("Line resolution references an unknown invoice line.")
+    account_only_lines = frozenset(
+        resolution.line_number for resolution in command.line_resolutions if resolution.account_only
+    )
+    explicit_accounts = {
+        resolution.line_number: resolution.expense_account_id
+        for resolution in command.line_resolutions
+        if resolution.account_only and resolution.expense_account_id is not None
+    }
+    if account_only_lines - explicit_accounts.keys():
+        raise ReviewDecisionError("New account-only decisions require an explicit expense_account_id.")
+    validation = validate_vendor_bill_inputs(
+        evidence.invoice,
+        evidence.partner_match,
+        evidence.product_match,
+        evidence.tax_match,
+        company_id=command.company_id,
+        operating_expense_match=evidence.operating_expense_match,
+        account_only_line_numbers=account_only_lines,
+        explicit_account_only_accounts=explicit_accounts,
+    )
+    if not validation.is_valid:
+        raise ReviewDecisionError("Vendor Bill decision requires complete resolved execution inputs.")
