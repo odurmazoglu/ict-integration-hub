@@ -131,7 +131,7 @@ async def test_creates_supplier_partner_when_no_exact_vat_match(monkeypatch: pyt
     assert result.company_id == COMPANY_ID
     assert result.supplier_tax_number == VKN
     assert len(client.create_calls) == 1
-    assert client.create_calls[0] == {"name": NAME, "vat": VKN, "company_type": "company"}
+    assert client.create_calls[0] == {"name": NAME, "vat": VKN}
     # exact-VAT search before create, then the post-create re-query/read-back.
     assert len(client.search_calls) == 2
     assert client.search_calls[0]["domain"] == [
@@ -306,10 +306,17 @@ async def test_post_create_readback_mismatch_is_data_integrity_error() -> None:
 
 
 async def test_create_payload_contains_only_sanctioned_keys() -> None:
+    """P0-PROD-08J: the payload is exactly {name, vat} -- not merely "no forbidden
+    keys present". company_type does not exist on production res.partner ("Invalid
+    field 'company_type' on 'res.partner'"); is_company was reported readonly and is
+    not a safe substitute -- neither is ever written."""
+
     client = FakeJson2Client(create_result=1, search_sequence=[[], [_partner_row(partner_id=1)]])
     await _writer(client).create_supplier(_command())
 
-    assert set(client.create_calls[0]) == {"name", "vat", "company_type"}
+    assert set(client.create_calls[0]) == {"name", "vat"}
+    assert "company_type" not in client.create_calls[0]
+    assert "is_company" not in client.create_calls[0]
     forbidden = {
         "email",
         "phone",
@@ -332,8 +339,40 @@ async def test_create_payload_contains_only_sanctioned_keys() -> None:
         "currency_id",
         "property_account_position_id",
         "company_id",
+        "active",
+        "company_type",
+        "is_company",
     }
     assert forbidden.isdisjoint(client.create_calls[0])
+
+
+def test_forbidden_token_guard_rejects_company_type_and_is_company_if_reintroduced() -> None:
+    """P0-PROD-08J defense-in-depth: prove the guard itself works, not merely that
+    today's payload happens to be clean. A future edit that reintroduces either field
+    must fail loudly rather than silently reach Odoo."""
+
+    from app.erp.write.odoo_supplier_partner_writer import _reject_forbidden_tokens
+
+    with pytest.raises(SupplierPartnerWriteValidationError):
+        _reject_forbidden_tokens({"name": NAME, "vat": VKN, "company_type": "company"})
+    with pytest.raises(SupplierPartnerWriteValidationError):
+        _reject_forbidden_tokens({"name": NAME, "vat": VKN, "is_company": True})
+
+
+def test_writer_module_never_references_company_type_or_is_company_as_a_value() -> None:
+    """Source-level regression guard: SUPPLIER_COMPANY_TYPE and the literal
+    'company_type'/'is_company' res.partner fields must never reappear in this
+    module outside of the forbidden-token guard itself and its explanatory
+    comments (both of which legitimately name them)."""
+
+    source = Path("app/erp/write/odoo_supplier_partner_writer.py").read_text(encoding="utf-8")
+    assert "SUPPLIER_COMPANY_TYPE" not in source
+    # The only reference allowed outside comments/docstrings is inside the
+    # FORBIDDEN_RES_PARTNER_TOKENS frozenset itself -- check the actual payload dict
+    # literal in isolation so the explanatory comment above it cannot mask a regression.
+    payload_literal = source[source.index("payload = {") : source.index("_reject_forbidden_tokens(payload)")]
+    assert "company_type" not in payload_literal
+    assert "is_company" not in payload_literal
 
 
 # --------------------------------------------------------- Phase 34: security / no secret leakage

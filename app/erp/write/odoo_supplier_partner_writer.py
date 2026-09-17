@@ -31,10 +31,14 @@ from app.core.runtime_checks import APPROVED_STAGING_ODOO_HOSTS, PRODUCTION_APPR
 
 RES_PARTNER_MODEL = "res.partner"
 PARTNER_FIELDS = ["id", "name", "vat", "active", "company_id"]
-# res.partner legal-entity typing: a VKN/TCKN holder is an organization, not a person.
-SUPPLIER_COMPANY_TYPE = "company"
 # The create payload is fixed and never caller-supplied; this scan is defense in depth.
-FORBIDDEN_RES_PARTNER_TOKENS = frozenset({"active", "unlink", "action_", "message_", "__", "parent_id"})
+# company_type/is_company are explicitly listed even though the payload never sets them
+# today: production Odoo metadata confirmed res.partner has no writable company_type
+# field ("Invalid field 'company_type' on 'res.partner'") and reported is_company as
+# readonly (P0-PROD-08J) -- neither may ever be silently reintroduced.
+FORBIDDEN_RES_PARTNER_TOKENS = frozenset(
+    {"active", "unlink", "action_", "message_", "__", "parent_id", "company_type", "is_company"}
+)
 _EXACT_VAT_LOOKUP_LIMIT = 5
 
 
@@ -158,10 +162,13 @@ class OdooSupplierPartnerRepository:
         return _record(records[0])
 
     async def create_supplier_partner(self, *, name: str, normalized_vat: str) -> int:
+        # P0-PROD-08J: intentionally exactly {name, vat}. res.partner has no writable
+        # company_type field in production Odoo ("Invalid field 'company_type' on
+        # 'res.partner'"); is_company was reported readonly. No substitute field is
+        # added -- see FORBIDDEN_RES_PARTNER_TOKENS for the regression guard.
         payload = {
             "name": _require_name(name),
             "vat": _require_normalized_vat(normalized_vat),
-            "company_type": SUPPLIER_COMPANY_TYPE,
         }
         _reject_forbidden_tokens(payload)
         created = await _translate_connector_errors(self._client.create_res_partner(payload))
