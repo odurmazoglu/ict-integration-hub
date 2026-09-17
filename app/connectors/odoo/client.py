@@ -77,25 +77,10 @@ class OdooJson2Client:
         )
 
     async def create_account_move(self, payload: dict[str, Any]) -> int:
-        result = await self._post_json("/json/2/account.move/create", payload)
-        if isinstance(result, int):
-            return result
-        if isinstance(result, dict) and isinstance(result.get("id"), int):
-            return int(result["id"])
-        raise ConnectorError("Odoo account.move create returned an unexpected response.")
+        return await self._create_one(path="/json/2/account.move/create", values=payload, label="account.move")
 
     async def create_sale_order(self, payload: dict[str, Any]) -> int:
-        result = await self._post_json("/json/2/sale.order/create", payload)
-        if not isinstance(result, bool):
-            if isinstance(result, int):
-                return result
-            if isinstance(result, dict) and type(result.get("id")) is int:
-                return int(result["id"])
-            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
-                return result[0]
-        raise ConnectorError(
-            f"Odoo sale.order create returned an unexpected response shape: {_response_shape(result)}."
-        )
+        return await self._create_one(path="/json/2/sale.order/create", values=payload, label="sale.order")
 
     async def create_res_partner(self, payload: dict[str, Any]) -> int:
         """Create exactly one ``res.partner`` and return its positive integer id.
@@ -106,17 +91,7 @@ class OdooJson2Client:
         any other shape fails closed.
         """
 
-        result = await self._post_json("/json/2/res.partner/create", {"vals_list": [payload]})
-        if not isinstance(result, bool):
-            if isinstance(result, int):
-                return result
-            if isinstance(result, dict) and type(result.get("id")) is int:
-                return int(result["id"])
-            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
-                return result[0]
-        raise ConnectorError(
-            f"Odoo res.partner create returned an unexpected response shape: {_response_shape(result)}."
-        )
+        return await self._create_one(path="/json/2/res.partner/create", values=payload, label="res.partner")
 
     async def create_product_template(self, payload: dict[str, Any]) -> int:
         """Create exactly one ``product.template`` and return its positive integer id.
@@ -128,17 +103,7 @@ class OdooJson2Client:
         other shape fails closed.
         """
 
-        result = await self._post_json("/json/2/product.template/create", {"vals_list": [payload]})
-        if not isinstance(result, bool):
-            if isinstance(result, int):
-                return result
-            if isinstance(result, dict) and type(result.get("id")) is int:
-                return int(result["id"])
-            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
-                return result[0]
-        raise ConnectorError(
-            f"Odoo product.template create returned an unexpected response shape: {_response_shape(result)}."
-        )
+        return await self._create_one(path="/json/2/product.template/create", values=payload, label="product.template")
 
     async def create_supplierinfo(self, payload: dict[str, Any]) -> int:
         """Create exactly one ``product.supplierinfo`` and return its positive integer id.
@@ -148,22 +113,14 @@ class OdooJson2Client:
         handling as ``create_product_template``.
         """
 
-        result = await self._post_json("/json/2/product.supplierinfo/create", {"vals_list": [payload]})
-        if not isinstance(result, bool):
-            if isinstance(result, int):
-                return result
-            if isinstance(result, dict) and type(result.get("id")) is int:
-                return int(result["id"])
-            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
-                return result[0]
-        raise ConnectorError(
-            f"Odoo product.supplierinfo create returned an unexpected response shape: {_response_shape(result)}."
+        return await self._create_one(
+            path="/json/2/product.supplierinfo/create", values=payload, label="product.supplierinfo"
         )
 
     async def write_account_move(self, *, record_id: int, values: dict[str, Any]) -> bool:
         if type(record_id) is not int or record_id <= 0:
             raise ConnectorError("Odoo account.move record id is invalid.")
-        result = await self._post_json("/json/2/account.move/write", {"ids": [record_id], "values": values})
+        result = await self._post_json("/json/2/account.move/write", {"ids": [record_id], "vals": values})
         if isinstance(result, bool):
             return result
         raise ConnectorError("Odoo account.move write returned an unexpected response.")
@@ -178,7 +135,7 @@ class OdooJson2Client:
 
         if type(partner_id) is not int or partner_id <= 0:
             raise ConnectorError("Odoo res.partner record id is invalid.")
-        result = await self._post_json("/json/2/res.partner/write", {"ids": [partner_id], "values": {"active": False}})
+        result = await self._post_json("/json/2/res.partner/write", {"ids": [partner_id], "vals": {"active": False}})
         if isinstance(result, bool):
             return result
         raise ConnectorError("Odoo res.partner archive write returned an unexpected response.")
@@ -207,14 +164,7 @@ class OdooJson2Client:
     async def create_studio_record(self, *, model: str, values: dict[str, Any]) -> int:
         if not _is_studio_model_allowed(model):
             raise ConnectorError("Odoo Studio write model is not allowed.")
-        result = await self._post_json(f"/json/2/{model}/create", {"vals_list": [values]})
-        if type(result) is int:
-            return result
-        if isinstance(result, dict) and type(result.get("id")) is int:
-            return int(result["id"])
-        if isinstance(result, list) and len(result) == 1 and type(result[0]) is int:
-            return result[0]
-        raise ConnectorError(f"Odoo Studio create returned an unexpected response shape: {_response_shape(result)}.")
+        return await self._create_one(path=f"/json/2/{model}/create", values=values, label="Studio")
 
     async def write_studio_record(self, *, model: str, record_id: int, values: dict[str, Any]) -> bool:
         if not _is_studio_model_allowed(model):
@@ -277,6 +227,21 @@ class OdooJson2Client:
                 raise ConnectorError("Odoo field metadata search_read returned an unexpected record.")
             records.append(item)
         return records
+
+    async def _create_one(self, *, path: str, values: dict[str, Any], label: str) -> int:
+        """Call the fixed JSON-2 ``create(vals_list)`` shape for one record."""
+
+        if not isinstance(values, dict) or not values:
+            raise ConnectorError(f"Odoo {label} create values are invalid.")
+        result = await self._post_json(path, {"vals_list": [values]})
+        if not isinstance(result, bool):
+            if type(result) is int and result > 0:
+                return result
+            if isinstance(result, dict) and type(result.get("id")) is int and result["id"] > 0:
+                return int(result["id"])
+            if isinstance(result, list) and len(result) == 1 and type(result[0]) is int and result[0] > 0:
+                return result[0]
+        raise ConnectorError(f"Odoo {label} create returned an unexpected response shape: {_response_shape(result)}.")
 
     async def _post_json(self, path: str, payload: dict[str, Any]) -> JsonValue:
         try:

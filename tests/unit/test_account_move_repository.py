@@ -42,7 +42,7 @@ async def test_account_move_repository_creates_draft_vendor_bill_payload() -> No
             "partner_id": 101,
             "invoice_date": "2026-07-30",
             "ref": "INV-1",
-            "currency": "TRY",
+            "currency_id": 31,
             "invoice_line_ids": (
                 (
                     0,
@@ -167,6 +167,100 @@ async def test_account_move_repository_rejects_missing_idempotency_key_before_od
     assert client.create_calls == []
 
 
+@pytest.mark.parametrize(
+    "currency_records",
+    [
+        [],
+        [{"id": 31, "name": "TRY", "active": True}, {"id": 32, "name": "TRY", "active": True}],
+        [{"id": 31, "name": "TRY", "active": False}],
+    ],
+)
+async def test_account_move_repository_fails_closed_before_create_for_unusable_currency(
+    currency_records: list[dict[str, Any]],
+) -> None:
+    client = FakeJson2Client(currency_records=currency_records)
+    repository = AccountMoveRepository(client=client)
+
+    with pytest.raises(VendorBillWriteValidationError):
+        await repository.create_draft_vendor_bill(vendor_bill=_vendor_bill(), idempotency_key="ettn-1")
+
+    assert client.create_calls == []
+
+
+async def test_account_move_repository_resolves_exact_active_currency_before_create() -> None:
+    client = FakeJson2Client(currency_records=[{"id": 31, "name": "TRY", "active": True}])
+
+    await AccountMoveRepository(client=client).create_draft_vendor_bill(
+        vendor_bill=_vendor_bill(), idempotency_key="ettn-1"
+    )
+
+    assert client.search_calls == [
+        {
+            "model": "res.currency",
+            "domain": [["name", "=", "TRY"], ["active", "in", [True, False]]],
+            "fields": ["id", "name", "active"],
+            "limit": 2,
+            "offset": 0,
+        }
+    ]
+    assert client.create_calls[0]["currency_id"] == 31
+    assert "currency" not in client.create_calls[0]
+
+
+async def test_account_move_repository_builds_d_market_shaped_account_only_payload() -> None:
+    client = FakeJson2Client(currency_records=[{"id": 31, "name": "TRY", "active": True}])
+    bill = VendorBill(
+        supplier_id=448,
+        invoice_number="HD12026000964604",
+        invoice_date=date(2026, 9, 10),
+        currency="TRY",
+        external_uuid="F1ADCCAD-FB70-AAF1-8105-005056BB160F",
+        reference="HD12026000964604",
+        company_id=1,
+        invoice_lines=(
+            VendorBillLine(
+                product_id=None,
+                quantity=Decimal("1.000"),
+                uom=None,
+                unit_price=Decimal("563.510000"),
+                tax_ids=(34,),
+                description="Kraf Kesim Tablası A2 45X60 3002G",
+                account_id=247,
+            ),
+        ),
+    )
+
+    await AccountMoveRepository(client=client).create_draft_vendor_bill(
+        vendor_bill=bill,
+        idempotency_key="workflow-execution:pilot",
+    )
+
+    assert client.create_calls == [
+        {
+            "move_type": "in_invoice",
+            "partner_id": 448,
+            "invoice_date": "2026-09-10",
+            "ref": "HD12026000964604",
+            "currency_id": 31,
+            "invoice_line_ids": (
+                (
+                    0,
+                    0,
+                    {
+                        "name": "Kraf Kesim Tablası A2 45X60 3002G",
+                        "quantity": "1.000",
+                        "price_unit": "563.510000",
+                        "account_id": 247,
+                        "tax_ids": ((6, 0, (34,)),),
+                    },
+                ),
+            ),
+            "company_id": 1,
+            "invoice_origin": "workflow-execution:pilot",
+        }
+    ]
+
+
 async def test_account_move_repository_creates_draft_customer_invoice_payload() -> None:
     client = FakeJson2Client(create_result=9101)
     repository = AccountMoveRepository(client=client)
@@ -254,10 +348,14 @@ class FakeJson2Client:
         create_result: int = 7001,
         create_error: Exception | None = None,
         search_records: Sequence[dict[str, Any]] | None = None,
+        currency_records: Sequence[dict[str, Any]] | None = None,
     ) -> None:
         self.create_result = create_result
         self.create_error = create_error
         self.search_records = list(search_records or [])
+        self.currency_records = list(
+            [{"id": 31, "name": "TRY", "active": True}] if currency_records is None else currency_records
+        )
         self.create_calls: list[dict[str, Any]] = []
         self.search_calls: list[dict[str, Any]] = []
 
@@ -285,6 +383,8 @@ class FakeJson2Client:
                 "offset": offset,
             }
         )
+        if model == "res.currency":
+            return list(self.currency_records)
         return list(self.search_records)
 
 

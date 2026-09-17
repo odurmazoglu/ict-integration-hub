@@ -15,6 +15,7 @@ from app.connectors.odoo.client import OdooJson2Client
 async def test_create_account_move_returns_created_id() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/json/2/account.move/create"
+        assert json.loads(request.content) == {"vals_list": [{"move_type": "in_invoice"}]}
         assert b"action_post" not in request.content
         return httpx.Response(200, json=123)
 
@@ -42,6 +43,7 @@ def _client(handler) -> OdooJson2Client:
 async def test_create_sale_order_returns_created_id() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/json/2/sale.order/create"
+        assert json.loads(request.content) == {"vals_list": [{"partner_id": 1}]}
         assert b"action_confirm" not in request.content
         return httpx.Response(200, json=9001)
 
@@ -203,7 +205,7 @@ async def test_create_account_move_rejects_unexpected_response() -> None:
     with pytest.raises(ConnectorError) as exc_info:
         await client.create_account_move({"move_type": "in_invoice"})
 
-    assert exc_info.value.safe_message == "Odoo account.move create returned an unexpected response."
+    assert "Odoo account.move create returned an unexpected response shape" in exc_info.value.safe_message
 
 
 async def test_call_model_method_uses_purchase_order_action_route() -> None:
@@ -230,7 +232,7 @@ async def test_write_account_move_uses_vendor_bill_write_route() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/json/2/account.move/write"
         assert b'"ids":[901]' in request.content
-        assert b'"values":{"ref":"INV-1001"}' in request.content
+        assert json.loads(request.content) == {"ids": [901], "vals": {"ref": "INV-1001"}}
         return httpx.Response(200, json=True)
 
     client = OdooJson2Client(
@@ -242,6 +244,18 @@ async def test_write_account_move_uses_vendor_bill_write_route() -> None:
     )
 
     assert await client.write_account_move(record_id=901, values={"ref": "INV-1001"}) is True
+
+
+async def test_archive_res_partner_sends_only_active_false_with_vals() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/res.partner/write"
+        payload = json.loads(request.content)
+        assert payload == {"ids": [448], "vals": {"active": False}}
+        assert "values" not in payload
+        assert "unlink" not in request.url.path
+        return httpx.Response(200, json=True)
+
+    assert await _client(handler).archive_res_partner(partner_id=448) is True
 
 
 @pytest.mark.parametrize(

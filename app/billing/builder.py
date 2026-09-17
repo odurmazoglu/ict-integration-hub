@@ -359,19 +359,19 @@ def _operating_expense_product_shape_errors(
     return ()
 
 
-def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int | None = None) -> dict[str, Any]:
+def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int) -> dict[str, Any]:
+    if type(currency_id) is not int or currency_id <= 0:
+        raise ValueError("currency_id must be a positive Odoo id.")
     payload: dict[str, Any] = {
         "move_type": "in_invoice",
         "partner_id": vendor_bill.supplier_id,
         "invoice_date": vendor_bill.invoice_date.isoformat(),
         "ref": vendor_bill.reference,
-        "currency": vendor_bill.currency,
+        "currency_id": currency_id,
         "invoice_line_ids": tuple((0, 0, _line_payload(line)) for line in vendor_bill.invoice_lines),
     }
     if vendor_bill.company_id is not None:
         payload["company_id"] = vendor_bill.company_id
-    if currency_id is not None:
-        payload["currency_id"] = currency_id
     if vendor_bill.notes:
         payload["narration"] = "\n".join(vendor_bill.notes)
     return {key: value for key, value in payload.items() if value is not None}
@@ -380,19 +380,19 @@ def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int | 
 def to_odoo_customer_invoice_payload(
     customer_invoice: CustomerInvoice,
     *,
-    currency_id: int | None = None,
+    currency_id: int,
 ) -> dict[str, Any]:
+    if type(currency_id) is not int or currency_id <= 0:
+        raise ValueError("currency_id must be a positive Odoo id.")
     payload: dict[str, Any] = {
         "move_type": "out_invoice",
         "company_id": customer_invoice.company_id,
         "partner_id": customer_invoice.customer_id,
         "invoice_date": customer_invoice.invoice_date.isoformat(),
         "ref": customer_invoice.reference,
-        "currency": customer_invoice.currency,
+        "currency_id": currency_id,
         "invoice_line_ids": tuple((0, 0, _customer_line_payload(line)) for line in customer_invoice.invoice_lines),
     }
-    if currency_id is not None:
-        payload["currency_id"] = currency_id
     if customer_invoice.notes:
         payload["narration"] = "\n".join(customer_invoice.notes)
     return {key: value for key, value in payload.items() if value is not None}
