@@ -1351,3 +1351,89 @@ def test_find_latest_for_review_returns_the_highest_version(session: Session) ->
     found = repo.find_latest_for_review(review_id=REVIEW_ID, company_id=COMPANY_ID)
 
     assert found == latest
+
+
+# --------------------------------------------------------------------- P0-PROD-08J
+
+
+class _FakeOdooJson2ClientForPayloadProof:
+    """Minimal fake standing in for the real Odoo JSON-2 client -- just enough to
+    exercise the REAL OdooSupplierPartnerWriter end-to-end from orchestration, to
+    prove the corrected payload reaches Odoo regardless of which SupplierResolutionMode
+    triggered the create (P0-PROD-08J)."""
+
+    def __init__(self, *, create_result: int) -> None:
+        self.create_result = create_result
+        self.create_calls: list[dict[str, Any]] = []
+        self._search_call = 0
+
+    async def create_res_partner(self, payload: dict[str, Any]) -> int:
+        self.create_calls.append(payload)
+        return self.create_result
+
+    async def search_read(self, *, model: str, domain, fields, limit: int = 20, offset: int = 0):
+        self._search_call += 1
+        if self._search_call == 1:
+            return []  # pre-create exact-VAT lookup: no existing partner
+        return [{"id": self.create_result, "name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN, "active": True}]
+
+
+NAME_FOR_REAL_WRITER_TEST = "D-MARKET ELEKTRONIK"
+
+
+def _real_writer(client: _FakeOdooJson2ClientForPayloadProof):
+    from app.erp.write.odoo_supplier_partner_writer import (
+        OdooSupplierPartnerRepository,
+        OdooSupplierPartnerWritePolicy,
+        OdooSupplierPartnerWriter,
+    )
+
+    policy = OdooSupplierPartnerWritePolicy(
+        supplier_remediation_write_enabled=True,
+        app_env="staging",
+        odoo_host="test-ictteknoloji.odoo.com",
+    )
+    return OdooSupplierPartnerWriter(repository=OdooSupplierPartnerRepository(client=client), policy=policy)
+
+
+async def test_one_off_vendor_through_real_writer_sends_exactly_name_and_vat(session: Session) -> None:
+    """P0-PROD-08J / Step 7: ONE_OFF_VENDOR, exercised through the REAL Odoo writer
+    (not a fake that abstracts the payload away), sends exactly {name, vat}."""
+
+    client = _FakeOdooJson2ClientForPayloadProof(create_result=9001)
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_name=NAME_FOR_REAL_WRITER_TEST, supplier_vat=VKN),
+        writer=_real_writer(client),
+    )
+
+    result = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+
+    assert result.effective_partner_id == 9001
+    assert len(client.create_calls) == 1
+    assert client.create_calls[0] == {"name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN}
+
+
+async def test_create_permanent_supplier_through_real_writer_sends_exactly_name_and_vat(session: Session) -> None:
+    """P0-PROD-08J / Step 6: CREATE_PERMANENT_SUPPLIER, exercised through the REAL
+    Odoo writer, sends exactly {name, vat} -- the same shared writer as ONE_OFF_VENDOR,
+    proving one fix covers both without a special D-Market-only writer."""
+
+    client = _FakeOdooJson2ClientForPayloadProof(create_result=9002)
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_name=NAME_FOR_REAL_WRITER_TEST, supplier_vat=VKN),
+        # CREATE_PERMANENT_SUPPLIER re-validates the created partner post-write (belt
+        # and suspenders); the fake partner_reader must know about the id the fake
+        # Odoo client just "created" for that re-validation to succeed.
+        partner=_partner(id=9002, vat=VKN),
+        writer=_real_writer(client),
+    )
+
+    result = await h.use_case.execute(
+        h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+    )
+
+    assert result.effective_partner_id == 9002
+    assert len(client.create_calls) == 1
+    assert client.create_calls[0] == {"name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN}
