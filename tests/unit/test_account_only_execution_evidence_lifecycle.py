@@ -920,3 +920,194 @@ async def test_unknown_resolution_line_cannot_be_silently_dropped(session: Sessi
             account_records=(ResolutionAccountRecord(id=TEST_EXPENSE_ACCOUNT_ID, company_ids=(COMPANY_ID,)),),
         )
     _assert_no_decision(session)
+
+
+async def _historical_v2_without_snapshot(session: Session, monkeypatch) -> str:
+    """Emulate the pre-08M builder at the original transition, never repair history."""
+    invoice = _invoice()
+    review_id = await _import(session, _initial_facts(invoice))
+    with monkeypatch.context() as old_code:
+        old_code.setattr(
+            "app.application.use_cases.reclassify_review.build_review_execution_evidence", lambda **_: None
+        )
+        result = await _reclassify(
+            session, review_id=review_id, expected_version=1, rule_result=_resolved_facts(invoice)
+        )
+    assert result.to_version == 2
+    assert result.executable is False
+    return review_id
+
+
+async def _fresh_matching_snapshot(session: Session, review_id: str, *, expected_version: int = 2, facts=None):
+    """Existing supported application operation; no remediation orchestration."""
+    result = await ReclassifyWorkbenchReviewUseCase(
+        decision_engine=_decision_engine(facts or _resolved_facts(_invoice())),
+        source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
+        reclassification_writer=SqlAlchemyReviewRepository(session),
+    ).execute(
+        ReclassifyReviewCommand(
+            review_id=review_id,
+            company_id=COMPANY_ID,
+            expected_version=expected_version,
+            trigger=ReviewReclassificationTrigger.MASTER_DATA_CHANGED,
+            note="Explicit current-time matching refresh after snapshot retention fix; not historical recovery.",
+        )
+    )
+    session.commit()
+    return result
+
+
+async def test_08o_existing_reclassification_versions_new_snapshot_without_business_change(session, monkeypatch):
+    review_id = await _historical_v2_without_snapshot(session, monkeypatch)
+    source_before = session.scalar(select(WorkbenchReviewSourceInvoiceEvidence)).invoice.copy()
+    v2_event = session.scalar(select(WorkbenchReviewReclassification))
+    v2_event_before = (v2_event.to_version, v2_event.new_workflow, v2_event.new_review_reasons, v2_event.executable)
+    review = session.scalar(select(WorkbenchReviewItem))
+    reasons_before = review.review_reasons.copy()
+
+    result = await _fresh_matching_snapshot(session, review_id)
+    session.expire_all()
+    assert result.changed and result.to_version == 3
+    assert result.previous_workflow == result.new_workflow == WorkflowType.MANUAL_REVIEW
+    assert result.previous_review_reasons == result.new_review_reasons
+    assert [r.code for r in result.new_review_reasons] == [ManualReviewReasonCode.PRODUCT_NOT_FOUND]
+    assert session.scalar(select(WorkbenchReviewItem)).version == 3
+    assert session.scalar(select(WorkbenchReviewItem)).status == "pending_review"
+    assert session.scalar(select(WorkbenchReviewItem)).review_reasons == reasons_before
+    assert session.scalar(select(WorkbenchReviewSourceInvoiceEvidence)).invoice == source_before
+    assert session.query(WorkbenchReviewExecutionEvidence).count() == 1
+    row = session.scalar(select(WorkbenchReviewExecutionEvidence))
+    assert row.review_version == 3  # v2 remains missing, never backfilled
+    assert row.partner_match["partner_id"] == NEW_PARTNER_ID
+    assert row.product_match["line_results"][0]["result"]["status"] == ProductMatchStatus.NOT_FOUND.value
+    assert row.tax_match["line_results"][0]["result"]["tax_id"] == TAX_ID
+    for forbidden in ("account_only", "expense_account_id", "selected_product_id"):
+        assert forbidden not in str(row.invoice) + str(row.product_match)
+    assert row.operating_expense_match is None
+    assert row.account_only_expense_match["status"] == "NOT_FOUND"
+    assert row.account_only_expense_match["expense_account_id"] is None
+    old_event = session.get(WorkbenchReviewReclassification, v2_event.id)
+    assert (
+        old_event.to_version,
+        old_event.new_workflow,
+        old_event.new_review_reasons,
+        old_event.executable,
+    ) == v2_event_before
+    new_event = session.scalar(
+        select(WorkbenchReviewReclassification).where(WorkbenchReviewReclassification.from_version == 2)
+    )
+    assert new_event.trigger == "master_data_changed"
+    assert "current-time" in new_event.note and new_event.created_at is not None
+    assert session.query(WorkbenchReviewDecision).count() == 0
+    assert session.query(ExecutionSourceInvoiceEvidence).count() == 0
+
+
+async def test_08o_v3_explicit_account_only_pins_stage2_and_preserves_discount(session, monkeypatch):
+    review_id = await _historical_v2_without_snapshot(session, monkeypatch)
+    await _fresh_matching_snapshot(session, review_id)
+    ack = _submit_decision(
+        session,
+        review_id=review_id,
+        expected_version=3,
+        line_resolutions=(LineResolution(line_number="1", account_only=True, expense_account_id=247),),
+        account_records=(ResolutionAccountRecord(id=247, company_ids=(COMPANY_ID,)),),
+    )
+    assert ack.accepted
+    source = SqlAlchemyExecutionSourceInvoiceReader(session).get_source_invoice(
+        review_id=review_id, company_id=COMPANY_ID, decision_version=4
+    )
+    assert source.line_resolutions[0].expense_account_id == 247
+    assert source.product_match.line_results[0].result.status is ProductMatchStatus.NOT_FOUND
+    bill = VendorBillBuilder().build(
+        source.invoice,
+        source.partner_match,
+        source.product_match,
+        source.tax_match,
+        company_id=COMPANY_ID,
+        account_only_line_numbers=frozenset({"1"}),
+        explicit_account_only_accounts={"1": source.line_resolutions[0].expense_account_id},
+    )
+    line = bill.invoice_lines[0]
+    assert line.account_id == 247 and line.product_id is None
+    untaxed = line.quantity * line.unit_price
+    vat = (untaxed * Decimal("0.20")).quantize(Decimal("0.01"))
+    assert (untaxed, vat, untaxed + vat) == (Decimal("563.51"), Decimal("112.70"), Decimal("676.21"))
+    assert line.tax_ids == (TAX_ID,)
+    assert session.query(WorkbenchReviewExecutionEvidence).count() == 1
+    assert session.scalar(select(WorkbenchReviewExecutionEvidence)).review_version == 3
+
+
+async def test_08o_replay_and_duplicate_requests_cannot_create_v4(session, monkeypatch):
+    review_id = await _historical_v2_without_snapshot(session, monkeypatch)
+    first = await _fresh_matching_snapshot(session, review_id)
+    replay = await _fresh_matching_snapshot(session, review_id)
+    assert first == replay  # existing compare-and-confirm contract
+    assert session.scalar(select(WorkbenchReviewItem)).version == 3
+    assert session.query(WorkbenchReviewReclassification).count() == 2
+    assert session.query(WorkbenchReviewExecutionEvidence).count() == 1
+    # Even a caller deliberately requesting the new version cannot force unchanged output.
+    unchanged = await _fresh_matching_snapshot(session, review_id, expected_version=3)
+    assert unchanged.changed is False and unchanged.to_version == 3
+    with pytest.raises(ReviewVersionConflictError):
+        await _fresh_matching_snapshot(session, review_id, expected_version=99)
+
+
+async def test_08o_conflicting_duplicate_fails_closed(session, monkeypatch):
+    review_id = await _historical_v2_without_snapshot(session, monkeypatch)
+    await _fresh_matching_snapshot(session, review_id)
+    changed = replace(_resolved_facts(_invoice()), partner_match=_partner(PartnerMatchStatus.NOT_FOUND))
+    with pytest.raises(ReviewVersionConflictError):
+        await _fresh_matching_snapshot(session, review_id, facts=changed)
+    assert session.scalar(select(WorkbenchReviewItem)).version == 3
+    assert session.query(WorkbenchReviewExecutionEvidence).count() == 1
+
+
+async def test_08o_snapshot_failure_rolls_back_new_version(session, monkeypatch):
+    review_id = await _historical_v2_without_snapshot(session, monkeypatch)
+    original_flush = session.flush
+
+    def fail_snapshot(objects=None):
+        if any(isinstance(row, WorkbenchReviewExecutionEvidence) for row in session.new):
+            raise RuntimeError("Fixture persistence failure")
+        return original_flush(objects)
+
+    monkeypatch.setattr(session, "flush", fail_snapshot)
+    with pytest.raises(RuntimeError, match="Fixture persistence failure"):
+        await _fresh_matching_snapshot(session, review_id)
+    session.rollback()
+    assert session.scalar(select(WorkbenchReviewItem)).version == 2
+    assert session.query(WorkbenchReviewExecutionEvidence).count() == 0
+    assert session.query(WorkbenchReviewReclassification).count() == 1
+
+
+async def test_08o_compare_and_set_rejects_version_race_before_snapshot_insert(session, monkeypatch):
+    review_id = await _historical_v2_without_snapshot(session, monkeypatch)
+    repository = SqlAlchemyReviewRepository(session)
+    original = repository._find_review_execution_evidence
+
+    def competing_transition(**kwargs):
+        # Simulate another actor winning between the version read and the CAS.
+        from sqlalchemy import update
+
+        result = original(**kwargs)
+        session.execute(update(WorkbenchReviewItem).where(WorkbenchReviewItem.review_id == review_id).values(version=3))
+        return result
+
+    monkeypatch.setattr(repository, "_find_review_execution_evidence", competing_transition)
+    with pytest.raises(ReviewVersionConflictError):
+        await ReclassifyWorkbenchReviewUseCase(
+            decision_engine=_decision_engine(_resolved_facts(_invoice())),
+            source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
+            reclassification_writer=repository,
+        ).execute(
+            ReclassifyReviewCommand(
+                review_id=review_id,
+                company_id=COMPANY_ID,
+                expected_version=2,
+                trigger=ReviewReclassificationTrigger.MASTER_DATA_CHANGED,
+                note="Explicit current-time refresh",
+            )
+        )
+    assert session.query(WorkbenchReviewExecutionEvidence).count() == 0
+    assert session.query(WorkbenchReviewReclassification).count() == 1
+    session.rollback()
