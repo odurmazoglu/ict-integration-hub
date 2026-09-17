@@ -112,10 +112,12 @@ class AccountMoveRepository:
         idempotency_key: str,
         company_id: int | None = None,
     ) -> AccountMoveDraft:
+        currency_id = await self._resolve_vendor_bill_currency(vendor_bill.currency)
         payload = self._draft_payload(
             vendor_bill=vendor_bill,
             idempotency_key=idempotency_key,
             company_id=company_id,
+            currency_id=currency_id,
         )
         move_id = await _translate_connector_errors(self._client.create_account_move(payload))
         return AccountMoveDraft(id=move_id)
@@ -156,9 +158,11 @@ class AccountMoveRepository:
         customer_invoice: CustomerInvoice,
         idempotency_key: str,
     ) -> AccountMoveDraft:
+        currency_id = await self._resolve_customer_invoice_currency(customer_invoice.currency)
         payload = self._customer_invoice_draft_payload(
             customer_invoice=customer_invoice,
             idempotency_key=idempotency_key,
+            currency_id=currency_id,
         )
         move_id = await _translate_customer_invoice_connector_errors(self._client.create_account_move(payload))
         return AccountMoveDraft(id=move_id)
@@ -169,29 +173,83 @@ class AccountMoveRepository:
         vendor_bill: VendorBill,
         idempotency_key: str,
         company_id: int | None = None,
+        currency_id: int,
     ) -> dict[str, Any]:
         _validate_idempotency_key(idempotency_key)
         company_id = _validate_company_id(
             company_id if company_id is not None else vendor_bill.company_id,
             "Vendor Bill",
         )
-        payload = to_odoo_account_move_payload(vendor_bill)
+        payload = to_odoo_account_move_payload(vendor_bill, currency_id=currency_id)
         payload["company_id"] = company_id
         payload[IDEMPOTENCY_FIELD] = idempotency_key
         _validate_payload(payload)
         return payload
+
+    async def _resolve_vendor_bill_currency(self, currency_code: str) -> int:
+        code = currency_code.strip().upper() if isinstance(currency_code, str) else ""
+        if not code:
+            raise VendorBillWriteValidationError("Vendor Bill currency code is required.")
+        records = await _translate_connector_errors(
+            self._client.search_read(
+                model="res.currency",
+                domain=[["name", "=", code], ["active", "in", [True, False]]],
+                fields=["id", "name", "active"],
+                limit=2,
+            )
+        )
+        if len(records) != 1:
+            raise VendorBillWriteValidationError("Vendor Bill currency must resolve to exactly one Odoo currency.")
+        record = records[0]
+        currency_id = record.get("id")
+        if (
+            type(currency_id) is not int
+            or currency_id <= 0
+            or str(record.get("name", "")).strip().upper() != code
+            or record.get("active") is not True
+        ):
+            raise VendorBillWriteValidationError("Vendor Bill currency is not an active exact Odoo currency.")
+        return currency_id
 
     def _customer_invoice_draft_payload(
         self,
         *,
         customer_invoice: CustomerInvoice,
         idempotency_key: str,
+        currency_id: int,
     ) -> dict[str, Any]:
         _validate_customer_invoice_idempotency_key(idempotency_key)
-        payload = to_odoo_customer_invoice_payload(customer_invoice)
+        payload = to_odoo_customer_invoice_payload(customer_invoice, currency_id=currency_id)
         payload[IDEMPOTENCY_FIELD] = idempotency_key
         _validate_customer_invoice_payload(payload)
         return payload
+
+    async def _resolve_customer_invoice_currency(self, currency_code: str) -> int:
+        code = currency_code.strip().upper() if isinstance(currency_code, str) else ""
+        if not code:
+            raise CustomerInvoiceWriteValidationError("Customer Invoice currency code is required.")
+        records = await _translate_customer_invoice_connector_errors(
+            self._client.search_read(
+                model="res.currency",
+                domain=[["name", "=", code], ["active", "in", [True, False]]],
+                fields=["id", "name", "active"],
+                limit=2,
+            )
+        )
+        if len(records) != 1:
+            raise CustomerInvoiceWriteValidationError(
+                "Customer Invoice currency must resolve to exactly one Odoo currency."
+            )
+        record = records[0]
+        currency_id = record.get("id")
+        if (
+            type(currency_id) is not int
+            or currency_id <= 0
+            or str(record.get("name", "")).strip().upper() != code
+            or record.get("active") is not True
+        ):
+            raise CustomerInvoiceWriteValidationError("Customer Invoice currency is not an active exact Odoo currency.")
+        return currency_id
 
 
 async def _translate_connector_errors[T](awaitable: Any) -> T:
@@ -255,6 +313,8 @@ def _validate_payload(payload: dict[str, Any]) -> None:
         raise VendorBillWriteValidationError("Vendor Bill reference is required.")
     if not payload.get("invoice_line_ids"):
         raise VendorBillWriteValidationError("Vendor Bill invoice lines are required.")
+    if type(payload.get("currency_id")) is not int or payload["currency_id"] <= 0 or "currency" in payload:
+        raise VendorBillWriteValidationError("Vendor Bill currency_id is required.")
     payload_text = str(payload).lower()
     for forbidden in FORBIDDEN_ACCOUNT_MOVE_FIELDS:
         if forbidden in payload_text:
@@ -272,6 +332,8 @@ def _validate_customer_invoice_payload(payload: dict[str, Any]) -> None:
         raise CustomerInvoiceWriteValidationError("Customer Invoice reference is required.")
     if not payload.get("invoice_line_ids"):
         raise CustomerInvoiceWriteValidationError("Customer Invoice invoice lines are required.")
+    if type(payload.get("currency_id")) is not int or payload["currency_id"] <= 0 or "currency" in payload:
+        raise CustomerInvoiceWriteValidationError("Customer Invoice currency_id is required.")
     payload_text = str(payload).lower()
     for forbidden in FORBIDDEN_ACCOUNT_MOVE_FIELDS:
         if forbidden in payload_text:

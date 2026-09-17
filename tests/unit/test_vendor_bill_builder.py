@@ -162,7 +162,6 @@ def test_payload_generation_is_deterministic() -> None:
         "partner_id": 101,
         "invoice_date": "2026-07-21",
         "ref": "INV-1",
-        "currency": "TRY",
         "invoice_line_ids": (
             (
                 0,
@@ -182,13 +181,11 @@ def test_payload_generation_is_deterministic() -> None:
     }
 
 
-def test_payload_does_not_invent_currency_id() -> None:
+def test_payload_requires_resolved_currency_id() -> None:
     bill = VendorBillBuilder().build(_invoice([_line("1")]), _partner(), _products([_product_line("1", 501)]), _taxes())
 
-    payload = to_odoo_account_move_payload(bill)
-
-    assert "currency_id" not in payload
-    assert payload["currency"] == "TRY"
+    with pytest.raises(ValueError, match="currency_id"):
+        to_odoo_account_move_payload(bill, currency_id=0)
 
 
 def test_vendor_bill_dtos_are_immutable() -> None:

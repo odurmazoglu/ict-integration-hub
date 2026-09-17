@@ -323,6 +323,8 @@ class FakeOdooVendorBillClient:
         limit: int = 20,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        if model == "res.currency":
+            return [{"id": 31, "name": "TRY", "active": True}]
         self.search_calls.append(domain)
         move_type = _domain_value(domain, "move_type") or "in_invoice"
         if move_type not in self.created_move_types:

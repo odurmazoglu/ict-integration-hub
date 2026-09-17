@@ -346,7 +346,7 @@ def test_expense_odoo_payload_has_account_id_and_no_product_id() -> None:
         operating_expense_match=_expense_match(),
     )
 
-    payload = to_odoo_account_move_payload(bill)
+    payload = to_odoo_account_move_payload(bill, currency_id=31)
     line_payload = payload["invoice_line_ids"][0][2]
 
     assert line_payload == {
@@ -372,7 +372,7 @@ def test_expense_payload_passes_account_move_repository_forbidden_field_guard() 
         company_id=1,
         operating_expense_match=_expense_match(),
     )
-    payload_text = str(to_odoo_account_move_payload(bill)).lower()
+    payload_text = str(to_odoo_account_move_payload(bill, currency_id=31)).lower()
     assert not any(forbidden in payload_text for forbidden in FORBIDDEN_ACCOUNT_MOVE_FIELDS)
 
 
