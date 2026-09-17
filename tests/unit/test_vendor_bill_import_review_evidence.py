@@ -494,14 +494,30 @@ async def test_product_not_found_still_pins_raw_stage1_evidence_for_explicit_ove
     assert evidence.tax_match == _tax_match()
 
 
-async def test_manual_review_import_still_creates_review_item_without_execution_evidence() -> None:
+async def test_manual_review_import_with_mixed_match_shape_still_pins_raw_stage1_evidence() -> None:
+    """P0-PROD-08M: this is the *realistic* counterpart of
+    test_product_not_found_still_pins_raw_stage1_evidence_for_explicit_override above --
+    same partner/product/tax match shape, but with the workflow value the real
+    deterministic rule engine actually produces for it (MANUAL_REVIEW, since product
+    is unmatched) rather than an artificially faked VENDOR_BILL. Before P0-PROD-08M,
+    build_review_execution_evidence excluded every non-VENDOR_BILL workflow, so this
+    exact case -- a real invoice blocked only on PRODUCT_NOT_FOUND, needing an explicit
+    operator account_only/selected_product override -- never got Stage-1 evidence
+    pinned in production. Evidence being pinned here does not decide or execute
+    anything by itself; it only makes the later explicit decision possible."""
+
     service = RecordingReviewItemCreationService()
     result = await _import_use_case(rule_result=_manual_review_rule_result(), service=service).execute(_command())
 
     assert result.review_required is True
-    assert service.execution_evidence is None
     assert service.created_item is not None
     assert service.created_item.workflow is WorkflowType.MANUAL_REVIEW
+    evidence = service.execution_evidence
+    assert evidence is not None
+    assert evidence.operating_expense_match is None
+    assert evidence.partner_match == _partner_match()
+    assert evidence.product_match == _product_match(ProductMatchStatus.NOT_FOUND)
+    assert evidence.tax_match == _tax_match()
 
 
 # ------------------------------------------------- F. real repository: idempotency + Stage-1 -> Stage-2

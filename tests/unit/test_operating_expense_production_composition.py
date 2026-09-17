@@ -290,13 +290,23 @@ async def test_no_mapping_stays_manual_review_with_no_executable_evidence(sessio
 
 
 async def test_unknown_sku_is_never_rescued_by_expense_mapping(session: Session) -> None:
+    """The whole-invoice expense mapping never auto-rescues a line carrying a real
+    (but unmatched) product identifier into VENDOR_BILL -- that part is unchanged.
+    P0-PROD-08M: Stage-1 now additionally pins the raw match facts under
+    account_only_expense_match (not operating_expense_match, which stays unused here)
+    so a later explicit per-line account_only override has real evidence to execute
+    against; it does not by itself rescue anything into VENDOR_BILL."""
+
     _add_mapping(session)
 
     await _run(session, _invoice(buyer_item_code="UNKNOWN-SKU"))
 
     review_item = session.execute(select(WorkbenchReviewItem)).scalar_one()
     assert review_item.workflow == WorkflowType.MANUAL_REVIEW.value
-    assert session.execute(select(WorkbenchReviewExecutionEvidence)).scalars().all() == []
+    stage1 = session.execute(select(WorkbenchReviewExecutionEvidence)).scalar_one()
+    assert stage1.operating_expense_match is None
+    assert stage1.account_only_expense_match is not None
+    assert stage1.account_only_expense_match["expense_account_id"] == EXPENSE_ACCOUNT_ID
 
 
 async def test_mapping_is_company_isolated(session: Session) -> None:

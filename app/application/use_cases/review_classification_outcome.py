@@ -49,14 +49,14 @@ def build_review_execution_evidence(
     invoice: InternalInvoice,
     decision_result: DecisionResult,
 ) -> ReviewExecutionEvidence | None:
-    """Immutable pre-decision Stage-1 evidence for a fully matched Vendor Bill candidate.
+    """Pin matching facts before an explicit operator can resolve unmatched lines.
 
-    Only produced when the deterministic execution inputs are canonically complete
-    (``validate_vendor_bill_inputs``). Incomplete or ambiguous matches keep the
-    existing fail-closed behavior: no executable Vendor Bill evidence is pinned.
+    MANUAL_REVIEW is the deterministic outcome for PRODUCT_NOT_FOUND. It must
+    reach the existing partial-snapshot checks too; a snapshot alone never
+    authorizes execution. Decision acceptance validates the resolved inputs.
     """
 
-    if decision_result.workflow is not WorkflowType.VENDOR_BILL:
+    if decision_result.workflow not in {WorkflowType.VENDOR_BILL, WorkflowType.MANUAL_REVIEW}:
         return None
     partner_match = decision_result.partner_match
     product_match = decision_result.product_match

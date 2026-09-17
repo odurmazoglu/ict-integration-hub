@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -21,8 +22,15 @@ from app.application.workbench import (
 )
 from app.application.workbench.exceptions import ReviewDecisionError, ReviewVersionConflictError
 from app.application.workflow import WorkflowType
-from app.domain.invoice import Header, InternalInvoice, MonetaryTotals, Party
-from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus
+from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party
+from app.matching import (
+    InvoiceProductLineResult,
+    InvoiceProductMatchResult,
+    PartnerMatchResult,
+    PartnerMatchStatus,
+    ProductMatchResult,
+    ProductMatchStatus,
+)
 from app.tax_mapping import InvoiceTaxMappingResult
 
 
@@ -197,6 +205,9 @@ class RecordingDecisionWriter:
         self.commands: tuple[ReviewDecisionCommand, ...] = ()
         self.commands_with_evidence: tuple[tuple[ReviewDecisionCommand, ExecutionSourceInvoice], ...] = ()
 
+    def has_matching_review_decision(self, command: ReviewDecisionCommand) -> bool:
+        return False
+
     def submit_review_decision(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         self.commands = (*self.commands, command)
         if self.error is not None:
@@ -284,10 +295,17 @@ def _source_evidence() -> ExecutionSourceInvoice:
         decision_version=2,
         source_invoice_id="ETTN-1",
         invoice=InternalInvoice(
-            header=Header(invoice_number="INV-1", invoice_uuid="ETTN-1", ettn="ETTN-1"),
+            header=Header(
+                invoice_number="INV-1",
+                invoice_uuid="ETTN-1",
+                ettn="ETTN-1",
+                issue_date=date(2026, 9, 17),
+                currency_code="TRY",
+            ),
             supplier=Party(name="Supplier"),
             customer=Party(name="Customer"),
             totals=MonetaryTotals(payable_amount=Decimal("120.00")),
+            lines=(InvoiceLine(line_number="1", quantity=Decimal("1"), unit_price=Decimal("120")),),
         ),
         partner_match=PartnerMatchResult(
             status=PartnerMatchStatus.MATCHED,
@@ -297,6 +315,24 @@ def _source_evidence() -> ExecutionSourceInvoice:
             candidate_count=1,
             confidence=Decimal("1.00"),
         ),
-        product_match=InvoiceProductMatchResult(),
+        product_match=InvoiceProductMatchResult(
+            line_results=(
+                InvoiceProductLineResult(
+                    line_number="1",
+                    result=ProductMatchResult(
+                        status=ProductMatchStatus.MATCHED,
+                        line_number="1",
+                        product_id=90,
+                        default_code=None,
+                        barcode=None,
+                        seller_item_code=None,
+                        matched_by="default_code",
+                        reason="Matched.",
+                        candidate_count=1,
+                        confidence=Decimal("1"),
+                    ),
+                ),
+            )
+        ),
         tax_match=InvoiceTaxMappingResult(),
     )
