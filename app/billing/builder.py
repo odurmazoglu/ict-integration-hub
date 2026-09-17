@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any
 
 from app.billing.dto import (
@@ -257,6 +257,11 @@ def validate_vendor_bill_inputs(
         for tax_index, _tax in enumerate(line.taxes):
             if (line.line_number, tax_index) not in tax_by_line:
                 errors.append(f"{line_path}.taxes[{tax_index}] must be matched.")
+        if line.unit_price is not None and line.quantity is not None:
+            errors.extend(_discount_errors(line, line_path))
+
+    if not errors and any(line.discounts for line in invoice.lines):
+        errors.extend(_totals_invariant_errors(invoice))
 
     return validation_result(errors)
 
@@ -446,7 +451,7 @@ def _vendor_bill_line(
         product_id=product_result.product_id,
         quantity=line.quantity,
         uom=line.unit_code,
-        unit_price=line.unit_price,
+        unit_price=_net_unit_price(line),
         tax_ids=tax_ids,
         description=line.description,
     )
@@ -465,10 +470,102 @@ def _expense_vendor_bill_line(
         account_id=expense_account_id,
         quantity=line.quantity,
         uom=None,
-        unit_price=line.unit_price,
+        unit_price=_net_unit_price(line),
         tax_ids=tax_ids,
         description=line.description,
     )
+
+
+# P0-PROD-08L: preserve source invoice discounts/allowances when building a Vendor
+# Bill line. Odoo's own account.move.line.discount is a percentage field; deriving a
+# percentage from a source *amount* is an unnecessary, lossy round-trip (an amount is
+# what the immutable evidence actually says). Instead the discount is netted directly
+# into price_unit -- quantity * net_unit_price reproduces the source's post-discount
+# line economics exactly, with no reliance on Odoo's own rounding behavior at all.
+#
+# Only a source amount is ever trusted. A rate-only allowance (no cbc:Amount) has no
+# safely-inferable base without inventing accounting logic the immutable evidence does
+# not itself provide -- validate_vendor_bill_inputs fails the whole build closed for
+# that line rather than guess (see _discount_errors). Line-level *charges*
+# (ChargeIndicator=true) are not modeled anywhere in InvoiceLine at all -- the parser
+# never preserves them -- so a genuine charge is invisible to this function; the
+# per-invoice totals invariant below is what catches that (and any other unmodeled
+# economic difference, including a header-only allowance -- see MonetaryTotals) rather
+# than this function silently mismatching.
+_DISCOUNT_UNIT_PRICE_PRECISION = Decimal("0.000001")  # matches the source's own unit_price precision
+TOTALS_INVARIANT_TOLERANCE = Decimal("0.01")  # one minor currency unit (kuruş/cent)
+
+
+def _line_gross_total(line: InvoiceLine) -> Decimal:
+    assert line.unit_price is not None
+    assert line.quantity is not None
+    return line.unit_price * line.quantity
+
+
+def _line_total_discount(line: InvoiceLine) -> Decimal:
+    return sum((discount.amount for discount in line.discounts if discount.amount is not None), Decimal("0"))
+
+
+def _line_net_total(line: InvoiceLine) -> Decimal:
+    return _line_gross_total(line) - _line_total_discount(line)
+
+
+def _net_unit_price(line: InvoiceLine) -> Decimal:
+    """``line.unit_price`` unchanged when there are no discounts -- byte-identical to
+    pre-08L behavior. ``validate_vendor_bill_inputs`` has already proven every discount
+    carries a usable amount and the total does not exceed the gross line total before
+    this is ever reached."""
+
+    assert line.unit_price is not None
+    assert line.quantity is not None
+    if not line.discounts:
+        return line.unit_price
+    net_total = _line_net_total(line)
+    return (net_total / line.quantity).quantize(_DISCOUNT_UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
+
+
+def _discount_errors(line: InvoiceLine, line_path: str) -> list[str]:
+    if not line.discounts:
+        return []
+    if any(discount.amount is None for discount in line.discounts):
+        return [
+            f"{line_path}.discounts contains an allowance with no amount; "
+            "percentage-only/rate-only allowances are not supported."
+        ]
+    total_discount = _line_total_discount(line)
+    if total_discount < Decimal("0"):
+        return [f"{line_path}.discounts total must not be negative."]
+    if total_discount > _line_gross_total(line) + TOTALS_INVARIANT_TOLERANCE:
+        return [f"{line_path}.discounts total must not exceed the line's gross amount."]
+    return []
+
+
+def _totals_invariant_errors(invoice: InternalInvoice) -> list[str]:
+    """P0-PROD-08L: the exact safety net for the defect found in P0-PROD-08K -- never
+    build a Vendor Bill whose net line economics silently diverge from the immutable
+    source invoice's own authoritative tax-exclusive total. This also fails closed on
+    an invoice-level-only allowance (MonetaryTotals.allowance_total not fully explained
+    by any line's own discounts) and on a line-level charge (never parsed into
+    InvoiceLine at all) -- neither is modeled by this PR, so either would otherwise
+    silently produce a Vendor Bill with different economics than the source invoice.
+    Only evaluated when at least one line actually carries a discount; a no-discount
+    invoice never reaches this check, preserving pre-08L behavior exactly.
+    """
+
+    target = invoice.totals.tax_exclusive_amount
+    if target is None:
+        return ["totals.tax_exclusive_amount is required to validate discounted line economics."]
+    computed = sum(
+        (_line_net_total(line) for line in invoice.lines if line.unit_price is not None and line.quantity is not None),
+        Decimal("0"),
+    )
+    if abs(computed - target) > TOTALS_INVARIANT_TOLERANCE:
+        return [
+            f"Computed net line total ({computed}) does not match the source invoice's tax-exclusive "
+            f"amount ({target}); refusing to build a Vendor Bill with different economics than the "
+            "source invoice."
+        ]
+    return []
 
 
 def _customer_invoice_reference(

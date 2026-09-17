@@ -39,7 +39,7 @@ from app.application.workbench.dto import LineResolution
 from app.application.workbench.exceptions import WorkbenchContractError
 from app.billing import VendorBillBuilder, VendorBillBuildError, VendorBillLine
 from app.billing.builder import validate_vendor_bill_inputs
-from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
+from app.domain.invoice import Discount, Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.matching import (
     InvoiceProductLineResult,
     InvoiceProductMatchResult,
@@ -717,3 +717,321 @@ def test_g_no_automatic_product_not_found_to_expense_conversion() -> None:
 
     assert result.status is ExecutionStepStatus.FAILED
     assert result.error_code == "vendor_bill_build_error"
+
+
+# --------------------------------------------------------------------------- P0-PROD-08L: discount preservation
+
+
+def _dmarket_line(*, discounts: tuple[Discount, ...]) -> InvoiceLine:
+    """The real P0-PROD-08K pilot line's exact economics: gross 805.01, a single
+    241.50 fixed allowance, net 563.51, KDV 20% = 112.70, payable 676.21."""
+
+    return InvoiceLine(
+        line_number="1",
+        description="Kraf Kesim Tablası A2 45X60 3002G",
+        seller_item_code=SELLER_ITEM_CODE,
+        quantity=Decimal("1.000"),
+        unit_code="C62",
+        unit_price=Decimal("805.010000"),
+        discounts=discounts,
+        taxes=(
+            Tax(tax_type="KDV", rate=Decimal("20.00"), base_amount=Decimal("805.01"), tax_amount=Decimal("112.70")),
+        ),
+    )
+
+
+def _invoice_with_totals(lines: list[InvoiceLine], *, tax_exclusive_amount: Decimal | None) -> InternalInvoice:
+    return InternalInvoice(
+        header=Header(
+            invoice_number="HD12026000964604",
+            invoice_uuid="uuid-dmarket",
+            ettn="uuid-dmarket",
+            issue_date=date(2026, 9, 10),
+            currency_code="TRY",
+        ),
+        supplier=Party(name="D-MARKET ELEKTRONİK HİZMETLER VE TİCARET ANONİM ŞİRKETİ", tax_number="2650179910"),
+        customer=Party(name="ICT", tax_number="4651205941"),
+        totals=MonetaryTotals(
+            line_extension_amount=Decimal("805.01"),
+            tax_exclusive_amount=tax_exclusive_amount,
+            tax_inclusive_amount=Decimal("676.21"),
+            allowance_total=Decimal("241.50"),
+            charge_total=Decimal("0.00"),
+            payable_amount=Decimal("676.21"),
+        ),
+        lines=tuple(lines),
+    )
+
+
+def test_h_dmarket_account_only_line_preserves_discount_economics() -> None:
+    """A: the exact real pilot -- 805.01 - 241.50 = 563.51, KDV 112.70, payable 676.21.
+    Built through the account_only path with a test fixture account id (never the real
+    production id) exactly as P0-PROD-08K's future decision would submit it."""
+
+    line = _dmarket_line(discounts=(Discount(amount=Decimal("241.50")),))
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("563.51"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+    )
+
+    assert len(bill.invoice_lines) == 1
+    built = bill.invoice_lines[0]
+    assert built.product_id is None
+    assert built.account_id == EXPENSE_ACCOUNT_ID
+    assert built.quantity == Decimal("1.000")
+    assert built.description == "Kraf Kesim Tablası A2 45X60 3002G"
+    assert built.tax_ids == (TAX_ID,)
+    # The net economics: quantity * unit_price must reproduce the source's true
+    # tax-exclusive amount, not the pre-discount gross (805.01).
+    assert built.quantity * built.unit_price == Decimal("563.510000")
+
+
+def test_i_dmarket_product_line_preserves_discount_economics() -> None:
+    """C (Section 7): discount support is not account_only-specific -- the identical
+    economics apply through a normal product-matched line."""
+
+    line = _dmarket_line(discounts=(Discount(amount=Decimal("241.50")),))
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("563.51"))
+    product_match = _products([_product_line("1", ProductMatchStatus.MATCHED, product_id=501)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+    )
+
+    built = bill.invoice_lines[0]
+    assert built.product_id == 501
+    assert built.account_id is None
+    assert built.tax_ids == (TAX_ID,)
+    assert built.quantity * built.unit_price == Decimal("563.510000")
+
+
+def test_j_no_discount_line_unit_price_is_byte_identical() -> None:
+    """Backward compatibility: a line with no discounts must build with unit_price
+    exactly equal to the source, unchanged by this PR."""
+
+    line = _dmarket_line(discounts=())
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("805.01"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+    )
+
+    assert bill.invoice_lines[0].unit_price == Decimal("805.010000")
+
+
+def test_k_quantity_greater_than_one_discount_is_divided_correctly() -> None:
+    line = InvoiceLine(
+        line_number="1",
+        description="Bulk item",
+        seller_item_code=SELLER_ITEM_CODE,
+        quantity=Decimal("4"),
+        unit_code="C62",
+        unit_price=Decimal("100.00"),
+        discounts=(Discount(amount=Decimal("40.00")),),
+        taxes=(Tax(tax_type="KDV", rate=Decimal("20")),),
+    )
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("360.00"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+    )
+
+    built = bill.invoice_lines[0]
+    assert built.quantity == Decimal("4")
+    # gross 400.00 - 40.00 = 360.00 net; 360.00 / 4 = 90.00 per unit
+    assert built.unit_price == Decimal("90.000000")
+    assert built.quantity * built.unit_price == Decimal("360.000000")
+
+
+def test_l_multiple_discounts_on_one_line_are_summed() -> None:
+    line = InvoiceLine(
+        line_number="1",
+        description="Two allowances",
+        seller_item_code=SELLER_ITEM_CODE,
+        quantity=Decimal("1"),
+        unit_price=Decimal("100.00"),
+        discounts=(
+            Discount(amount=Decimal("10.00"), reason="Promo"),
+            Discount(amount=Decimal("5.00"), reason="Loyalty"),
+        ),
+        taxes=(Tax(tax_type="KDV", rate=Decimal("20")),),
+    )
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("85.00"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+    )
+
+    assert bill.invoice_lines[0].unit_price == Decimal("85.000000")
+
+
+def test_m_zero_amount_discount_is_a_no_op() -> None:
+    line = InvoiceLine(
+        line_number="1",
+        description="Zero discount",
+        seller_item_code=SELLER_ITEM_CODE,
+        quantity=Decimal("1"),
+        unit_price=Decimal("50.00"),
+        discounts=(Discount(amount=Decimal("0")),),
+        taxes=(Tax(tax_type="KDV", rate=Decimal("20")),),
+    )
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("50.00"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+    )
+
+    assert bill.invoice_lines[0].unit_price == Decimal("50.000000")
+
+
+def test_n_malformed_rate_only_discount_fails_closed() -> None:
+    """A discount with no amount (rate-only) cannot be safely resolved without
+    inventing accounting logic the immutable evidence does not itself provide."""
+
+    line = _dmarket_line(discounts=(Discount(rate=Decimal("0.30"), amount=None),))
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("563.51"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    with pytest.raises(VendorBillBuildError) as exc_info:
+        VendorBillBuilder().build(
+            invoice,
+            _partner(),
+            product_match,
+            _taxes(invoice),
+            company_id=1,
+            account_only_line_numbers=frozenset({"1"}),
+            account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+        )
+    assert any("percentage-only/rate-only allowances are not supported" in error for error in exc_info.value.errors)
+
+
+def test_o_discount_exceeding_gross_amount_fails_closed() -> None:
+    line = _dmarket_line(discounts=(Discount(amount=Decimal("9999.00")),))
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("-9193.99"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    with pytest.raises(VendorBillBuildError) as exc_info:
+        VendorBillBuilder().build(
+            invoice,
+            _partner(),
+            product_match,
+            _taxes(invoice),
+            company_id=1,
+            account_only_line_numbers=frozenset({"1"}),
+            account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+        )
+    assert any("must not exceed the line's gross amount" in error for error in exc_info.value.errors)
+
+
+def test_p_totals_invariant_rejects_a_header_only_allowance_not_explained_by_any_line() -> None:
+    """This is the general safety net for an invoice-level-only allowance (Section 10):
+    the line's own discount (241.50) does not fully explain a larger header discount --
+    refuse to build rather than silently produce wrong economics."""
+
+    line = _dmarket_line(discounts=(Discount(amount=Decimal("241.50")),))
+    # Claim a tax_exclusive_amount that implies an *additional*, unexplained 50.00
+    # header-only allowance on top of the line's own.
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=Decimal("513.51"))
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    with pytest.raises(VendorBillBuildError) as exc_info:
+        VendorBillBuilder().build(
+            invoice,
+            _partner(),
+            product_match,
+            _taxes(invoice),
+            company_id=1,
+            account_only_line_numbers=frozenset({"1"}),
+            account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+        )
+    assert any("does not match the source invoice" in error for error in exc_info.value.errors)
+
+
+def test_q_missing_tax_exclusive_amount_fails_closed_when_discounts_present() -> None:
+    line = _dmarket_line(discounts=(Discount(amount=Decimal("241.50")),))
+    invoice = _invoice_with_totals([line], tax_exclusive_amount=None)
+    product_match = _products([_product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE)])
+
+    with pytest.raises(VendorBillBuildError) as exc_info:
+        VendorBillBuilder().build(
+            invoice,
+            _partner(),
+            product_match,
+            _taxes(invoice),
+            company_id=1,
+            account_only_line_numbers=frozenset({"1"}),
+            account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+        )
+    assert any("tax_exclusive_amount is required" in error for error in exc_info.value.errors)
+
+
+def test_r_mixed_discounted_and_non_discounted_lines() -> None:
+    discounted = _dmarket_line(discounts=(Discount(amount=Decimal("241.50")),))
+    plain = InvoiceLine(
+        line_number="2",
+        description="Plain line",
+        quantity=Decimal("1"),
+        unit_price=Decimal("100.00"),
+        taxes=(Tax(tax_type="KDV", rate=Decimal("20")),),
+    )
+    invoice = _invoice_with_totals([discounted, plain], tax_exclusive_amount=Decimal("663.51"))
+    product_match = _products(
+        [
+            _product_line("1", ProductMatchStatus.NOT_FOUND, seller_item_code=SELLER_ITEM_CODE),
+            _product_line("2", ProductMatchStatus.MATCHED, product_id=777),
+        ]
+    )
+
+    bill = VendorBillBuilder().build(
+        invoice,
+        _partner(),
+        product_match,
+        _taxes(invoice),
+        company_id=1,
+        account_only_line_numbers=frozenset({"1"}),
+        account_only_expense_match=_expense_match(expense_account_id=EXPENSE_ACCOUNT_ID),
+    )
+
+    assert len(bill.invoice_lines) == 2
+    assert bill.invoice_lines[0].unit_price == Decimal("563.510000")
+    assert bill.invoice_lines[1].unit_price == Decimal("100.00")  # unchanged, no discount
