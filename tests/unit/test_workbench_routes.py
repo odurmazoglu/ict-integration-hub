@@ -909,6 +909,21 @@ def test_pqrs_no_auto_decision_pinning_or_execution_or_supplier_creation() -> No
         assert not any(forbidden in name for name in dependency_type_names)
 
 
+def test_one_off_vendor_not_hub_owned_error_maps_to_409() -> None:
+    """P0-PROD-08I: the ownership-protection failure must be an operator-visible
+    conflict, never a 500 -- it is an expected business outcome (the exact-VAT match
+    is a pre-existing partner the Hub never created via ONE_OFF_VENDOR), not a bug."""
+
+    from app.api.routers import workbench as workbench_router
+    from app.application.workbench.exceptions import SupplierResolutionOneOffVendorNotHubOwnedError
+
+    status_code = workbench_router._status_code_for_exception(
+        SupplierResolutionOneOffVendorNotHubOwnedError("not hub-owned")
+    )
+
+    assert status_code == 409
+
+
 async def test_t_extra_request_fields_are_rejected(api_client: AsyncClient) -> None:
     response = await _post_product_resolution(
         api_client,
@@ -1349,6 +1364,17 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         assert forbidden not in supplier_resolution_text
     assert set(supplier_resolution_schema["properties"]) == {"mode", "expected_version", "partner_id", "note"}
     assert supplier_resolution_schema.get("additionalProperties") is False
+    mode_ref = supplier_resolution_schema["properties"]["mode"]["$ref"].split("/")[-1]
+    assert "one_off_vendor" in response.json()["components"]["schemas"][mode_ref]["enum"]
+    assert "use_one_off_supplier" in response.json()["components"]["schemas"][mode_ref]["enum"]
+    supplier_remediation_schema = response.json()["components"]["schemas"]["SupplierRemediationResponse"]
+    for expected in (
+        "one_off_vendor_hub_owned",
+        "one_off_vendor_retirement_status",
+        "one_off_vendor_awaiting_vendor_bill",
+        "one_off_vendor_reconciliation_required",
+    ):
+        assert expected in supplier_remediation_schema["properties"]
     decision_schema = response.json()["components"]["schemas"]["ReviewDecisionRequest"]
     schema_text = str(decision_schema)
     assert "company_id" not in schema_text

@@ -72,12 +72,14 @@ from app.application.workbench.exceptions import (
     SupplierResolutionContractError,
     SupplierResolutionDataIntegrityError,
     SupplierResolutionError,
+    SupplierResolutionOneOffVendorNotHubOwnedError,
     SupplierResolutionPartnerInactiveError,
     SupplierResolutionPartnerMismatchError,
     SupplierResolutionPartnerNotFoundError,
     SupplierResolutionRaceError,
     WorkbenchContractError,
 )
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workflow import ManualReviewReason, WorkflowType
@@ -335,10 +337,14 @@ def submit_review_decision(
     summary="Resolve a missing supplier for an Import Workbench review",
     description=(
         "Requires workbench_review_decide. For a review whose reasons include SUPPLIER_NOT_FOUND, records an "
-        "explicit resolution (match an existing partner, create a permanent partner, or one-off) and triggers the "
-        "non-destructive SUPPLIER_RESOLUTION reclassification. Legal supplier identity comes only from the review's "
-        "immutable source evidence -- never the request body. CREATE_PERMANENT_SUPPLIER is gated by "
-        "SUPPLIER_REMEDIATION_WRITE_ENABLED. It never executes a Vendor Bill."
+        "explicit resolution -- MATCH_EXISTING (select an existing partner), CREATE_PERMANENT_SUPPLIER (create a "
+        "normal ongoing ICT supplier), ONE_OFF_VENDOR (create/reuse a Hub-owned partner for a single one-off "
+        "purchase, retired once a Vendor Bill durably succeeds -- see one_off_vendor_retirement_status in the "
+        "response), or USE_ONE_OFF_SUPPLIER (record intent only; deferred) -- and triggers the non-destructive "
+        "SUPPLIER_RESOLUTION reclassification. Legal supplier identity (name, VAT) always comes only from the "
+        "review's immutable source evidence -- never the request body; the request only selects the mode. "
+        "CREATE_PERMANENT_SUPPLIER and ONE_OFF_VENDOR are both gated by SUPPLIER_REMEDIATION_WRITE_ENABLED. This "
+        "endpoint never executes a Vendor Bill and never archives a partner."
     ),
 )
 async def resolve_review_supplier(
@@ -439,6 +445,7 @@ def _product_remediation_response(result) -> ProductRemediationResponse:
 
 
 def _supplier_remediation_response(result) -> SupplierRemediationResponse:
+    retirement_status = result.one_off_vendor_retirement_status
     return SupplierRemediationResponse(
         review_id=result.review_id,
         company_id=result.company_id,
@@ -453,6 +460,18 @@ def _supplier_remediation_response(result) -> SupplierRemediationResponse:
         reclassified=result.reclassified,
         already_applied=result.already_applied,
         workbench_republished=result.workbench_republished,
+        one_off_vendor_hub_owned=result.one_off_vendor_hub_owned,
+        one_off_vendor_retirement_status=retirement_status,
+        one_off_vendor_awaiting_vendor_bill=(
+            retirement_status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+            if retirement_status is not None
+            else None
+        ),
+        one_off_vendor_reconciliation_required=(
+            retirement_status is OneOffVendorRetirementStatus.NEEDS_RECONCILIATION
+            if retirement_status is not None
+            else None
+        ),
         safe_message=result.safe_message,
     )
 
@@ -710,6 +729,7 @@ def _status_code_for_exception(exc: Exception) -> int:
             ReviewStateConflictError,
             ReviewDecisionIdempotencyConflictError,
             SupplierResolutionConflictError,
+            SupplierResolutionOneOffVendorNotHubOwnedError,
             SupplierResolutionRaceError,
             SupplierResolutionPartnerMismatchError,
             SupplierResolutionPartnerInactiveError,

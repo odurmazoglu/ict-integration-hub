@@ -110,6 +110,26 @@ class SqlAlchemyReviewOneOffVendorRetirementRepository:
             raise OneOffVendorRetirementError(SAFE_RETIREMENT_PERSISTENCE_ERROR) from exc
         return _retirement_from_model(record) if record is not None else None
 
+    def find_latest_for_review(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> OneOffVendorRetirement | None:
+        try:
+            record = self._session.scalar(
+                select(WorkbenchReviewOneOffVendorRetirement)
+                .where(
+                    WorkbenchReviewOneOffVendorRetirement.review_id == review_id,
+                    WorkbenchReviewOneOffVendorRetirement.company_id == company_id,
+                )
+                .order_by(WorkbenchReviewOneOffVendorRetirement.review_version.desc())
+                .limit(1)
+            )
+        except SQLAlchemyError as exc:
+            raise OneOffVendorRetirementError(SAFE_RETIREMENT_PERSISTENCE_ERROR) from exc
+        return _retirement_from_model(record) if record is not None else None
+
     def advance(
         self,
         retirement: OneOffVendorRetirement,

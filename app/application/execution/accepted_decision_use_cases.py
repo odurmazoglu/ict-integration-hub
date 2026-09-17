@@ -28,6 +28,7 @@ from app.application.execution.runtime_service import ExecutionRuntimeCoordinato
 from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workbench.exceptions import ReviewNotFoundError
+from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
 
 
 class AcceptedDecisionExecutionStatus(StrEnum):
@@ -94,6 +95,7 @@ class RunAcceptedDecisionExecutionUseCase:
         retry_policy_resolver: RetryPolicyResolver,
         execution_preflight: ExecutionPreflight | None = None,
         accepted_billing_evidence_reader: AcceptedBillingEvidenceReader | None = None,
+        one_off_vendor_retirement_trigger: OneOffVendorRetirementTrigger | None = None,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
         self._execution_planner = execution_planner
@@ -103,6 +105,9 @@ class RunAcceptedDecisionExecutionUseCase:
         self._retry_policy_resolver = retry_policy_resolver
         self._execution_preflight = execution_preflight or ExecutionPreflightPolicy()
         self._accepted_billing_evidence_reader = accepted_billing_evidence_reader
+        # Optional: the P0-PROD-08I post-Vendor-Bill retirement hook. None -> never
+        # attempted; every other execution behaves identically to before this existed.
+        self._one_off_vendor_retirement_trigger = one_off_vendor_retirement_trigger
 
     def execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         if not isinstance(command, RunAcceptedDecisionExecutionCommand):
@@ -157,7 +162,7 @@ class RunAcceptedDecisionExecutionUseCase:
         )
         result = self._runtime_coordinator.execute(runtime.snapshot, approval=command.approval)
         snapshot = self._runtime_repository.get_snapshot(execution_id=result.execution_id)
-        return AcceptedDecisionExecutionResult(
+        execution_result = AcceptedDecisionExecutionResult(
             review_id=command.review_id,
             company_id=command.company_id,
             decision_version=command.decision_version,
@@ -165,6 +170,21 @@ class RunAcceptedDecisionExecutionUseCase:
             execution_id=result.execution_id,
             runtime_state=snapshot.state if snapshot is not None else None,
         )
+        # P0-PROD-08I: by the time the runtime coordinator has returned, any Vendor Bill
+        # step it just ran is already durably persisted -- only now is it safe to attempt
+        # retirement. Never for DRY_RUN (no real Vendor Bill exists to retire against).
+        # Best-effort and entirely optional: see OneOffVendorRetirementTrigger for why a
+        # failure here can never turn this successful result into a failure.
+        if (
+            command.mode is ExecutionMode.EXECUTE
+            and execution_result.status is AcceptedDecisionExecutionStatus.EXECUTED
+            and self._one_off_vendor_retirement_trigger is not None
+        ):
+            self._one_off_vendor_retirement_trigger.try_retire_after_execution(
+                review_id=command.review_id,
+                company_id=command.company_id,
+            )
+        return execution_result
 
 
 def _execution_request(

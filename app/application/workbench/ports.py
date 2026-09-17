@@ -233,6 +233,21 @@ class OneOffVendorRetirementWriter(Protocol):
     ) -> OneOffVendorRetirement | None:
         pass
 
+    def find_latest_for_review(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> OneOffVendorRetirement | None:
+        """The most recent retirement row for this review, regardless of version.
+
+        A review normally carries at most one ONE_OFF_VENDOR retirement row -- once
+        created, SUPPLIER_NOT_FOUND is cleared and the resolution is never repeated. This
+        exists for the post-Vendor-Bill retirement trigger (P0-PROD-08I), which knows only
+        ``(review_id, company_id)`` at execution time, never the historical review version
+        the resolution was recorded at.
+        """
+
     def advance(
         self,
         retirement: OneOffVendorRetirement,
