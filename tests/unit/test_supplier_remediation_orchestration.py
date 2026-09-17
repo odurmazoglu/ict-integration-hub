@@ -1222,3 +1222,132 @@ async def test_h_existing_permanent_partner_is_never_adopted_as_one_off(session:
     assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 0
     # The pre-existing permanent partner itself is never touched by this failure.
     assert h.writer.calls[0].supplier_tax_number == VKN
+
+
+# --------------------------------------------------------------------- P0-PROD-08I
+
+
+async def test_result_surfaces_one_off_vendor_lifecycle_on_fresh_resolve(session: Session) -> None:
+    """The result DTO makes ONE_OFF_VENDOR ownership and lifecycle state explicit --
+    never fabricated, always read back from the retirement row just created."""
+
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN),
+        writer=_FakeSupplierPartnerWriter(new_partner_id=6001),
+    )
+    result = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+
+    assert result.one_off_vendor_hub_owned is True
+    assert result.one_off_vendor_retirement_status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+
+
+async def test_result_surfaces_one_off_vendor_lifecycle_on_replay(session: Session) -> None:
+    """An exact replay (already_applied=True) still reports the current retirement
+    state -- never stale, never fabricated."""
+
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN),
+        writer=_FakeSupplierPartnerWriter(new_partner_id=6001),
+    )
+    await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+    replay = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+
+    assert replay.already_applied is True
+    assert replay.one_off_vendor_hub_owned is True
+    assert replay.one_off_vendor_retirement_status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [SupplierResolutionMode.MATCH_EXISTING, SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER],
+)
+async def test_result_never_surfaces_one_off_vendor_fields_for_other_modes(session: Session, mode) -> None:
+    """L/M regression: MATCH_EXISTING and CREATE_PERMANENT_SUPPLIER results never carry
+    ONE_OFF_VENDOR lifecycle fields -- both stay None, exactly as before this PR."""
+
+    h = _Harness(
+        session,
+        source=_source_evidence(supplier_vat=VKN),
+        partner=_partner(id=6001, vat=VKN),
+        writer=_FakeSupplierPartnerWriter(new_partner_id=6001, existing_vat=VKN, existing_partner_id=6001),
+    )
+    resolved_partner_id = 6001 if mode is SupplierResolutionMode.MATCH_EXISTING else None
+    result = await h.use_case.execute(h.command(mode=mode, resolved_partner_id=resolved_partner_id))
+
+    assert result.one_off_vendor_hub_owned is None
+    assert result.one_off_vendor_retirement_status is None
+
+
+async def test_result_never_surfaces_one_off_vendor_fields_for_use_one_off_supplier(session: Session) -> None:
+    """N regression: USE_ONE_OFF_SUPPLIER's deferred-execution result never carries
+    ONE_OFF_VENDOR lifecycle fields either -- it is a structurally distinct mode."""
+
+    h = _Harness(session, source=_source_evidence(supplier_vat=VKN))
+    result = await h.use_case.execute(
+        h.command(mode=SupplierResolutionMode.USE_ONE_OFF_SUPPLIER, resolved_partner_id=None)
+    )
+
+    assert result.one_off_vendor_hub_owned is None
+    assert result.one_off_vendor_retirement_status is None
+
+
+def test_find_latest_for_review_returns_none_when_absent(session: Session) -> None:
+    repo = SqlAlchemyReviewOneOffVendorRetirementRepository(session)
+    assert repo.find_latest_for_review(review_id=REVIEW_ID, company_id=COMPANY_ID) is None
+
+
+def test_find_latest_for_review_finds_row_by_review_id_alone(session: Session) -> None:
+    """The post-Vendor-Bill retirement trigger only ever knows (review_id, company_id) --
+    never the historical review_version the ONE_OFF_VENDOR resolution was recorded at."""
+
+    from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirement as _Retirement
+
+    repo = SqlAlchemyReviewOneOffVendorRetirementRepository(session)
+    created = repo.create_retirement(
+        _Retirement(
+            review_id=REVIEW_ID,
+            company_id=COMPANY_ID,
+            review_version=1,
+            resolved_partner_id=6001,
+            status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL,
+        )
+    )
+
+    found = repo.find_latest_for_review(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert found == created
+    # A direct lookup at the *decision*'s (later, different) version would find nothing --
+    # this is exactly why find_latest_for_review exists.
+    assert repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=2) is None
+
+
+def test_find_latest_for_review_returns_the_highest_version(session: Session) -> None:
+    from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirement as _Retirement
+
+    repo = SqlAlchemyReviewOneOffVendorRetirementRepository(session)
+    repo.create_retirement(
+        _Retirement(
+            review_id=REVIEW_ID,
+            company_id=COMPANY_ID,
+            review_version=1,
+            resolved_partner_id=6001,
+            status=OneOffVendorRetirementStatus.ARCHIVED,
+        )
+    )
+    latest = repo.create_retirement(
+        _Retirement(
+            review_id=REVIEW_ID,
+            company_id=COMPANY_ID,
+            review_version=3,
+            resolved_partner_id=6002,
+            status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL,
+        )
+    )
+
+    found = repo.find_latest_for_review(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert found == latest

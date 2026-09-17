@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from app.application.dto import ApplicationDTO
 from app.application.workbench.exceptions import SupplierResolutionContractError
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
 from app.application.workflow import ManualReviewReason, WorkflowType
 
@@ -119,9 +120,26 @@ class SupplierRemediationResult(ApplicationDTO):
     already_applied: bool = False
     workbench_republished: bool = False
     safe_message: str | None = None
+    #: Set only for ``mode is ONE_OFF_VENDOR`` -- ``True`` whenever the effective partner
+    #: is Hub-owned via ONE_OFF_VENDOR (always the case once this result exists; ownership
+    #: is enforced before the remediation effect is ever written). ``None`` for every other
+    #: mode (P0-PROD-08I).
+    one_off_vendor_hub_owned: bool | None = None
+    #: The archive-last lifecycle state for this review's ONE_OFF_VENDOR retirement, if one
+    #: exists. ``None`` for every other mode, and also ``None`` if the retirement row could
+    #: not be read (never fabricated).
+    one_off_vendor_retirement_status: OneOffVendorRetirementStatus | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "current_review_reasons", tuple(self.current_review_reasons))
+        if self.one_off_vendor_hub_owned is not None and self.mode is not SupplierResolutionMode.ONE_OFF_VENDOR:
+            raise SupplierResolutionContractError("one_off_vendor_hub_owned is only valid for ONE_OFF_VENDOR.")
+        if self.one_off_vendor_retirement_status is not None and self.mode is not SupplierResolutionMode.ONE_OFF_VENDOR:
+            raise SupplierResolutionContractError("one_off_vendor_retirement_status is only valid for ONE_OFF_VENDOR.")
+        if self.one_off_vendor_retirement_status is not None and not isinstance(
+            self.one_off_vendor_retirement_status, OneOffVendorRetirementStatus
+        ):
+            raise SupplierResolutionContractError("one_off_vendor_retirement_status must be canonical when set.")
 
 
 def _require_text(value: str | None, message: str) -> None:

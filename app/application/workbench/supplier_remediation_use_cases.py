@@ -330,13 +330,14 @@ class ResolveWorkbenchSupplierUseCase:
             )
         )
 
+        retirement = None
         if command.mode is SupplierResolutionMode.ONE_OFF_VENDOR:
             if self._retirement_writer is None:
                 raise SupplierResolutionError(SAFE_SUPPLIER_REMEDIATION_ERROR)
             # Idempotent by construction: a byte-identical retry (same partner_id)
             # returns the existing row; a genuinely different partner_id for the same
             # review version fails closed (OneOffVendorRetirementConflictError).
-            self._retirement_writer.create_retirement(
+            retirement = self._retirement_writer.create_retirement(
                 OneOffVendorRetirement(
                     review_id=command.review_id,
                     company_id=command.company_id,
@@ -356,6 +357,7 @@ class ResolveWorkbenchSupplierUseCase:
             reclass,
             already_applied=already_applied,
             workbench_republished=republished,
+            retirement=retirement,
         )
 
     async def _create_permanent_partner(
@@ -442,6 +444,7 @@ class ResolveWorkbenchSupplierUseCase:
         *,
         already_applied: bool,
         workbench_republished: bool = False,
+        retirement: OneOffVendorRetirement | None = None,
     ) -> SupplierRemediationResult:
         supplier_still_missing = _has_supplier_not_found(reclass.new_review_reasons)
         status = (
@@ -449,6 +452,7 @@ class ResolveWorkbenchSupplierUseCase:
             if supplier_still_missing
             else SupplierRemediationStatus.RESOLVED
         )
+        is_one_off_vendor = command.mode is SupplierResolutionMode.ONE_OFF_VENDOR
         return SupplierRemediationResult(
             review_id=command.review_id,
             company_id=command.company_id,
@@ -463,6 +467,8 @@ class ResolveWorkbenchSupplierUseCase:
             reclassified=bool(reclass.changed),
             already_applied=already_applied,
             workbench_republished=workbench_republished,
+            one_off_vendor_hub_owned=True if is_one_off_vendor else None,
+            one_off_vendor_retirement_status=retirement.status if retirement is not None else None,
             safe_message=(
                 "Supplier resolved; the review was reclassified."
                 if status is SupplierRemediationStatus.RESOLVED
@@ -587,6 +593,8 @@ class ResolveWorkbenchSupplierUseCase:
             # (idempotent, update-only) Workbench republish so a retry after a prior
             # republish failure can still reflect the new review state in the UI.
             republished = self._republish_workbench_projection(command)
+            is_one_off_vendor = command.mode is SupplierResolutionMode.ONE_OFF_VENDOR
+            retirement = self._find_retirement(command)
             return SupplierRemediationResult(
                 review_id=command.review_id,
                 company_id=command.company_id,
@@ -605,6 +613,8 @@ class ResolveWorkbenchSupplierUseCase:
                 reclassified=True,
                 already_applied=True,
                 workbench_republished=republished,
+                one_off_vendor_hub_owned=True if is_one_off_vendor else None,
+                one_off_vendor_retirement_status=retirement.status if retirement is not None else None,
                 safe_message="This supplier remediation was already applied.",
             )
 
@@ -626,12 +636,22 @@ class ResolveWorkbenchSupplierUseCase:
                 reclass,
                 already_applied=True,
                 workbench_republished=republished,
+                retirement=self._find_retirement(command),
             )
         except BaseException:
             self._unit_of_work.rollback()
             raise
 
     # ------------------------------------------------------------------ helpers
+
+    def _find_retirement(self, command: ResolveWorkbenchSupplierCommand) -> OneOffVendorRetirement | None:
+        if command.mode is not SupplierResolutionMode.ONE_OFF_VENDOR or self._retirement_writer is None:
+            return None
+        return self._retirement_writer.find(
+            review_id=command.review_id,
+            company_id=command.company_id,
+            review_version=command.expected_version,
+        )
 
     def _resolution(
         self,

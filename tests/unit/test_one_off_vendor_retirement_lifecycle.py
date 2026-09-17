@@ -34,7 +34,10 @@ from app.application.workbench.one_off_vendor_retirement import (
     OneOffVendorRetirement,
     OneOffVendorRetirementStatus,
 )
-from app.application.workbench.one_off_vendor_use_cases import ArchiveOneOffVendorUseCase
+from app.application.workbench.one_off_vendor_use_cases import (
+    ArchiveOneOffVendorUseCase,
+    OneOffVendorRetirementTrigger,
+)
 from app.db.base import Base
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workbench_review_one_off_vendor_retirement import WorkbenchReviewOneOffVendorRetirement
@@ -355,3 +358,177 @@ def test_s_expense_account_builder_and_execution_untouched_by_this_pr() -> None:
     # The 08G contract itself is still present and unchanged in shape.
     assert "explicit_account_only_accounts" in builder_source
     assert "explicit_account_only_accounts" in strategy_source
+
+
+# --------------------------------------------------------------------------- P0-PROD-08I
+
+
+class _FakeRetirementWriter:
+    """Minimal fake of the OneOffVendorRetirementWriter port, for trigger tests that
+    want to exercise "no retirement row exists" without touching the real repository."""
+
+    def __init__(
+        self, *, retirement: OneOffVendorRetirement | None = None, raise_error: Exception | None = None
+    ) -> None:
+        self.retirement = retirement
+        self.raise_error = raise_error
+        self.calls: list[tuple[str, int]] = []
+
+    def find_latest_for_review(self, *, review_id: str, company_id: int) -> OneOffVendorRetirement | None:
+        self.calls.append((review_id, company_id))
+        if self.raise_error is not None:
+            raise self.raise_error
+        return self.retirement
+
+    def create_retirement(self, retirement):  # pragma: no cover - not exercised by these tests
+        raise NotImplementedError
+
+    def find(self, *, review_id, company_id, review_version):  # pragma: no cover - not exercised
+        raise NotImplementedError
+
+    def advance(self, retirement, *, expected_status, new_status):  # pragma: no cover - not exercised
+        raise NotImplementedError
+
+
+def test_trigger_no_retirement_row_is_a_silent_noop(session: Session) -> None:
+    """Most reviews are not ONE_OFF_VENDOR -- the overwhelming common case must cost
+    one cheap read and touch nothing else."""
+
+    writer = _FakeRetirementWriter(retirement=None)
+    port = _FakeRetirementPort()
+    trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=writer,
+        archive_use_case=_use_case(
+            session, evidence_reader=_FakeVendorBillEvidenceReader(has_evidence=True), port=port
+        ),
+    )
+
+    result = trigger.try_retire_after_execution(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result is None
+    assert writer.calls == [(REVIEW_ID, COMPANY_ID)]
+    assert port.calls == []
+
+
+def test_trigger_awaiting_vendor_bill_is_not_an_error(session: Session) -> None:
+    """G: retirement exists but Vendor Bill evidence does not yet -- correctly not
+    archived, and this is a normal result, not a swallowed failure."""
+
+    _seed_retirement(session, status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL)
+    writer = SqlAlchemyReviewOneOffVendorRetirementRepository(session)
+    port = _FakeRetirementPort()
+    trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=writer,
+        archive_use_case=_use_case(
+            session, evidence_reader=_FakeVendorBillEvidenceReader(has_evidence=False), port=port
+        ),
+    )
+
+    result = trigger.try_retire_after_execution(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result is not None
+    assert result.status is ArchiveOneOffVendorStatus.AWAITING_VENDOR_BILL
+    assert port.calls == []
+
+
+def test_trigger_successful_vendor_bill_allows_retirement(session: Session) -> None:
+    """H: durable Vendor Bill evidence present -- retirement proceeds via the trigger,
+    using only (review_id, company_id), never the decision's own version."""
+
+    _seed_retirement(session, status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL)
+    port = _FakeRetirementPort()
+    trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+        archive_use_case=_use_case(
+            session, evidence_reader=_FakeVendorBillEvidenceReader(has_evidence=True), port=port
+        ),
+    )
+
+    result = trigger.try_retire_after_execution(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result is not None
+    assert result.status is ArchiveOneOffVendorStatus.ARCHIVED
+    assert len(port.calls) == 1
+
+
+def test_trigger_already_archived_is_idempotent_no_new_odoo_call(session: Session) -> None:
+    """I: archive replay is idempotent -- a second Vendor Bill execution on the same
+    review (e.g. a retry) never re-archives or re-touches Odoo."""
+
+    _seed_retirement(session, status=OneOffVendorRetirementStatus.ARCHIVED)
+    port = _FakeRetirementPort()
+    trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+        archive_use_case=_use_case(
+            session, evidence_reader=_FakeVendorBillEvidenceReader(has_evidence=True), port=port
+        ),
+    )
+
+    result = trigger.try_retire_after_execution(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result is not None
+    assert result.status is ArchiveOneOffVendorStatus.ARCHIVED
+    assert result.already_applied is True
+    assert port.calls == []
+
+
+def test_trigger_swallows_gate_closed_failure_never_raises(session: Session) -> None:
+    """P0-PROD-08I s.7: the write gate being closed -- the default in every environment
+    today -- must never propagate out of the trigger and must never corrupt the
+    already-successful Vendor Bill result. The retirement row is left safely retryable."""
+
+    _seed_retirement(session, status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL)
+    port = _FakeRetirementPort()
+    port.raise_error = SupplierPartnerWriteSafetyGateError("gate disabled")
+    trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+        archive_use_case=_use_case(
+            session, evidence_reader=_FakeVendorBillEvidenceReader(has_evidence=True), port=port
+        ),
+    )
+
+    result = trigger.try_retire_after_execution(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result is None  # swallowed, never raised
+    row = SqlAlchemyReviewOneOffVendorRetirementRepository(session).find(
+        review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=2
+    )
+    assert row.status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+
+
+def test_trigger_swallows_uncertain_failure_never_raises(session: Session) -> None:
+    """J: a crash/transport failure between Vendor Bill success and archive completion
+    never raises out of the trigger and never creates a second Vendor Bill or partner --
+    the retirement row is left at NEEDS_RECONCILIATION for a human, or a later retry."""
+
+    _seed_retirement(session, status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL)
+    port = _FakeRetirementPort()
+    port.raise_error = SupplierPartnerWriteTransportError("timeout")
+    trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+        archive_use_case=_use_case(
+            session, evidence_reader=_FakeVendorBillEvidenceReader(has_evidence=True), port=port
+        ),
+    )
+
+    result = trigger.try_retire_after_execution(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result is None  # swallowed, never raised
+    row = SqlAlchemyReviewOneOffVendorRetirementRepository(session).find(
+        review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=2
+    )
+    assert row.status is OneOffVendorRetirementStatus.NEEDS_RECONCILIATION
+
+
+def test_trigger_find_failure_is_also_swallowed(session: Session) -> None:
+    writer = _FakeRetirementWriter(raise_error=OneOffVendorRetirementDataIntegrityError("boom"))
+    trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=writer,
+        archive_use_case=_use_case(
+            session, evidence_reader=_FakeVendorBillEvidenceReader(has_evidence=True), port=_FakeRetirementPort()
+        ),
+    )
+
+    result = trigger.try_retire_after_execution(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result is None

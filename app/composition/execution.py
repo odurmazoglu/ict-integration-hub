@@ -22,7 +22,9 @@ from app.application.execution import (
     WorkbenchVendorBillExecutionWorkflow,
 )
 from app.application.execution.contracts import ExecutionStepType
+from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
+from app.composition.supplier_remediation import build_archive_one_off_vendor_use_case
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
@@ -48,6 +50,7 @@ from app.persistence import (
     SqlAlchemyExecutionRuntimeRepository,
     SqlAlchemyExecutionSourceInvoiceReader,
     SqlAlchemyQuotationScenarioEvidenceRepository,
+    SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
 )
 
@@ -98,6 +101,18 @@ def build_vendor_bill_execution_use_case(
             ),
         )
     )
+    # P0-PROD-08I: the narrow, best-effort post-Vendor-Bill ONE_OFF_VENDOR retirement
+    # hook. Reuses the exact same gated archive-last orchestration composed for the
+    # (currently unwired) manual archive path -- no separate authorization surface.
+    retirement_trigger = OneOffVendorRetirementTrigger(
+        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+        archive_use_case=build_archive_one_off_vendor_use_case(
+            session=session,
+            settings=settings,
+            odoo_client=odoo_client,
+            approved_by="system:vendor-bill-execution",
+        ),
+    )
     return RunAcceptedDecisionExecutionUseCase(
         accepted_decision_reader=review_repository,
         execution_planner=ExecutionPlanner(),
@@ -124,6 +139,7 @@ def build_vendor_bill_execution_use_case(
             staging_execution_step_types=((ExecutionStepType.VENDOR_BILL,) if staging_vendor_bill_execute else ()),
         ),
         accepted_billing_evidence_reader=accepted_billing_reader,
+        one_off_vendor_retirement_trigger=retirement_trigger,
     )
 
 

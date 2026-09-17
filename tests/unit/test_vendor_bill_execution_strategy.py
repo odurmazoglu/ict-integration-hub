@@ -445,6 +445,92 @@ def test_dry_run_heterogeneous_plan_still_uses_no_write_foundation(session: Sess
     assert result.status is AcceptedDecisionExecutionStatus.DRY_RUN_COMPLETED
 
 
+class _SpyOneOffVendorRetirementTrigger:
+    """Structural double for OneOffVendorRetirementTrigger (P0-PROD-08I) -- records
+    every call without touching any real persistence or Odoo port."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+
+    def try_retire_after_execution(self, *, review_id: str, company_id: int):
+        self.calls.append((review_id, company_id))
+        return None
+
+
+def test_one_off_vendor_retirement_trigger_invoked_after_successful_execute(session: Session) -> None:
+    """P0-PROD-08I: the narrow post-Vendor-Bill retirement hook fires only after the
+    runtime coordinator has already durably persisted a successful EXECUTE-mode run."""
+
+    repository = SqlAlchemyExecutionRuntimeRepository(session)
+    writer = RecordingVendorBillWriter(
+        result=VendorBillWriteResult(status="created", idempotency_key="unused", external_id=9001)
+    )
+    trigger = _SpyOneOffVendorRetirementTrigger()
+    result = RunAcceptedDecisionExecutionUseCase(
+        accepted_decision_reader=StaticAcceptedDecisionReader(_accepted_decision()),
+        execution_planner=execution_exports.ExecutionPlanner(),
+        runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),
+        runtime_coordinator=ExecutionRuntimeCoordinator(
+            runtime_repository=repository,
+            event_repository=repository,
+            strategy_resolver=ExecutionStrategyResolver((_strategy(writer=writer),)),
+        ),
+        runtime_repository=repository,
+        retry_policy_resolver=StaticRetryPolicyResolver(ExecutionRetryPolicy.never()),
+        execution_preflight=ExecutionPreflightPolicy(production_execution_enabled=True),
+        one_off_vendor_retirement_trigger=trigger,
+    ).execute(_command(mode=ExecutionMode.EXECUTE, approved_by="finance.lead"))
+
+    assert result.status is AcceptedDecisionExecutionStatus.EXECUTED
+    assert trigger.calls == [("review-1", 7)]
+
+
+def test_one_off_vendor_retirement_trigger_never_invoked_for_dry_run(session: Session) -> None:
+    """A DRY_RUN never creates a real durable Vendor Bill -- the retirement hook must
+    never even be consulted for one."""
+
+    from app.application.execution import foundation_no_write_strategy_resolver
+
+    repository = SqlAlchemyExecutionRuntimeRepository(session)
+    trigger = _SpyOneOffVendorRetirementTrigger()
+    result = RunAcceptedDecisionExecutionUseCase(
+        accepted_decision_reader=StaticAcceptedDecisionReader(
+            _accepted_decision_for_steps((ExecutionStepType.VENDOR_BILL, ExecutionStepType.CUSTOMER_RECHARGE))
+        ),
+        execution_planner=execution_exports.ExecutionPlanner(),
+        runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),
+        runtime_coordinator=ExecutionRuntimeCoordinator(
+            runtime_repository=repository,
+            event_repository=repository,
+            strategy_resolver=foundation_no_write_strategy_resolver(),
+        ),
+        runtime_repository=repository,
+        retry_policy_resolver=StaticRetryPolicyResolver(),
+        one_off_vendor_retirement_trigger=trigger,
+    ).execute(_command(mode=ExecutionMode.DRY_RUN))
+
+    assert result.status is AcceptedDecisionExecutionStatus.DRY_RUN_COMPLETED
+    assert trigger.calls == []
+
+
+def test_one_off_vendor_retirement_trigger_defaults_to_none_and_execute_is_unaffected(session: Session) -> None:
+    """When not wired (the default), EXECUTE behaves exactly as it did before this
+    hook existed -- no attribute error, no behavior change."""
+
+    repository = SqlAlchemyExecutionRuntimeRepository(session)
+    writer = RecordingVendorBillWriter(
+        result=VendorBillWriteResult(status="created", idempotency_key="unused", external_id=9001)
+    )
+    result = _use_case(
+        session,
+        runtime_repository=repository,
+        accepted_decision_reader=StaticAcceptedDecisionReader(_accepted_decision()),
+        strategy=_strategy(writer=writer),
+    ).execute(_command(mode=ExecutionMode.EXECUTE, approved_by="finance.lead"))
+
+    assert result.status is AcceptedDecisionExecutionStatus.EXECUTED
+
+
 def test_architecture_boundaries() -> None:
     source = Path("app/application/execution/vendor_bill_strategy.py").read_text(encoding="utf-8")
 

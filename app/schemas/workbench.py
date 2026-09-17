@@ -12,6 +12,7 @@ from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import ProductRemediationStatus
 from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
@@ -243,6 +244,16 @@ class SupplierRemediationResponse(BaseModel):
     reclassified: bool
     already_applied: bool
     workbench_republished: bool
+    #: ``True`` only for ``mode=one_off_vendor``: the effective partner is Hub-owned via
+    #: ONE_OFF_VENDOR. ``None`` for every other mode.
+    one_off_vendor_hub_owned: bool | None = None
+    #: The archive-last lifecycle state for this review's ONE_OFF_VENDOR retirement, if any.
+    #: ``None`` for every other mode, or if no retirement row could be read.
+    one_off_vendor_retirement_status: OneOffVendorRetirementStatus | None = None
+    #: Derived convenience flags for an operator/UI -- both ``None`` unless
+    #: ``one_off_vendor_retirement_status`` is set.
+    one_off_vendor_awaiting_vendor_bill: bool | None = None
+    one_off_vendor_reconciliation_required: bool | None = None
     safe_message: str | None = None
 
 

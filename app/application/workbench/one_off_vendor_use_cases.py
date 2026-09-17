@@ -10,6 +10,8 @@ read-before-write idempotent) rather than dead-ending.
 
 from __future__ import annotations
 
+import asyncio
+
 from app.application.commands.one_off_vendor_retirement import ArchiveOneOffVendorPartnerCommand
 from app.application.dto.one_off_vendor_retirement import OneOffVendorArchiveWriteStatus
 from app.application.exceptions import ApplicationError
@@ -174,3 +176,72 @@ class ArchiveOneOffVendorUseCase:
                 ArchiveOneOffVendorStatus.RECONCILIATION_REQUIRED: "Archive outcome requires manual reconciliation.",
             }[status],
         )
+
+
+class OneOffVendorRetirementTrigger:
+    """Best-effort post-Vendor-Bill retirement hook (P0-PROD-08I).
+
+    The narrow production orchestration point for ``ArchiveOneOffVendorUseCase``: called
+    once, synchronously, immediately after a durably-persisted, successful EXECUTE-mode
+    accepted-decision run (never for DRY_RUN, never speculatively before that -- see
+    ``RunAcceptedDecisionExecutionUseCase``). By the time this runs, any Vendor Bill step
+    completed by that run is already durably committed, satisfying the archive-last
+    invariant before this ever attempts anything.
+
+    Most reviews carry no ONE_OFF_VENDOR retirement row at all -- ``find_latest_for_review``
+    is a cheap no-op read for them. When a row exists, every outcome and every failure is
+    delegated entirely to the existing, crash-safe use case; this class adds no
+    state-machine logic of its own -- see ``one_off_vendor_retirement`` for why that use
+    case is always safe to (re-)invoke regardless of readiness.
+
+    Every failure is swallowed: a durably successful Vendor Bill must never be reported as
+    failed merely because retirement could not complete (P0-PROD-08I s.7). The write gate
+    being closed -- the default in every environment today -- is exactly such a failure;
+    ``AWAITING_VENDOR_BILL``/``RECONCILIATION_REQUIRED`` are both expected, non-error
+    outcomes of the underlying use case, never raised.
+    """
+
+    def __init__(
+        self,
+        *,
+        retirement_writer: OneOffVendorRetirementWriter,
+        archive_use_case: ArchiveOneOffVendorUseCase,
+    ) -> None:
+        self._retirement_writer = retirement_writer
+        self._archive_use_case = archive_use_case
+
+    def try_retire_after_execution(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> ArchiveOneOffVendorResult | None:
+        try:
+            retirement = self._retirement_writer.find_latest_for_review(review_id=review_id, company_id=company_id)
+        except ApplicationError:
+            return None
+        if retirement is None:
+            return None
+        command = ArchiveOneOffVendorCommand(
+            review_id=retirement.review_id,
+            company_id=retirement.company_id,
+            review_version=retirement.review_version,
+        )
+        try:
+            return _run_archive(self._archive_use_case, command)
+        except ApplicationError:
+            return None
+
+
+def _run_archive(
+    use_case: ArchiveOneOffVendorUseCase,
+    command: ArchiveOneOffVendorCommand,
+) -> ArchiveOneOffVendorResult:
+    # Mirrors vendor_bill_strategy._run_writer's exact bridge: this runs from the same sync
+    # execution-runtime call stack that already used this idiom to perform the Vendor Bill
+    # write itself, so no running loop is ever present here in practice.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(use_case.execute(command))
+    raise OneOffVendorRetirementError("The retirement trigger cannot run inside an active event loop.")
