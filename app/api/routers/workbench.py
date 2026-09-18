@@ -14,6 +14,8 @@ from app.api.dependencies import (
     GetReviewItemUseCaseDep,
     ListReviewQueueUseCaseDep,
     ListWriteAuthorizationsUseCaseDep,
+    OneOffVendorRetirementUseCaseDep,
+    RecoverOneOffVendorRetirementWorkflowDep,
     RequestContextDep,
     ResolveWorkbenchSupplierUseCaseDep,
     RevokeWriteAuthorizationUseCaseDep,
@@ -91,7 +93,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionRaceError,
     WorkbenchContractError,
 )
-from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
+from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorCommand, OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.write_authorization import (
@@ -112,6 +114,11 @@ from app.schemas.workbench import (
     ExecutionArtifactResponse,
     LineResolutionRequest,
     ManualReviewReasonResponse,
+    OneOffVendorRetirementEnvelope,
+    OneOffVendorRetirementRecoveryEnvelope,
+    OneOffVendorRetirementRecoveryRequest,
+    OneOffVendorRetirementRecoveryResponse,
+    OneOffVendorRetirementResponse,
     ProductRemediationEnvelope,
     ProductRemediationResponse,
     ProductResolutionRequest,
@@ -978,5 +985,56 @@ def revoke_write_authorization(
             revoked_by=context.user_id,
         )
         return _success(response, context.trace_id, WriteAuthorizationResponse.model_validate(record), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/reviews/{review_id}/one-off-vendor-retirement",
+    response_model=OneOffVendorRetirementEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+)
+def get_one_off_vendor_retirement(
+    review_id: str,
+    response: Response,
+    request: Request,
+    context: RequestContextDep,
+    use_case: OneOffVendorRetirementUseCaseDep,
+    review_version: Annotated[int | None, Query(gt=0)] = None,
+) -> OneOffVendorRetirementEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_READ)(context)
+        _reject_unsupported_query_params(request, frozenset({"review_version"}))
+        retirement = use_case.execute(review_id=review_id, company_id=context.company_id, review_version=review_version)
+        return _success(
+            response, context.trace_id, OneOffVendorRetirementResponse.model_validate(retirement), warnings=[]
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/reviews/{review_id}/one-off-vendor-retirement/recover",
+    response_model=OneOffVendorRetirementRecoveryEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+)
+async def recover_one_off_vendor_retirement(
+    review_id: str,
+    request_body: OneOffVendorRetirementRecoveryRequest,
+    response: Response,
+    context: RequestContextDep,
+    workflow: RecoverOneOffVendorRetirementWorkflowDep,
+) -> OneOffVendorRetirementRecoveryEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        result = await workflow.execute(
+            ArchiveOneOffVendorCommand(
+                review_id=review_id, company_id=context.company_id, review_version=request_body.review_version
+            ),
+            approved_by=context.user_id,
+        )
+        return _success(
+            response, context.trace_id, OneOffVendorRetirementRecoveryResponse.model_validate(result), warnings=[]
+        )
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)

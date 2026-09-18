@@ -12,7 +12,7 @@ from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
-from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
+from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorStatus, OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import ProductRemediationStatus
 from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
@@ -479,3 +479,32 @@ class WriteAuthorizationResponse(BaseModel):
 
 WriteAuthorizationEnvelope = ApiEnvelope[WriteAuthorizationResponse]
 WriteAuthorizationsEnvelope = ApiEnvelope[list[WriteAuthorizationResponse]]
+
+
+class OneOffVendorRetirementResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True)
+    review_id: str
+    company_id: int
+    review_version: int
+    resolved_partner_id: int
+    status: OneOffVendorRetirementStatus
+
+
+class OneOffVendorRetirementRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    review_version: int = Field(gt=0)
+
+
+class OneOffVendorRetirementRecoveryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True)
+    review_id: str
+    company_id: int
+    review_version: int
+    resolved_partner_id: int | None
+    status: ArchiveOneOffVendorStatus
+    already_applied: bool
+    safe_message: str | None
+
+
+OneOffVendorRetirementEnvelope = ApiEnvelope[OneOffVendorRetirementResponse]
+OneOffVendorRetirementRecoveryEnvelope = ApiEnvelope[OneOffVendorRetirementRecoveryResponse]

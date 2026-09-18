@@ -34,6 +34,10 @@ from app.application.workbench import (
     WorkbenchDecisionIngestionWorkflow,
 )
 from app.application.workbench.product_remediation import CreateNewProductCommand, CreateNewProductResult
+from app.application.workbench.retirement_recovery import (
+    GetOneOffVendorRetirementUseCase,
+    RecoverOneOffVendorRetirementWorkflow,
+)
 from app.application.workbench.supplier_remediation import (
     ResolveWorkbenchSupplierCommand,
     SupplierRemediationResult,
@@ -53,6 +57,10 @@ from app.composition import (
     build_workbench_accepted_decision_execution_dispatcher,
     build_workbench_quotation_scenario_evidence_workflow,
     build_workbench_vendor_bill_execution_workflow,
+)
+from app.composition.supplier_remediation import (
+    build_get_one_off_vendor_retirement_use_case,
+    build_recover_one_off_vendor_retirement_workflow,
 )
 from app.composition.write_authorization import (
     build_create_write_authorization_use_case,
@@ -458,4 +466,22 @@ ListWriteAuthorizationsUseCaseDep = Annotated[
 RevokeWriteAuthorizationUseCaseDep = Annotated[
     RevokeWriteAuthorizationUseCase,
     Depends(get_revoke_write_authorization_use_case),
+]
+
+
+def get_one_off_vendor_retirement_use_case(session: DbSessionDep) -> GetOneOffVendorRetirementUseCase:
+    return build_get_one_off_vendor_retirement_use_case(session=session)
+
+
+def get_recover_one_off_vendor_retirement_workflow(
+    session: DbSessionDep, settings: SettingsDep
+) -> RecoverOneOffVendorRetirementWorkflow:
+    return build_recover_one_off_vendor_retirement_workflow(session=session, settings=settings)
+
+
+OneOffVendorRetirementUseCaseDep = Annotated[
+    GetOneOffVendorRetirementUseCase, Depends(get_one_off_vendor_retirement_use_case)
+]
+RecoverOneOffVendorRetirementWorkflowDep = Annotated[
+    RecoverOneOffVendorRetirementWorkflow, Depends(get_recover_one_off_vendor_retirement_workflow)
 ]

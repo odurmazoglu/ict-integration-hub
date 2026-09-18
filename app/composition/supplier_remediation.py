@@ -8,6 +8,10 @@ from app.application.workbench import (
     ResolveWorkbenchSupplierUseCase,
     ValidateSupplierResolutionUseCase,
 )
+from app.application.workbench.retirement_recovery import (
+    GetOneOffVendorRetirementUseCase,
+    RecoverOneOffVendorRetirementWorkflow,
+)
 from app.composition.imports import build_deterministic_decision_engine, build_odoo_workbench_projection_publisher
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
@@ -113,7 +117,7 @@ def build_archive_one_off_vendor_use_case(
     ``OdooSupplierPartnerWritePolicy`` as supplier-partner creation -- archiving a
     Hub-owned one-off partner is protected by the same
     ``SUPPLIER_REMEDIATION_WRITE_ENABLED`` authorization, not a new or broader one.
-    Not wired to any REST endpoint in this PR -- see the PR description for why.
+    Used by the post-execution trigger and explicit operator recovery workflow.
     """
 
     resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
@@ -128,4 +132,22 @@ def build_archive_one_off_vendor_use_case(
         retirement_port=retirement_port,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         approved_by=approved_by,
+    )
+
+
+def build_get_one_off_vendor_retirement_use_case(*, session: Session) -> GetOneOffVendorRetirementUseCase:
+    return GetOneOffVendorRetirementUseCase(
+        review_reader=SqlAlchemyReviewRepository(session),
+        retirement_reader=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+    )
+
+
+def build_recover_one_off_vendor_retirement_workflow(
+    *, session: Session, settings: Settings, odoo_client: OdooJson2Client | None = None
+) -> RecoverOneOffVendorRetirementWorkflow:
+    return RecoverOneOffVendorRetirementWorkflow(
+        status_reader=build_get_one_off_vendor_retirement_use_case(session=session),
+        archive_use_case_factory=lambda approved_by: build_archive_one_off_vendor_use_case(
+            session=session, settings=settings, odoo_client=odoo_client, approved_by=approved_by
+        ),
     )
