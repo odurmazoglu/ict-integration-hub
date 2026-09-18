@@ -510,6 +510,30 @@ def _line_net_total(line: InvoiceLine) -> Decimal:
     return _line_gross_total(line) - _line_total_discount(line)
 
 
+def line_gross_total(line: InvoiceLine) -> Decimal:
+    """Public reuse point for ``_line_gross_total`` (P0-PROD-09B: Vendor Bill preview).
+
+    Preview needs the exact same per-line gross/discount/net economics
+    ``VendorBillBuilder.build`` already computes and validates (P0-PROD-08L) --
+    this and its two siblings below exist so preview never reimplements that
+    arithmetic, only reads it.
+    """
+
+    return _line_gross_total(line)
+
+
+def line_total_discount(line: InvoiceLine) -> Decimal:
+    """Public reuse point for ``_line_total_discount`` -- see ``line_gross_total``."""
+
+    return _line_total_discount(line)
+
+
+def line_net_total(line: InvoiceLine) -> Decimal:
+    """Public reuse point for ``_line_net_total`` -- see ``line_gross_total``."""
+
+    return _line_net_total(line)
+
+
 def _net_unit_price(line: InvoiceLine) -> Decimal:
     """``line.unit_price`` unchanged when there are no discounts -- byte-identical to
     pre-08L behavior. ``validate_vendor_bill_inputs`` has already proven every discount

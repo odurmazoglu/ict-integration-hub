@@ -369,6 +369,46 @@ class WorkbenchVendorBillExecutionResponse(BaseModel):
     message: str | None = None
 
 
+class VendorBillPreviewLineResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_number: str | None
+    description: str | None
+    quantity: str
+    unit_price: str
+    account_id: int | None
+    product_id: int | None
+    tax_ids: list[int]
+
+
+class VendorBillPreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    decision_version: int
+    decision_id: str | None
+    selected_workflow: WorkflowType
+
+    move_type: str
+    partner_id: int
+    invoice_date: date
+    reference: str | None
+    header_company_id: int | None
+    currency_code: str
+    currency_id: int
+
+    idempotency_key: str
+
+    lines: list[VendorBillPreviewLineResponse]
+
+    gross_source_amount: str
+    total_discount: str
+    preview_untaxed: str
+    preview_tax: str
+    preview_total: str
+
+
 class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -392,6 +432,7 @@ ReviewQueueEnvelope = ApiEnvelope[ReviewQueueResponse]
 ReviewDecisionAcknowledgementEnvelope = ApiEnvelope[ReviewDecisionAcknowledgementResponse]
 WorkbenchDecisionIngestionEnvelope = ApiEnvelope[WorkbenchDecisionIngestionResponse]
 WorkbenchVendorBillExecutionEnvelope = ApiEnvelope[WorkbenchVendorBillExecutionResponse]
+VendorBillPreviewEnvelope = ApiEnvelope[VendorBillPreviewResponse]
 WorkbenchQuotationScenarioEvidenceEnvelope = ApiEnvelope[WorkbenchQuotationScenarioEvidenceResponse]
 ErrorEnvelope = ApiEnvelope[Any]
 
