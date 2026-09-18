@@ -10,10 +10,13 @@ from fastapi.security import HTTPBearer
 
 from app.api.dependencies import (
     CreateNewProductUseCaseDep,
+    CreateWriteAuthorizationUseCaseDep,
     GetReviewItemUseCaseDep,
     ListReviewQueueUseCaseDep,
+    ListWriteAuthorizationsUseCaseDep,
     RequestContextDep,
     ResolveWorkbenchSupplierUseCaseDep,
+    RevokeWriteAuthorizationUseCaseDep,
     SubmitReviewDecisionUseCaseDep,
     VendorBillPreviewUseCaseDep,
     WorkbenchAcceptedDecisionExecutionDispatcherDep,
@@ -91,6 +94,14 @@ from app.application.workbench.exceptions import (
 from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
+from app.application.workbench.write_authorization import (
+    WriteAuthorizationAlreadyConsumedError,
+    WriteAuthorizationError,
+    WriteAuthorizationExpiredError,
+    WriteAuthorizationNotFoundError,
+    WriteAuthorizationRevokedError,
+    WriteAuthorizationScopeMismatchError,
+)
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.billing.exceptions import VendorBillBuildError
 from app.schemas.workbench import (
@@ -127,6 +138,10 @@ from app.schemas.workbench import (
     WorkbenchVendorBillExecutionEnvelope,
     WorkbenchVendorBillExecutionRequest,
     WorkbenchVendorBillExecutionResponse,
+    WriteAuthorizationEnvelope,
+    WriteAuthorizationIssueRequest,
+    WriteAuthorizationResponse,
+    WriteAuthorizationsEnvelope,
     decimal_to_api,
 )
 
@@ -261,14 +276,25 @@ def execute_workbench_vendor_bill(
 ) -> WorkbenchVendorBillExecutionEnvelope | JSONResponse:
     try:
         context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
-        result = workflow.execute(
-            review_id=review_id,
-            company_id=context.company_id,
-            decision_version=request_body.decision_version,
-            mode=request_body.mode,
-            approval=_execution_approval(request_body.approval),
-            trace_id=context.trace_id,
-        )
+        if request_body.authorization_id is not None:
+            result = workflow.execute(
+                review_id=review_id,
+                company_id=context.company_id,
+                decision_version=request_body.decision_version,
+                mode=request_body.mode,
+                approval=_execution_approval(request_body.approval),
+                trace_id=context.trace_id,
+                authorization_id=request_body.authorization_id,
+            )
+        else:
+            result = workflow.execute(
+                review_id=review_id,
+                company_id=context.company_id,
+                decision_version=request_body.decision_version,
+                mode=request_body.mode,
+                approval=_execution_approval(request_body.approval),
+                trace_id=context.trace_id,
+            )
         return _success(response, context.trace_id, _vendor_bill_execution_response(result), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
@@ -794,6 +820,20 @@ def _raise_error(exc: Exception, *, trace_id: str) -> JSONResponse:
 
 
 def _status_code_for_exception(exc: Exception) -> int:
+    if isinstance(exc, WriteAuthorizationNotFoundError):
+        return HTTPStatus.NOT_FOUND
+    if isinstance(
+        exc,
+        (
+            WriteAuthorizationScopeMismatchError,
+            WriteAuthorizationExpiredError,
+            WriteAuthorizationRevokedError,
+            WriteAuthorizationAlreadyConsumedError,
+        ),
+    ):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, WriteAuthorizationError):
+        return HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(exc, WorkbenchContractError):
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, ExecutionPlanningError):
@@ -862,3 +902,81 @@ def _status_code_for_exception(exc: Exception) -> int:
     ):
         return HTTPStatus.INTERNAL_SERVER_ERROR
     return HTTPStatus.INTERNAL_SERVER_ERROR
+
+
+@router.post(
+    "/reviews/{review_id}/write-authorizations",
+    response_model=WriteAuthorizationEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Issue one narrow Vendor Bill execution authorization",
+)
+def issue_write_authorization(
+    review_id: str,
+    request_body: WriteAuthorizationIssueRequest,
+    response: Response,
+    context: RequestContextDep,
+    use_case: CreateWriteAuthorizationUseCaseDep,
+) -> WriteAuthorizationEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        record = use_case.execute(
+            company_id=context.company_id,
+            review_id=review_id,
+            decision_version=request_body.decision_version,
+            operation_type=request_body.operation_type,
+            authorized_by=context.user_id,
+            justification=request_body.justification,
+        )
+        return _success(response, context.trace_id, WriteAuthorizationResponse.model_validate(record), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/reviews/{review_id}/write-authorizations",
+    response_model=WriteAuthorizationsEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="List auditable Vendor Bill execution authorizations",
+)
+def list_write_authorizations(
+    review_id: str,
+    response: Response,
+    request: Request,
+    context: RequestContextDep,
+    use_case: ListWriteAuthorizationsUseCaseDep,
+) -> WriteAuthorizationsEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_READ)(context)
+        _reject_unsupported_query_params(request, frozenset())
+        records = use_case.execute(company_id=context.company_id, review_id=review_id)
+        return _success(
+            response, context.trace_id, [WriteAuthorizationResponse.model_validate(r) for r in records], warnings=[]
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/reviews/{review_id}/write-authorizations/{authorization_id}/revoke",
+    response_model=WriteAuthorizationEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Revoke a Vendor Bill authorization, including further same-execution recovery",
+)
+def revoke_write_authorization(
+    review_id: str,
+    authorization_id: str,
+    response: Response,
+    context: RequestContextDep,
+    use_case: RevokeWriteAuthorizationUseCaseDep,
+) -> WriteAuthorizationEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        record = use_case.execute(
+            company_id=context.company_id,
+            review_id=review_id,
+            authorization_id=authorization_id,
+            revoked_by=context.user_id,
+        )
+        return _success(response, context.trace_id, WriteAuthorizationResponse.model_validate(record), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)

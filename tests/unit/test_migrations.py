@@ -618,7 +618,13 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     }
     assert "uq_wrov_retirements_review_version" in retirement_unique_constraints_at_head
 
-    # One extra downgrade step consumes 202607170027 (the newest migration) so every
+    # Consume only the new authorization migration before the unchanged history walk.
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_write_authorizations" not in inspector.get_table_names()
+    assert "workbench_review_one_off_vendor_retirements" in inspector.get_table_names()
+
+    # One extra downgrade step consumes 202607170027 so every
     # subsequent single-step "-1" walk below still lands on the same pre-existing
     # revision it always has -- this test intentionally walks the *entire* history.
     command.downgrade(config, "-1")

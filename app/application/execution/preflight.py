@@ -28,13 +28,26 @@ class ExecutionPreflightPolicy:
     real_write_gates: Mapping[ExecutionStepType, RealWriteGate] | None = None
     writer_step_types: tuple[ExecutionStepType, ...] = (ExecutionStepType.VENDOR_BILL,)
     staging_execution_step_types: tuple[ExecutionStepType, ...] = ()
+    production_operations_enabled: bool = False
 
     def ensure_execute_allowed(self, *, plan: ExecutionPlan, approval: ExecutionApproval | None) -> None:
         if plan.mode is not ExecutionMode.EXECUTE:
             return
         if approval is None:
             raise ExecutionApprovalError("Explicit execution approval is required for EXECUTE mode.")
-        if not self.production_execution_enabled:
+        authorization = approval.authorization
+        if authorization is not None:
+            if not self.production_operations_enabled:
+                raise ExecutionModeNotEnabledError("Production operations must be explicitly enabled.")
+            if len(plan.steps) != 1 or plan.steps[0].step_type is not ExecutionStepType.VENDOR_BILL:
+                raise ExecutionModeNotEnabledError("Runtime authorization is limited to one direct Vendor Bill step.")
+            authorization.ensure_execution_scope(
+                company_id=plan.company_id,
+                review_id=plan.review_id,
+                decision_version=plan.decision_version,
+                execution_id=plan.execution_id,
+            )
+        if not self.production_execution_enabled and authorization is None:
             raise ExecutionModeNotEnabledError("Production execution must be explicitly enabled.")
         if self.staging_execution_step_types:
             for step in plan.steps:

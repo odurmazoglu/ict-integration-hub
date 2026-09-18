@@ -6,12 +6,14 @@ from uuid import NAMESPACE_URL, uuid5
 
 from app.application.commands import Command
 from app.application.dto import ApplicationDTO
+from app.application.exceptions import ApplicationError
 from app.application.execution.contracts import (
     AcceptedReviewDecision,
     ExecutionApproval,
     ExecutionMode,
     ExecutionRequest,
     ExecutionStatus,
+    ExecutionStepType,
 )
 from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.execution.planner import ExecutionPlanner
@@ -30,6 +32,14 @@ from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workbench.exceptions import ReviewNotFoundError
 from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
+from app.application.workbench.write_authorization import (
+    WriteAuthorizationError,
+    WriteAuthorizationOperationType,
+    WriteAuthorizationRecord,
+    WriteAuthorizationRepository,
+    WriteAuthorizationScopeMismatchError,
+)
+from app.application.workflow import WorkflowType
 
 
 class AcceptedDecisionExecutionStatus(StrEnum):
@@ -50,6 +60,8 @@ class RunAcceptedDecisionExecutionCommand(Command):
     decision_version: int
     mode: ExecutionMode = ExecutionMode.DRY_RUN
     approval: ExecutionApproval | None = None
+    authorization_id: str | None = None
+    trace_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -57,6 +69,10 @@ class RunAcceptedDecisionExecutionCommand(Command):
         _require_positive_int(self.decision_version, "decision_version must be positive.")
         if not isinstance(self.mode, ExecutionMode):
             raise ExecutionPlanningError("mode must be a canonical ExecutionMode.")
+        if self.authorization_id is not None:
+            _require_text(self.authorization_id, "authorization_id must be non-empty.")
+            if self.mode is not ExecutionMode.EXECUTE:
+                raise ExecutionPlanningError("Runtime authorization is valid only in EXECUTE mode.")
         if self.approval is not None and not isinstance(self.approval, ExecutionApproval):
             raise ExecutionPlanningError("approval must be a canonical ExecutionApproval when supplied.")
 
@@ -98,6 +114,7 @@ class RunAcceptedDecisionExecutionUseCase:
         execution_preflight: ExecutionPreflight | None = None,
         accepted_billing_evidence_reader: AcceptedBillingEvidenceReader | None = None,
         one_off_vendor_retirement_trigger: OneOffVendorRetirementTrigger | None = None,
+        write_authorization_repository: WriteAuthorizationRepository | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._accepted_decision_reader = accepted_decision_reader
@@ -111,6 +128,7 @@ class RunAcceptedDecisionExecutionUseCase:
         # Optional: the P0-PROD-08I post-Vendor-Bill retirement hook. None -> never
         # attempted; every other execution behaves identically to before this existed.
         self._one_off_vendor_retirement_trigger = one_off_vendor_retirement_trigger
+        self._write_authorization_repository = write_authorization_repository
 
     def execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         """Own the Hub transaction; returned runtime failures are persisted outcomes.
@@ -184,14 +202,61 @@ class RunAcceptedDecisionExecutionUseCase:
             accepted_billing_instructions=accepted_billing_instructions,
         )
         plan = self._execution_planner.plan(request)
+        claimed_authorization: WriteAuthorizationRecord | None = None
         if command.mode is ExecutionMode.EXECUTE:
-            self._execution_preflight.ensure_execute_allowed(plan=plan, approval=command.approval)
+            if command.authorization_id is not None:
+                if self._write_authorization_repository is None:
+                    raise WriteAuthorizationScopeMismatchError(
+                        "Runtime authorization is not supported by this workflow."
+                    )
+                if command.approval is None or command.approval.authorization is not None:
+                    raise WriteAuthorizationScopeMismatchError(
+                        "Named approval and a persisted authorization ID are required."
+                    )
+                if (
+                    decision.selected_workflow is not WorkflowType.VENDOR_BILL
+                    or len(plan.steps) != 1
+                    or plan.steps[0].step_type is not ExecutionStepType.VENDOR_BILL
+                ):
+                    raise WriteAuthorizationScopeMismatchError(
+                        "Authorization is limited to one direct Vendor Bill execution."
+                    )
+                claimed_authorization = self._write_authorization_repository.claim_and_consume(
+                    company_id=command.company_id,
+                    review_id=command.review_id,
+                    operation_type=WriteAuthorizationOperationType.EXECUTE_VENDOR_BILL,
+                    target_version=command.decision_version,
+                    authorization_id=command.authorization_id,
+                    trace_id=command.trace_id,
+                    execution_id=request.execution_id,
+                )
+            elif command.approval is not None and command.approval.authorization is not None:
+                raise WriteAuthorizationScopeMismatchError(
+                    "Execution authorization must be claimed by the application."
+                )
+
+            effective_approval = command.approval
+            if claimed_authorization is not None and command.approval is not None:
+                effective_approval = ExecutionApproval(
+                    approved_by=command.approval.approved_by,
+                    authorization=claimed_authorization,
+                )
+
+            try:
+                self._execution_preflight.ensure_execute_allowed(plan=plan, approval=effective_approval)
+            except ApplicationError as exc:
+                if claimed_authorization is None or exc.error_category != "production_safety_gate_failure":
+                    raise
+                raise WriteAuthorizationError(exc.safe_message) from exc
             self._runtime_coordinator.ensure_plan_supports_mode(plan=plan, mode=command.mode)
+        else:
+            effective_approval = command.approval
+
         runtime = self._runtime_service.create_or_load(
             plan=plan,
             retry_policy=self._retry_policy_resolver.resolve(plan),
         )
-        result = self._runtime_coordinator.execute(runtime.snapshot, approval=command.approval)
+        result = self._runtime_coordinator.execute(runtime.snapshot, approval=effective_approval)
         snapshot = self._runtime_repository.get_snapshot(execution_id=result.execution_id)
         execution_result = AcceptedDecisionExecutionResult(
             review_id=command.review_id,

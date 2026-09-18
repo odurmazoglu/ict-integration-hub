@@ -9,6 +9,7 @@ from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.expense_mapping import OperatingExpenseMatchResult, operating_expense_evidence_errors
 from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationSet
 from app.application.workbench.dto import LineResolution, ReviewDecisionType
+from app.application.workbench.write_authorization import WriteAuthorizationRecord
 from app.application.workflow import WorkflowType
 from app.billing.dto import CustomerInvoiceBillingInstruction
 from app.domain.invoice import InternalInvoice
@@ -353,9 +354,12 @@ class AcceptedReviewDecision(ApplicationDTO):
 @dataclass(frozen=True, slots=True)
 class ExecutionApproval(ApplicationDTO):
     approved_by: str
+    authorization: WriteAuthorizationRecord | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.approved_by, "approved_by is required.")
+        if self.authorization is not None and not isinstance(self.authorization, WriteAuthorizationRecord):
+            raise ExecutionPlanningError("authorization must be a canonical WriteAuthorizationRecord.")
 
 
 @dataclass(frozen=True, slots=True)
