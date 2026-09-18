@@ -246,13 +246,22 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
     ) -> SupplierPartnerWriteResult:
         _validate_existing_partner(existing, normalized_vat=normalized_vat, command=command)
         if not existing.active:
-            raise SupplierPartnerInactiveError(
-                "The existing Odoo supplier partner for this tax number is archived; resolve it manually."
-            )
+            # P0-PROD-09C: still fails closed by default -- an inactive exact-VAT
+            # match is only ever reused when the caller explicitly authorizes THIS
+            # partner id. This writer never decides ownership itself; it only asks
+            # the caller-supplied predicate (see CreateSupplierPartnerCommand's
+            # authorize_inactive_reuse docstring). CREATE_PERMANENT_SUPPLIER and
+            # every other caller pass no predicate, so their behavior is unchanged.
+            if command.authorize_inactive_reuse is None or not command.authorize_inactive_reuse(existing.id):
+                raise SupplierPartnerInactiveError(
+                    "The existing Odoo supplier partner for this tax number is archived; resolve it manually."
+                )
         name_mismatch = _names_differ(existing.name, command.supplier_name)
         warnings: tuple[str, ...] = ()
         if name_mismatch:
-            warnings = ("Supplier legal name on file differs from the invoice supplier name; not changed.",)
+            warnings = (*warnings, "Supplier legal name on file differs from the invoice supplier name; not changed.")
+        if not existing.active:
+            warnings = (*warnings, "The reused Odoo supplier partner for this tax number is archived (inactive).")
         return SupplierPartnerWriteResult(
             status=SupplierPartnerWriteStatus.ALREADY_EXISTS,
             partner_id=existing.id,
