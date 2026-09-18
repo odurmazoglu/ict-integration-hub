@@ -3,6 +3,7 @@
 from app.composition.execution import (
     build_customer_quotation_execution_use_case,
     build_vendor_bill_execution_use_case,
+    build_vendor_bill_preview_use_case,
     build_workbench_accepted_decision_execution_dispatcher,
     build_workbench_customer_quotation_execution_workflow,
     build_workbench_vendor_bill_execution_workflow,
@@ -32,6 +33,7 @@ __all__ = [
     "build_resolve_workbench_supplier_use_case",
     "build_uyumsoft_canonical_invoice_importer",
     "build_vendor_bill_execution_use_case",
+    "build_vendor_bill_preview_use_case",
     "build_workbench_accepted_decision_execution_dispatcher",
     "build_workbench_customer_quotation_execution_workflow",
     "build_workbench_quotation_scenario_evidence_workflow",

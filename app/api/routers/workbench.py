@@ -15,6 +15,7 @@ from app.api.dependencies import (
     RequestContextDep,
     ResolveWorkbenchSupplierUseCaseDep,
     SubmitReviewDecisionUseCaseDep,
+    VendorBillPreviewUseCaseDep,
     WorkbenchAcceptedDecisionExecutionDispatcherDep,
     WorkbenchDecisionIngestionWorkflowDep,
     WorkbenchQuotationScenarioEvidenceWorkflowDep,
@@ -36,6 +37,14 @@ from app.application.execution import (
     ExecutionPlanningError,
     WorkbenchVendorBillExecutionResult,
 )
+from app.application.execution.exceptions import (
+    ExecutionPreviewCurrencyResolutionError,
+    ExecutionPreviewUnsupportedWorkflowError,
+    ExecutionSourceInvoiceError,
+    ExecutionSourceInvoiceIntegrityError,
+    ExecutionSourceInvoiceNotFoundError,
+)
+from app.application.execution.vendor_bill_preview import PreviewVendorBillRequest, VendorBillPreview
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceResult
 from app.application.workbench import (
     BusinessContextAllocation,
@@ -83,6 +92,7 @@ from app.application.workbench.one_off_vendor_retirement import OneOffVendorReti
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workflow import ManualReviewReason, WorkflowType
+from app.billing.exceptions import VendorBillBuildError
 from app.schemas.workbench import (
     ApiEnvelope,
     BusinessContextAllocationRequest,
@@ -105,6 +115,9 @@ from app.schemas.workbench import (
     SupplierRemediationResponse,
     SupplierResolutionRequest,
     TaxResolutionRequest,
+    VendorBillPreviewEnvelope,
+    VendorBillPreviewLineResponse,
+    VendorBillPreviewResponse,
     WorkbenchDecisionIngestionCandidateResponse,
     WorkbenchDecisionIngestionEnvelope,
     WorkbenchDecisionIngestionResponse,
@@ -257,6 +270,46 @@ def execute_workbench_vendor_bill(
             trace_id=context.trace_id,
         )
         return _success(response, context.trace_id, _vendor_bill_execution_response(result), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/reviews/{review_id}/vendor-bill-preview",
+    response_model=VendorBillPreviewEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Preview the Vendor Bill an accepted decision would produce",
+    description=(
+        "Requires workbench_execute -- the same permission that already governs visibility into execution "
+        "status/artifacts; no write permission exists or is required for this read-only operation. Computes the "
+        "exact Vendor Bill economics and routing EXECUTE would produce for the given decision_version, using "
+        "only the persisted accepted decision, persisted Stage-2 execution evidence, and the same VendorBillBuilder "
+        "real execution uses -- it performs no current-time partner/product/tax matching and no account/product "
+        "selection of its own. Makes exactly one read-only Odoo call (res.currency resolution, identical to what "
+        "EXECUTE's writer already performs) and zero Odoo or Hub writes. Works regardless of "
+        "EXECUTION_EXECUTE_ENABLED or any other business-write gate. preview_untaxed/preview_tax/preview_total are "
+        "deterministic PREVIEW totals computed before any Odoo Vendor Bill record exists -- never Odoo-computed "
+        "values. "
+        "idempotency_key is the exact identity a later EXECUTE call would use for this Vendor Bill step."
+    ),
+)
+def preview_workbench_vendor_bill(
+    review_id: str,
+    decision_version: Annotated[int, Query()],
+    response: Response,
+    context: RequestContextDep,
+    use_case: VendorBillPreviewUseCaseDep,
+) -> VendorBillPreviewEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        preview = use_case.preview(
+            PreviewVendorBillRequest(
+                review_id=review_id,
+                company_id=context.company_id,
+                decision_version=decision_version,
+            )
+        )
+        return _success(response, context.trace_id, _vendor_bill_preview_response(preview), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -667,6 +720,41 @@ def _quotation_scenario_evidence_response(
     )
 
 
+def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPreviewResponse:
+    return VendorBillPreviewResponse(
+        review_id=preview.review_id,
+        company_id=preview.company_id,
+        decision_version=preview.decision_version,
+        decision_id=preview.decision_id,
+        selected_workflow=preview.selected_workflow,
+        move_type=preview.move_type,
+        partner_id=preview.partner_id,
+        invoice_date=preview.invoice_date,
+        reference=preview.reference,
+        header_company_id=preview.header_company_id,
+        currency_code=preview.currency_code,
+        currency_id=preview.currency_id,
+        idempotency_key=preview.idempotency_key,
+        lines=[
+            VendorBillPreviewLineResponse(
+                line_number=line.line_number,
+                description=line.description,
+                quantity=decimal_to_api(line.quantity),
+                unit_price=decimal_to_api(line.unit_price),
+                account_id=line.account_id,
+                product_id=line.product_id,
+                tax_ids=list(line.tax_ids),
+            )
+            for line in preview.lines
+        ],
+        gross_source_amount=decimal_to_api(preview.gross_source_amount),
+        total_discount=decimal_to_api(preview.total_discount),
+        preview_untaxed=decimal_to_api(preview.preview_untaxed),
+        preview_tax=decimal_to_api(preview.preview_tax),
+        preview_total=decimal_to_api(preview.preview_total),
+    )
+
+
 def _artifact_response(artifact: ExecutionArtifact) -> ExecutionArtifactResponse:
     return ExecutionArtifactResponse(
         artifact_type=artifact.artifact_type,
@@ -710,6 +798,21 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, ExecutionPlanningError):
         return HTTPStatus.BAD_REQUEST
+    if isinstance(
+        exc,
+        (
+            ExecutionPreviewUnsupportedWorkflowError,
+            ExecutionPreviewCurrencyResolutionError,
+            VendorBillBuildError,
+        ),
+    ):
+        return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, ExecutionSourceInvoiceNotFoundError):
+        return HTTPStatus.NOT_FOUND
+    if isinstance(exc, ExecutionSourceInvoiceIntegrityError):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, ExecutionSourceInvoiceError):
+        return HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(exc, SupplierResolutionContractError):
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, ProductRemediationContractError):

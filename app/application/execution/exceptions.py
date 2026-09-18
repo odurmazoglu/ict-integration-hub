@@ -45,6 +45,23 @@ class ExecutionApprovalError(ExecutionError):
     error_category = "execution_approval_error"
 
 
+class ExecutionPreviewUnsupportedWorkflowError(ExecutionError):
+    """Safe error raised when a Vendor Bill preview is requested for a decision whose
+    selected workflow is not VENDOR_BILL (P0-PROD-09B). Preview never falls back to
+    computing anything for another workflow shape."""
+
+    error_category = "execution_preview_unsupported_workflow"
+
+
+class ExecutionPreviewCurrencyResolutionError(ExecutionError):
+    """Safe error raised when Vendor Bill preview's read-only currency resolution
+    fails (missing/inactive/ambiguous Odoo currency) -- the application-layer
+    translation of the ERP-layer currency lookup failure, so callers (including the
+    API router) never need to depend on any ERP-layer exception type directly."""
+
+    error_category = "execution_preview_currency_resolution_error"
+
+
 class ExecutionSourceInvoiceError(ExecutionError):
     """Safe error raised when authoritative source invoice evidence cannot be used."""
 

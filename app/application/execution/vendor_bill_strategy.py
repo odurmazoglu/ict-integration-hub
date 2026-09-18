@@ -24,6 +24,7 @@ from app.application.execution.exceptions import (
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
 from app.application.ports import VendorBillWriter
+from app.application.workbench.dto import LineResolution
 from app.billing import VendorBillBuilder
 from app.billing.exceptions import VendorBillBuildError
 
@@ -61,16 +62,9 @@ class VendorBillExecutionStrategy:
                 decision_version=request.decision_version,
             )
             _validate_source(request=request, source=source)
-            account_only_line_numbers = frozenset(
-                resolution.line_number for resolution in source.line_resolutions if resolution.account_only
+            account_only_line_numbers, explicit_account_only_accounts = account_only_line_resolution(
+                source.line_resolutions
             )
-            # Pinned at decision-acceptance time (P0-PROD-08G), never recomputed here --
-            # see LineResolution.expense_account_id and SubmitReviewDecisionUseCase.
-            explicit_account_only_accounts = {
-                resolution.line_number: resolution.expense_account_id
-                for resolution in source.line_resolutions
-                if resolution.account_only and resolution.expense_account_id is not None
-            }
             vendor_bill = self._vendor_bill_builder.build(
                 source.invoice,
                 source.partner_match,
@@ -124,6 +118,28 @@ class VendorBillExecutionStrategy:
                 created=write_result.status == "created",
             ),
         )
+
+
+def account_only_line_resolution(
+    line_resolutions: tuple[LineResolution, ...],
+) -> tuple[frozenset[str], dict[str, int]]:
+    """Derive ``VendorBillBuilder.build``'s two account-only inputs from pinned decision
+    evidence (P0-PROD-09B: shared verbatim by real execution and the read-only preview,
+    so neither ever recomputes or diverges from the other).
+
+    Pinned at decision-acceptance time (P0-PROD-08G), never recomputed here -- see
+    ``LineResolution.expense_account_id`` and ``SubmitReviewDecisionUseCase``.
+    """
+
+    account_only_line_numbers = frozenset(
+        resolution.line_number for resolution in line_resolutions if resolution.account_only
+    )
+    explicit_account_only_accounts = {
+        resolution.line_number: resolution.expense_account_id
+        for resolution in line_resolutions
+        if resolution.account_only and resolution.expense_account_id is not None
+    }
+    return account_only_line_numbers, explicit_account_only_accounts
 
 
 def vendor_bill_write_idempotency_key(request: ExecutionStepRequest) -> str:

@@ -17,6 +17,11 @@ from app.application.execution import (
     WorkbenchAcceptedDecisionExecutionDispatcher,
     WorkbenchVendorBillExecutionWorkflow,
 )
+from app.application.execution.vendor_bill_preview import (
+    PreviewVendorBillRequest,
+    PreviewVendorBillUseCase,
+    VendorBillPreview,
+)
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceWorkflow
 from app.application.workbench import (
     CreateNewProductUseCase,
@@ -39,6 +44,7 @@ from app.composition import (
     build_resolve_workbench_supplier_use_case,
     build_uyumsoft_canonical_invoice_importer,
     build_vendor_bill_execution_use_case,
+    build_vendor_bill_preview_use_case,
     build_workbench_accepted_decision_execution_dispatcher,
     build_workbench_quotation_scenario_evidence_workflow,
     build_workbench_vendor_bill_execution_workflow,
@@ -384,4 +390,35 @@ class _LazyCreateNewProductUseCase:
 CreateNewProductUseCaseDep = Annotated[
     CreateNewProductUseCase,
     Depends(get_create_new_product_use_case),
+]
+
+
+def get_vendor_bill_preview_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> PreviewVendorBillUseCase:
+    return _LazyPreviewVendorBillUseCase(session=session, settings=settings)
+
+
+class _LazyPreviewVendorBillUseCase:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._use_case: PreviewVendorBillUseCase | None = None
+
+    def preview(self, request: PreviewVendorBillRequest) -> VendorBillPreview:
+        return self._get_use_case().preview(request)
+
+    def _get_use_case(self) -> PreviewVendorBillUseCase:
+        if self._use_case is None:
+            self._use_case = build_vendor_bill_preview_use_case(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._use_case
+
+
+VendorBillPreviewUseCaseDep = Annotated[
+    PreviewVendorBillUseCase,
+    Depends(get_vendor_bill_preview_use_case),
 ]
