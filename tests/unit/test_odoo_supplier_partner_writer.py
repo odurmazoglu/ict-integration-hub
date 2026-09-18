@@ -176,6 +176,77 @@ async def test_archived_exact_vat_partner_fails_closed_without_reactivation() ->
     assert client.create_calls == []
 
 
+# ------------------------------------------- Phase 27b (P0-PROD-09C): authorized inactive reuse
+
+
+async def test_archived_partner_with_no_authorizer_still_fails_closed() -> None:
+    """authorize_inactive_reuse defaults to None -- byte-identical to the pre-09C
+    behavior proven above -- for every caller that does not explicitly supply one."""
+
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=9, active=False)])
+    with pytest.raises(SupplierPartnerInactiveError):
+        await _writer(client).create_supplier(_command(authorize_inactive_reuse=None))
+    assert client.create_calls == []
+
+
+async def test_archived_partner_with_authorizer_returning_false_still_fails_closed() -> None:
+    """An authorizer that declines reuse for THIS partner id behaves identically to
+    having no authorizer at all -- the writer never treats "predicate present" as
+    itself sufficient."""
+
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=9, active=False)])
+    with pytest.raises(SupplierPartnerInactiveError):
+        await _writer(client).create_supplier(_command(authorize_inactive_reuse=lambda partner_id: False))
+    assert client.create_calls == []
+
+
+async def test_archived_partner_with_authorizer_returning_true_is_reused_no_reactivation() -> None:
+    """When the caller's predicate authorizes THIS specific partner id, the writer
+    returns ALREADY_EXISTS -- never raises, never writes anything (no reactivation
+    payload of any kind is ever sent for this or any other scenario)."""
+
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=9, active=False)])
+    calls: list[int] = []
+
+    def _authorize(partner_id: int) -> bool:
+        calls.append(partner_id)
+        return True
+
+    result = await _writer(client).create_supplier(_command(authorize_inactive_reuse=_authorize))
+
+    assert result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS
+    assert result.partner_id == 9
+    assert calls == [9]  # the writer asked about exactly the partner id it found
+    assert client.create_calls == []
+    assert any("archived" in warning.lower() for warning in result.warnings)
+
+
+async def test_authorizer_is_never_consulted_for_an_active_match() -> None:
+    """The predicate is only ever invoked for an INACTIVE exact-VAT match -- an active
+    match reuses exactly as before, with zero new code path involved."""
+
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=42, active=True)])
+    calls: list[int] = []
+    result = await _writer(client).create_supplier(
+        _command(authorize_inactive_reuse=lambda partner_id: calls.append(partner_id) or True)
+    )
+    assert result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS
+    assert calls == []
+
+
+async def test_authorizer_is_never_consulted_when_creating_a_genuinely_new_partner() -> None:
+    """No exact-VAT match at all -> straight to create; the predicate is irrelevant
+    and is never called."""
+
+    client = FakeJson2Client(create_result=777, search_sequence=[[], [_partner_row(partner_id=777)]])
+    calls: list[int] = []
+    result = await _writer(client).create_supplier(
+        _command(authorize_inactive_reuse=lambda partner_id: calls.append(partner_id) or True)
+    )
+    assert result.status is SupplierPartnerWriteStatus.CREATED
+    assert calls == []
+
+
 # --------------------------------------------------------- Phase 28: NAME MISMATCH
 
 

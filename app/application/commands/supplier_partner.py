@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.application.commands.base import Command
@@ -18,6 +19,16 @@ class CreateSupplierPartnerCommand(Command):
     application layer. The future P0-3D2D remediation flow MUST source them from
     the immutable ``ReviewSourceInvoiceEvidence`` for the review, never from HTTP
     client input.
+
+    ``authorize_inactive_reuse`` (P0-PROD-09C) is an optional, caller-supplied
+    predicate consulted ONLY when the exact-VAT lookup finds exactly one existing
+    but *inactive* (archived) partner. The writer itself carries no notion of "Hub
+    ownership" -- that is application/domain knowledge -- so by default (``None``,
+    every caller except ONE_OFF_VENDOR reuse) an inactive exact-VAT match still
+    fails closed exactly as before. Only ``ResolveWorkbenchSupplierUseCase``'s
+    ONE_OFF_VENDOR path supplies a predicate, and only after checking its own
+    ``SupplierRemediationEffect`` ownership ledger -- the writer never infers
+    ownership itself, it only asks the question the caller hands it.
     """
 
     company_id: int
@@ -25,6 +36,7 @@ class CreateSupplierPartnerCommand(Command):
     supplier_tax_number: str
     idempotency_key: str
     approved_by: str | None = None
+    authorize_inactive_reuse: Callable[[int], bool] | None = None
 
     def __post_init__(self) -> None:
         if type(self.company_id) is not int or self.company_id <= 0:

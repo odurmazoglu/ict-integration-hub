@@ -384,16 +384,35 @@ class ResolveWorkbenchSupplierUseCase:
         command: ResolveWorkbenchSupplierCommand,
         source,
     ):
-        """Same minimal name+VAT create-or-reuse as CREATE_PERMANENT_SUPPLIER (P0-PROD-08H).
+        """Same minimal name+VAT create-or-reuse as CREATE_PERMANENT_SUPPLIER (P0-PROD-08H),
+        now also reaching an *archived* Hub-owned partner (P0-PROD-09C).
 
         The underlying writer's exact-VAT read-before-write already covers idempotent
         replay (case B/F) and ambiguous-match fail-closed (case C). The one thing it
         cannot know is *ownership*: an exact-VAT match may be a pre-existing partner
-        the Hub never created via ONE_OFF_VENDOR (e.g. a permanent supplier, case A) --
-        silently treating that as retirement-eligible would risk archiving a normal
-        active ICT supplier. Only a partner with its own prior ONE_OFF_VENDOR effect
-        is ever reused here.
+        the Hub never created via ONE_OFF_VENDOR (e.g. a permanent supplier, case A),
+        or an archived partner from a completed prior ONE_OFF_VENDOR lifecycle for
+        this same VAT (case G, P0-PROD-09C) -- silently treating either as
+        retirement-eligible/reusable without proof of ownership would be unsafe.
+        Only a partner with its own prior ONE_OFF_VENDOR effect is ever reused here,
+        active or archived.
+
+        ``_authorize_inactive_reuse`` is passed to the writer so it never infers Hub
+        ownership itself (see ``OdooSupplierPartnerWriter``/``CreateSupplierPartnerCommand``):
+        it only asks this exact ownership-ledger question, identical to the one this
+        method already asks below for the active-match case. CREATE_PERMANENT_SUPPLIER
+        (``_create_permanent_partner``) passes no such predicate, so an archived
+        exact-VAT match there still fails closed exactly as before this change.
         """
+
+        def _authorize_inactive_reuse(partner_id: int) -> bool:
+            return (
+                self._remediation_effect_writer.find_one_off_vendor_effect_by_partner_id(
+                    company_id=command.company_id,
+                    resolved_partner_id=partner_id,
+                )
+                is not None
+            )
 
         # Legal identity is derived ONLY from immutable source evidence, never from the request body.
         write_result = await self._supplier_partner_writer.create_supplier(
@@ -406,6 +425,7 @@ class ResolveWorkbenchSupplierUseCase:
                     f"one-off-vendor:{command.company_id}:{source.source_invoice_id}:{command.expected_version}"
                 ),
                 approved_by=command.approved_by,
+                authorize_inactive_reuse=_authorize_inactive_reuse,
             )
         )
         if write_result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS:
