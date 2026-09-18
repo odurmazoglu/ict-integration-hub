@@ -45,6 +45,12 @@ class ResolveWorkbenchSupplierCommand(ApplicationDTO):
     approved_by: str
     resolved_partner_id: int | None = None
     note: str | None = None
+    #: P0-PROD-09F. Optional id of a pre-issued, narrow write authorization scoped to
+    #: exactly (company_id, review_id, CREATE_PERMANENT_SUPPLIER or
+    #: ONE_OFF_VENDOR_SUPPLIER, expected_version). When present, it replaces the need
+    #: for SUPPLIER_REMEDIATION_WRITE_ENABLED to be globally open for this one write;
+    #: only consulted for those two write-capable modes.
+    authorization_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -53,6 +59,8 @@ class ResolveWorkbenchSupplierCommand(ApplicationDTO):
         if not isinstance(self.mode, SupplierResolutionMode):
             raise SupplierResolutionContractError("A canonical SupplierResolutionMode is required.")
         _require_text(self.approved_by, "approved_by (authenticated actor) is required.")
+        if self.authorization_id is not None:
+            _require_text(self.authorization_id, "authorization_id must be non-empty when supplied.")
         if self.mode is SupplierResolutionMode.MATCH_EXISTING:
             _require_positive_int(self.resolved_partner_id, "MATCH_EXISTING requires a positive partner_id.")
         elif self.resolved_partner_id is not None:

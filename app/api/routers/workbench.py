@@ -429,8 +429,11 @@ def submit_review_decision(
         "response), or USE_ONE_OFF_SUPPLIER (record intent only; deferred) -- and triggers the non-destructive "
         "SUPPLIER_RESOLUTION reclassification. Legal supplier identity (name, VAT) always comes only from the "
         "review's immutable source evidence -- never the request body; the request only selects the mode. "
-        "CREATE_PERMANENT_SUPPLIER and ONE_OFF_VENDOR are both gated by SUPPLIER_REMEDIATION_WRITE_ENABLED. This "
-        "endpoint never executes a Vendor Bill and never archives a partner."
+        "CREATE_PERMANENT_SUPPLIER and ONE_OFF_VENDOR are both gated by SUPPLIER_REMEDIATION_WRITE_ENABLED, or by "
+        "an optional authorization_id from a pre-issued narrow write authorization scoped to exactly this "
+        "review/version/operation (see the write-authorizations endpoint) -- either way the master production "
+        "kill switch and named-approver checks remain absolute. This endpoint never executes a Vendor Bill and "
+        "never archives a partner."
     ),
 )
 async def resolve_review_supplier(
@@ -451,6 +454,7 @@ async def resolve_review_supplier(
                 approved_by=context.user_name or context.user_id,
                 resolved_partner_id=request_body.partner_id,
                 note=request_body.note,
+                authorization_id=request_body.authorization_id,
             )
         )
         return _success(
@@ -915,7 +919,14 @@ def _status_code_for_exception(exc: Exception) -> int:
     "/reviews/{review_id}/write-authorizations",
     response_model=WriteAuthorizationEnvelope,
     responses=COMMON_ERROR_RESPONSES,
-    summary="Issue one narrow Vendor Bill execution authorization",
+    summary="Issue one narrow, single-use write authorization",
+    description=(
+        "Requires workbench_execute. Issues one short-lived (15 minute), single-use authorization scoped to "
+        "exactly (company_id, review_id, operation_type, target_version), replacing the need to open a global "
+        "write gate/restart the container for one operator-approved write. Supports EXECUTE_VENDOR_BILL, "
+        "CREATE_PERMANENT_SUPPLIER, ONE_OFF_VENDOR_SUPPLIER, and ONE_OFF_VENDOR_ARCHIVE. The master production "
+        "kill switch (PRODUCTION_OPERATIONS_ENABLED) and named-approver requirement are never bypassed."
+    ),
 )
 def issue_write_authorization(
     review_id: str,
@@ -1017,6 +1028,16 @@ def get_one_off_vendor_retirement(
     "/reviews/{review_id}/one-off-vendor-retirement/recover",
     response_model=OneOffVendorRetirementRecoveryEnvelope,
     responses=COMMON_ERROR_RESPONSES,
+    summary="Recover a ONE_OFF_VENDOR retirement using the existing archive-last state machine",
+    description=(
+        "Requires workbench_execute. Body is only review_version (the retirement row's own persisted version) "
+        "and an optional authorization_id from a pre-issued narrow write authorization scoped to exactly "
+        "(company_id, review_id, ONE_OFF_VENDOR_ARCHIVE, review_version) -- see the write-authorizations "
+        "endpoint. Without it, the write still requires SUPPLIER_REMEDIATION_WRITE_ENABLED to be globally open; "
+        "the master production kill switch and named-approver checks are never bypassed by either path. "
+        "Invokes the existing, unmodified ArchiveOneOffVendorUseCase exactly once -- ARCHIVE_ATTEMPTED and "
+        "NEEDS_RECONCILIATION always read the partner back before ever writing again."
+    ),
 )
 async def recover_one_off_vendor_retirement(
     review_id: str,
@@ -1032,6 +1053,7 @@ async def recover_one_off_vendor_retirement(
                 review_id=review_id, company_id=context.company_id, review_version=request_body.review_version
             ),
             approved_by=context.user_id,
+            authorization_id=request_body.authorization_id,
         )
         return _success(
             response, context.trace_id, OneOffVendorRetirementRecoveryResponse.model_validate(result), warnings=[]

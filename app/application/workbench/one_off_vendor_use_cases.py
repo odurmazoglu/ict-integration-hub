@@ -31,6 +31,11 @@ from app.application.workbench.one_off_vendor_retirement import (
     OneOffVendorRetirementStatus,
 )
 from app.application.workbench.ports import OneOffVendorRetirementWriter, VendorBillExecutionEvidenceReader
+from app.application.workbench.write_authorization import (
+    WriteAuthorizationOperationType,
+    WriteAuthorizationRepository,
+    one_off_vendor_archive_authorization_consumer_id,
+)
 
 # Exceptions from OneOffVendorRetirementPort.archive_partner() that are CERTAIN to mean
 # no Odoo write was attempted: the gate/policy check and payload validation run before
@@ -56,12 +61,19 @@ class ArchiveOneOffVendorUseCase:
         retirement_port: OneOffVendorRetirementPort,
         unit_of_work: UnitOfWork,
         approved_by: str | None = None,
+        write_authorization_repository: WriteAuthorizationRepository | None = None,
+        authorization_id: str | None = None,
     ) -> None:
         self._retirement_writer = retirement_writer
         self._vendor_bill_evidence_reader = vendor_bill_evidence_reader
         self._retirement_port = retirement_port
         self._unit_of_work = unit_of_work
         self._approved_by = approved_by
+        # Optional (P0-PROD-09F): only the explicit operator recovery workflow ever
+        # supplies these -- the automatic post-execution retirement trigger never
+        # does, and remains gated by the existing global flag only.
+        self._write_authorization_repository = write_authorization_repository
+        self._authorization_id = authorization_id
 
     async def execute(self, command: ArchiveOneOffVendorCommand) -> ArchiveOneOffVendorResult:
         if not isinstance(command, ArchiveOneOffVendorCommand):
@@ -103,14 +115,25 @@ class ArchiveOneOffVendorUseCase:
         # retirement.status is now ARCHIVE_ATTEMPTED or NEEDS_RECONCILIATION -- both
         # resume here. The writer is read-before-write idempotent, so this is always
         # safe to (re-)attempt regardless of how we got here.
+        authorization = self._claim_write_authorization(command)
         try:
             write_result = await self._retirement_port.archive_partner(
                 ArchiveOneOffVendorPartnerCommand(
                     partner_id=retirement.resolved_partner_id,
                     approved_by=self._approved_by,
+                    authorization=authorization,
                 )
             )
         except _CERTAIN_NO_WRITE_EXCEPTIONS:
+            # P0-PROD-09F: discard the flushed-but-uncommitted authorization claim
+            # (if any) before the retirement-state revert below commits -- a certain
+            # no-write failure here always means one of the *unconditional* checks
+            # (master kill switch, approval ack, named approver) failed despite a
+            # valid authorization; none of those are fixed by retrying with the same
+            # authorization, but the authorization itself must remain usable once
+            # the real misconfiguration is fixed, exactly like an uncertain failure
+            # below already preserves it via rollback.
+            self._unit_of_work.rollback()
             if retirement.status is OneOffVendorRetirementStatus.ARCHIVE_ATTEMPTED:
                 self._retirement_writer.advance(
                     retirement,
@@ -153,6 +176,29 @@ class ArchiveOneOffVendorUseCase:
         )
         self._unit_of_work.commit()
         return self._result(retirement, status=ArchiveOneOffVendorStatus.ARCHIVED, already_applied=False)
+
+    def _claim_write_authorization(self, command: ArchiveOneOffVendorCommand):
+        """P0-PROD-09F: claim (and durably consume) the narrow write authorization for
+        this exact archive attempt, if one was supplied. Deterministic consumer id
+        from the command's own identity, so a legitimate crash-then-retry of the same
+        recovery request resumes against its own already-consumed authorization."""
+
+        if self._authorization_id is None:
+            return None
+        if self._write_authorization_repository is None:
+            raise OneOffVendorRetirementError("Runtime authorization is not supported by this workflow.")
+        return self._write_authorization_repository.claim_and_consume(
+            company_id=command.company_id,
+            review_id=command.review_id,
+            operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
+            target_version=command.review_version,
+            authorization_id=self._authorization_id,
+            execution_id=one_off_vendor_archive_authorization_consumer_id(
+                company_id=command.company_id,
+                review_id=command.review_id,
+                review_version=command.review_version,
+            ),
+        )
 
     def _result(
         self,

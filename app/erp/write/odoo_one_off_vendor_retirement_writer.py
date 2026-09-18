@@ -68,7 +68,9 @@ class OdooOneOffVendorRetirementWriter:
 
         # Dedicated master-data write gate, shared with supplier-partner creation.
         # With default settings this raises before any Odoo call.
-        self._policy.ensure_real_write_allowed(approved_by=command.approved_by)
+        self._policy.ensure_real_write_allowed(
+            approved_by=command.approved_by, write_authorization=command.authorization
+        )
 
         wrote = await _translate_connector_errors(self._client.archive_res_partner(partner_id=command.partner_id))
         if not wrote:

@@ -36,14 +36,21 @@ class RecoverOneOffVendorRetirementWorkflow:
         self,
         *,
         status_reader: GetOneOffVendorRetirementUseCase,
-        archive_use_case_factory: Callable[[str], ArchiveOneOffVendorUseCase],
+        archive_use_case_factory: Callable[..., ArchiveOneOffVendorUseCase],
     ) -> None:
         self._status_reader = status_reader
         self._archive_use_case_factory = archive_use_case_factory
 
-    async def execute(self, command: ArchiveOneOffVendorCommand, *, approved_by: str) -> ArchiveOneOffVendorResult:
+    async def execute(
+        self,
+        command: ArchiveOneOffVendorCommand,
+        *,
+        approved_by: str,
+        authorization_id: str | None = None,
+    ) -> ArchiveOneOffVendorResult:
         # Validate persisted exact tenant/version before constructing any ERP adapter.
         self._status_reader.execute(
             review_id=command.review_id, company_id=command.company_id, review_version=command.review_version
         )
-        return await self._archive_use_case_factory(approved_by).execute(command)
+        use_case = self._archive_use_case_factory(approved_by=approved_by, authorization_id=authorization_id)
+        return await use_case.execute(command)

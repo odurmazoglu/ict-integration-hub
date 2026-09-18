@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
+from uuid import NAMESPACE_URL, uuid5
 
 from app.application.dto import ApplicationDTO
 from app.application.exceptions import ApplicationError
@@ -13,6 +14,16 @@ class WriteAuthorizationOperationType(StrEnum):
     """Permitted operation types for narrow write authorizations."""
 
     EXECUTE_VENDOR_BILL = "EXECUTE_VENDOR_BILL"
+    #: P0-PROD-09F. Authorizes one CREATE_PERMANENT_SUPPLIER resolution write.
+    CREATE_PERMANENT_SUPPLIER = "CREATE_PERMANENT_SUPPLIER"
+    #: P0-PROD-09F. Authorizes one ONE_OFF_VENDOR resolution write -- covers both a
+    #: genuinely new partner create and reuse of an archived Hub-owned partner (#159):
+    #: both go through the exact same OdooSupplierPartnerWriter.create_supplier call.
+    ONE_OFF_VENDOR_SUPPLIER = "ONE_OFF_VENDOR_SUPPLIER"
+    #: P0-PROD-09F. Authorizes one explicit ONE_OFF_VENDOR archive/recovery write
+    #: (the #162 recovery endpoint). Never used by the automatic post-execution
+    #: retirement trigger, which remains gated by the existing global flag only.
+    ONE_OFF_VENDOR_ARCHIVE = "ONE_OFF_VENDOR_ARCHIVE"
 
 
 class WriteAuthorizationStatus(StrEnum):
@@ -99,17 +110,45 @@ class WriteAuthorizationRecord(ApplicationDTO):
     def ensure_execution_scope(
         self, *, company_id: int, review_id: str, decision_version: int, execution_id: str
     ) -> None:
+        self.ensure_scope(
+            company_id=company_id,
+            review_id=review_id,
+            operation_type=WriteAuthorizationOperationType.EXECUTE_VENDOR_BILL,
+            target_version=decision_version,
+            consumer_id=execution_id,
+            scope_error_message="Authorization does not match the exact Vendor Bill execution scope.",
+        )
+
+    def ensure_scope(
+        self,
+        *,
+        company_id: int,
+        review_id: str,
+        operation_type: WriteAuthorizationOperationType,
+        target_version: int,
+        consumer_id: str,
+        scope_error_message: str = "Authorization does not match the exact requested write scope.",
+    ) -> None:
+        """General-purpose defense-in-depth re-check for any operation type (P0-PROD-09F).
+
+        ``ensure_execution_scope`` above is now a thin, behavior-preserving wrapper
+        over this -- every existing Vendor Bill execution call site and test is
+        unaffected. ``consumer_id`` generalizes ``execution_id``: the opaque,
+        deterministic identity of the *specific write attempt* that claimed this
+        authorization (see each operation's own consumer-id helper), so a legitimate
+        retry of the same attempt can still use its own already-consumed
+        authorization while an unrelated attempt cannot.
+        """
+
         if (self.company_id, self.review_id, self.operation_type, self.target_version) != (
             company_id,
             review_id,
-            WriteAuthorizationOperationType.EXECUTE_VENDOR_BILL,
-            decision_version,
+            operation_type,
+            target_version,
         ):
-            raise WriteAuthorizationScopeMismatchError(
-                "Authorization does not match the exact Vendor Bill execution scope."
-            )
-        if self.status is not WriteAuthorizationStatus.CONSUMED or self.consumed_by_execution_id != execution_id:
-            raise WriteAuthorizationAlreadyConsumedError("Authorization must be bound to this execution.")
+            raise WriteAuthorizationScopeMismatchError(scope_error_message)
+        if self.status is not WriteAuthorizationStatus.CONSUMED or self.consumed_by_execution_id != consumer_id:
+            raise WriteAuthorizationAlreadyConsumedError("Authorization must be bound to this write attempt.")
         if self.is_expired:
             raise WriteAuthorizationExpiredError("Write authorization has expired.")
 
@@ -174,3 +213,27 @@ class WriteAuthorizationRepository(Protocol):
         Crash before the outer commit rolls consumption back with runtime state.
         """
         ...
+
+
+def supplier_resolution_authorization_consumer_id(
+    *, company_id: int, review_id: str, expected_version: int, mode: str
+) -> str:
+    """Deterministic consumer identity for a CREATE_PERMANENT_SUPPLIER/ONE_OFF_VENDOR_SUPPLIER
+    write attempt (P0-PROD-09F). Mirrors ``accepted_decision_execution_id``'s exact
+    construction: same inputs always produce the same id, so a legitimate crash-then-
+    retry of the same ``ResolveWorkbenchSupplierCommand`` resumes against its own
+    already-consumed authorization instead of being rejected as a different attempt.
+    """
+
+    identity = f"supplier-resolution-write:{company_id}:{review_id}:{expected_version}:{mode}"
+    return f"supplier-resolution-write:{uuid5(NAMESPACE_URL, identity)}"
+
+
+def one_off_vendor_archive_authorization_consumer_id(*, company_id: int, review_id: str, review_version: int) -> str:
+    """Deterministic consumer identity for a ONE_OFF_VENDOR_ARCHIVE recovery write
+    attempt (P0-PROD-09F). Same construction discipline as
+    ``supplier_resolution_authorization_consumer_id`` -- a retry of the same recovery
+    request resumes against its own already-consumed authorization."""
+
+    identity = f"one-off-vendor-archive-write:{company_id}:{review_id}:{review_version}"
+    return f"one-off-vendor-archive-write:{uuid5(NAMESPACE_URL, identity)}"
