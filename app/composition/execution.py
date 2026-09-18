@@ -56,6 +56,7 @@ from app.persistence import (
     SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyUnitOfWork,
+    SqlAlchemyWriteAuthorizationRepository,
 )
 
 
@@ -136,6 +137,7 @@ def build_vendor_bill_execution_use_case(
         retry_policy_resolver=StaticRetryPolicyResolver(ExecutionRetryPolicy.immediate(max_attempts=2)),
         execution_preflight=ExecutionPreflightPolicy(
             production_execution_enabled=settings.execution_execute_enabled,
+            production_operations_enabled=settings.production_operations_enabled,
             real_write_gates={
                 strategy.supported_step_types[0]: vendor_bill_policy,
                 purchase_order_strategy.supported_step_types[0]: vendor_bill_policy,
@@ -145,6 +147,7 @@ def build_vendor_bill_execution_use_case(
         ),
         accepted_billing_evidence_reader=accepted_billing_reader,
         one_off_vendor_retirement_trigger=retirement_trigger,
+        write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
     )
 
 

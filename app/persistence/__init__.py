@@ -26,6 +26,7 @@ from app.persistence.workbench_review_supplier_remediation_effect_reader import 
     SqlAlchemyReviewSupplierRemediationEffectRepository,
 )
 from app.persistence.workbench_review_supplier_resolution_reader import SqlAlchemyReviewSupplierResolutionRepository
+from app.persistence.write_authorization_repository import SqlAlchemyWriteAuthorizationRepository
 
 __all__ = [
     "SqlAlchemyAcceptedBillingEvidenceReader",
@@ -43,6 +44,7 @@ __all__ = [
     "SqlAlchemyReviewSourceInvoiceEvidenceReader",
     "SqlAlchemyReviewSupplierRemediationEffectRepository",
     "SqlAlchemyReviewSupplierResolutionRepository",
+    "SqlAlchemyWriteAuthorizationRepository",
     "SqlAlchemyUnitOfWork",
     "SqlAlchemyReviewRepository",
     "SqlAlchemyVendorBillExecutionEvidenceReader",

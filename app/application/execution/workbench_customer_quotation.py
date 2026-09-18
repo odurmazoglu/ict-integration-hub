@@ -20,6 +20,7 @@ from app.application.execution.runtime import ExecutionState
 from app.application.execution.workbench_vendor_bill import (
     WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
+    WorkbenchVendorBillExecutionWorkflow,
     _artifacts,
     _result,
     _status_from_execution,
@@ -193,7 +194,7 @@ class WorkbenchAcceptedDecisionExecutionDispatcher:
         self,
         *,
         accepted_decision_reader: AcceptedReviewDecisionReader,
-        vendor_bill_workflow: WorkbenchAcceptedDecisionExecutionWorkflow,
+        vendor_bill_workflow: WorkbenchVendorBillExecutionWorkflow,
         customer_quotation_workflow: WorkbenchAcceptedDecisionExecutionWorkflow,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
@@ -209,6 +210,7 @@ class WorkbenchAcceptedDecisionExecutionDispatcher:
         mode: ExecutionMode = ExecutionMode.DRY_RUN,
         approval: ExecutionApproval | None = None,
         trace_id: str | None = None,
+        authorization_id: str | None = None,
     ) -> WorkbenchVendorBillExecutionResult:
         command = RunAcceptedDecisionExecutionCommand(
             review_id=review_id,
@@ -225,6 +227,19 @@ class WorkbenchAcceptedDecisionExecutionDispatcher:
             )
         except ReviewNotFoundError:
             return _result(command, status=WorkbenchVendorBillExecutionStatus.NOT_FOUND)
+
+        if authorization_id is not None:
+            if decision.selected_workflow is not WorkflowType.VENDOR_BILL:
+                raise ExecutionPlanningError("Runtime authorization is supported only for Vendor Bill decisions.")
+            return self._vendor_bill_workflow.execute(
+                review_id=review_id,
+                company_id=company_id,
+                decision_version=decision_version,
+                mode=mode,
+                approval=approval,
+                trace_id=trace_id,
+                authorization_id=authorization_id,
+            )
 
         workflow = (
             self._customer_quotation_workflow

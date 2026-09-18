@@ -40,6 +40,7 @@ from app.application.workbench.exceptions import (
     WorkbenchProjectionPublishError,
 )
 from app.application.workbench.projection import ProjectionPublishResult
+from app.application.workbench.write_authorization import WriteAuthorizationError
 from app.application.workflow import WorkflowType
 
 EXECUTION_PROJECTION_FAILURE_MESSAGE = (
@@ -128,6 +129,7 @@ class WorkbenchVendorBillExecutionWorkflow:
         mode: ExecutionMode = ExecutionMode.DRY_RUN,
         approval: ExecutionApproval | None = None,
         trace_id: str | None = None,
+        authorization_id: str | None = None,
     ) -> WorkbenchVendorBillExecutionResult:
         command = RunAcceptedDecisionExecutionCommand(
             review_id=review_id,
@@ -135,6 +137,8 @@ class WorkbenchVendorBillExecutionWorkflow:
             decision_version=decision_version,
             mode=mode,
             approval=approval,
+            authorization_id=authorization_id,
+            trace_id=trace_id,
         )
         try:
             decision = self._accepted_decision_reader.get_accepted_decision(
@@ -194,7 +198,7 @@ class WorkbenchVendorBillExecutionWorkflow:
 
         try:
             execution = self._execution_use_case.execute(command)
-        except ExecutionModeNotEnabledError as exc:
+        except (ExecutionModeNotEnabledError, WriteAuthorizationError) as exc:
             return _result(
                 command,
                 status=WorkbenchVendorBillExecutionStatus.EXECUTION_DISABLED,

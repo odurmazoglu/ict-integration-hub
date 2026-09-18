@@ -38,6 +38,11 @@ from app.application.workbench.supplier_remediation import (
     ResolveWorkbenchSupplierCommand,
     SupplierRemediationResult,
 )
+from app.application.workbench.write_authorization_use_cases import (
+    CreateWriteAuthorizationUseCase,
+    ListWriteAuthorizationsUseCase,
+    RevokeWriteAuthorizationUseCase,
+)
 from app.composition import (
     build_create_new_product_use_case,
     build_odoo_workbench_decision_ingestion_workflow,
@@ -48,6 +53,11 @@ from app.composition import (
     build_workbench_accepted_decision_execution_dispatcher,
     build_workbench_quotation_scenario_evidence_workflow,
     build_workbench_vendor_bill_execution_workflow,
+)
+from app.composition.write_authorization import (
+    build_create_write_authorization_use_case,
+    build_list_write_authorizations_use_case,
+    build_revoke_write_authorization_use_case,
 )
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
@@ -421,4 +431,31 @@ class _LazyPreviewVendorBillUseCase:
 VendorBillPreviewUseCaseDep = Annotated[
     PreviewVendorBillUseCase,
     Depends(get_vendor_bill_preview_use_case),
+]
+
+
+# Narrow authorization metadata operations use Hub persistence only; no ERP client.
+def get_create_write_authorization_use_case(session: DbSessionDep) -> CreateWriteAuthorizationUseCase:
+    return build_create_write_authorization_use_case(session=session)
+
+
+def get_list_write_authorizations_use_case(session: DbSessionDep) -> ListWriteAuthorizationsUseCase:
+    return build_list_write_authorizations_use_case(session=session)
+
+
+def get_revoke_write_authorization_use_case(session: DbSessionDep) -> RevokeWriteAuthorizationUseCase:
+    return build_revoke_write_authorization_use_case(session=session)
+
+
+CreateWriteAuthorizationUseCaseDep = Annotated[
+    CreateWriteAuthorizationUseCase,
+    Depends(get_create_write_authorization_use_case),
+]
+ListWriteAuthorizationsUseCaseDep = Annotated[
+    ListWriteAuthorizationsUseCase,
+    Depends(get_list_write_authorizations_use_case),
+]
+RevokeWriteAuthorizationUseCaseDep = Annotated[
+    RevokeWriteAuthorizationUseCase,
+    Depends(get_revoke_write_authorization_use_case),
 ]

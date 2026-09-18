@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,7 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api import dependencies
+from app.api.error_handling import install_api_exception_handlers
 from app.api.routers.workbench import router
 from app.api.security import AuthenticationMethod, Permission, RequestContext
 from app.application.execution import (
@@ -24,11 +25,13 @@ from app.application.execution import (
     ExecutionMode,
     ExecutionModeNotEnabledError,
     ExecutionPersistenceError,
+    ExecutionRuntimeService,
     ExecutionRuntimeStepState,
     ExecutionSourceInvoice,
     ExecutionState,
     ExecutionUnsupportedStepError,
     RunAcceptedDecisionExecutionCommand,
+    accepted_decision_execution_id,
 )
 from app.application.workbench import (
     AllocationCompleteness,
@@ -40,8 +43,13 @@ from app.application.workbench import (
     ReviewItem,
     ReviewStatus,
 )
+from app.application.workbench.write_authorization import (
+    WriteAuthorizationAlreadyConsumedError,
+    WriteAuthorizationOperationType,
+    WriteAuthorizationStatus,
+)
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
-from app.composition import build_vendor_bill_execution_use_case
+from app.composition import build_vendor_bill_execution_use_case, build_workbench_vendor_bill_execution_workflow
 from app.connectors.exceptions import ConnectorTimeoutError
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
@@ -57,8 +65,13 @@ from app.matching import (
     ProductMatchResult,
     ProductMatchStatus,
 )
+from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
+from app.models.workbench_review_decision import WorkbenchReviewDecision
+from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_write_authorization import WorkbenchReviewWriteAuthorization
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 from app.persistence import SqlAlchemyExecutionRuntimeRepository, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
+from app.persistence.write_authorization_repository import SqlAlchemyWriteAuthorizationRepository
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
 
@@ -618,6 +631,7 @@ def _normal_execution_api(monkeypatch, engine: Engine, client, *, settings=None)
     monkeypatch.setattr(dependencies, "SessionLocal", sessionmaker(bind=engine))
     monkeypatch.setattr(OdooJson2Client, "from_settings", classmethod(lambda cls, settings: client))
     app = FastAPI()
+    install_api_exception_handlers(app)
     app.include_router(router)
     app.dependency_overrides[dependencies.get_settings] = lambda: settings or _execute_settings()
     app.dependency_overrides[dependencies.get_request_context] = lambda: RequestContext(
@@ -786,3 +800,430 @@ def test_runtime_is_committed_before_retirement_and_projection(
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "executed"
     assert observed == ["retirement", "projection"]
+
+
+# P0-PROD-09D1: use the normal request/application transaction and writer identity.
+def _authorization_api(monkeypatch, engine, odoo, *, updates=None, company_id=7, permissions=None):
+    settings = _execute_settings().model_copy(update={"execution_execute_enabled": False, **(updates or {})})
+    api = _normal_execution_api(monkeypatch, engine, odoo, settings=settings)
+    api.app.dependency_overrides[dependencies.get_request_context] = lambda: RequestContext(
+        user_id="finance",
+        user_name="Finance",
+        company_id=company_id,
+        permissions=permissions
+        if permissions is not None
+        else (Permission.WORKBENCH_EXECUTE, Permission.WORKBENCH_REVIEW_READ),
+        trace_id="authorization-test",
+        authentication_method=AuthenticationMethod.JWT,
+    )
+    return api
+
+
+def _issue_authorization(api):
+    response = api.post("/api/workbench/reviews/review-1/write-authorizations", json={"decision_version": 2})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["authorized_by"] == "finance"
+    assert data["operation_type"] == "EXECUTE_VENDOR_BILL"
+    assert data["target_version"] == 2 and data["status"] == "pending"
+    assert len(data["authorization_id"]) == 36
+    return data["authorization_id"]
+
+
+def _execute_authorized(api, authorization_id):
+    return api.post(
+        "/api/workbench/reviews/review-1/execute",
+        json={
+            "decision_version": 2,
+            "mode": "execute",
+            "approval": {"approved_by": "controller"},
+            "authorization_id": authorization_id,
+        },
+    )
+
+
+def _get_authorization(engine, authorization_id):
+    with Session(engine) as session:
+        return SqlAlchemyWriteAuthorizationRepository(session).get_by_id(
+            authorization_id=authorization_id, company_id=7
+        )
+
+
+def test_vendor_bill_authorization_uses_existing_runtime_and_completed_replay(transaction_engine, monkeypatch):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        disabled = _api_execute(api)
+        assert disabled.json()["data"]["status"] == "execution_disabled"
+        authorization_id = _issue_authorization(api)
+        response = _execute_authorized(api, authorization_id)
+        data = response.json()["data"]
+        assert data["status"] == "executed"
+        record = _get_authorization(transaction_engine, authorization_id)
+        assert record.status is WriteAuthorizationStatus.CONSUMED
+        assert record.consumed_by_execution_id == data["execution_id"]
+        assert record.consumed_by_trace_id == "authorization-test"
+        assert record.use_count == 1
+        assert len(odoo.create_calls) == 1
+        replay = _execute_authorized(api, authorization_id)
+        assert replay.json()["data"]["status"] == "already_executed"
+        assert _get_authorization(transaction_engine, authorization_id).use_count == 1
+        assert len(odoo.create_calls) == 1
+        listed = api.get("/api/workbench/reviews/review-1/write-authorizations")
+        assert listed.status_code == 200 and len(listed.json()["data"]) == 1
+        with Session(transaction_engine) as session:
+            assert session.query(WorkflowExecution).count() == 1
+            assert session.query(ExecutionSourceInvoiceEvidence).count() == 1
+            assert session.query(WorkbenchReviewDecision).count() == 1
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"production_operations_enabled": False},
+        {"production_operations_enabled": False, "execution_execute_enabled": True},
+        {"production_approval_ack": ""},
+    ],
+)
+def test_authorization_cannot_bypass_master_gate_or_approval_ack(transaction_engine, monkeypatch, updates):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo, updates=updates) as api:
+        authorization_id = _issue_authorization(api)
+        response = _execute_authorized(api, authorization_id)
+        assert response.status_code == 403 or response.json()["data"]["status"] == "execution_disabled"
+    assert odoo.search_calls == [] and odoo.create_calls == []
+    assert _get_authorization(transaction_engine, authorization_id).status is WriteAuthorizationStatus.PENDING
+
+
+class AuthorizationProcessCrash(BaseException):
+    """Simulate abrupt termination that bypasses application Exception handling."""
+
+
+@pytest.mark.parametrize("after_remote_write", [False, True])
+def test_authorization_consumed_then_process_crash_recovers_same_execution(
+    transaction_engine,
+    monkeypatch,
+    after_remote_write,
+):
+    class CrashClient(FakeOdooVendorBillClient):
+        async def create_account_move(self, payload):
+            await super().create_account_move(payload)
+            raise AuthorizationProcessCrash()
+
+    odoo = CrashClient() if after_remote_write else FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+    settings = _execute_settings().model_copy(update={"execution_execute_enabled": False})
+    with monkeypatch.context() as crash_patch:
+        if not after_remote_write:
+
+            def crash_before_write(self, **kwargs):
+                raise AuthorizationProcessCrash()
+
+            crash_patch.setattr(ExecutionRuntimeService, "create_or_load", crash_before_write)
+        with Session(transaction_engine) as session:
+            workflow = build_workbench_vendor_bill_execution_workflow(
+                session=session, settings=settings, odoo_client=odoo
+            )
+            with pytest.raises(AuthorizationProcessCrash):
+                workflow.execute(
+                    review_id="review-1",
+                    company_id=7,
+                    decision_version=2,
+                    mode=ExecutionMode.EXECUTE,
+                    approval=ExecutionApproval(approved_by="controller"),
+                    authorization_id=authorization_id,
+                )
+            assert (
+                SqlAlchemyWriteAuthorizationRepository(session)
+                .get_by_id(
+                    authorization_id=authorization_id,
+                    company_id=7,
+                )
+                .status
+                is WriteAuthorizationStatus.CONSUMED
+            )
+        # Closing the dead process' session rolls back consumption AND runtime state.
+    record = _get_authorization(transaction_engine, authorization_id)
+    assert record.status is WriteAuthorizationStatus.PENDING and record.use_count == 0
+    with Session(transaction_engine) as fresh:
+        assert fresh.query(WorkflowExecution).count() == 0
+    if after_remote_write:
+        assert len(odoo.create_calls) == 1
+    else:
+        assert odoo.create_calls == [] and odoo.search_calls == []
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        resumed = _execute_authorized(api, authorization_id)
+        assert resumed.json()["data"]["status"] == "executed"
+        assert resumed.json()["data"]["artifacts"][0]["created"] is (not after_remote_write)
+    assert len(odoo.create_calls) == 1
+    assert _get_authorization(transaction_engine, authorization_id).use_count == 1
+
+
+def test_consumed_authorization_allows_only_same_execution_waiting_retry_recovery(transaction_engine, monkeypatch):
+    odoo = FakeOdooVendorBillClient(timeout_after_create=True)
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+        first = _execute_authorized(api, authorization_id).json()["data"]
+        assert first["runtime_state"] == "waiting_retry"
+        record = _get_authorization(transaction_engine, authorization_id)
+        assert record.status is WriteAuthorizationStatus.CONSUMED and record.use_count == 1
+        second = _execute_authorized(api, authorization_id).json()["data"]
+        assert second["status"] == "executed" and second["execution_id"] == first["execution_id"]
+        assert second["artifacts"][0]["created"] is False
+    assert len(odoo.create_calls) == 1
+    record = _get_authorization(transaction_engine, authorization_id)
+    assert record.use_count == 2 and record.last_used_trace_id == "authorization-test"
+    with Session(transaction_engine) as session:
+        with pytest.raises(WriteAuthorizationAlreadyConsumedError):
+            SqlAlchemyWriteAuthorizationRepository(session).claim_and_consume(
+                company_id=7,
+                review_id="review-1",
+                operation_type=WriteAuthorizationOperationType.EXECUTE_VENDOR_BILL,
+                target_version=2,
+                authorization_id=authorization_id,
+                execution_id="different-execution",
+            )
+
+
+@pytest.mark.parametrize("failure", ["expired", "revoked", "scope", "stale"])
+def test_authorization_fail_closed_before_remote_access(transaction_engine, monkeypatch, failure):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+        if failure == "revoked":
+            revoked = api.post(f"/api/workbench/reviews/review-1/write-authorizations/{authorization_id}/revoke")
+            assert revoked.status_code == 200
+        with Session(transaction_engine) as session:
+            model = session.scalar(select(WorkbenchReviewWriteAuthorization))
+            if failure == "expired":
+                model.created_at = datetime.now(UTC) - timedelta(minutes=20)
+                model.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+            elif failure == "scope":
+                model.target_version = 3
+            elif failure == "stale":
+                session.scalar(select(WorkbenchReviewItem)).version = 3
+            session.commit()
+        response = _execute_authorized(api, authorization_id)
+        assert response.json()["data"]["status"] == "execution_disabled"
+    assert odoo.search_calls == [] and odoo.create_calls == []
+
+
+def test_consumed_authorization_can_be_revoked_to_block_further_recovery(transaction_engine, monkeypatch):
+    odoo = LookupFailureClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+        first = _execute_authorized(api, authorization_id)
+        assert first.json()["data"]["runtime_state"] == "waiting_retry"
+        response = api.post(f"/api/workbench/reviews/review-1/write-authorizations/{authorization_id}/revoke")
+        assert response.json()["data"]["status"] == "revoked"
+        assert response.json()["data"]["use_count"] == 1
+        second = _execute_authorized(api, authorization_id)
+        assert second.json()["data"]["status"] == "execution_disabled"
+    assert len(odoo.search_calls) == 1 and odoo.create_calls == []
+
+
+def test_expired_consumed_authorization_requires_fresh_grant_same_writer_identity(transaction_engine, monkeypatch):
+    odoo = FakeOdooVendorBillClient(timeout_after_create=True)
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        original_id = _issue_authorization(api)
+        first = _execute_authorized(api, original_id).json()["data"]
+        with Session(transaction_engine) as session:
+            model = session.scalar(select(WorkbenchReviewWriteAuthorization))
+            model.created_at = datetime.now(UTC) - timedelta(minutes=20)
+            model.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+            session.commit()
+        assert _execute_authorized(api, original_id).json()["data"]["status"] == "execution_disabled"
+        fresh_id = _issue_authorization(api)
+        assert fresh_id != original_id
+        recovered = _execute_authorized(api, fresh_id).json()["data"]
+        assert recovered["execution_id"] == first["execution_id"]
+        assert recovered["status"] == "executed" and recovered["artifacts"][0]["created"] is False
+    assert len(odoo.create_calls) == 1
+
+
+@pytest.mark.parametrize("permissions", [(), (Permission.WORKBENCH_REVIEW_READ,)])
+def test_authorization_issue_revoke_require_existing_execution_permission(transaction_engine, monkeypatch, permissions):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo, permissions=permissions) as api:
+        assert (
+            api.post("/api/workbench/reviews/review-1/write-authorizations", json={"decision_version": 2}).status_code
+            == 403
+        )
+        assert api.post("/api/workbench/reviews/review-1/write-authorizations/missing/revoke").status_code == 403
+    with Session(transaction_engine) as session:
+        assert session.query(WorkbenchReviewWriteAuthorization).count() == 0
+
+
+def test_authorization_company_review_scope_is_derived_from_authenticated_context(transaction_engine, monkeypatch):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+        assert (
+            api.post(f"/api/workbench/reviews/wrong-review/write-authorizations/{authorization_id}/revoke").status_code
+            == 404
+        )
+        assert (
+            api.post(
+                "/api/workbench/reviews/review-1/write-authorizations", json={"decision_version": 2, "company_id": 999}
+            ).status_code
+            == 400
+        )
+    with _authorization_api(monkeypatch, transaction_engine, odoo, company_id=999) as api:
+        assert api.get("/api/workbench/reviews/review-1/write-authorizations").status_code == 404
+        assert (
+            api.post(f"/api/workbench/reviews/review-1/write-authorizations/{authorization_id}/revoke").status_code
+            == 404
+        )
+        assert _execute_authorized(api, authorization_id).json()["data"]["status"] == "not_found"
+    assert _get_authorization(transaction_engine, authorization_id).status is WriteAuthorizationStatus.PENDING
+    assert odoo.create_calls == [] and odoo.search_calls == []
+
+
+@pytest.mark.parametrize(
+    "operation", ["CREATE_PARTNER", "CREATE_PRODUCT", "EXECUTE_CUSTOMER_INVOICE", "EXECUTE_CUSTOMER_QUOTATION"]
+)
+def test_authorization_api_supports_vendor_bill_operation_only(transaction_engine, monkeypatch, operation):
+    with _authorization_api(monkeypatch, transaction_engine, FakeOdooVendorBillClient()) as api:
+        response = api.post(
+            "/api/workbench/reviews/review-1/write-authorizations",
+            json={"decision_version": 2, "operation_type": operation},
+        )
+        assert response.status_code == 400
+    with Session(transaction_engine) as session:
+        assert session.query(WorkbenchReviewWriteAuthorization).count() == 0
+
+
+def test_authorization_id_is_rejected_in_dry_run(transaction_engine, monkeypatch):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+        response = api.post(
+            "/api/workbench/reviews/review-1/execute",
+            json={"decision_version": 2, "authorization_id": authorization_id},
+        )
+        assert response.status_code == 400
+    assert _get_authorization(transaction_engine, authorization_id).status is WriteAuthorizationStatus.PENDING
+    assert odoo.search_calls == [] and odoo.create_calls == []
+
+
+def test_durably_consumed_authorization_without_runtime_recovers_exact_bound_execution(transaction_engine, monkeypatch):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+    with Session(transaction_engine) as session:
+        decision = SqlAlchemyReviewRepository(session).get_accepted_decision(
+            review_id="review-1",
+            company_id=7,
+            decision_version=2,
+        )
+        execution_id = accepted_decision_execution_id(_command(mode=ExecutionMode.EXECUTE), decision=decision)
+        SqlAlchemyWriteAuthorizationRepository(session).claim_and_consume(
+            company_id=7,
+            review_id="review-1",
+            operation_type=WriteAuthorizationOperationType.EXECUTE_VENDOR_BILL,
+            target_version=2,
+            authorization_id=authorization_id,
+            execution_id=execution_id,
+            trace_id="pre-write-crash",
+        )
+        session.commit()  # Rehearse a durable consumed-before-write legacy checkpoint.
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        response = _execute_authorized(api, authorization_id)
+        assert response.json()["data"]["status"] == "executed"
+        assert response.json()["data"]["execution_id"] == execution_id
+    record = _get_authorization(transaction_engine, authorization_id)
+    assert record.use_count == 2 and record.consumed_by_trace_id == "pre-write-crash"
+    assert len(odoo.create_calls) == 1
+
+
+@pytest.mark.parametrize("failure_point", ["commit", "finalization"])
+def test_authorization_rollback_after_remote_success_recovers_existing_bill(
+    transaction_engine, monkeypatch, failure_point
+):
+    odoo = FakeOdooVendorBillClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        authorization_id = _issue_authorization(api)
+    with monkeypatch.context() as failure_patch:
+        if failure_point == "commit":
+
+            def fail_commit(self):
+                raise RuntimeError("Injected commit failure")
+
+            failure_patch.setattr(SqlAlchemyUnitOfWork, "commit", fail_commit)
+        else:
+            original = SqlAlchemyExecutionRuntimeRepository.persist_transition
+
+            def fail_transition(self, **kwargs):
+                if any(e.event_type is ExecutionEventType.STEP_COMPLETED for e in kwargs["events"]):
+                    raise ExecutionPersistenceError("Injected finalization failure")
+                return original(self, **kwargs)
+
+            failure_patch.setattr(SqlAlchemyExecutionRuntimeRepository, "persist_transition", fail_transition)
+        with _authorization_api(failure_patch, transaction_engine, odoo) as api:
+            failed = _execute_authorized(api, authorization_id)
+            assert (
+                failed.status_code == 500
+                if failure_point == "commit"
+                else failed.json()["data"]["status"] == "execution_failed"
+            )
+    record = _get_authorization(transaction_engine, authorization_id)
+    assert record.status is WriteAuthorizationStatus.PENDING and record.use_count == 0
+    assert len(odoo.create_calls) == 1
+    with Session(transaction_engine) as session:
+        assert session.query(WorkflowExecution).count() == 0
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        resumed = _execute_authorized(api, authorization_id).json()["data"]
+        assert resumed["status"] == "executed" and resumed["artifacts"][0]["created"] is False
+    assert len(odoo.create_calls) == 1
+
+
+@pytest.mark.parametrize("different_authorizations", [False, True])
+def test_postgresql_concurrent_authorized_requests_use_one_execution_and_one_bill(
+    transaction_engine,
+    monkeypatch,
+    different_authorizations,
+):
+    if transaction_engine.dialect.name != "postgresql":
+        pytest.skip("PostgreSQL row-lock/concurrency test requires the isolated transaction test database.")
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    writer_entered = Event()
+    release_writer = Event()
+    second_claim_entered = Event()
+    original_claim = SqlAlchemyWriteAuthorizationRepository.claim_and_consume
+
+    def observe_claim(self, **kwargs):
+        if writer_entered.is_set():
+            second_claim_entered.set()
+        return original_claim(self, **kwargs)
+
+    monkeypatch.setattr(SqlAlchemyWriteAuthorizationRepository, "claim_and_consume", observe_claim)
+
+    class BlockingClient(FakeOdooVendorBillClient):
+        async def create_account_move(self, payload):
+            writer_entered.set()
+            assert release_writer.wait(10), "second request did not reach authorization claim"
+            return await super().create_account_move(payload)
+
+    odoo = BlockingClient()
+    with _authorization_api(monkeypatch, transaction_engine, odoo) as api:
+        first_id = _issue_authorization(api)
+        second_id = _issue_authorization(api) if different_authorizations else first_id
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(_execute_authorized, api, first_id)
+            assert writer_entered.wait(10)
+            second = pool.submit(_execute_authorized, api, second_id)
+            try:
+                assert second_claim_entered.wait(10)
+                assert not first.done() and not second.done()
+                assert odoo.create_calls == []
+            finally:
+                release_writer.set()
+            results = [first.result(timeout=20).json()["data"], second.result(timeout=20).json()["data"]]
+    assert all(r["status"] in {"executed", "already_executed"} for r in results)
+    assert results[0]["execution_id"] == results[1]["execution_id"]
+    assert len(odoo.create_calls) == 1
+    with Session(transaction_engine) as session:
+        assert session.query(WorkflowExecution).count() == 1
+        assert session.query(WorkflowExecutionStep).count() == 1

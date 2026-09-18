@@ -23,6 +23,7 @@ from app.models.workbench_review_reclassification import WorkbenchReviewReclassi
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.models.workbench_review_supplier_remediation_effect import WorkbenchReviewSupplierRemediationEffect
 from app.models.workbench_review_supplier_resolution import WorkbenchReviewSupplierResolution
+from app.models.workbench_review_write_authorization import WorkbenchReviewWriteAuthorization
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 
 __all__ = [
@@ -49,6 +50,7 @@ __all__ = [
     "WorkbenchReviewReclassification",
     "WorkbenchReviewSupplierRemediationEffect",
     "WorkbenchReviewSupplierResolution",
+    "WorkbenchReviewWriteAuthorization",
     "WorkflowExecution",
     "WorkflowExecutionEvent",
     "WorkflowExecutionStep",

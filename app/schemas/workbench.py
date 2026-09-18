@@ -16,6 +16,7 @@ from app.application.workbench.one_off_vendor_retirement import OneOffVendorReti
 from app.application.workbench.product_remediation import ProductRemediationStatus
 from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
+from app.application.workbench.write_authorization import WriteAuthorizationOperationType, WriteAuthorizationStatus
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
 
 
@@ -344,6 +345,7 @@ class WorkbenchVendorBillExecutionRequest(BaseModel):
     decision_version: int
     mode: ExecutionMode = ExecutionMode.DRY_RUN
     approval: ExecutionApprovalRequest | None = None
+    authorization_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class ExecutionArtifactResponse(BaseModel):
@@ -441,3 +443,39 @@ def decimal_to_api(value: Decimal | None) -> str | None:
     if value is None:
         return None
     return format(value, "f")
+
+
+class WriteAuthorizationIssueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision_version: int = Field(gt=0)
+    operation_type: WriteAuthorizationOperationType = WriteAuthorizationOperationType.EXECUTE_VENDOR_BILL
+    justification: str | None = Field(default=None, max_length=2000)
+
+
+class WriteAuthorizationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True)
+
+    authorization_id: str
+    company_id: int
+    review_id: str
+    operation_type: WriteAuthorizationOperationType
+    target_version: int
+    status: WriteAuthorizationStatus
+    authorized_by: str
+    created_at: datetime
+    expires_at: datetime
+    is_expired: bool
+    justification: str | None
+    consumed_at: datetime | None
+    consumed_by_trace_id: str | None
+    consumed_by_execution_id: str | None
+    revoked_at: datetime | None
+    revoked_by: str | None
+    use_count: int
+    last_used_at: datetime | None
+    last_used_trace_id: str | None
+
+
+WriteAuthorizationEnvelope = ApiEnvelope[WriteAuthorizationResponse]
+WriteAuthorizationsEnvelope = ApiEnvelope[list[WriteAuthorizationResponse]]
