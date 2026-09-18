@@ -56,6 +56,7 @@ from app.matching import (
 )
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 from app.persistence import SqlAlchemyExecutionRuntimeRepository
+from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
 
@@ -339,6 +340,7 @@ def _use_case(
 ) -> RunAcceptedDecisionExecutionUseCase:
     repository = SqlAlchemyExecutionRuntimeRepository(session)
     return RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=StaticAcceptedDecisionReader(decision),
         execution_planner=execution_exports.ExecutionPlanner(),
         runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),

@@ -36,6 +36,7 @@ from app.application.quotation.exceptions import QuotationEvidenceNotFoundError
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workflow import WorkflowType
 from app.erp.write.exceptions import CustomerQuotationWriteConfigurationError, CustomerQuotationWritePricelistError
+from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 COMPANY_ID = 7
 REVIEW_ID = "review-1"
@@ -579,6 +580,7 @@ def test_end_to_end_runtime_executes_one_step_per_scenario_independently() -> No
     writer = FakeQuotationWriter()
     repository = SqlAlchemyExecutionRuntimeRepository(session)
     use_case = RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=FakeAcceptedDecisionReader(_decision(scenario_ids=("scn-a", "scn-b"))),
         execution_planner=ExecutionPlanner(),
         runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),

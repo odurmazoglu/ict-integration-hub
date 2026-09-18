@@ -57,6 +57,7 @@ from app.matching import (
 )
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRuntimeRepository
+from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
 
@@ -428,6 +429,7 @@ def test_dry_run_heterogeneous_plan_still_uses_no_write_foundation(session: Sess
 
     repository = SqlAlchemyExecutionRuntimeRepository(session)
     result = RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=StaticAcceptedDecisionReader(
             _accepted_decision_for_steps((ExecutionStepType.VENDOR_BILL, ExecutionStepType.CUSTOMER_RECHARGE))
         ),
@@ -467,6 +469,7 @@ def test_one_off_vendor_retirement_trigger_invoked_after_successful_execute(sess
     )
     trigger = _SpyOneOffVendorRetirementTrigger()
     result = RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=StaticAcceptedDecisionReader(_accepted_decision()),
         execution_planner=execution_exports.ExecutionPlanner(),
         runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),
@@ -494,6 +497,7 @@ def test_one_off_vendor_retirement_trigger_never_invoked_for_dry_run(session: Se
     repository = SqlAlchemyExecutionRuntimeRepository(session)
     trigger = _SpyOneOffVendorRetirementTrigger()
     result = RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=StaticAcceptedDecisionReader(
             _accepted_decision_for_steps((ExecutionStepType.VENDOR_BILL, ExecutionStepType.CUSTOMER_RECHARGE))
         ),
@@ -878,6 +882,7 @@ def _use_case(
 ) -> RunAcceptedDecisionExecutionUseCase:
     repository = runtime_repository or SqlAlchemyExecutionRuntimeRepository(session)
     return RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=accepted_decision_reader,
         execution_planner=execution_exports.ExecutionPlanner(),
         runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),

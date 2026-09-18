@@ -129,13 +129,13 @@ Durable tables:
 
 The event stream records immutable evidence such as `ExecutionCreated`, `PlanningCompleted`, `ExecutionStarted`, `StepStarted`, `StepCompleted`, `StepFailed`, `RetryScheduled`, `ExecutionCompleted`, `ExecutionFailed`, and `ExecutionCancelled`. Transition events are created only inside atomic execution creation or `persist_transition`. Repository APIs expose event history reads only; independent append, event update, and event delete operations are intentionally absent.
 
-One logical runtime transition is persisted atomically by the repository adapter. The application layer prepares a new immutable `ExecutionSnapshot` and one or more `ExecutionEventDraft` values; it does not manage SQLAlchemy sessions, transactions, or event sequence numbers.
+One logical runtime transition is flushed atomically by the repository adapter using a savepoint inside the caller transaction. The application layer prepares a new immutable `ExecutionSnapshot` and one or more `ExecutionEventDraft` values. The repository owns SQLAlchemy row updates and event sequence allocation; the application use case owns the outer transaction through `UnitOfWork`. A successful flush or savepoint release is not a durable commit.
 
 The application layer has no independent snapshot, checkpoint, or event mutation API. Runtime mutations are only legal through atomic execution creation or `persist_transition`.
 
 `ExecutionArtifact` is the canonical runtime representation of ERP objects produced by execution. It is immutable, deterministic, and contains only safe artifact identity: artifact type, artifact id, external identity, and whether the current execution created the artifact. It must not contain raw provider payloads, URLs, authentication data, or secrets. Future strategies such as RFQ, Purchase Order, Expense, Fixed Asset, Subscription, and Customer Invoice execution should reuse this same artifact model instead of adding step-specific reference fields.
 
-For each transition, the SQLAlchemy repository persists in one database transaction:
+For each transition, the SQLAlchemy repository flushes together inside the outer Hub transaction:
 
 - execution snapshot state
 - affected step state and safe result summary
@@ -274,3 +274,38 @@ This foundation does not:
 - call live Odoo or Uyumsoft providers
 - use AI or fuzzy matching
 - run a scheduler or background worker
+
+
+## Workbench execution transaction ownership
+
+`POST /api/workbench/reviews/{review_id}/execute` uses the request-scoped session,
+shared by accepted-decision readers and runtime repositories. `get_db_session`
+creates/closes the session; it does not commit on request teardown. The composed
+`RunAcceptedDecisionExecutionUseCase` is the transaction owner, with a required
+`SqlAlchemyUnitOfWork` bound to that same session for Vendor Bill and customer
+quotation execution. Callers must start from committed accepted decisions/evidence
+and must not include unrelated pending writes in that session.
+
+After the runtime coordinator returns, the application commits the entire Hub
+outcome before returning or attempting retirement/projection. This includes the
+execution snapshot, steps, retry counters, checkpoint, ordered events, and artifact
+references embedded in step results. A returned `FAILED`/`waiting_retry` result is
+a normal persisted outcome: its safe error code/message and retry state are
+committed together, just like a successful `COMPLETED` outcome. Dry-run runtime
+outcomes are also committed, without ERP writes. Repository `flush()` establishes
+constraints and visibility within the transaction; only application `commit()`
+makes the outcome durable across sessions and request closure.
+
+Unexpected exceptions or commit failures trigger application rollback and propagate;
+no pending partial Hub outcome may be reported as durably completed. Eligibility
+and preflight rejections create no runtime state. Completed replay reads existing
+committed artifacts and never executes the writer again. Optional ONE_OFF_VENDOR
+retirement has its own existing transaction sequence **after** execution commit;
+Workbench projection is also post-commit. Neither is part of the atomic execution
+outcome, and expected projection failures preserve the committed successful result.
+
+This is Hub atomicity only. Odoo draft creation and Hub commit cannot be one atomic
+transaction. If remote creation succeeds and Hub finalization/commit fails, stop
+and reconcile by the deterministic writer idempotency identity before any explicitly
+authorized replay. The change adds no retry loop, scheduler, gate opening, posting,
+or production execution.
