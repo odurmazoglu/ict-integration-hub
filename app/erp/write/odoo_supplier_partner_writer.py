@@ -19,6 +19,7 @@ from app.application.exceptions.supplier_partner import (
     SupplierPartnerWriteValidationError,
 )
 from app.application.ports.supplier_partner_writer import SupplierPartnerWriter
+from app.application.workbench.write_authorization import WriteAuthorizationRecord
 from app.connectors.exceptions import (
     ConnectorAuthenticationError,
     ConnectorAuthorizationError,
@@ -102,7 +103,22 @@ class OdooSupplierPartnerWritePolicy:
             and self.odoo_host in self.approved_staging_hosts
         )
 
-    def ensure_real_write_allowed(self, *, approved_by: str | None) -> None:
+    def ensure_real_write_allowed(
+        self, *, approved_by: str | None, write_authorization: WriteAuthorizationRecord | None = None
+    ) -> None:
+        if write_authorization is not None:
+            # P0-PROD-09F: a valid, already-consumed narrow authorization replaces
+            # ONLY supplier_remediation_write_enabled -- exactly mirroring
+            # ExecutionPreflightPolicy.ensure_execute_allowed's own bypass shape for
+            # Vendor Bill execution. The master kill switch, production approval
+            # acknowledgement, and named-approver check are never bypassed by any
+            # authorization -- they are absolute regardless of how this is reached.
+            if not self.production_operations_enabled:
+                raise SupplierPartnerWriteSafetyGateError("Production operations must be explicitly enabled.")
+            if self.production_approval_ack != self.required_approval_ack:
+                raise SupplierPartnerWriteSafetyGateError("Production approval acknowledgement is required.")
+            _ensure_named_approver(approved_by)
+            return
         if not self.supplier_remediation_write_enabled:
             raise SupplierPartnerWriteSafetyGateError(
                 "Supplier remediation master-data write must be explicitly enabled."
@@ -195,7 +211,9 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
         supplier_name = command.supplier_name.strip()
 
         # Dedicated master-data write gate. With default settings this raises before any Odoo call.
-        self._policy.ensure_real_write_allowed(approved_by=command.approved_by)
+        self._policy.ensure_real_write_allowed(
+            approved_by=command.approved_by, write_authorization=command.authorization
+        )
 
         # Read before write, always.
         existing = await self._repository.find_by_exact_vat(

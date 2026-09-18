@@ -73,6 +73,11 @@ from app.application.workbench.supplier_resolution import (
     normalize_supplier_vat,
 )
 from app.application.workbench.supplier_resolution_use_cases import ValidateSupplierResolutionUseCase
+from app.application.workbench.write_authorization import (
+    WriteAuthorizationOperationType,
+    WriteAuthorizationRepository,
+    supplier_resolution_authorization_consumer_id,
+)
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
 
 SAFE_SUPPLIER_REMEDIATION_ERROR = "Supplier remediation failed."
@@ -138,6 +143,7 @@ class ResolveWorkbenchSupplierUseCase:
         unit_of_work: UnitOfWork,
         workbench_republisher: WorkbenchReviewRepublisher | None = None,
         retirement_writer: OneOffVendorRetirementWriter | None = None,
+        write_authorization_repository: WriteAuthorizationRepository | None = None,
         _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
@@ -154,6 +160,11 @@ class ResolveWorkbenchSupplierUseCase:
         # Optional: required only for ONE_OFF_VENDOR (P0-PROD-08H); every other mode
         # never touches it. None -> ONE_OFF_VENDOR fails closed with a clear error.
         self._retirement_writer = retirement_writer
+        # Optional (P0-PROD-09F): required only when command.authorization_id is
+        # supplied for CREATE_PERMANENT_SUPPLIER/ONE_OFF_VENDOR. None -> an
+        # authorization_id on the command fails closed with a clear error, exactly
+        # mirroring the Vendor Bill execution runtime's own optionality for this.
+        self._write_authorization_repository = write_authorization_repository
         # Test-only seam: invoked on the fresh path just before the reservation INSERT,
         # so a test can commit a competing reservation in another transaction in between.
         self._after_precheck_hook = _after_precheck_hook
@@ -365,6 +376,9 @@ class ResolveWorkbenchSupplierUseCase:
         command: ResolveWorkbenchSupplierCommand,
         source,
     ):
+        authorization = self._claim_supplier_write_authorization(
+            command, operation_type=WriteAuthorizationOperationType.CREATE_PERMANENT_SUPPLIER
+        )
         # Legal identity is derived ONLY from immutable source evidence, never from the request body.
         return await self._supplier_partner_writer.create_supplier(
             CreateSupplierPartnerCommand(
@@ -376,7 +390,43 @@ class ResolveWorkbenchSupplierUseCase:
                     f"supplier-remediation:{command.company_id}:{source.source_invoice_id}:{command.expected_version}"
                 ),
                 approved_by=command.approved_by,
+                authorization=authorization,
             )
+        )
+
+    def _claim_supplier_write_authorization(
+        self,
+        command: ResolveWorkbenchSupplierCommand,
+        *,
+        operation_type: WriteAuthorizationOperationType,
+    ):
+        """P0-PROD-09F: claim (and durably consume) the narrow write authorization for
+        this exact supplier-resolution write attempt, if one was supplied. Consumption
+        is flushed here and becomes durable with whatever commit follows in
+        ``_complete`` -- exactly the same "commit consumption together with the
+        write's own outcome" discipline the Vendor Bill execution runtime already uses
+        for EXECUTE_VENDOR_BILL. The consumer id is deterministic from the command's
+        own identity, so a legitimate crash-then-retry of the same resolution request
+        resumes against its own already-consumed authorization rather than being
+        rejected as a different attempt.
+        """
+
+        if command.authorization_id is None:
+            return None
+        if self._write_authorization_repository is None:
+            raise SupplierResolutionContractError("Runtime authorization is not supported by this workflow.")
+        return self._write_authorization_repository.claim_and_consume(
+            company_id=command.company_id,
+            review_id=command.review_id,
+            operation_type=operation_type,
+            target_version=command.expected_version,
+            authorization_id=command.authorization_id,
+            execution_id=supplier_resolution_authorization_consumer_id(
+                company_id=command.company_id,
+                review_id=command.review_id,
+                expected_version=command.expected_version,
+                mode=command.mode.value,
+            ),
         )
 
     async def _create_or_reuse_one_off_vendor_partner(
@@ -414,6 +464,9 @@ class ResolveWorkbenchSupplierUseCase:
                 is not None
             )
 
+        authorization = self._claim_supplier_write_authorization(
+            command, operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_SUPPLIER
+        )
         # Legal identity is derived ONLY from immutable source evidence, never from the request body.
         write_result = await self._supplier_partner_writer.create_supplier(
             CreateSupplierPartnerCommand(
@@ -426,6 +479,7 @@ class ResolveWorkbenchSupplierUseCase:
                 ),
                 approved_by=command.approved_by,
                 authorize_inactive_reuse=_authorize_inactive_reuse,
+                authorization=authorization,
             )
         )
         if write_result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS:

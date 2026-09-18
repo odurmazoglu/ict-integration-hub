@@ -12,7 +12,12 @@ WRITE_AUTHORIZATION_STATUSES = (
     "revoked",
 )
 
-WRITE_AUTHORIZATION_OPERATION_TYPES = ("EXECUTE_VENDOR_BILL",)
+WRITE_AUTHORIZATION_OPERATION_TYPES = (
+    "EXECUTE_VENDOR_BILL",
+    "CREATE_PERMANENT_SUPPLIER",
+    "ONE_OFF_VENDOR_SUPPLIER",
+    "ONE_OFF_VENDOR_ARCHIVE",
+)
 
 
 class WorkbenchReviewWriteAuthorization(Base):
@@ -39,7 +44,8 @@ class WorkbenchReviewWriteAuthorization(Base):
         CheckConstraint("company_id > 0", name="ck_wr_write_auth_company_pos"),
         CheckConstraint("target_version > 0", name="ck_wr_write_auth_version_pos"),
         CheckConstraint(
-            "operation_type IN ('EXECUTE_VENDOR_BILL')",
+            "operation_type IN ('EXECUTE_VENDOR_BILL', 'CREATE_PERMANENT_SUPPLIER', "
+            "'ONE_OFF_VENDOR_SUPPLIER', 'ONE_OFF_VENDOR_ARCHIVE')",
             name="ck_wr_write_auth_op_type",
         ),
         CheckConstraint("use_count >= 0", name="ck_wr_write_auth_use_count"),
