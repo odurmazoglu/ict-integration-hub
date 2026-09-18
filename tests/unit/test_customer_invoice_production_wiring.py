@@ -63,6 +63,7 @@ from app.persistence import (
     SqlAlchemyReviewRepository,
 )
 from app.persistence.review_billing_evidence_reader import serialize_billing_instruction_payload
+from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.unit.test_workbench_review_execution_evidence import _evidence as _source_evidence
 
 
@@ -358,8 +359,9 @@ def test_full_plan_preflight_blocks_before_any_runtime_or_writer_when_one_billin
         )
 
 
-def test_accepted_execution_preflight_blocks_missing_billing_before_runtime() -> None:
+def test_accepted_execution_preflight_blocks_missing_billing_before_runtime(session: Session) -> None:
     use_case = RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=_AcceptedDecisionReader(
             AcceptedReviewDecision(
                 review_id="review-1",

@@ -25,6 +25,7 @@ from app.application.execution.ports import (
 from app.application.execution.preflight import ExecutionPreflightPolicy
 from app.application.execution.runtime import ExecutionState
 from app.application.execution.runtime_service import ExecutionRuntimeCoordinator, ExecutionRuntimeService
+from app.application.services.unit_of_work import UnitOfWork
 from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workbench.exceptions import ReviewNotFoundError
@@ -87,6 +88,7 @@ class RunAcceptedDecisionExecutionUseCase:
     def __init__(
         self,
         *,
+        unit_of_work: UnitOfWork,
         accepted_decision_reader: AcceptedReviewDecisionReader,
         execution_planner: ExecutionPlanner,
         runtime_service: ExecutionRuntimeService,
@@ -97,6 +99,7 @@ class RunAcceptedDecisionExecutionUseCase:
         accepted_billing_evidence_reader: AcceptedBillingEvidenceReader | None = None,
         one_off_vendor_retirement_trigger: OneOffVendorRetirementTrigger | None = None,
     ) -> None:
+        self._unit_of_work = unit_of_work
         self._accepted_decision_reader = accepted_decision_reader
         self._execution_planner = execution_planner
         self._runtime_service = runtime_service
@@ -110,6 +113,34 @@ class RunAcceptedDecisionExecutionUseCase:
         self._one_off_vendor_retirement_trigger = one_off_vendor_retirement_trigger
 
     def execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
+        """Own the Hub transaction; returned runtime failures are persisted outcomes.
+
+        Repositories flush only. Commit state, steps, events and artifacts together
+        before retirement/projection. Pre-commit exceptions (including commit errors)
+        roll back pending Hub changes; remote ERP writes cannot be rolled back here.
+        """
+        try:
+            execution_result = self._execute(command)
+        except Exception:
+            self._unit_of_work.rollback()
+            raise
+        # P0-PROD-08I: the execution outcome is now committed, including any Vendor Bill
+        # artifact -- only now is it safe to attempt
+        # retirement. Never for DRY_RUN (no real Vendor Bill exists to retire against).
+        # Best-effort and entirely optional: see OneOffVendorRetirementTrigger for why a
+        # failure here can never turn this successful result into a failure.
+        if (
+            command.mode is ExecutionMode.EXECUTE
+            and execution_result.status is AcceptedDecisionExecutionStatus.EXECUTED
+            and self._one_off_vendor_retirement_trigger is not None
+        ):
+            self._one_off_vendor_retirement_trigger.try_retire_after_execution(
+                review_id=command.review_id,
+                company_id=command.company_id,
+            )
+        return execution_result
+
+    def _execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         if not isinstance(command, RunAcceptedDecisionExecutionCommand):
             raise ExecutionPlanningError("RunAcceptedDecisionExecutionCommand is required.")
 
@@ -170,20 +201,9 @@ class RunAcceptedDecisionExecutionUseCase:
             execution_id=result.execution_id,
             runtime_state=snapshot.state if snapshot is not None else None,
         )
-        # P0-PROD-08I: by the time the runtime coordinator has returned, any Vendor Bill
-        # step it just ran is already durably persisted -- only now is it safe to attempt
-        # retirement. Never for DRY_RUN (no real Vendor Bill exists to retire against).
-        # Best-effort and entirely optional: see OneOffVendorRetirementTrigger for why a
-        # failure here can never turn this successful result into a failure.
-        if (
-            command.mode is ExecutionMode.EXECUTE
-            and execution_result.status is AcceptedDecisionExecutionStatus.EXECUTED
-            and self._one_off_vendor_retirement_trigger is not None
-        ):
-            self._one_off_vendor_retirement_trigger.try_retire_after_execution(
-                review_id=command.review_id,
-                company_id=command.company_id,
-            )
+        # Both success and a returned FAILED/waiting_retry outcome are durable.
+        # This must precede every best-effort remote post-execution action.
+        self._unit_of_work.commit()
         return execution_result
 
 

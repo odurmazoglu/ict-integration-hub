@@ -67,6 +67,7 @@ from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 from app.persistence import SqlAlchemyReviewRepository
 from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRuntimeRepository
+from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxMappingResult
 
 
@@ -378,6 +379,7 @@ def _use_case(
 ) -> RunAcceptedDecisionExecutionUseCase:
     repository = runtime_repository or SqlAlchemyExecutionRuntimeRepository(session)
     return RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=SqlAlchemyReviewRepository(session),
         execution_planner=ExecutionPlanner(),
         runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),

@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import os
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api import dependencies
+from app.api.routers.workbench import router
+from app.api.security import AuthenticationMethod, Permission, RequestContext
 from app.application.execution import (
     AcceptedDecisionExecutionStatus,
     ExecutionApproval,
@@ -36,6 +43,7 @@ from app.application.workbench import (
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.composition import build_vendor_bill_execution_use_case
 from app.connectors.exceptions import ConnectorTimeoutError
+from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.core.runtime_checks import PRODUCTION_APPROVAL_ACK
 from app.db.base import Base
@@ -49,7 +57,8 @@ from app.matching import (
     ProductMatchResult,
     ProductMatchStatus,
 )
-from app.persistence import SqlAlchemyExecutionRuntimeRepository, SqlAlchemyReviewRepository
+from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
+from app.persistence import SqlAlchemyExecutionRuntimeRepository, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
 
@@ -558,3 +567,222 @@ def _domain_value(domain: list[Any], field: str) -> Any:
         if isinstance(item, list) and len(item) >= 3 and item[0] == field:
             return item[2]
     return None
+
+
+@pytest.fixture()
+def transaction_engine(tmp_path: Path):
+    database_url = os.environ.get("TEST_EXECUTION_TRANSACTION_DATABASE_URL")
+    if database_url:
+        url = make_url(database_url)
+        if url.database != "ict_execution_transaction_test" or url.host not in {"localhost", "127.0.0.1", "db"}:
+            raise ValueError("Transaction tests require the isolated local test database.")
+        # Match the existing Alembic PostgreSQL identifier-length configuration.
+        engine = create_engine(url, max_identifier_length=128)
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+        with Session(engine) as session:
+            _submit_vendor_bill_decision(session)
+            session.commit()
+        yield engine
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+        return
+    engine = create_engine(f"sqlite:///{tmp_path / 'execution.db'}", connect_args={"check_same_thread": False})
+
+    # SQLite's legacy transaction mode otherwise lets a first SAVEPOINT commit
+    # independently. Explicit BEGIN makes rollback tests exercise the real boundary.
+    @event.listens_for(engine, "connect")
+    def disable_legacy_transactions(connection, _record):
+        connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def begin_transaction(connection):
+        connection.exec_driver_sql("BEGIN")
+
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        _submit_vendor_bill_decision(session)
+        session.commit()
+    yield engine
+    engine.dispose()
+
+
+class LookupFailureClient(FakeOdooVendorBillClient):
+    async def search_read(self, **kwargs):
+        self.search_calls.append(kwargs["domain"])
+        raise ConnectorTimeoutError("Odoo request timed out.")
+
+
+def _normal_execution_api(monkeypatch, engine: Engine, client, *, settings=None):
+    # Preserve the actual get_db_session, lazy dispatcher and composition path.
+    monkeypatch.setattr(dependencies, "SessionLocal", sessionmaker(bind=engine))
+    monkeypatch.setattr(OdooJson2Client, "from_settings", classmethod(lambda cls, settings: client))
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[dependencies.get_settings] = lambda: settings or _execute_settings()
+    app.dependency_overrides[dependencies.get_request_context] = lambda: RequestContext(
+        user_id="finance",
+        user_name="Finance",
+        company_id=7,
+        permissions=(Permission.WORKBENCH_EXECUTE,),
+        trace_id="transaction-test",
+        authentication_method=AuthenticationMethod.JWT,
+    )
+    return TestClient(app)
+
+
+def _api_execute(client):
+    return client.post(
+        "/api/workbench/reviews/review-1/execute",
+        json={"decision_version": 2, "mode": "execute", "approval": {"approved_by": "controller"}},
+    )
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_normal_api_commits_success_artifact_or_waiting_retry_diagnostics(
+    transaction_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    failed: bool,
+) -> None:
+    odoo = LookupFailureClient() if failed else FakeOdooVendorBillClient()
+    with _normal_execution_api(monkeypatch, transaction_engine, odoo) as api:
+        response = _api_execute(api)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == ("execution_failed" if failed else "executed")
+    with Session(transaction_engine) as fresh:
+        repository = SqlAlchemyExecutionRuntimeRepository(fresh)
+        snapshot = repository.get_snapshot(execution_id=data["execution_id"])
+        assert snapshot is not None
+        assert snapshot.state is (ExecutionState.WAITING_RETRY if failed else ExecutionState.COMPLETED)
+        step = snapshot.steps[0]
+        assert step.last_result is not None
+        history = repository.history(execution_id=snapshot.execution_id)
+        assert history.events
+        if failed:
+            assert step.retry_count == 1
+            assert step.last_result.message == "Odoo request timed out."
+            assert step.last_result.error_code
+            assert step.last_result.produced_artifacts == ()
+            assert data["artifacts"] == []
+            assert odoo.create_calls == []
+        else:
+            assert step.last_result.produced_artifacts[0].artifact_id == "9001"
+            assert data["artifacts"][0]["artifact_id"] == "9001"
+            assert len(odoo.create_calls) == 1
+    if not failed:
+        with _normal_execution_api(monkeypatch, transaction_engine, odoo) as api:
+            replay = _api_execute(api)
+        assert replay.json()["data"]["status"] == "already_executed"
+        assert len(odoo.create_calls) == 1
+        assert len(odoo.search_calls) == 1
+
+
+@pytest.mark.parametrize("failure_point", ["commit", "finalization"])
+def test_normal_api_rolls_back_entire_hub_outcome_on_unexpected_failure(
+    transaction_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    odoo = FakeOdooVendorBillClient()
+    rollbacks = []
+    original_rollback = SqlAlchemyUnitOfWork.rollback
+
+    def record_rollback(self):
+        rollbacks.append(True)
+        original_rollback(self)
+
+    monkeypatch.setattr(SqlAlchemyUnitOfWork, "rollback", record_rollback)
+    if failure_point == "commit":
+
+        def fail_commit(self):
+            raise RuntimeError("Injected commit failure")
+
+        monkeypatch.setattr(SqlAlchemyUnitOfWork, "commit", fail_commit)
+    else:
+        original_transition = SqlAlchemyExecutionRuntimeRepository.persist_transition
+
+        def fail_finalization(self, **kwargs):
+            if any(e.event_type is ExecutionEventType.STEP_COMPLETED for e in kwargs["events"]):
+                raise ExecutionPersistenceError("Injected finalization failure")
+            return original_transition(self, **kwargs)
+
+        monkeypatch.setattr(SqlAlchemyExecutionRuntimeRepository, "persist_transition", fail_finalization)
+    with _normal_execution_api(monkeypatch, transaction_engine, odoo) as api:
+        response = _api_execute(api)
+    assert rollbacks == [True]
+    if failure_point == "commit":
+        assert response.status_code == 500
+    else:
+        assert response.status_code == 200
+        assert response.json()["data"]["status"] == "execution_failed"
+        assert response.json()["data"]["artifacts"] == []
+    assert len(odoo.create_calls) == 1  # remote success cannot be undone by Hub rollback
+    with Session(transaction_engine) as fresh:
+        for model in (WorkflowExecution, WorkflowExecutionStep, WorkflowExecutionEvent):
+            assert fresh.scalars(select(model)).all() == []
+        assert (
+            SqlAlchemyReviewRepository(fresh)
+            .get_accepted_decision(
+                review_id="review-1",
+                company_id=7,
+                decision_version=2,
+            )
+            .decision_version
+            == 2
+        )
+
+
+def test_runtime_is_committed_before_retirement_and_projection(
+    transaction_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.application.workbench.exceptions import WorkbenchProjectionPublishError
+    from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
+    from app.erp.odoo.workbench_projection_publisher import (
+        OdooWorkbenchProjectionFieldMapping,
+        OdooWorkbenchProjectionPublisher,
+    )
+
+    mapping = OdooWorkbenchProjectionFieldMapping(
+        model="x_test",
+        name="name",
+        review_id="x_review",
+        company_id="x_company",
+        invoice_number="x_invoice",
+        supplier="x_supplier",
+        supplier_tax_number="x_vat",
+        invoice_date="x_date",
+        currency="x_currency",
+        invoice_total="x_total",
+        review_status="x_status",
+        workflow="x_workflow",
+        review_version="x_version",
+        last_sync_at="x_sync",
+    )
+    monkeypatch.setattr(OdooWorkbenchProjectionFieldMapping, "from_environment", classmethod(lambda cls: mapping))
+    observed = []
+
+    def assert_durable(label):
+        with Session(transaction_engine) as independent:
+            record = independent.scalars(select(WorkflowExecution)).one()
+            snapshot = SqlAlchemyExecutionRuntimeRepository(independent).get_snapshot(execution_id=record.execution_id)
+            assert snapshot is not None and snapshot.state is ExecutionState.COMPLETED
+            assert snapshot.steps[0].last_result.produced_artifacts[0].artifact_id == "9001"
+        observed.append(label)
+
+    def retirement(self, **kwargs):
+        assert_durable("retirement")
+
+    def projection(self, result, **kwargs):
+        assert_durable("projection")
+        raise WorkbenchProjectionPublishError("Injected projection failure")
+
+    monkeypatch.setattr(OneOffVendorRetirementTrigger, "try_retire_after_execution", retirement)
+    monkeypatch.setattr(OdooWorkbenchProjectionPublisher, "project_vendor_bill_execution_result", projection)
+    settings = _execute_settings().model_copy(update={"odoo_workbench_projection_publish_enabled": True})
+    with _normal_execution_api(monkeypatch, transaction_engine, FakeOdooVendorBillClient(), settings=settings) as api:
+        response = _api_execute(api)
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "executed"
+    assert observed == ["retirement", "projection"]

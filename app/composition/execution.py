@@ -52,6 +52,7 @@ from app.persistence import (
     SqlAlchemyQuotationScenarioEvidenceRepository,
     SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
+    SqlAlchemyUnitOfWork,
 )
 
 
@@ -114,6 +115,7 @@ def build_vendor_bill_execution_use_case(
         ),
     )
     return RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=review_repository,
         execution_planner=ExecutionPlanner(),
         runtime_service=ExecutionRuntimeService(
@@ -207,6 +209,7 @@ def build_customer_quotation_execution_use_case(
         customer_quotation_writer=customer_quotation_writer,
     )
     return RunAcceptedDecisionExecutionUseCase(
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=SqlAlchemyReviewRepository(session),
         execution_planner=ExecutionPlanner(),
         runtime_service=ExecutionRuntimeService(
