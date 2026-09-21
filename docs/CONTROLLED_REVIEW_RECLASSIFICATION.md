@@ -87,13 +87,31 @@ current Hub reads and can influence the snapshot. This dependence is legitimate
 for a **new current-time version**, never proof of historical equivalence.
 
 The ONE_OFF_VENDOR ownership effect establishes who created the partner; normal
-partner matching still requires a unique current active VAT match. It does not
-force the effect's partner ID or rerun remediation. Ownership, retirement,
-supplier resolution and remediation effects are untouched. Product lookup is
-read-only; no product or supplierinfo is created. If today's candidates differ,
-review reasons/workflow may legitimately differ; a future pilot invocation must
-check its expected supplier/product/tax state before committing and roll back
-unexpected outcomes. No fixed tax or partner IDs are supplied by the caller.
+partner matching still requires a unique current active VAT match, and this is
+unchanged for any review with no accepted remediation effect. Ownership,
+retirement, supplier resolution and remediation effects are untouched. Product
+lookup is read-only; no product or supplierinfo is created. If today's
+candidates differ, review reasons/workflow may legitimately differ; a future
+pilot invocation must check its expected supplier/product/tax state before
+committing and roll back unexpected outcomes. No fixed tax or partner IDs are
+supplied by the caller.
+
+**P0-PROD-10D update:** when the raw deterministic partner match is *not*
+matched (the case above always hits this for an archived partner, since
+matching never considers inactive partners), and an accepted
+`SupplierRemediationEffect` already exists for this exact `(review_id,
+company_id)`, `ReclassifyWorkbenchReviewUseCase` now substitutes a synthesized
+`MATCHED` partner (`matched_by="supplier_remediation_effect"`) for **Stage-1
+execution evidence construction only** -- never for the classification
+evidence or the reported `review_reasons`/`workflow`, which still reflect the
+raw, honest matcher outcome. This lets a review whose supplier was legitimately
+reused from an archived, Hub-owned ONE_OFF_VENDOR partner (see
+`docs/ONE_OFF_VENDOR_RETIREMENT_RECOVERY.md` and PR #159) reach a submittable
+decision without reactivating the partner and without any change to the
+generic matcher. It is opt-in per composition root
+(`supplier_remediation_effect_reader`, default `None`) and only ever reads the
+one review's own accepted effect -- never another review's, another
+company's, or an inactive partner with no recorded effect at all.
 
 For the intended pilot-equivalent state, Stage 1 contains a matched supplier,
 `PRODUCT_NOT_FOUND` for line 1 and a matched purchase VAT 20% tax. It contains no
