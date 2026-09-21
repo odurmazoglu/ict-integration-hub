@@ -16,6 +16,7 @@ from app.persistence import (
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyUnitOfWork,
+    SqlAlchemyWriteAuthorizationRepository,
 )
 
 
@@ -55,4 +56,5 @@ def build_create_new_product_use_case(
             policy=policy,
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
+        write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
     )

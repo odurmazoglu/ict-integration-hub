@@ -618,6 +618,13 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     }
     assert "uq_wrov_retirements_review_version" in retirement_unique_constraints_at_head
 
+    # P0-PROD-09G added one more migration on top (widening the operation_type check
+    # constraint only -- no table/column change) -- one extra "-1" step consumes it
+    # before P0-PROD-09F's own extension step below.
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_write_authorizations" in inspector.get_table_names()
+
     # P0-PROD-09F added one more migration on top (widening the operation_type check
     # constraint only -- no table/column change) -- one extra "-1" step consumes it
     # before the original single-step table-removal walk below.

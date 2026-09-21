@@ -34,13 +34,18 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
             i.name for i in WorkbenchReviewWriteAuthorization.__table__.indexes
         }
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170029"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170030"
         _assert_operation_type_check_constraint(engine, name)
-        # Rows using the new operation types must be cleared before downgrading --
-        # SQLite's batch-recreate (and PostgreSQL's default ADD CONSTRAINT
-        # validation) both re-validate existing rows against the restored, narrower
-        # constraint, exactly as for any other constraint tightening.
-        _delete_new_operation_type_rows(engine, name)
+        # Rows using an operation type must be cleared before downgrading past the
+        # migration that introduced it -- SQLite's batch-recreate (and PostgreSQL's
+        # default ADD CONSTRAINT validation) both re-validate existing rows against
+        # the restored, narrower constraint, exactly as for any other constraint
+        # tightening.
+        _delete_rows_with_operation_type(engine, name, "CREATE_NEW_PRODUCT")
+        command.downgrade(config, "202607170029")
+        _assert_pre_09g_check_constraint_rejects_create_new_product(engine, name)
+        for operation_type in ("CREATE_PERMANENT_SUPPLIER", "ONE_OFF_VENDOR_SUPPLIER", "ONE_OFF_VENDOR_ARCHIVE"):
+            _delete_rows_with_operation_type(engine, name, operation_type)
         command.downgrade(config, "202607170028")
         _assert_pre_09f_check_constraint_rejects_new_operation_types(engine, name)
         command.downgrade(config, "202607170027")
@@ -85,15 +90,18 @@ def _seed_review(engine, review_id: str) -> None:
         )
 
 
-def _delete_new_operation_type_rows(engine, table_name: str) -> None:
+def _delete_rows_with_operation_type(engine, table_name: str, operation_type: str) -> None:
     with engine.begin() as connection:
-        connection.execute(text(f"DELETE FROM {table_name} WHERE operation_type != 'EXECUTE_VENDOR_BILL'"))
+        connection.execute(
+            text(f"DELETE FROM {table_name} WHERE operation_type = :operation_type"),
+            {"operation_type": operation_type},
+        )
 
 
 def _assert_operation_type_check_constraint(engine, table_name: str) -> None:
-    """P0-PROD-09F: the extended check constraint accepts all four operation types
-    and still rejects anything else -- proving the migration actually widened the
-    constraint rather than merely reordering its name/columns."""
+    """P0-PROD-09F/09G: the extended check constraint accepts all five operation
+    types and still rejects anything else -- proving the migrations actually
+    widened the constraint rather than merely reordering its name/columns."""
 
     _seed_review(engine, "review-ck-check")
     for operation_type in (
@@ -101,10 +109,26 @@ def _assert_operation_type_check_constraint(engine, table_name: str) -> None:
         "CREATE_PERMANENT_SUPPLIER",
         "ONE_OFF_VENDOR_SUPPLIER",
         "ONE_OFF_VENDOR_ARCHIVE",
+        "CREATE_NEW_PRODUCT",
     ):
         _insert_authorization(engine, table_name, review_id="review-ck-check", operation_type=operation_type)
     with pytest.raises(IntegrityError):
         _insert_authorization(engine, table_name, review_id="review-ck-check", operation_type="SOMETHING_ELSE")
+
+
+def _assert_pre_09g_check_constraint_rejects_create_new_product(engine, table_name: str) -> None:
+    """After downgrading to 202607170029, the pre-09G constraint is restored exactly
+    -- CREATE_NEW_PRODUCT is rejected again while the 09F operation types are still
+    accepted, proving downgrade reverts only what this one migration added."""
+
+    _seed_review(engine, "review-ck-downgrade-09g")
+    _insert_authorization(
+        engine, table_name, review_id="review-ck-downgrade-09g", operation_type="ONE_OFF_VENDOR_ARCHIVE"
+    )
+    with pytest.raises(IntegrityError):
+        _insert_authorization(
+            engine, table_name, review_id="review-ck-downgrade-09g", operation_type="CREATE_NEW_PRODUCT"
+        )
 
 
 def _assert_pre_09f_check_constraint_rejects_new_operation_types(engine, table_name: str) -> None:

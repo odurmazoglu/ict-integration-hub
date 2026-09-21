@@ -133,7 +133,9 @@ class OdooSupplierInfoWriter(SupplierInfoWriter):
             raise SupplierInfoWriteValidationError("A canonical CreateSupplierInfoCommand is required.")
 
         # Dedicated master-data write gate. With default settings this raises before any Odoo call.
-        self._policy.ensure_real_write_allowed(approved_by=command.approved_by)
+        self._policy.ensure_real_write_allowed(
+            approved_by=command.approved_by, write_authorization=command.authorization
+        )
 
         # Read before write, always. Natural identity is (partner_id, product_code) within
         # this company or a shared (company_id=False) record.
