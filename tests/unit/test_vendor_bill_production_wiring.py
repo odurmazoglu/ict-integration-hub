@@ -347,6 +347,11 @@ class FakeOdooVendorBillClient:
     ) -> list[dict[str, Any]]:
         if model == "res.currency":
             return [{"id": 31, "name": "TRY", "active": True}]
+        if model == "product.product":
+            # P0-PROD-10E: resolve every requested product id to a real Odoo uom_id --
+            # never touches the source invoice's own unit_code.
+            requested_ids = _domain_value(domain, "id") or []
+            return [{"id": product_id, "uom_id": [1, "Units"]} for product_id in requested_ids]
         self.search_calls.append(domain)
         move_type = _domain_value(domain, "move_type") or "in_invoice"
         if move_type not in self.created_move_types:

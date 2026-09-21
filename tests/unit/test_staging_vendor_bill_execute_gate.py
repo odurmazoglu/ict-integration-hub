@@ -545,7 +545,6 @@ async def test_staging_write_still_runs_idempotency_check_before_create() -> Non
             VendorBillLine(
                 product_id=501,
                 quantity=Decimal("1"),
-                uom="NIU",
                 unit_price=Decimal("10.00"),
                 tax_ids=(401,),
                 description="Line 1",

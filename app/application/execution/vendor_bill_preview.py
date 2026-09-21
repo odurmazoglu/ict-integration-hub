@@ -45,6 +45,7 @@ from app.application.execution.contracts import (
 from app.application.execution.exceptions import (
     ExecutionPlanningError,
     ExecutionPreviewCurrencyResolutionError,
+    ExecutionPreviewProductUomResolutionError,
     ExecutionPreviewUnsupportedWorkflowError,
 )
 from app.application.execution.planner import ExecutionPlanner
@@ -71,6 +72,16 @@ class VendorBillPreviewCurrencyReader(Protocol):
         pass
 
 
+class VendorBillPreviewProductUomReader(Protocol):
+    """Structurally read-only (P0-PROD-10E): the only other Odoo call the preview
+    path can make, mirroring ``VendorBillPreviewCurrencyReader`` exactly. No
+    create/write/unlink method exists on this type at all.
+    """
+
+    def resolve_vendor_bill_product_uom_ids(self, product_ids: tuple[int, ...]) -> dict[int, int]:
+        pass
+
+
 @dataclass(frozen=True, slots=True)
 class PreviewVendorBillRequest(Command):
     review_id: str
@@ -92,6 +103,10 @@ class VendorBillPreviewLine(ApplicationDTO):
     account_id: int | None
     product_id: int | None
     tax_ids: tuple[int, ...] = field(default_factory=tuple)
+    # P0-PROD-10E: the exact Odoo uom_id EXECUTE would write for this line -- None
+    # for an account-only line (no product, no UoM), never the source invoice's own
+    # UN/CEFACT unit code.
+    product_uom_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,12 +152,14 @@ class PreviewVendorBillUseCase:
         execution_planner: ExecutionPlanner,
         vendor_bill_builder: VendorBillBuilder,
         currency_reader: VendorBillPreviewCurrencyReader,
+        product_uom_reader: VendorBillPreviewProductUomReader,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
         self._source_invoice_reader = source_invoice_reader
         self._execution_planner = execution_planner
         self._vendor_bill_builder = vendor_bill_builder
         self._currency_reader = currency_reader
+        self._product_uom_reader = product_uom_reader
 
     def preview(self, request: PreviewVendorBillRequest) -> VendorBillPreview:
         if not isinstance(request, PreviewVendorBillRequest):
@@ -232,6 +249,20 @@ class PreviewVendorBillUseCase:
         except ApplicationError as exc:
             raise ExecutionPreviewCurrencyResolutionError(exc.safe_message) from exc
 
+        # P0-PROD-10E: resolve the real Odoo uom_id for every product on this bill,
+        # via the same read-only, fail-closed path EXECUTE's writer uses -- never the
+        # source invoice's own UN/CEFACT unit code. A preview must fail exactly when
+        # EXECUTE would fail, not merely display a wrong or missing value.
+        product_ids = tuple(
+            sorted(
+                {bill_line.product_id for bill_line in vendor_bill.invoice_lines if bill_line.product_id is not None}
+            )
+        )
+        try:
+            product_uom_ids = self._product_uom_reader.resolve_vendor_bill_product_uom_ids(product_ids)
+        except ApplicationError as exc:
+            raise ExecutionPreviewProductUomResolutionError(exc.safe_message) from exc
+
         lines = tuple(
             VendorBillPreviewLine(
                 line_number=source_line.line_number,
@@ -241,6 +272,7 @@ class PreviewVendorBillUseCase:
                 account_id=bill_line.account_id,
                 product_id=bill_line.product_id,
                 tax_ids=bill_line.tax_ids,
+                product_uom_id=product_uom_ids.get(bill_line.product_id) if bill_line.product_id is not None else None,
             )
             for source_line, bill_line in zip(source.invoice.lines, vendor_bill.invoice_lines, strict=True)
         )

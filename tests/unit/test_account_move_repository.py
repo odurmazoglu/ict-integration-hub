@@ -53,7 +53,7 @@ async def test_account_move_repository_creates_draft_vendor_bill_payload() -> No
                         "price_unit": "10.50",
                         "tax_ids": ((6, 0, (401,)),),
                         "name": "Line 1",
-                        "product_uom_id": "NIU",
+                        "product_uom_id": 1,
                     },
                 ),
             ),
@@ -129,7 +129,6 @@ async def test_account_move_repository_rejects_missing_company_for_vendor_bill_w
             VendorBillLine(
                 product_id=501,
                 quantity=Decimal("2"),
-                uom="NIU",
                 unit_price=Decimal("10.50"),
                 tax_ids=(401,),
                 description="Line 1",
@@ -187,6 +186,72 @@ async def test_account_move_repository_fails_closed_before_create_for_unusable_c
     assert client.create_calls == []
 
 
+@pytest.mark.parametrize(
+    "product_uom_records",
+    [
+        [],  # product not found at all
+        [{"id": 501, "uom_id": False}],  # product exists but carries no UoM
+    ],
+)
+async def test_account_move_repository_fails_closed_before_create_for_unresolved_product_uom(
+    product_uom_records: list[dict[str, Any]],
+) -> None:
+    """P0-PROD-10E: a product whose Odoo uom_id cannot be resolved must fail the
+    whole write before any Odoo create call -- never omit product_uom_id, never
+    fall back to the source invoice's own UN/CEFACT unit code."""
+
+    client = FakeJson2Client(product_uom_records=product_uom_records)
+    repository = AccountMoveRepository(client=client)
+
+    with pytest.raises(VendorBillWriteValidationError):
+        await repository.create_draft_vendor_bill(vendor_bill=_vendor_bill(), idempotency_key="ettn-1")
+
+    assert client.create_calls == []
+
+
+async def test_account_move_repository_resolves_product_uom_from_odoo_not_source_unit_code() -> None:
+    """P0-PROD-10E production regression shape: source unit_code="C62", resolved
+    product 389/template 161 with Odoo uom_id=1 -- the payload must carry the
+    resolved integer 1, never the string "C62"."""
+
+    client = FakeJson2Client(product_uom_records=[{"id": 389, "uom_id": [1, "Units"]}])
+    repository = AccountMoveRepository(client=client)
+    bill = VendorBill(
+        supplier_id=448,
+        invoice_number="HD12026000964602",
+        invoice_date=date(2026, 9, 10),
+        currency="TRY",
+        external_uuid="F1ADCCAD-FB70-9EF1-8105-005056BB160F",
+        reference="HD12026000964602",
+        company_id=1,
+        invoice_lines=(
+            VendorBillLine(
+                product_id=389,
+                quantity=Decimal("1.000"),
+                unit_price=Decimal("2166.000000"),
+                tax_ids=(34,),
+                description="Stanley The Iceflow Flip Straw 2.0 Pipet",
+            ),
+        ),
+    )
+
+    await repository.create_draft_vendor_bill(vendor_bill=bill, idempotency_key="workflow-execution:pilot")
+
+    line_payload = client.create_calls[0]["invoice_line_ids"][0][2]
+    assert line_payload["product_uom_id"] == 1
+    assert line_payload["product_uom_id"] != "C62"
+    uom_search_calls = [call for call in client.search_calls if call["model"] == "product.product"]
+    assert uom_search_calls == [
+        {
+            "model": "product.product",
+            "domain": [["id", "in", [389]]],
+            "fields": ["id", "uom_id"],
+            "limit": 1,
+            "offset": 0,
+        }
+    ]
+
+
 async def test_account_move_repository_resolves_exact_active_currency_before_create() -> None:
     client = FakeJson2Client(currency_records=[{"id": 31, "name": "TRY", "active": True}])
 
@@ -194,7 +259,8 @@ async def test_account_move_repository_resolves_exact_active_currency_before_cre
         vendor_bill=_vendor_bill(), idempotency_key="ettn-1"
     )
 
-    assert client.search_calls == [
+    currency_calls = [call for call in client.search_calls if call["model"] == "res.currency"]
+    assert currency_calls == [
         {
             "model": "res.currency",
             "domain": [["name", "=", "TRY"], ["active", "in", [True, False]]],
@@ -221,7 +287,6 @@ async def test_account_move_repository_builds_d_market_shaped_account_only_paylo
             VendorBillLine(
                 product_id=None,
                 quantity=Decimal("1.000"),
-                uom=None,
                 unit_price=Decimal("563.510000"),
                 tax_ids=(34,),
                 description="Kraf Kesim Tablası A2 45X60 3002G",
@@ -349,12 +414,19 @@ class FakeJson2Client:
         create_error: Exception | None = None,
         search_records: Sequence[dict[str, Any]] | None = None,
         currency_records: Sequence[dict[str, Any]] | None = None,
+        product_uom_records: Sequence[dict[str, Any]] | None = None,
     ) -> None:
         self.create_result = create_result
         self.create_error = create_error
         self.search_records = list(search_records or [])
         self.currency_records = list(
             [{"id": 31, "name": "TRY", "active": True}] if currency_records is None else currency_records
+        )
+        # P0-PROD-10E: matches _vendor_bill()'s single product_id=501 line by default,
+        # so every pre-existing test that doesn't care about UoM resolution keeps
+        # working unchanged. Tests that DO care override this explicitly.
+        self.product_uom_records = list(
+            [{"id": 501, "uom_id": [1, "Units"]}] if product_uom_records is None else product_uom_records
         )
         self.create_calls: list[dict[str, Any]] = []
         self.search_calls: list[dict[str, Any]] = []
@@ -385,6 +457,8 @@ class FakeJson2Client:
         )
         if model == "res.currency":
             return list(self.currency_records)
+        if model == "product.product":
+            return list(self.product_uom_records)
         return list(self.search_records)
 
 
@@ -401,7 +475,6 @@ def _vendor_bill() -> VendorBill:
             VendorBillLine(
                 product_id=501,
                 quantity=Decimal("2"),
-                uom="NIU",
                 unit_price=Decimal("10.50"),
                 tax_ids=(401,),
                 description="Line 1",

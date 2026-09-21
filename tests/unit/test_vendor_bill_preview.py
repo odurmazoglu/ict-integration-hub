@@ -95,6 +95,30 @@ class StaticCurrencyReader:
         return self._currency_id
 
 
+class StaticProductUomReader:
+    """P0-PROD-10E fake mirroring ``StaticCurrencyReader``. Resolves every requested
+    product id to ``default_uom_id`` unless an explicit per-product override or a
+    forced error is supplied -- never derives anything from the source invoice."""
+
+    def __init__(
+        self,
+        *,
+        default_uom_id: int = 1,
+        uom_ids: dict[int, int] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._default_uom_id = default_uom_id
+        self._uom_ids = uom_ids or {}
+        self._error = error
+        self.calls: list[tuple[int, ...]] = []
+
+    def resolve_vendor_bill_product_uom_ids(self, product_ids: tuple[int, ...]) -> dict[int, int]:
+        self.calls.append(product_ids)
+        if self._error is not None:
+            raise self._error
+        return {product_id: self._uom_ids.get(product_id, self._default_uom_id) for product_id in product_ids}
+
+
 class RecordingReadOnlyOdooClient:
     """Only ``search_read`` -- mirrors production res.currency lookup exactly."""
 
@@ -321,15 +345,18 @@ def _use_case(
     decision: AcceptedReviewDecision | None,
     source: ExecutionSourceInvoice | None,
     currency_reader=None,
+    product_uom_reader=None,
 ) -> tuple[PreviewVendorBillUseCase, StaticSourceInvoiceReader, StaticCurrencyReader]:
     source_reader = StaticSourceInvoiceReader(source)
     currency = currency_reader or StaticCurrencyReader()
+    product_uom = product_uom_reader or StaticProductUomReader()
     use_case = PreviewVendorBillUseCase(
         accepted_decision_reader=StaticAcceptedDecisionReader(decision),
         source_invoice_reader=source_reader,
         execution_planner=ExecutionPlanner(),
         vendor_bill_builder=VendorBillBuilder(),
         currency_reader=currency,
+        product_uom_reader=product_uom,
     )
     return use_case, source_reader, currency
 
@@ -373,6 +400,7 @@ def test_d_market_account_only_preview_reproduces_exact_pilot_economics() -> Non
     assert line.account_id == 247
     assert line.product_id is None
     assert line.tax_ids == (34,)
+    assert line.product_uom_id is None
 
     # 9: exact known D-Market idempotency identity
     assert preview.idempotency_key == EXPECTED_D_MARKET_IDEMPOTENCY_KEY
@@ -393,6 +421,8 @@ def test_product_backed_vendor_bill_preview() -> None:
     assert line.quantity == Decimal("2")
     assert line.unit_price == Decimal("50.00")
     assert line.tax_ids == (701,)
+    # P0-PROD-10E: the preview's own resolved Odoo uom_id, never the source unit_code.
+    assert line.product_uom_id == 1
     assert preview.preview_untaxed == Decimal("100.00")
     assert preview.preview_tax == Decimal("20.00")
     assert preview.preview_total == Decimal("120.00")
@@ -545,8 +575,10 @@ def test_mixed_account_only_and_product_invoice_preview() -> None:
     product_line, account_line = preview.lines
     assert product_line.product_id == 611
     assert product_line.account_id is None
+    assert product_line.product_uom_id == 1
     assert account_line.product_id is None
     assert account_line.account_id == 270
+    assert account_line.product_uom_id is None
     # 6: multi-line totals
     assert preview.preview_untaxed == Decimal("200.00")
     assert preview.preview_tax == Decimal("40.00")
@@ -701,6 +733,7 @@ def test_preview_use_case_never_references_any_write_gate_setting() -> None:
         "execution_planner",
         "vendor_bill_builder",
         "currency_reader",
+        "product_uom_reader",
     }
 
 

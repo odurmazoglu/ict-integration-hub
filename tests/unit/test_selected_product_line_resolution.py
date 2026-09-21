@@ -229,7 +229,6 @@ def test_b_explicit_selected_product_replaces_the_failed_match() -> None:
         VendorBillLine(
             product_id=SELECTED_PRODUCT_ID,
             quantity=Decimal("1"),
-            uom="NIU",
             unit_price=Decimal("50.00"),
             tax_ids=(TAX_ID,),
             description="Line 1",

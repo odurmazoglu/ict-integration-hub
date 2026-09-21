@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -359,16 +360,20 @@ def _operating_expense_product_shape_errors(
     return ()
 
 
-def to_odoo_account_move_payload(vendor_bill: VendorBill, *, currency_id: int) -> dict[str, Any]:
+def to_odoo_account_move_payload(
+    vendor_bill: VendorBill, *, currency_id: int, product_uom_ids: Mapping[int, int]
+) -> dict[str, Any]:
     if type(currency_id) is not int or currency_id <= 0:
         raise ValueError("currency_id must be a positive Odoo id.")
+    if not isinstance(product_uom_ids, Mapping):
+        raise ValueError("product_uom_ids must be a mapping of Odoo product id to Odoo uom id.")
     payload: dict[str, Any] = {
         "move_type": "in_invoice",
         "partner_id": vendor_bill.supplier_id,
         "invoice_date": vendor_bill.invoice_date.isoformat(),
         "ref": vendor_bill.reference,
         "currency_id": currency_id,
-        "invoice_line_ids": tuple((0, 0, _line_payload(line)) for line in vendor_bill.invoice_lines),
+        "invoice_line_ids": tuple((0, 0, _line_payload(line, product_uom_ids)) for line in vendor_bill.invoice_lines),
     }
     if vendor_bill.company_id is not None:
         payload["company_id"] = vendor_bill.company_id
@@ -398,18 +403,26 @@ def to_odoo_customer_invoice_payload(
     return {key: value for key, value in payload.items() if value is not None}
 
 
-def _line_payload(line: VendorBillLine) -> dict[str, Any]:
+def _line_payload(line: VendorBillLine, product_uom_ids: Mapping[int, int]) -> dict[str, Any]:
     if line.account_id is not None:
         return _operating_expense_line_payload(line)
+    # P0-PROD-10E: the source invoice's raw UN/CEFACT unit code (e.g. "C62") must
+    # never reach this payload -- Odoo's product_uom_id is a many2one integer id,
+    # never an external unit-code string. product_uom_ids is resolved read-only
+    # from the product itself (see AccountMoveRepository._resolve_vendor_bill_product_uoms
+    # / OdooVendorBillPreviewProductUomReader), never derived from the invoice here.
+    assert line.product_id is not None
+    uom_id = product_uom_ids.get(line.product_id)
+    if type(uom_id) is not int or uom_id <= 0:
+        raise ValueError(f"No resolved Odoo product_uom_id for product {line.product_id}.")
     payload: dict[str, Any] = {
         "product_id": line.product_id,
         "quantity": _decimal_text(line.quantity),
         "price_unit": _decimal_text(line.unit_price),
         "tax_ids": ((6, 0, line.tax_ids),),
         "name": line.description,
+        "product_uom_id": uom_id,
     }
-    if line.uom is not None:
-        payload["product_uom_id"] = line.uom
     return {key: value for key, value in payload.items() if value is not None}
 
 
@@ -450,7 +463,6 @@ def _vendor_bill_line(
     return VendorBillLine(
         product_id=product_result.product_id,
         quantity=line.quantity,
-        uom=line.unit_code,
         unit_price=_net_unit_price(line),
         tax_ids=tax_ids,
         description=line.description,
@@ -469,7 +481,6 @@ def _expense_vendor_bill_line(
         product_id=None,
         account_id=expense_account_id,
         quantity=line.quantity,
-        uom=None,
         unit_price=_net_unit_price(line),
         tax_ids=tax_ids,
         description=line.description,

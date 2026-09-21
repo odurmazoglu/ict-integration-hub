@@ -12,11 +12,18 @@ class VendorBillLine:
     Exactly one accounting source is set: a matched ``product_id`` (Odoo derives
     the expense account) or a pinned ``account_id`` for a deterministic operating
     expense line with no product. ``product_id XOR account_id``.
+
+    Carries no UoM of any kind (P0-PROD-10E): the source invoice's raw UN/CEFACT
+    unit code is immutable source evidence, never an Odoo id, and must never be
+    stored here or written to Odoo. The real Odoo ``product_uom_id`` is resolved
+    read-only from ``product_id`` itself at payload-construction time (see
+    ``to_odoo_account_move_payload``'s ``product_uom_ids`` parameter) -- never
+    carried on this DTO, exactly like ``currency_id`` is resolved and passed in
+    separately rather than stored per line.
     """
 
     product_id: int | None
     quantity: Decimal
-    uom: str | None
     unit_price: Decimal
     tax_ids: tuple[int, ...] = field(default_factory=tuple)
     description: str | None = None

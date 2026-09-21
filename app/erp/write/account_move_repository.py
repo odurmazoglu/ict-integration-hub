@@ -113,11 +113,15 @@ class AccountMoveRepository:
         company_id: int | None = None,
     ) -> AccountMoveDraft:
         currency_id = await self._resolve_vendor_bill_currency(vendor_bill.currency)
+        product_uom_ids = await self._resolve_vendor_bill_product_uoms(
+            tuple(sorted({line.product_id for line in vendor_bill.invoice_lines if line.product_id is not None}))
+        )
         payload = self._draft_payload(
             vendor_bill=vendor_bill,
             idempotency_key=idempotency_key,
             company_id=company_id,
             currency_id=currency_id,
+            product_uom_ids=product_uom_ids,
         )
         move_id = await _translate_connector_errors(self._client.create_account_move(payload))
         return AccountMoveDraft(id=move_id)
@@ -174,17 +178,53 @@ class AccountMoveRepository:
         idempotency_key: str,
         company_id: int | None = None,
         currency_id: int,
+        product_uom_ids: dict[int, int],
     ) -> dict[str, Any]:
         _validate_idempotency_key(idempotency_key)
         company_id = _validate_company_id(
             company_id if company_id is not None else vendor_bill.company_id,
             "Vendor Bill",
         )
-        payload = to_odoo_account_move_payload(vendor_bill, currency_id=currency_id)
+        payload = to_odoo_account_move_payload(vendor_bill, currency_id=currency_id, product_uom_ids=product_uom_ids)
         payload["company_id"] = company_id
         payload[IDEMPOTENCY_FIELD] = idempotency_key
         _validate_payload(payload)
         return payload
+
+    async def _resolve_vendor_bill_product_uoms(self, product_ids: tuple[int, ...]) -> dict[int, int]:
+        """Read-only Odoo ``uom_id`` resolution for every resolved product on this bill.
+
+        P0-PROD-10E: the source invoice's raw UN/CEFACT unit code (e.g. "C62") is
+        never an Odoo id and must never be written to ``product_uom_id`` -- the real
+        Odoo unit of measure is resolved here, directly from the already-resolved
+        ``product.product`` record, exactly the same way ``_resolve_vendor_bill_currency``
+        resolves ``currency_id`` from ``res.currency`` rather than trusting anything
+        derived from the invoice. Fails closed (one Odoo product missing/ambiguous
+        UoM fails the whole write) rather than omit the field or guess a default.
+        """
+
+        if not product_ids:
+            return {}
+        records = await _translate_connector_errors(
+            self._client.search_read(
+                model="product.product",
+                domain=[["id", "in", list(product_ids)]],
+                fields=["id", "uom_id"],
+                limit=len(product_ids),
+            )
+        )
+        resolved: dict[int, int] = {}
+        for record in records:
+            product_id = record.get("id")
+            uom_id = _many2one_id(record.get("uom_id"))
+            if isinstance(product_id, int) and not isinstance(product_id, bool) and uom_id is not None:
+                resolved[product_id] = uom_id
+        missing = sorted(set(product_ids) - resolved.keys())
+        if missing:
+            raise VendorBillWriteValidationError(
+                f"Vendor Bill product UoM could not be resolved for Odoo product id(s): {missing}."
+            )
+        return resolved
 
     async def _resolve_vendor_bill_currency(self, currency_code: str) -> int:
         code = currency_code.strip().upper() if isinstance(currency_code, str) else ""
@@ -345,3 +385,13 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _many2one_id(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, list | tuple) and value and isinstance(value[0], int) and not isinstance(value[0], bool):
+        return value[0]
+    return None
