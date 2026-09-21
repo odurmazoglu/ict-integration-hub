@@ -77,6 +77,10 @@ def build_resolve_workbench_supplier_use_case(
         ),
         source_invoice_reader=source_invoice_reader,
         reclassification_writer=review_repository,
+        # P0-PROD-10D: lets reclassification reach a submittable decision for an
+        # archived Hub-owned ONE_OFF_VENDOR reuse -- see ReclassifyWorkbenchReviewUseCase's
+        # own docstring for the exact, narrowly-scoped substitution this enables.
+        supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
     )
 
     # Reuse the existing best-effort Workbench publisher, gated by the existing flag.
