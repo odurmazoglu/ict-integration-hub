@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.application.commands.base import Command
 from app.application.exceptions.product_remediation import (
     ProductWriteValidationError,
     SupplierInfoWriteValidationError,
 )
+
+if TYPE_CHECKING:
+    # Deferred: app.application.workbench's package __init__ eagerly imports use
+    # cases that themselves import this module, so a real-time import here would
+    # cycle. Safe because of `from __future__ import annotations` above -- the
+    # WriteAuthorizationRecord annotation is never evaluated at runtime.
+    from app.application.workbench.write_authorization import WriteAuthorizationRecord
 
 # Odoo v19 product.template.type selection. Combo products are out of scope for the
 # simple no-attribute CREATE_NEW_PRODUCT v1 flow but are accepted here since the
@@ -23,6 +31,14 @@ class CreateProductCommand(Command):
     supplier's own product code (see ``CreateSupplierInfoCommand.product_code``).
     No category, taxes, barcode, or company are set here; those are left to
     documented Odoo defaults.
+
+    ``authorization`` (P0-PROD-09G) is an optional, already-claimed-and-consumed
+    ``WriteAuthorizationRecord`` for this exact write. When present, it lets
+    ``OdooProductWritePolicy.ensure_real_write_allowed`` bypass ONLY
+    ``product_remediation_write_enabled`` -- the master production kill switch,
+    approval acknowledgement, and named-approver check are never bypassed.
+    Consumed strictly before this command is ever constructed (see
+    ``CreateNewProductUseCase``); this field never itself performs a claim.
     """
 
     name: str
@@ -31,6 +47,7 @@ class CreateProductCommand(Command):
     is_storable: bool
     default_code: str | None = None
     approved_by: str | None = None
+    authorization: WriteAuthorizationRecord | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -57,6 +74,9 @@ class CreateSupplierInfoCommand(Command):
 
     ``currency_id``, ``delay``, ``min_qty``, and ``price`` are left as Odoo
     defaults (omitted from the write payload) unless explicitly supplied.
+
+    ``authorization`` (P0-PROD-09G) -- see ``CreateProductCommand``'s docstring;
+    identical contract, same shared ``OdooProductWritePolicy`` gate.
     """
 
     company_id: int
@@ -71,6 +91,7 @@ class CreateSupplierInfoCommand(Command):
     min_qty: float | None = None
     price: float | None = None
     approved_by: str | None = None
+    authorization: WriteAuthorizationRecord | None = None
 
     def __post_init__(self) -> None:
         if type(self.company_id) is not int or isinstance(self.company_id, bool) or self.company_id <= 0:

@@ -1350,6 +1350,7 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "internal_reference",
         "is_storable",
         "note",
+        "authorization_id",
     }
     assert product_resolution_schema.get("additionalProperties") is False
     assert "product_type" in product_resolution_schema.get("required", [])

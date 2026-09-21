@@ -477,8 +477,11 @@ async def resolve_review_supplier(
         "to the crash-safe CREATE_NEW_PRODUCT orchestration to create a new Odoo product.template/supplierinfo, or "
         "safely reuse/reconcile an existing one. Requires the review's supplier to already be resolved (see the "
         "supplier-resolution endpoint) -- this endpoint never creates or resolves a supplier itself. Gated by "
-        "PRODUCT_REMEDIATION_WRITE_ENABLED. It never submits a review decision, pins selected_product_id, or "
-        "executes a Vendor Bill -- those remain separate explicit operator actions."
+        "PRODUCT_REMEDIATION_WRITE_ENABLED, or by a narrow single-use CREATE_NEW_PRODUCT write authorization "
+        "(authorization_id) issued via the write-authorizations endpoint for this exact review/version -- either "
+        "way the production master kill switch and named-approver requirement are never bypassed. It never "
+        "submits a review decision, pins selected_product_id, or executes a Vendor Bill -- those remain separate "
+        "explicit operator actions."
     ),
 )
 async def resolve_review_product(
@@ -503,6 +506,7 @@ async def resolve_review_product(
                 is_storable=request_body.is_storable,
                 internal_reference=request_body.internal_reference,
                 note=request_body.note,
+                authorization_id=request_body.authorization_id,
             )
         )
         return _success(
@@ -924,8 +928,9 @@ def _status_code_for_exception(exc: Exception) -> int:
         "Requires workbench_execute. Issues one short-lived (15 minute), single-use authorization scoped to "
         "exactly (company_id, review_id, operation_type, target_version), replacing the need to open a global "
         "write gate/restart the container for one operator-approved write. Supports EXECUTE_VENDOR_BILL, "
-        "CREATE_PERMANENT_SUPPLIER, ONE_OFF_VENDOR_SUPPLIER, and ONE_OFF_VENDOR_ARCHIVE. The master production "
-        "kill switch (PRODUCTION_OPERATIONS_ENABLED) and named-approver requirement are never bypassed."
+        "CREATE_PERMANENT_SUPPLIER, ONE_OFF_VENDOR_SUPPLIER, ONE_OFF_VENDOR_ARCHIVE, and CREATE_NEW_PRODUCT. The "
+        "master production kill switch (PRODUCTION_OPERATIONS_ENABLED) and named-approver requirement are never "
+        "bypassed."
     ),
 )
 def issue_write_authorization(

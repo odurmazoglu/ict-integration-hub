@@ -141,7 +141,9 @@ class OdooProductWriter(ProductWriter):
             raise ProductWriteValidationError("A canonical CreateProductCommand is required.")
 
         # Dedicated master-data write gate. With default settings this raises before any Odoo call.
-        self._policy.ensure_real_write_allowed(approved_by=command.approved_by)
+        self._policy.ensure_real_write_allowed(
+            approved_by=command.approved_by, write_authorization=command.authorization
+        )
 
         payload = _product_template_payload(command)
         _reject_forbidden_tokens(payload)

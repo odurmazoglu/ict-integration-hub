@@ -89,6 +89,14 @@ class CreateNewProductCommand(ApplicationDTO):
     (``"consu"``) vs. service (``"service"``) -- it is never inferred from
     ``product_name``, ``seller_item_code``, the supplier, the invoice description, or
     ``uom_id`` (see PR fixing the P0-PROD-07F product-standard audit finding).
+
+    ``authorization_id`` (P0-PROD-09G) is an optional reference to a previously
+    issued, narrow, single-use write authorization (see
+    ``app.application.workbench.write_authorization``) that lets
+    ``CreateNewProductUseCase`` bypass the global ``PRODUCT_REMEDIATION_WRITE_ENABLED``
+    gate for exactly this one write, without opening it globally. Never a blanket
+    or wildcard grant; the master production kill switch, approval acknowledgement,
+    and named-approver checks are never bypassed.
     """
 
     review_id: str
@@ -103,6 +111,7 @@ class CreateNewProductCommand(ApplicationDTO):
     internal_reference: str | None = None
     note: str | None = None
     idempotency_key: str | None = None
+    authorization_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -128,6 +137,10 @@ class CreateNewProductCommand(ApplicationDTO):
             not isinstance(self.idempotency_key, str) or not self.idempotency_key.strip()
         ):
             raise ProductRemediationContractError("idempotency_key must be non-empty text when provided.")
+        if self.authorization_id is not None and (
+            not isinstance(self.authorization_id, str) or not self.authorization_id.strip()
+        ):
+            raise ProductRemediationContractError("authorization_id must be non-empty text when provided.")
 
 
 @dataclass(frozen=True, slots=True)

@@ -64,6 +64,11 @@ from app.application.workbench.product_remediation import (
     normalize_seller_item_code,
 )
 from app.application.workbench.queries import ReviewDetailQuery
+from app.application.workbench.write_authorization import (
+    WriteAuthorizationOperationType,
+    WriteAuthorizationRepository,
+    product_remediation_authorization_consumer_id,
+)
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
 
 # Exceptions from OdooProductWriter.create_product() that are CERTAIN to mean no Odoo
@@ -96,6 +101,7 @@ class CreateNewProductUseCase:
         product_writer: ProductWriter,
         supplier_info_writer: SupplierInfoWriter,
         unit_of_work: UnitOfWork,
+        write_authorization_repository: WriteAuthorizationRepository | None = None,
         _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
@@ -107,6 +113,9 @@ class CreateNewProductUseCase:
         self._product_writer = product_writer
         self._supplier_info_writer = supplier_info_writer
         self._unit_of_work = unit_of_work
+        # Optional (P0-PROD-09G): only set when narrow runtime write authorization is
+        # wired in; a command without an authorization_id never touches this.
+        self._write_authorization_repository = write_authorization_repository
         # Test-only seam: invoked on the fresh path just before the reservation INSERT,
         # so a test can commit a competing reservation/claim in another transaction in between.
         self._after_precheck_hook = _after_precheck_hook
@@ -366,6 +375,34 @@ class CreateNewProductUseCase:
             ),
         )
 
+    def _claim_write_authorization(self, command: CreateNewProductCommand):
+        """P0-PROD-09G: claim (and durably consume) the narrow write authorization for
+        this exact CREATE_NEW_PRODUCT write, if one was supplied. Deterministic
+        consumer id from the command's own identity (keyed by line_number, not by
+        which of the two underlying Odoo writes is in flight), so this is safe to
+        call again, idempotently, immediately before the product.template create and
+        again before the product.supplierinfo create/link -- and so a legitimate
+        crash-then-retry of either step resumes against its own already-consumed
+        authorization."""
+
+        if command.authorization_id is None:
+            return None
+        if self._write_authorization_repository is None:
+            raise ProductRemediationContractError("Runtime authorization is not supported by this workflow.")
+        return self._write_authorization_repository.claim_and_consume(
+            company_id=command.company_id,
+            review_id=command.review_id,
+            operation_type=WriteAuthorizationOperationType.CREATE_NEW_PRODUCT,
+            target_version=command.expected_version,
+            authorization_id=command.authorization_id,
+            execution_id=product_remediation_authorization_consumer_id(
+                company_id=command.company_id,
+                review_id=command.review_id,
+                expected_version=command.expected_version,
+                line_number=command.line_number,
+            ),
+        )
+
     async def _create_product_and_supplierinfo(
         self,
         command: CreateNewProductCommand,
@@ -381,6 +418,7 @@ class CreateNewProductUseCase:
         )
         self._unit_of_work.commit()
 
+        authorization = self._claim_write_authorization(command)
         try:
             write_result = await self._product_writer.create_product(
                 CreateProductCommand(
@@ -390,11 +428,18 @@ class CreateNewProductUseCase:
                     is_storable=attempted.is_storable,
                     default_code=attempted.internal_reference,
                     approved_by=attempted.approved_by,
+                    authorization=authorization,
                 )
             )
         except _CERTAIN_NO_WRITE_EXCEPTIONS:
-            # Certain: no Odoo product.template was created. Safe to revert and let a
-            # normal retry reattempt cleanly.
+            # P0-PROD-09G: discard the flushed-but-uncommitted authorization claim
+            # (if any) before the reservation revert below commits -- a certain
+            # no-write failure here always means one of the *unconditional* checks
+            # (master kill switch, approval ack, named approver) failed despite a
+            # valid authorization; none of those are fixed by retrying with the same
+            # authorization, but the authorization itself must remain usable once the
+            # real misconfiguration is fixed (mirrors ArchiveOneOffVendorUseCase).
+            self._unit_of_work.rollback()
             self._reservation_writer.advance(
                 attempted,
                 expected_status=ProductReservationStatus.CREATE_ATTEMPTED,
@@ -406,6 +451,7 @@ class CreateNewProductUseCase:
             # Uncertain remote outcome (transport failure, read-back/variant-resolution
             # failure, or anything unexpected). Leave CREATE_ATTEMPTED committed so a
             # resume requires reconciliation -- never convert this into a blind retry.
+            # This also discards any flushed-but-uncommitted authorization claim.
             self._unit_of_work.rollback()
             raise
 
@@ -417,18 +463,20 @@ class CreateNewProductUseCase:
             product_id=write_result.product_id,
         )
         self._unit_of_work.commit()
-        return await self._create_supplierinfo(created, created_product=True)
+        return await self._create_supplierinfo(created, created_product=True, command=command)
 
     async def _create_supplierinfo(
         self,
         reservation: ProductRemediationReservation,
         *,
         created_product: bool,
+        command: CreateNewProductCommand,
     ) -> CreateNewProductResult:
         if reservation.product_template_id is None or reservation.product_id is None:
             raise ProductRemediationDataIntegrityError(
                 "Cannot create supplierinfo before the product identity is persisted."
             )
+        authorization = self._claim_write_authorization(command)
         write_result = await self._supplier_info_writer.create_supplier_info(
             CreateSupplierInfoCommand(
                 company_id=reservation.company_id,
@@ -438,6 +486,7 @@ class CreateNewProductUseCase:
                 product_code=reservation.seller_item_code,
                 idempotency_key=reservation.idempotency_key or _default_idempotency_key(reservation),
                 approved_by=reservation.approved_by,
+                authorization=authorization,
             )
         )
         completed = self._reservation_writer.advance(
@@ -472,7 +521,7 @@ class CreateNewProductUseCase:
         if existing.status is ProductReservationStatus.CREATE_ATTEMPTED:
             return self._reconcile_uncertain_create(existing)
         if existing.status is ProductReservationStatus.PRODUCT_CREATED:
-            return await self._create_supplierinfo(existing, created_product=False)
+            return await self._create_supplierinfo(existing, created_product=False, command=command)
         if existing.status is ProductReservationStatus.COMPLETED:
             return self._success_result(
                 existing,

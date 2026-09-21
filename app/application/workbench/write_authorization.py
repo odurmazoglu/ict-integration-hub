@@ -24,6 +24,11 @@ class WriteAuthorizationOperationType(StrEnum):
     #: (the #162 recovery endpoint). Never used by the automatic post-execution
     #: retirement trigger, which remains gated by the existing global flag only.
     ONE_OFF_VENDOR_ARCHIVE = "ONE_OFF_VENDOR_ARCHIVE"
+    #: P0-PROD-09G. Authorizes one CREATE_NEW_PRODUCT remediation write -- covers
+    #: both the product.template create and the product.supplierinfo create/link
+    #: that follows it for the same review line (CreateNewProductUseCase claims it
+    #: again, idempotently, immediately before each of the two Odoo calls).
+    CREATE_NEW_PRODUCT = "CREATE_NEW_PRODUCT"
 
 
 class WriteAuthorizationStatus(StrEnum):
@@ -237,3 +242,19 @@ def one_off_vendor_archive_authorization_consumer_id(*, company_id: int, review_
 
     identity = f"one-off-vendor-archive-write:{company_id}:{review_id}:{review_version}"
     return f"one-off-vendor-archive-write:{uuid5(NAMESPACE_URL, identity)}"
+
+
+def product_remediation_authorization_consumer_id(
+    *, company_id: int, review_id: str, expected_version: int, line_number: str
+) -> str:
+    """Deterministic consumer identity for a CREATE_NEW_PRODUCT write attempt
+    (P0-PROD-09G). Same construction discipline as the other consumer-id helpers --
+    keyed by ``line_number`` (not by which of the two underlying Odoo writes is in
+    flight), so ``CreateNewProductUseCase`` can claim the same authorization again,
+    idempotently, immediately before both the product.template create and the
+    product.supplierinfo create/link, and a legitimate crash-then-retry of either
+    step resumes against its own already-consumed authorization.
+    """
+
+    identity = f"product-remediation-write:{company_id}:{review_id}:{expected_version}:{line_number}"
+    return f"product-remediation-write:{uuid5(NAMESPACE_URL, identity)}"

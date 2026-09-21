@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from app.application.exceptions.product_remediation import ProductWriteSafetyGateError
+from app.application.workbench.write_authorization import WriteAuthorizationRecord
 from app.core.config import Settings
 from app.core.runtime_checks import APPROVED_STAGING_ODOO_HOSTS, PRODUCTION_APPROVAL_ACK
 
@@ -47,7 +48,21 @@ class OdooProductWritePolicy:
             and self.odoo_host in self.approved_staging_hosts
         )
 
-    def ensure_real_write_allowed(self, *, approved_by: str | None) -> None:
+    def ensure_real_write_allowed(
+        self, *, approved_by: str | None, write_authorization: WriteAuthorizationRecord | None = None
+    ) -> None:
+        if write_authorization is not None:
+            # P0-PROD-09G: an already-claimed-and-consumed narrow authorization
+            # bypasses ONLY product_remediation_write_enabled (and the staging
+            # shortcut below, which is itself gated by that same flag) -- the
+            # production master kill switch, approval acknowledgement, and named
+            # approver are never bypassed by any authorization.
+            if not self.production_operations_enabled:
+                raise ProductWriteSafetyGateError("Production operations must be explicitly enabled.")
+            if self.production_approval_ack != self.required_approval_ack:
+                raise ProductWriteSafetyGateError("Production approval acknowledgement is required.")
+            _ensure_named_approver(approved_by)
+            return
         if not self.product_remediation_write_enabled:
             raise ProductWriteSafetyGateError("Product remediation master-data write must be explicitly enabled.")
         if self.staging_write_sanctioned:

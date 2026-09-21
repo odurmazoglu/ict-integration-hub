@@ -132,12 +132,15 @@ class CreateWriteAuthorizationUseCase:
             )
             return
 
-        # CREATE_PERMANENT_SUPPLIER / ONE_OFF_VENDOR_SUPPLIER: the review existing at
-        # exactly this version is the whole precondition -- ResolveWorkbenchSupplierUseCase
-        # itself still independently re-validates SUPPLIER_NOT_FOUND/mode-specific
-        # rules at consumption time; this issuance check never duplicates or
-        # anticipates that -- an authorization can be issued and still be correctly
-        # refused at use time if the underlying review state does not qualify.
+        # CREATE_PERMANENT_SUPPLIER / ONE_OFF_VENDOR_SUPPLIER / CREATE_NEW_PRODUCT: the
+        # review existing at exactly this version is the whole precondition -- the
+        # owning use case (ResolveWorkbenchSupplierUseCase / CreateNewProductUseCase)
+        # still independently re-validates its own operation-specific eligibility
+        # (SUPPLIER_NOT_FOUND/mode rules, or PENDING_REVIEW + PRODUCT_NOT_FOUND +
+        # resolved supplier) at consumption time; this issuance check never
+        # duplicates or anticipates that -- an authorization can be issued and still
+        # be correctly refused at use time if the underlying review state does not
+        # qualify.
 
 
 class ListWriteAuthorizationsUseCase:

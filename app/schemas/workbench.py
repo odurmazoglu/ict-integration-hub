@@ -288,6 +288,7 @@ class ProductResolutionRequest(BaseModel):
     internal_reference: str | None = None
     is_storable: bool = False
     note: str | None = None
+    authorization_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class ProductRemediationResponse(BaseModel):
