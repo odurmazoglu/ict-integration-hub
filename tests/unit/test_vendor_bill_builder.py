@@ -33,7 +33,6 @@ def test_successful_build() -> None:
         VendorBillLine(
             product_id=501,
             quantity=Decimal("2"),
-            uom="NIU",
             unit_price=Decimal("10.50"),
             tax_ids=(401,),
             description="Line 1",
@@ -155,7 +154,7 @@ def test_duplicate_mappings_are_rejected() -> None:
 def test_payload_generation_is_deterministic() -> None:
     bill = VendorBillBuilder().build(_invoice([_line("1")]), _partner(), _products([_product_line("1", 501)]), _taxes())
 
-    payload = to_odoo_account_move_payload(bill, currency_id=31)
+    payload = to_odoo_account_move_payload(bill, currency_id=31, product_uom_ids={501: 1})
 
     assert payload == {
         "move_type": "in_invoice",
@@ -172,7 +171,7 @@ def test_payload_generation_is_deterministic() -> None:
                     "price_unit": "10.50",
                     "tax_ids": ((6, 0, (401,)),),
                     "name": "Line 1",
-                    "product_uom_id": "NIU",
+                    "product_uom_id": 1,
                 },
             ),
         ),
@@ -185,7 +184,28 @@ def test_payload_requires_resolved_currency_id() -> None:
     bill = VendorBillBuilder().build(_invoice([_line("1")]), _partner(), _products([_product_line("1", 501)]), _taxes())
 
     with pytest.raises(ValueError, match="currency_id"):
-        to_odoo_account_move_payload(bill, currency_id=0)
+        to_odoo_account_move_payload(bill, currency_id=0, product_uom_ids={501: 1})
+
+
+def test_payload_requires_resolved_product_uom_id() -> None:
+    bill = VendorBillBuilder().build(_invoice([_line("1")]), _partner(), _products([_product_line("1", 501)]), _taxes())
+
+    with pytest.raises(ValueError, match="product_uom_id"):
+        to_odoo_account_move_payload(bill, currency_id=31, product_uom_ids={})
+
+
+def test_payload_never_writes_the_source_unit_code_as_product_uom_id() -> None:
+    """P0-PROD-10E regression: the raw UN/CEFACT unit code ("NIU" here) must never
+    reach the Odoo payload, even if it happens to collide with a resolved id's type."""
+
+    bill = VendorBillBuilder().build(_invoice([_line("1")]), _partner(), _products([_product_line("1", 501)]), _taxes())
+
+    payload = to_odoo_account_move_payload(bill, currency_id=31, product_uom_ids={501: 1})
+
+    line_payload = payload["invoice_line_ids"][0][2]
+    assert line_payload["product_uom_id"] == 1
+    assert line_payload["product_uom_id"] != "NIU"
+    assert isinstance(line_payload["product_uom_id"], int)
 
 
 def test_vendor_bill_dtos_are_immutable() -> None:

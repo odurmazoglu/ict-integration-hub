@@ -176,48 +176,48 @@ def _expense_match(
 
 
 def test_product_line_valid_with_only_product_id() -> None:
-    line = VendorBillLine(product_id=501, quantity=Decimal("1"), uom="NIU", unit_price=Decimal("10"))
+    line = VendorBillLine(product_id=501, quantity=Decimal("1"), unit_price=Decimal("10"))
     assert line.product_id == 501
     assert line.account_id is None
 
 
 def test_expense_line_valid_with_only_account_id() -> None:
-    line = VendorBillLine(product_id=None, account_id=9001, quantity=Decimal("1"), uom=None, unit_price=Decimal("10"))
+    line = VendorBillLine(product_id=None, account_id=9001, quantity=Decimal("1"), unit_price=Decimal("10"))
     assert line.account_id == 9001
     assert line.product_id is None
 
 
 def test_line_rejects_both_product_and_account() -> None:
     with pytest.raises(ValueError):
-        VendorBillLine(product_id=501, account_id=9001, quantity=Decimal("1"), uom=None, unit_price=Decimal("10"))
+        VendorBillLine(product_id=501, account_id=9001, quantity=Decimal("1"), unit_price=Decimal("10"))
 
 
 def test_line_rejects_neither_product_nor_account() -> None:
     with pytest.raises(ValueError):
-        VendorBillLine(product_id=None, account_id=None, quantity=Decimal("1"), uom=None, unit_price=Decimal("10"))
+        VendorBillLine(product_id=None, account_id=None, quantity=Decimal("1"), unit_price=Decimal("10"))
 
 
 @pytest.mark.parametrize("bad", [0, -1])
 def test_line_rejects_non_positive_account_id(bad: int) -> None:
     with pytest.raises(ValueError):
-        VendorBillLine(product_id=None, account_id=bad, quantity=Decimal("1"), uom=None, unit_price=Decimal("10"))
+        VendorBillLine(product_id=None, account_id=bad, quantity=Decimal("1"), unit_price=Decimal("10"))
 
 
 @pytest.mark.parametrize("bad", [0, -5])
 def test_line_rejects_non_positive_product_id(bad: int) -> None:
     with pytest.raises(ValueError):
-        VendorBillLine(product_id=bad, quantity=Decimal("1"), uom=None, unit_price=Decimal("10"))
+        VendorBillLine(product_id=bad, quantity=Decimal("1"), unit_price=Decimal("10"))
 
 
 def test_line_rejects_bool_ids() -> None:
     with pytest.raises(ValueError):
-        VendorBillLine(product_id=True, quantity=Decimal("1"), uom=None, unit_price=Decimal("10"))  # noqa: FBT003
+        VendorBillLine(product_id=True, quantity=Decimal("1"), unit_price=Decimal("10"))  # noqa: FBT003
     with pytest.raises(ValueError):
-        VendorBillLine(product_id=None, account_id=True, quantity=Decimal("1"), uom=None, unit_price=Decimal("10"))  # noqa: FBT003
+        VendorBillLine(product_id=None, account_id=True, quantity=Decimal("1"), unit_price=Decimal("10"))  # noqa: FBT003
 
 
 def test_line_is_frozen() -> None:
-    line = VendorBillLine(product_id=501, quantity=Decimal("1"), uom="NIU", unit_price=Decimal("10"))
+    line = VendorBillLine(product_id=501, quantity=Decimal("1"), unit_price=Decimal("10"))
     with pytest.raises(FrozenInstanceError):
         line.account_id = 9001  # type: ignore[misc]
 
@@ -239,7 +239,6 @@ def test_product_builder_output_unchanged() -> None:
         VendorBillLine(
             product_id=501,
             quantity=Decimal("2"),
-            uom="NIU",
             unit_price=Decimal("10.50"),
             tax_ids=(TAX_ID,),
             description="Line 1",
@@ -252,7 +251,7 @@ def test_product_odoo_payload_snapshot_unchanged() -> None:
     invoice = _invoice([_line("1", buyer_item_code="SKU-1")])
     bill = VendorBillBuilder().build(invoice, _partner(), _matched_products(invoice), _taxes(invoice), company_id=1)
 
-    payload = to_odoo_account_move_payload(bill, currency_id=31)
+    payload = to_odoo_account_move_payload(bill, currency_id=31, product_uom_ids={501: 1})
 
     assert payload["invoice_line_ids"] == (
         (
@@ -264,7 +263,7 @@ def test_product_odoo_payload_snapshot_unchanged() -> None:
                 "price_unit": "10.50",
                 "tax_ids": ((6, 0, (TAX_ID,)),),
                 "name": "Line 1",
-                "product_uom_id": "NIU",
+                "product_uom_id": 1,
             },
         ),
     )
@@ -315,7 +314,6 @@ def test_expense_builder_produces_account_only_lines() -> None:
     assert line.product_id is None
     assert line.account_id == EXPENSE_ACCOUNT_ID
     assert line.tax_ids == (TAX_ID,)
-    assert line.uom is None
 
 
 def test_multi_line_expense_invoice_uses_same_pinned_account() -> None:
@@ -346,7 +344,7 @@ def test_expense_odoo_payload_has_account_id_and_no_product_id() -> None:
         operating_expense_match=_expense_match(),
     )
 
-    payload = to_odoo_account_move_payload(bill, currency_id=31)
+    payload = to_odoo_account_move_payload(bill, currency_id=31, product_uom_ids={})
     line_payload = payload["invoice_line_ids"][0][2]
 
     assert line_payload == {
@@ -372,7 +370,7 @@ def test_expense_payload_passes_account_move_repository_forbidden_field_guard() 
         company_id=1,
         operating_expense_match=_expense_match(),
     )
-    payload_text = str(to_odoo_account_move_payload(bill, currency_id=31)).lower()
+    payload_text = str(to_odoo_account_move_payload(bill, currency_id=31, product_uom_ids={})).lower()
     assert not any(forbidden in payload_text for forbidden in FORBIDDEN_ACCOUNT_MOVE_FIELDS)
 
 

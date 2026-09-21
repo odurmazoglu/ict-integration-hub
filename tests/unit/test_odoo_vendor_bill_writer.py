@@ -185,7 +185,6 @@ def _vendor_bill() -> VendorBill:
             VendorBillLine(
                 product_id=501,
                 quantity=Decimal("2"),
-                uom="NIU",
                 unit_price=Decimal("10.50"),
                 tax_ids=(401,),
                 description="Line 1",

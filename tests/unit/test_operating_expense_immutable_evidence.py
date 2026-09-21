@@ -665,7 +665,6 @@ def test_execution_strategy_passes_operating_expense_match_to_builder() -> None:
                         product_id=None,
                         account_id=EXPENSE_ACCOUNT_ID,
                         quantity=Decimal("1"),
-                        uom=None,
                         unit_price=Decimal("83.33"),
                         tax_ids=(TAX_ID,),
                         description="Common area fee 1",
@@ -729,7 +728,7 @@ def test_expense_source_builds_account_only_line_and_payload() -> None:
     assert bill.invoice_lines[0].product_id is None
     assert bill.invoice_lines[0].account_id == EXPENSE_ACCOUNT_ID
 
-    line_payload = to_odoo_account_move_payload(bill, currency_id=31)["invoice_line_ids"][0][2]
+    line_payload = to_odoo_account_move_payload(bill, currency_id=31, product_uom_ids={})["invoice_line_ids"][0][2]
     assert line_payload["account_id"] == EXPENSE_ACCOUNT_ID
     assert "product_id" not in line_payload
     assert "product_uom_id" not in line_payload

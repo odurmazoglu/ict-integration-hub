@@ -31,6 +31,7 @@ from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
 from app.erp.odoo.vendor_bill_preview_currency_reader import OdooVendorBillPreviewCurrencyReader
+from app.erp.odoo.vendor_bill_preview_product_uom_reader import OdooVendorBillPreviewProductUomReader
 from app.erp.odoo.workbench_projection_publisher import (
     OdooWorkbenchJson2ProjectionAdapter,
     OdooWorkbenchProjectionFieldMapping,
@@ -268,9 +269,10 @@ def build_vendor_bill_preview_use_case(
     """Compose the zero-write Vendor Bill preview (P0-PROD-09B).
 
     Deliberately does NOT depend on ``AccountMoveRepository``/``OdooVendorBillWriter``
-    or any other write-capable port -- its only ERP dependency is
-    ``OdooVendorBillPreviewCurrencyReader``, built on the same structurally read-only
-    ``OdooReadOnlyAdapter`` used throughout the read/matching layer (see
+    or any other write-capable port -- its only ERP dependencies are
+    ``OdooVendorBillPreviewCurrencyReader`` and (P0-PROD-10E)
+    ``OdooVendorBillPreviewProductUomReader``, both built on the same structurally
+    read-only ``OdooReadOnlyAdapter`` used throughout the read/matching layer (see
     ``OdooSelectedAccountReader``/``OdooSelectedProductReader`` for the established
     precedent). No write gate is read or checked anywhere in this composition --
     preview is available regardless of EXECUTION_EXECUTE_ENABLED or
@@ -284,6 +286,7 @@ def build_vendor_bill_preview_use_case(
         execution_planner=ExecutionPlanner(),
         vendor_bill_builder=VendorBillBuilder(),
         currency_reader=OdooVendorBillPreviewCurrencyReader(adapter=read_only_adapter),
+        product_uom_reader=OdooVendorBillPreviewProductUomReader(adapter=read_only_adapter),
     )
 
 

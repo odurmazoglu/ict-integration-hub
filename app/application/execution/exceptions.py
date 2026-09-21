@@ -59,7 +59,15 @@ class ExecutionPreviewCurrencyResolutionError(ExecutionError):
     translation of the ERP-layer currency lookup failure, so callers (including the
     API router) never need to depend on any ERP-layer exception type directly."""
 
-    error_category = "execution_preview_currency_resolution_error"
+
+class ExecutionPreviewProductUomResolutionError(ExecutionError):
+    """Safe error raised when Vendor Bill preview's read-only product UoM resolution
+    fails (P0-PROD-10E: missing/ambiguous Odoo ``uom_id`` for a resolved product) --
+    the application-layer translation of the ERP-layer UoM lookup failure. Mirrors
+    ``ExecutionPreviewCurrencyResolutionError`` exactly, so callers never need to
+    depend on any ERP-layer exception type directly."""
+
+    error_category = "execution_preview_product_uom_resolution_error"
 
 
 class ExecutionSourceInvoiceError(ExecutionError):
