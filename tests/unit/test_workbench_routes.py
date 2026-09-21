@@ -1367,7 +1367,13 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "ettn",
     ):
         assert forbidden not in supplier_resolution_text
-    assert set(supplier_resolution_schema["properties"]) == {"mode", "expected_version", "partner_id", "note"}
+    assert set(supplier_resolution_schema["properties"]) == {
+        "mode",
+        "expected_version",
+        "partner_id",
+        "note",
+        "authorization_id",
+    }
     assert supplier_resolution_schema.get("additionalProperties") is False
     mode_ref = supplier_resolution_schema["properties"]["mode"]["$ref"].split("/")[-1]
     assert "one_off_vendor" in response.json()["components"]["schemas"][mode_ref]["enum"]

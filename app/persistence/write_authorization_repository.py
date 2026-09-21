@@ -18,6 +18,7 @@ from app.application.workbench.write_authorization import (
     WriteAuthorizationStatus,
 )
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_one_off_vendor_retirement import WorkbenchReviewOneOffVendorRetirement
 from app.models.workbench_review_write_authorization import WorkbenchReviewWriteAuthorization
 
 
@@ -177,14 +178,12 @@ class SqlAlchemyWriteAuthorizationRepository:
                 target_version,
             ):
                 raise WriteAuthorizationScopeMismatchError("Write authorization scope does not match request.")
-            current_version = self._session.scalar(
-                select(WorkbenchReviewItem.version).where(
-                    WorkbenchReviewItem.review_id == review_id,
-                    WorkbenchReviewItem.company_id == company_id,
-                )
+            self._ensure_target_still_valid(
+                operation_type=operation_type,
+                review_id=review_id,
+                company_id=company_id,
+                target_version=target_version,
             )
-            if current_version != target_version:
-                raise WriteAuthorizationScopeMismatchError("Authorization targets a stale review version.")
             now = datetime.now(UTC)
             if model.status == "revoked":
                 raise WriteAuthorizationRevokedError("Write authorization has been revoked.")
@@ -221,3 +220,43 @@ class SqlAlchemyWriteAuthorizationRepository:
             return _record_from_model(model)
         except SQLAlchemyError as exc:
             raise WriteAuthorizationError("Failed to claim write authorization.") from exc
+
+    def _ensure_target_still_valid(
+        self,
+        *,
+        operation_type: WriteAuthorizationOperationType,
+        review_id: str,
+        company_id: int,
+        target_version: int,
+    ) -> None:
+        """P0-PROD-09F: what "the target is still valid" means depends on the
+        operation. EXECUTE_VENDOR_BILL/CREATE_PERMANENT_SUPPLIER/ONE_OFF_VENDOR_SUPPLIER
+        all target the review's *current* version -- unchanged from 09D1.
+        ONE_OFF_VENDOR_ARCHIVE targets a specific, already-persisted retirement row's
+        own version, which by design is almost always behind the review's current
+        version by the time recovery is needed (the review keeps advancing through
+        decision submission and execution after the retirement row is created) -- so
+        it is validated against that row's continued existence instead.
+        """
+
+        if operation_type is WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE:
+            retirement_exists = self._session.scalar(
+                select(WorkbenchReviewOneOffVendorRetirement.id).where(
+                    WorkbenchReviewOneOffVendorRetirement.review_id == review_id,
+                    WorkbenchReviewOneOffVendorRetirement.company_id == company_id,
+                    WorkbenchReviewOneOffVendorRetirement.review_version == target_version,
+                )
+            )
+            if retirement_exists is None:
+                raise WriteAuthorizationScopeMismatchError(
+                    "Authorization targets a retirement row that no longer exists."
+                )
+            return
+        current_version = self._session.scalar(
+            select(WorkbenchReviewItem.version).where(
+                WorkbenchReviewItem.review_id == review_id,
+                WorkbenchReviewItem.company_id == company_id,
+            )
+        )
+        if current_version != target_version:
+            raise WriteAuthorizationScopeMismatchError("Authorization targets a stale review version.")

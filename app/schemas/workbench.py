@@ -227,6 +227,7 @@ class SupplierResolutionRequest(BaseModel):
     expected_version: int
     partner_id: int | None = None
     note: str | None = None
+    authorization_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class SupplierRemediationResponse(BaseModel):
@@ -493,6 +494,7 @@ class OneOffVendorRetirementResponse(BaseModel):
 class OneOffVendorRetirementRecoveryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     review_version: int = Field(gt=0)
+    authorization_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class OneOffVendorRetirementRecoveryResponse(BaseModel):

@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from alembic import command
 from app.core.config import get_settings
@@ -32,7 +34,15 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
             i.name for i in WorkbenchReviewWriteAuthorization.__table__.indexes
         }
         with engine.connect() as connection:
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170028"
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170029"
+        _assert_operation_type_check_constraint(engine, name)
+        # Rows using the new operation types must be cleared before downgrading --
+        # SQLite's batch-recreate (and PostgreSQL's default ADD CONSTRAINT
+        # validation) both re-validate existing rows against the restored, narrower
+        # constraint, exactly as for any other constraint tightening.
+        _delete_new_operation_type_rows(engine, name)
+        command.downgrade(config, "202607170028")
+        _assert_pre_09f_check_constraint_rejects_new_operation_types(engine, name)
         command.downgrade(config, "202607170027")
         assert name not in inspect(engine).get_table_names()
         assert "workbench_review_decisions" in inspect(engine).get_table_names()
@@ -40,3 +50,70 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
     finally:
         engine.dispose()
         get_settings.cache_clear()
+
+
+def _insert_authorization(engine, table_name: str, *, review_id: str, operation_type: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO {table_name}
+                    (authorization_id, company_id, review_id, operation_type, target_version,
+                     status, authorized_by, expires_at)
+                VALUES (:auth_id, 1, :review_id, :operation_type, 1, 'pending', 'tester',
+                        datetime('now', '+15 minutes'))
+                """
+            ),
+            {"auth_id": f"auth-{operation_type}-{review_id}", "review_id": review_id, "operation_type": operation_type},
+        )
+
+
+def _seed_review(engine, review_id: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO workbench_review_items
+                    (review_id, company_id, invoice_id, invoice_number, supplier_tax_number, supplier_name,
+                     invoice_date, currency, total_amount, workflow, status, review_reasons, warnings,
+                     version, idempotency_key)
+                VALUES (:review_id, 1, 'inv', 'INV-1', '1234567890', 'Vendor', '2026-01-01', 'TRY', 1.0,
+                        'manual_review', 'pending_review', '[]', '[]', 1, :review_id)
+                """
+            ),
+            {"review_id": review_id},
+        )
+
+
+def _delete_new_operation_type_rows(engine, table_name: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(text(f"DELETE FROM {table_name} WHERE operation_type != 'EXECUTE_VENDOR_BILL'"))
+
+
+def _assert_operation_type_check_constraint(engine, table_name: str) -> None:
+    """P0-PROD-09F: the extended check constraint accepts all four operation types
+    and still rejects anything else -- proving the migration actually widened the
+    constraint rather than merely reordering its name/columns."""
+
+    _seed_review(engine, "review-ck-check")
+    for operation_type in (
+        "EXECUTE_VENDOR_BILL",
+        "CREATE_PERMANENT_SUPPLIER",
+        "ONE_OFF_VENDOR_SUPPLIER",
+        "ONE_OFF_VENDOR_ARCHIVE",
+    ):
+        _insert_authorization(engine, table_name, review_id="review-ck-check", operation_type=operation_type)
+    with pytest.raises(IntegrityError):
+        _insert_authorization(engine, table_name, review_id="review-ck-check", operation_type="SOMETHING_ELSE")
+
+
+def _assert_pre_09f_check_constraint_rejects_new_operation_types(engine, table_name: str) -> None:
+    """After downgrading to 202607170028, the pre-09F constraint is restored exactly
+    -- the new operation types are rejected again, proving downgrade genuinely
+    reverts the constraint body, not just the alembic_version pointer."""
+
+    _seed_review(engine, "review-ck-downgrade")
+    _insert_authorization(engine, table_name, review_id="review-ck-downgrade", operation_type="EXECUTE_VENDOR_BILL")
+    for operation_type in ("CREATE_PERMANENT_SUPPLIER", "ONE_OFF_VENDOR_SUPPLIER", "ONE_OFF_VENDOR_ARCHIVE"):
+        with pytest.raises(IntegrityError):
+            _insert_authorization(engine, table_name, review_id="review-ck-downgrade", operation_type=operation_type)

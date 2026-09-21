@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.application.commands.base import Command
 from app.application.exceptions.supplier_partner import SupplierPartnerWriteValidationError
+
+if TYPE_CHECKING:
+    # Deferred: app.application.workbench's package __init__ eagerly imports use
+    # cases that themselves import this module, so a real-time import here would
+    # cycle. Safe because of `from __future__ import annotations` above -- the
+    # WriteAuthorizationRecord annotation is never evaluated at runtime.
+    from app.application.workbench.write_authorization import WriteAuthorizationRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +37,14 @@ class CreateSupplierPartnerCommand(Command):
     ONE_OFF_VENDOR path supplies a predicate, and only after checking its own
     ``SupplierRemediationEffect`` ownership ledger -- the writer never infers
     ownership itself, it only asks the question the caller hands it.
+
+    ``authorization`` (P0-PROD-09F) is an optional, already-claimed-and-consumed
+    ``WriteAuthorizationRecord`` for this exact write. When present, it lets
+    ``OdooSupplierPartnerWritePolicy.ensure_real_write_allowed`` bypass ONLY
+    ``supplier_remediation_write_enabled`` -- the master production kill switch,
+    approval acknowledgement, and named-approver check are never bypassed. Consumed
+    strictly before this command is ever constructed (see
+    ``ResolveWorkbenchSupplierUseCase``); this field never itself performs a claim.
     """
 
     company_id: int
@@ -37,6 +53,7 @@ class CreateSupplierPartnerCommand(Command):
     idempotency_key: str
     approved_by: str | None = None
     authorize_inactive_reuse: Callable[[int], bool] | None = None
+    authorization: WriteAuthorizationRecord | None = None
 
     def __post_init__(self) -> None:
         if type(self.company_id) is not int or self.company_id <= 0:

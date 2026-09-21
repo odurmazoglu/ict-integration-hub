@@ -459,8 +459,18 @@ async def test_connector_errors_are_translated_without_leaking_secrets() -> None
 
 
 def test_writer_module_never_touches_secret_material() -> None:
+    """Guards against embedding an HTTP Authorization header/bearer-token literal.
+
+    P0-PROD-09F: the writer now takes a `write_authorization: WriteAuthorizationRecord`
+    parameter (narrow runtime write authorization, unrelated to any HTTP header) --
+    a bare `"authorization:"` substring match would false-positive on that Python
+    type annotation. `'"authorization"'` (quoted) still catches an actual header-name
+    or dict-key literal (e.g. `{"Authorization": f"Bearer {key}"}`) while leaving a
+    plain identifier's own type annotation alone.
+    """
+
     source = Path("app/erp/write/odoo_supplier_partner_writer.py").read_text(encoding="utf-8").lower()
-    for marker in ("odoo_api_key", "get_secret_value", "x-odoo-database", "authorization:", SECRET_MARKER.lower()):
+    for marker in ("odoo_api_key", "get_secret_value", "x-odoo-database", '"authorization"', SECRET_MARKER.lower()):
         assert marker not in source
 
 

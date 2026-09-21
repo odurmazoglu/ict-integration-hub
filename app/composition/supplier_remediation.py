@@ -32,6 +32,7 @@ from app.persistence import (
     SqlAlchemyReviewSupplierResolutionRepository,
     SqlAlchemyUnitOfWork,
     SqlAlchemyVendorBillExecutionEvidenceReader,
+    SqlAlchemyWriteAuthorizationRepository,
 )
 
 
@@ -101,6 +102,7 @@ def build_resolve_workbench_supplier_use_case(
         unit_of_work=SqlAlchemyUnitOfWork(session),
         workbench_republisher=workbench_republisher,
         retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
+        write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
     )
 
 
@@ -110,6 +112,7 @@ def build_archive_one_off_vendor_use_case(
     settings: Settings,
     odoo_client: OdooJson2Client | None = None,
     approved_by: str | None = None,
+    authorization_id: str | None = None,
 ) -> ArchiveOneOffVendorUseCase:
     """Compose the ONE_OFF_VENDOR archive-last orchestration (P0-PROD-08H).
 
@@ -118,6 +121,9 @@ def build_archive_one_off_vendor_use_case(
     Hub-owned one-off partner is protected by the same
     ``SUPPLIER_REMEDIATION_WRITE_ENABLED`` authorization, not a new or broader one.
     Used by the post-execution trigger and explicit operator recovery workflow.
+
+    ``authorization_id`` (P0-PROD-09F) is only ever set by the recovery workflow --
+    the automatic post-execution trigger never supplies it.
     """
 
     resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
@@ -132,6 +138,8 @@ def build_archive_one_off_vendor_use_case(
         retirement_port=retirement_port,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         approved_by=approved_by,
+        write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
+        authorization_id=authorization_id,
     )
 
 
@@ -147,7 +155,11 @@ def build_recover_one_off_vendor_retirement_workflow(
 ) -> RecoverOneOffVendorRetirementWorkflow:
     return RecoverOneOffVendorRetirementWorkflow(
         status_reader=build_get_one_off_vendor_retirement_use_case(session=session),
-        archive_use_case_factory=lambda approved_by: build_archive_one_off_vendor_use_case(
-            session=session, settings=settings, odoo_client=odoo_client, approved_by=approved_by
+        archive_use_case_factory=lambda *, approved_by, authorization_id=None: build_archive_one_off_vendor_use_case(
+            session=session,
+            settings=settings,
+            odoo_client=odoo_client,
+            approved_by=approved_by,
+            authorization_id=authorization_id,
         ),
     )
