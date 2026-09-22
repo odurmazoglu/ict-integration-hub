@@ -126,6 +126,38 @@ class SqlAlchemyExecutionRuntimeRepository:
         except SQLAlchemyError as exc:
             raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
 
+    def find_latest_snapshot_for_review(self, *, review_id: str, company_id: int) -> ExecutionSnapshot | None:
+        """Read-only lookup for the P0-PROD-12A operator execution-status endpoint.
+
+        A review can accumulate more than one ``workflow_executions`` row across
+        decision versions and, within one decision version, across ``DRY_RUN``
+        vs. ``EXECUTE`` modes (``accepted_decision_execution_id`` includes both --
+        see ``app/application/execution/accepted_decision_use_cases.py``; a plain
+        ``POST /execute`` defaults to ``DRY_RUN`` and is itself persisted, unlike
+        the separate zero-write preview endpoint, which never persists at all).
+        Operator incident diagnosis is about what a real ``EXECUTE`` attempt did,
+        so this deliberately looks only at ``mode == EXECUTE`` rows and picks the
+        most recent by decision_version then row id.
+        """
+
+        try:
+            record = self._session.scalar(
+                select(WorkflowExecution)
+                .options(selectinload(WorkflowExecution.steps))
+                .where(
+                    WorkflowExecution.company_id == company_id,
+                    WorkflowExecution.review_id == review_id,
+                    WorkflowExecution.mode == ExecutionMode.EXECUTE.value,
+                )
+                .order_by(WorkflowExecution.decision_version.desc(), WorkflowExecution.id.desc())
+                .limit(1)
+            )
+            if record is None:
+                return None
+            return _snapshot_from_model(record)
+        except SQLAlchemyError as exc:
+            raise ExecutionPersistenceError(SAFE_EXECUTION_PERSISTENCE_ERROR) from exc
+
     def persist_transition(
         self,
         *,

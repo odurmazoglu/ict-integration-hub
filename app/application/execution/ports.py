@@ -45,6 +45,18 @@ class ExecutionSourceInvoiceReader(Protocol):
         pass
 
 
+class WorkbenchExecutionSnapshotReader(Protocol):
+    """Read-only lookup of the latest real (EXECUTE-mode) execution for a review.
+
+    Used only by the P0-PROD-12A operator execution-status endpoint -- never by
+    the execution runtime itself, which always resumes by its own deterministic
+    ``execution_id`` and never needs to search by review.
+    """
+
+    def find_latest_snapshot_for_review(self, *, review_id: str, company_id: int) -> ExecutionSnapshot | None:
+        pass
+
+
 class AcceptedBillingEvidenceReader(Protocol):
     """Read accepted Stage 2 customer billing evidence for execution planning."""
 

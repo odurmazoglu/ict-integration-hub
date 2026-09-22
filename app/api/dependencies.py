@@ -33,6 +33,7 @@ from app.application.workbench import (
     SubmitReviewDecisionUseCase,
     WorkbenchDecisionIngestionWorkflow,
 )
+from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.product_remediation import CreateNewProductCommand, CreateNewProductResult
 from app.application.workbench.retirement_recovery import (
     GetOneOffVendorRetirementUseCase,
@@ -49,6 +50,7 @@ from app.application.workbench.write_authorization_use_cases import (
 )
 from app.composition import (
     build_create_new_product_use_case,
+    build_get_workbench_execution_status_use_case,
     build_odoo_workbench_decision_ingestion_workflow,
     build_resolve_workbench_supplier_use_case,
     build_uyumsoft_canonical_invoice_importer,
@@ -439,6 +441,16 @@ class _LazyPreviewVendorBillUseCase:
 VendorBillPreviewUseCaseDep = Annotated[
     PreviewVendorBillUseCase,
     Depends(get_vendor_bill_preview_use_case),
+]
+
+
+def get_workbench_execution_status_use_case(session: DbSessionDep) -> GetWorkbenchExecutionStatusUseCase:
+    return build_get_workbench_execution_status_use_case(session=session)
+
+
+WorkbenchExecutionStatusUseCaseDep = Annotated[
+    GetWorkbenchExecutionStatusUseCase,
+    Depends(get_workbench_execution_status_use_case),
 ]
 
 

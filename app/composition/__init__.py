@@ -2,6 +2,7 @@
 
 from app.composition.execution import (
     build_customer_quotation_execution_use_case,
+    build_get_workbench_execution_status_use_case,
     build_vendor_bill_execution_use_case,
     build_vendor_bill_preview_use_case,
     build_workbench_accepted_decision_execution_dispatcher,
@@ -27,6 +28,7 @@ __all__ = [
     "build_create_new_product_use_case",
     "build_customer_quotation_execution_use_case",
     "build_deterministic_decision_engine",
+    "build_get_workbench_execution_status_use_case",
     "build_import_invoice_use_case",
     "build_odoo_workbench_decision_ingestion_workflow",
     "build_odoo_workbench_projection_publisher",

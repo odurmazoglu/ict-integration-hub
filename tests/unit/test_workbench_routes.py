@@ -1318,6 +1318,7 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}",
         "/api/workbench/reviews/{review_id}/decision",
         "/api/workbench/reviews/{review_id}/execute",
+        "/api/workbench/reviews/{review_id}/execution-status",
         "/api/workbench/reviews/{review_id}/product-resolution",
         "/api/workbench/reviews/{review_id}/quotation-scenarios",
         "/api/workbench/reviews/{review_id}/supplier-resolution",
