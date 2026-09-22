@@ -33,13 +33,13 @@ from app.application.workbench import (
     SubmitReviewDecisionUseCase,
     WorkbenchDecisionIngestionWorkflow,
 )
-from app.application.workbench.review_evidence import ReviewEvidenceReader
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.product_remediation import CreateNewProductCommand, CreateNewProductResult
 from app.application.workbench.retirement_recovery import (
     GetOneOffVendorRetirementUseCase,
     RecoverOneOffVendorRetirementWorkflow,
 )
+from app.application.workbench.review_evidence import ReviewEvidenceReader
 from app.application.workbench.supplier_remediation import (
     ResolveWorkbenchSupplierCommand,
     SupplierRemediationResult,
@@ -75,14 +75,14 @@ from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
 from app.db.session import SessionLocal
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
-from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.partner_repository import OdooPartnerRepository
+from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountReader
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBillingEvidenceReader
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
-from app.persistence.workbench_review_source_invoice_reader import SqlAlchemyReviewSourceInvoiceEvidenceReader
 from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
+from app.persistence.workbench_review_source_invoice_reader import SqlAlchemyReviewSourceInvoiceEvidenceReader
 from app.services.document_storage import DocumentStorage, LocalDocumentStorage
 from app.services.uyumsoft_canonical_import import UyumsoftCanonicalInvoiceImporter
 

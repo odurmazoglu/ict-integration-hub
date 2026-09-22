@@ -7,8 +7,8 @@ from app.application.exceptions import ApplicationError
 from app.application.workbench.dto import ReviewItem, ReviewQueueResult
 from app.application.workbench.exceptions import ReviewQueryError, WorkbenchContractError
 from app.application.workbench.ports import ReviewQueueReader
-from app.application.workbench.review_evidence import ReviewEvidenceReader
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
+from app.application.workbench.review_evidence import ReviewEvidenceReader
 
 
 class ListReviewQueueUseCase:
