@@ -264,6 +264,8 @@ Application rollback:
 
 ## Backup And Restore Checklist
 
+See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md) for the versioned PostgreSQL backup script (`scripts/backup-postgres.sh`) and the full step-by-step restore runbook (backup verification, restore preconditions/procedure, post-restore verification, and abort conditions).
+
 - PostgreSQL backup captured and restore-tested.
 - Document storage root backed up with hashes preserved.
 - Runtime configuration backed up through the secret manager without exporting secret values to logs.
