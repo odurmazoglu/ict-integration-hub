@@ -7,7 +7,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.dependencies import get_db_session, get_document_storage, get_uyumsoft_client
+from app.api.dependencies import get_db_session, get_document_storage, get_request_context, get_uyumsoft_client
+from app.api.security import AuthenticationMethod, InvalidTokenError, Permission, RequestContext
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings, get_settings
 from app.db.base import Base
@@ -30,21 +31,85 @@ class FakeDocumentUyumsoftClient(UyumsoftSoapClient):
         )
 
 
-async def test_document_download_requires_read_only_confirmation(api_client: AsyncClient) -> None:
+def _context(*permissions: Permission, user_id: str = "operator-1") -> RequestContext:
+    return RequestContext(
+        user_id=user_id,
+        user_name="Document Operator",
+        company_id=7,
+        permissions=permissions,
+        trace_id="trace-document-download",
+        authentication_method=AuthenticationMethod.JWT,
+    )
+
+
+async def test_document_download_requires_authentication(api_client: AsyncClient) -> None:
+    """P0-PROD-12B: an unauthenticated request (no get_request_context override at all -- the
+    real DisabledRequestContextResolver applies) is rejected before any gate/validation."""
     response = await api_client.post(
         "/api/v1/documents/uyumsoft/invoices/download",
-        json={"invoice_ids": [1], "document_type": "UBL_XML"},
+        json={"invoice_ids": [1], "document_type": "UBL_XML", "confirm_read_only": True},
     )
+
+    assert response.status_code == 401
+
+
+async def test_document_download_authenticated_without_permission_is_forbidden(api_client: AsyncClient) -> None:
+    app.dependency_overrides[get_request_context] = lambda: _context(Permission.WORKBENCH_EXECUTE)
+    try:
+        response = await api_client.post(
+            "/api/v1/documents/uyumsoft/invoices/download",
+            json={"invoice_ids": [1], "document_type": "UBL_XML", "confirm_read_only": True},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+
+
+async def test_document_download_invalid_token_maps_to_401(api_client: AsyncClient) -> None:
+    """Mirrors the existing Workbench invalid-token contract (test_workbench_routes.py's
+    test_authentication_failures_map_to_401_envelope) -- same error envelope/status, no
+    route-specific auth error was introduced."""
+    app.dependency_overrides[get_request_context] = lambda: (_ for _ in ()).throw(
+        InvalidTokenError("Bearer token is invalid.")
+    )
+    try:
+        response = await api_client.post(
+            "/api/v1/documents/uyumsoft/invoices/download",
+            json={"invoice_ids": [1], "document_type": "UBL_XML", "confirm_read_only": True},
+            headers={"Authorization": "Bearer bogus-token"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+    assert response.json()["errors"][0]["code"] == "invalid_token"
+    assert "bogus-token" not in response.text
+
+
+async def test_document_download_requires_read_only_confirmation(api_client: AsyncClient) -> None:
+    app.dependency_overrides[get_request_context] = lambda: _context(Permission.INVOICE_DOCUMENT_READ)
+    try:
+        response = await api_client.post(
+            "/api/v1/documents/uyumsoft/invoices/download",
+            json={"invoice_ids": [1], "document_type": "UBL_XML"},
+        )
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 422
     assert "confirm_read_only" in response.json()["detail"]
 
 
 async def test_document_download_rejects_unbounded_batch(api_client: AsyncClient) -> None:
-    response = await api_client.post(
-        "/api/v1/documents/uyumsoft/invoices/download",
-        json={"invoice_ids": list(range(1, 22)), "document_type": "UBL_XML", "confirm_read_only": True},
-    )
+    app.dependency_overrides[get_request_context] = lambda: _context(Permission.INVOICE_DOCUMENT_READ)
+    try:
+        response = await api_client.post(
+            "/api/v1/documents/uyumsoft/invoices/download",
+            json={"invoice_ids": list(range(1, 22)), "document_type": "UBL_XML", "confirm_read_only": True},
+        )
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 422
 
@@ -63,6 +128,7 @@ async def test_document_download_persists_document_metadata_and_file(
         with session_factory() as session:
             yield session
 
+    app.dependency_overrides[get_request_context] = lambda: _context(Permission.INVOICE_DOCUMENT_READ)
     app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_environment="test")
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FakeDocumentUyumsoftClient()
@@ -97,6 +163,7 @@ async def test_document_download_returns_not_found_for_unknown_invoice(
         with session_factory() as session:
             yield session
 
+    app.dependency_overrides[get_request_context] = lambda: _context(Permission.INVOICE_DOCUMENT_READ)
     app.dependency_overrides[get_settings] = lambda: Settings(uyumsoft_environment="test")
     app.dependency_overrides[get_db_session] = db_override
     app.dependency_overrides[get_uyumsoft_client] = lambda: FakeDocumentUyumsoftClient()

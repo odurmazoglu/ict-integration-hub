@@ -24,6 +24,17 @@ class Permission(StrEnum):
     WORKBENCH_REVIEW_READ = "workbench_review_read"
     WORKBENCH_REVIEW_DECIDE = "workbench_review_decide"
     WORKBENCH_EXECUTE = "workbench_execute"
+    #: P0-PROD-12B. Authorizes triggering a controlled Uyumsoft invoice sync/ingestion
+    #: run (POST /api/v1/sync/uyumsoft/invoices). Distinct from every Workbench
+    #: permission: Uyumsoft sync has no review_id/company_id-scoped concept of its
+    #: own (see UYUMSOFT_SYNC_EXECUTE_ENABLED and the router's own gate checks,
+    #: which remain the separate "is this operation currently enabled" control).
+    UYUMSOFT_SYNC_EXECUTE = "uyumsoft_sync_execute"
+    #: P0-PROD-12B. Authorizes reading/fetching source invoice documents from the
+    #: Uyumsoft provider (POST /api/v1/documents/uyumsoft/invoices/download).
+    #: Distinct from every Workbench permission -- this is provider-document
+    #: access, not a Workbench review action.
+    INVOICE_DOCUMENT_READ = "invoice_document_read"
 
 
 @dataclass(frozen=True, slots=True)
