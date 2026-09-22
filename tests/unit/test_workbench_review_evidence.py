@@ -198,6 +198,51 @@ def test_review_evidence_uses_review_and_context_identity_only() -> None:
     assert partners.calls == []
 
 
+def test_review_evidence_preserves_nullable_source_line_amount_with_discount() -> None:
+    invoice = _invoice()
+    line = invoice.lines[0]
+    invoice = invoice.__class__(
+        header=invoice.header,
+        supplier=invoice.supplier,
+        customer=invoice.customer,
+        totals=invoice.totals,
+        lines=(
+            line.__class__(
+                line_number=line.line_number,
+                description=line.description,
+                seller_item_code=line.seller_item_code,
+                buyer_item_code=line.buyer_item_code,
+                barcode=line.barcode,
+                quantity=line.quantity,
+                unit_code=line.unit_code,
+                unit_price=line.unit_price,
+                line_extension_amount=None,
+                discounts=line.discounts,
+                taxes=line.taxes,
+            ),
+        ),
+        attachments=invoice.attachments,
+    )
+    result = ReviewEvidenceReader(
+        source_reader=FakeSourceReader(
+            ReviewSourceInvoiceEvidence(
+                review_id="review-1",
+                company_id=7,
+                review_version=1,
+                source_invoice_id="ETTN-1",
+                invoice=invoice,
+            )
+        ),
+        execution_reader=FakeExecutionReader(_execution(invoice)),
+        partner_repository=FakePartnerRepository(()),
+    ).get(review_id="review-1", company_id=7, review_version=1)
+
+    assert result is not None
+    assert result.source_lines[0].gross_amount is None
+    assert result.source_lines[0].discount_amount == Decimal("10")
+    assert result.source_lines[0].net_amount is None
+
+
 def _invoice() -> InternalInvoice:
     return InternalInvoice(
         header=Header(invoice_number="INV-1", invoice_uuid="ETTN-1", ettn="ETTN-1", issue_date=date(2026, 8, 2)),
