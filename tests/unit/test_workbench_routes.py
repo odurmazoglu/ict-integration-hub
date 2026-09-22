@@ -12,6 +12,7 @@ from app.api.dependencies import (
     get_list_review_queue_use_case,
     get_request_context,
     get_review_item_use_case,
+    get_review_evidence_reader,
     get_submit_review_decision_use_case,
     get_workbench_accepted_decision_execution_dispatcher,
     get_workbench_decision_ingestion_workflow,
@@ -161,6 +162,18 @@ async def test_get_detail_success_and_company_isolation(api_client: AsyncClient)
     assert use_case.calls == 1
     assert use_case.last_query.review_id == "review-1"
     assert use_case.last_query.company_id == 88
+
+
+async def test_get_detail_remains_backward_compatible_without_evidence(api_client: AsyncClient) -> None:
+    response = await _get(
+        api_client,
+        "/api/workbench/reviews/review-1",
+        context=_context(Permission.WORKBENCH_REVIEW_READ),
+        get_use_case=FakeGetUseCase(_review_item()),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["evidence"] is None
 
 
 async def test_get_detail_not_found_maps_to_404_without_cross_company_leak(api_client: AsyncClient) -> None:
