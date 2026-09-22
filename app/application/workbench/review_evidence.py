@@ -85,7 +85,11 @@ class SourceLineEvidence:
             quantity=line.quantity,
             unit_code=line.unit_code,
             unit_price=line.unit_price,
-            gross_amount=(line.line_extension_amount + discount_amount if discount_amount is not None else None),
+            gross_amount=(
+                line.line_extension_amount + discount_amount
+                if line.line_extension_amount is not None and discount_amount is not None
+                else line.line_extension_amount
+            ),
             discount_amount=discount_amount,
             net_amount=line.line_extension_amount,
             taxes=tuple((tax.tax_type, tax.rate, tax.tax_amount) for tax in line.taxes),
