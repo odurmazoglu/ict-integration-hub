@@ -127,6 +127,7 @@ class ReviewItem(ApplicationDTO):
     created_at: datetime | None = None
     updated_at: datetime | None = None
     version: int = 1
+    evidence: object | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")

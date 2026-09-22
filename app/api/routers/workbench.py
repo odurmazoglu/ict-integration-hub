@@ -121,16 +121,21 @@ from app.schemas.workbench import (
     OneOffVendorRetirementRecoveryRequest,
     OneOffVendorRetirementRecoveryResponse,
     OneOffVendorRetirementResponse,
+    ProductMatchEvidenceResponse,
     ProductRemediationEnvelope,
     ProductRemediationResponse,
     ProductResolutionRequest,
     ReviewDecisionAcknowledgementEnvelope,
     ReviewDecisionAcknowledgementResponse,
     ReviewDecisionRequest,
+    ReviewEvidenceResponse,
     ReviewItemEnvelope,
     ReviewItemResponse,
     ReviewQueueEnvelope,
     ReviewQueueResponse,
+    SourceLineResponse,
+    SourceTaxResponse,
+    SupplierCandidateResponse,
     SupplierRemediationEnvelope,
     SupplierRemediationResponse,
     SupplierResolutionRequest,
@@ -711,6 +716,74 @@ def _review_item_response(item: ReviewItem) -> ReviewItemResponse:
         created_at=item.created_at,
         updated_at=item.updated_at,
         version=item.version,
+        evidence=_evidence_response(item.evidence),
+    )
+
+
+def _evidence_response(evidence) -> ReviewEvidenceResponse | None:
+    if evidence is None:
+        return None
+    return ReviewEvidenceResponse(
+        supplier_candidates=[
+            SupplierCandidateResponse(
+                partner_id=candidate.partner_id,
+                name=candidate.name,
+                vat=candidate.vat,
+                active=candidate.active,
+                company_type=candidate.company_type,
+                parent_id=candidate.parent_id,
+                commercial_partner_id=candidate.commercial_partner_id,
+                street=candidate.street,
+                street2=candidate.street2,
+                zip=candidate.zip_code,
+                city=candidate.city,
+                state_id=candidate.state_id,
+                country_id=candidate.country_id,
+                email=candidate.email,
+                phone=candidate.phone,
+                mobile=candidate.mobile,
+                website=candidate.website,
+                supplier_rank=candidate.supplier_rank,
+                customer_rank=candidate.customer_rank,
+                company_id=candidate.company_id,
+            )
+            for candidate in evidence.supplier_candidates
+        ],
+        source_lines=[
+            SourceLineResponse(
+                line_number=line.line_number,
+                description=line.description,
+                quantity=decimal_to_api(line.quantity),
+                unit_code=line.unit_code,
+                unit_price=decimal_to_api(line.unit_price),
+                gross_amount=decimal_to_api(line.gross_amount),
+                discount_amount=decimal_to_api(line.discount_amount),
+                net_amount=decimal_to_api(line.net_amount),
+                taxes=[
+                    SourceTaxResponse(
+                        tax_type=tax_type,
+                        rate=decimal_to_api(rate),
+                        tax_amount=decimal_to_api(tax_amount),
+                    )
+                    for tax_type, rate, tax_amount in line.taxes
+                ],
+                seller_item_code=line.seller_item_code,
+                buyer_item_code=line.buyer_item_code,
+                product_match=(
+                    ProductMatchEvidenceResponse(
+                        status=line.product_match.status,
+                        product_id=line.product_match.product_id,
+                        matched_by=line.product_match.matched_by,
+                        reason=line.product_match.reason,
+                        candidate_count=line.product_match.candidate_count,
+                        confidence=decimal_to_api(line.product_match.confidence),
+                    )
+                    if line.product_match is not None
+                    else None
+                ),
+            )
+            for line in evidence.source_lines
+        ],
     )
 
 

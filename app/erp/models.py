@@ -13,6 +13,21 @@ class Partner:
     tax_number: str | None
     active: bool
     company_id: int | None = None
+    company_type: str | None = None
+    parent_id: int | None = None
+    commercial_partner_id: int | None = None
+    street: str | None = None
+    street2: str | None = None
+    zip_code: str | None = None
+    city: str | None = None
+    state_id: int | None = None
+    country_id: int | None = None
+    email: str | None = None
+    phone: str | None = None
+    mobile: str | None = None
+    website: str | None = None
+    supplier_rank: int | None = None
+    customer_rank: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -72,6 +72,75 @@ class ReviewItemResponse(BaseModel):
     created_at: datetime | None
     updated_at: datetime | None
     version: int
+    evidence: ReviewEvidenceResponse | None = None
+
+
+class SupplierCandidateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    partner_id: int
+    name: str | None
+    vat: str | None
+    active: bool
+    company_type: str | None
+    parent_id: int | None
+    commercial_partner_id: int | None
+    street: str | None
+    street2: str | None
+    zip: str | None
+    city: str | None
+    state_id: int | None
+    country_id: int | None
+    email: str | None
+    phone: str | None
+    mobile: str | None
+    website: str | None
+    supplier_rank: int | None
+    customer_rank: int | None
+    company_id: int | None
+
+
+class ProductMatchEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    status: str
+    product_id: int | None
+    matched_by: str | None
+    reason: str
+    candidate_count: int
+    confidence: str | None
+
+
+class SourceTaxResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tax_type: str | None
+    rate: str | None
+    tax_amount: str | None
+
+
+class SourceLineResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_number: str | None
+    description: str | None
+    quantity: str | None
+    unit_code: str | None
+    unit_price: str | None
+    gross_amount: str | None
+    discount_amount: str | None
+    net_amount: str | None
+    taxes: list[SourceTaxResponse]
+    seller_item_code: str | None
+    buyer_item_code: str | None
+    product_match: ProductMatchEvidenceResponse | None
+
+
+class ReviewEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    supplier_candidates: list[SupplierCandidateResponse]
+    source_lines: list[SourceLineResponse]
 
 
 class ReviewQueueResponse(BaseModel):

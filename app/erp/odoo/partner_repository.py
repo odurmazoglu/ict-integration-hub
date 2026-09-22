@@ -6,7 +6,28 @@ from typing import Any
 from app.erp.models import Partner
 from app.erp.odoo.adapter import OdooReadOnlyAdapter, many2one_id
 
-PARTNER_FIELDS = ["id", "name", "vat", "active", "company_id"]
+PARTNER_FIELDS = [
+    "id",
+    "name",
+    "vat",
+    "active",
+    "company_type",
+    "parent_id",
+    "commercial_partner_id",
+    "street",
+    "street2",
+    "zip",
+    "city",
+    "state_id",
+    "country_id",
+    "email",
+    "phone",
+    "mobile",
+    "website",
+    "supplier_rank",
+    "customer_rank",
+    "company_id",
+]
 
 
 class OdooPartnerRepository:
@@ -39,8 +60,27 @@ def _partner(record: dict[str, Any]) -> Partner:
         tax_number=_optional_str(record.get("vat")),
         active=bool(record.get("active", True)),
         company_id=many2one_id(record.get("company_id")),
+        company_type=_optional_str(record.get("company_type")),
+        parent_id=many2one_id(record.get("parent_id")),
+        commercial_partner_id=many2one_id(record.get("commercial_partner_id")),
+        street=_optional_str(record.get("street")),
+        street2=_optional_str(record.get("street2")),
+        zip_code=_optional_str(record.get("zip")),
+        city=_optional_str(record.get("city")),
+        state_id=many2one_id(record.get("state_id")),
+        country_id=many2one_id(record.get("country_id")),
+        email=_optional_str(record.get("email")),
+        phone=_optional_str(record.get("phone")),
+        mobile=_optional_str(record.get("mobile")),
+        website=_optional_str(record.get("website")),
+        supplier_rank=_optional_int(record.get("supplier_rank")),
+        customer_rank=_optional_int(record.get("customer_rank")),
     )
 
 
 def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _optional_int(value: Any) -> int | None:
+    return value if type(value) is int else None
