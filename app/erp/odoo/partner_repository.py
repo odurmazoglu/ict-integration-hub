@@ -11,7 +11,14 @@ PARTNER_FIELDS = [
     "name",
     "vat",
     "active",
-    "company_type",
+    # P0-PROD-15J: "company_type" is deliberately NOT requested. It is a valid
+    # standard Odoo field in general, but the real production Odoo Online
+    # instance's JSON-2 search_read rejects it with an HTTP 500 ("Invalid field
+    # 'company_type' on 'res.partner'") -- confirmed against production. Every
+    # other field in this list has been read successfully against the same
+    # instance. `Partner.company_type`/`SupplierCandidate.company_type` remain
+    # `None` (their existing default) rather than a fabricated value: this is
+    # read-model robustness against an unavailable field, not corrupt data.
     "parent_id",
     "commercial_partner_id",
     "street",
