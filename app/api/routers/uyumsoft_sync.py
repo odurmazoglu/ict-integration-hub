@@ -1,9 +1,17 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.security import HTTPBearer
 
-from app.api.dependencies import DbSessionDep, SettingsDep, UyumsoftCanonicalImporterDep, UyumsoftClientDep
+from app.api.dependencies import (
+    DbSessionDep,
+    RequestContextDep,
+    SettingsDep,
+    UyumsoftCanonicalImporterDep,
+    UyumsoftClientDep,
+)
+from app.api.security import Permission, require_permission
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.schemas.invoice_sync import SyncDirection, UyumsoftInvoiceSyncResponse
 from app.schemas.uyumsoft_invoices import InvoiceDirection
@@ -16,7 +24,15 @@ from app.services.uyumsoft_invoice_sync import (
     UyumsoftInvoiceSyncWorkflow,
 )
 
-router = APIRouter(prefix="/api/v1/sync/uyumsoft", tags=["uyumsoft-sync"])
+# P0-PROD-12B: same bearer-scheme + RequestContext/RBAC pattern as app/api/routers/workbench.py --
+# authentication answers "who may call this?"; UYUMSOFT_SYNC_EXECUTE_ENABLED and confirm_read_only
+# below remain the separate, independent "is this operation currently enabled?" controls. Neither
+# this route nor the underlying UyumsoftInvoiceSyncWorkflow has a company_id-scoped concept (company
+# is resolved per-invoice, deep inside canonical import) -- an authenticated caller is required, but
+# company_id from the token is not used to filter/scope this endpoint, because the underlying service
+# cannot enforce that filter.
+_bearer_scheme = HTTPBearer(auto_error=False)
+router = APIRouter(prefix="/api/v1/sync/uyumsoft", tags=["uyumsoft-sync"], dependencies=[Depends(_bearer_scheme)])
 
 SyncFromQuery = Annotated[datetime, Query(alias="from", description="Inclusive invoice start date/time.")]
 SyncToQuery = Annotated[datetime, Query(alias="to", description="Inclusive invoice end date/time.")]
@@ -40,6 +56,7 @@ InvoiceEttnQuery = Annotated[
 
 @router.post("/invoices", response_model=UyumsoftInvoiceSyncResponse)
 def sync_uyumsoft_invoices(
+    context: RequestContextDep,
     settings: SettingsDep,
     client: UyumsoftClientDep,
     canonical_importer: UyumsoftCanonicalImporterDep,
@@ -52,6 +69,7 @@ def sync_uyumsoft_invoices(
     confirm_read_only: SyncConfirmQuery = False,
     invoice_ettn: InvoiceEttnQuery = None,
 ) -> UyumsoftInvoiceSyncResponse:
+    require_permission(Permission.UYUMSOFT_SYNC_EXECUTE)(context)
     if not settings.uyumsoft_sync_execute_enabled:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

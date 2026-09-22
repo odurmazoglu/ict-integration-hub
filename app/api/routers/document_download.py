@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer
 
-from app.api.dependencies import DbSessionDep, DocumentStorageDep, SettingsDep, UyumsoftClientDep
+from app.api.dependencies import DbSessionDep, DocumentStorageDep, RequestContextDep, SettingsDep, UyumsoftClientDep
+from app.api.security import Permission, require_permission
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.schemas.invoice_document import (
     DocumentDownloadItemResponse,
@@ -19,17 +21,29 @@ from app.services.document_service import (
 )
 from app.services.document_storage import DocumentStorageError
 
-router = APIRouter(prefix="/api/v1/documents/uyumsoft", tags=["document-download"])
+# P0-PROD-12B: same bearer-scheme + RequestContext/RBAC pattern as app/api/routers/workbench.py --
+# authentication answers "who may call this?"; the test-environment-only gate and confirm_read_only
+# below remain the separate, independent "is this operation currently enabled?" controls. This route
+# has no company_id-scoped ownership check today (UyumsoftInvoiceMetadata carries no company field at
+# this stage of the pipeline -- company is resolved later, during canonical import); an authenticated
+# caller is required, but company_id from the token is not used to filter/scope this endpoint, because
+# the underlying service cannot enforce that filter.
+_bearer_scheme = HTTPBearer(auto_error=False)
+router = APIRouter(
+    prefix="/api/v1/documents/uyumsoft", tags=["document-download"], dependencies=[Depends(_bearer_scheme)]
+)
 
 
 @router.post("/invoices/download", response_model=DocumentDownloadResponse)
 def download_uyumsoft_invoice_documents(
+    context: RequestContextDep,
     request: DocumentDownloadRequest,
     settings: SettingsDep,
     client: UyumsoftClientDep,
     session: DbSessionDep,
     storage: DocumentStorageDep,
 ) -> DocumentDownloadResponse:
+    require_permission(Permission.INVOICE_DOCUMENT_READ)(context)
     if settings.uyumsoft_environment != "test":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

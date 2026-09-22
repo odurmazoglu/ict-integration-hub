@@ -101,6 +101,9 @@ Current permission vocabulary:
 
 - `WORKBENCH_REVIEW_READ`
 - `WORKBENCH_REVIEW_DECIDE`
+- `WORKBENCH_EXECUTE`
+- `UYUMSOFT_SYNC_EXECUTE`
+- `INVOICE_DOCUMENT_READ`
 
 Permissions are claims in `RequestContext`. This is not an RBAC system, role database, user database, or administration interface.
 
@@ -134,6 +137,21 @@ The route adapters construct `ReviewQueueQuery`, `ReviewDetailQuery`, and `Revie
 Workbench business context allocations are user-submitted evidence, not authorization. Allocation identifiers received from API clients or future Odoo projection child rows are untrusted until the Hub validates them. `target_company_id`, `customer_id`, `recharge_partner_id`, and `customer_invoice_id` do not grant cross-company access, do not prove ownership, and do not authorize customer invoice creation or recharge execution. The current contract performs structural positive-integer validation only; future repository validators must verify record existence, company access, outgoing customer-invoice/refund semantics, and partner/company relationships before execution.
 
 Successful and failed Workbench responses include the same `trace_id` in the JSON body and `X-Trace-ID` response header. Authentication failures before `RequestContext` resolution use the validated inbound trace id when available, otherwise a safe generated id.
+
+## Authenticated Ingestion And Document Routes
+
+`POST /api/v1/sync/uyumsoft/invoices` and `POST /api/v1/documents/uyumsoft/invoices/download` require the same `RequestContext`/`Permission` authentication as the Workbench API: a `Depends(HTTPBearer(auto_error=False))` router dependency plus `require_permission(...)` inside each handler, resolved through the identical `IPP_AUTH_MODE`-selected resolver (`oidc_jwt` in production, `development_headers` only outside production when explicitly enabled). An unauthenticated or unauthorized caller receives the same 401/403 error envelope as every other protected route; no route-specific authentication error was introduced.
+
+Required permissions:
+
+- Uyumsoft invoice sync: `uyumsoft_sync_execute`
+- Uyumsoft invoice document download: `invoice_document_read`
+
+Neither route derives or enforces `RequestContext.company_id` as a request scope: Uyumsoft sync has no company-scoped request concept (company is resolved per invoice, inside canonical import, after sync); the document-download route resolves invoices by Hub-local id with no company ownership column at this stage of the pipeline. An authenticated, permitted caller can therefore act across the full tenant base for these two routes, same as before this change -- authentication answers "who may call this," it does not retroactively add tenant scoping a route's underlying service does not implement.
+
+Authentication is additive, not a replacement for the existing feature gates, which remain fully in force after successful authentication: `UYUMSOFT_SYNC_EXECUTE_ENABLED` (sync), the test-environment-only gate (document download), and `confirm_read_only=true` (both). A caller must pass authentication, permission, and every existing gate to reach the underlying workflow.
+
+Production network isolation (API bound to `127.0.0.1`, UFW default-deny, SSH-only external access) remains the primary production protection for these two routes and was not modified by adding application authentication. Application-level authentication is defense-in-depth; it does not make either route safe to expose directly to the public internet.
 
 ## Odoo Online Workbench Projection Security
 
