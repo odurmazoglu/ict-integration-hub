@@ -12,7 +12,6 @@ from app.api.dependencies import (
     get_list_review_queue_use_case,
     get_request_context,
     get_review_item_use_case,
-    get_review_evidence_reader,
     get_submit_review_decision_use_case,
     get_workbench_accepted_decision_execution_dispatcher,
     get_workbench_decision_ingestion_workflow,

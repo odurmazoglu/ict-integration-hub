@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from app.application.workbench.evidence import ReviewExecutionEvidence, ReviewSourceInvoiceEvidence
+from app.application.workbench.evidence import ReviewExecutionEvidence
 from app.application.workbench.exceptions import ReviewNotFoundError
 from app.domain.invoice import InvoiceLine
 from app.erp.models import Partner
