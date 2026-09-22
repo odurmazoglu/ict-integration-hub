@@ -23,6 +23,7 @@ from app.api.dependencies import (
     VendorBillPreviewUseCaseDep,
     WorkbenchAcceptedDecisionExecutionDispatcherDep,
     WorkbenchDecisionIngestionWorkflowDep,
+    WorkbenchExecutionStatusUseCaseDep,
     WorkbenchQuotationScenarioEvidenceWorkflowDep,
 )
 from app.api.error_handling import error_response_factory
@@ -93,6 +94,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionRaceError,
     WorkbenchContractError,
 )
+from app.application.workbench.execution_status import WorkbenchExecutionStatus
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorCommand, OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
@@ -139,9 +141,17 @@ from app.schemas.workbench import (
     WorkbenchDecisionIngestionCandidateResponse,
     WorkbenchDecisionIngestionEnvelope,
     WorkbenchDecisionIngestionResponse,
+    WorkbenchEvidenceStatusResponse,
+    WorkbenchExecutionAuthorizationResponse,
+    WorkbenchExecutionDecisionResponse,
+    WorkbenchExecutionFailureResponse,
+    WorkbenchExecutionStatusEnvelope,
+    WorkbenchExecutionStatusResponse,
+    WorkbenchExecutionSummaryResponse,
     WorkbenchQuotationScenarioEvidenceEnvelope,
     WorkbenchQuotationScenarioEvidenceRequest,
     WorkbenchQuotationScenarioEvidenceResponse,
+    WorkbenchRecoveryStatusResponse,
     WorkbenchVendorBillExecutionEnvelope,
     WorkbenchVendorBillExecutionRequest,
     WorkbenchVendorBillExecutionResponse,
@@ -343,6 +353,33 @@ def preview_workbench_vendor_bill(
             )
         )
         return _success(response, context.trace_id, _vendor_bill_preview_response(preview), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/reviews/{review_id}/execution-status",
+    response_model=WorkbenchExecutionStatusEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Read operator execution/recovery status for a Workbench review (P0-PROD-12A)",
+    description=(
+        "Requires workbench_execute. Read-only composition of already-persisted execution/retry/artifact/"
+        "evidence/authorization state for the review's latest accepted decision and its most recent real "
+        "(EXECUTE-mode) accepted-decision execution, if any. Performs zero writes and never calls Odoo. Makes "
+        "the P0-PROD-10C/10G incident shape (waiting_retry, retry_count, prior failure, created Vendor Bill "
+        "artifact id) diagnosable without SSH/psql/internal Python."
+    ),
+)
+def get_workbench_execution_status(
+    review_id: str,
+    response: Response,
+    context: RequestContextDep,
+    use_case: WorkbenchExecutionStatusUseCaseDep,
+) -> WorkbenchExecutionStatusEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        status = use_case.execute(review_id=review_id, company_id=context.company_id)
+        return _success(response, context.trace_id, _workbench_execution_status_response(status), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -802,6 +839,71 @@ def _artifact_response(artifact: ExecutionArtifact) -> ExecutionArtifactResponse
         artifact_id=artifact.artifact_id,
         external_identity=artifact.external_identity,
         created=artifact.created,
+    )
+
+
+def _workbench_execution_status_response(status: WorkbenchExecutionStatus) -> WorkbenchExecutionStatusResponse:
+    return WorkbenchExecutionStatusResponse(
+        review_id=status.review_id,
+        company_id=status.company_id,
+        review_version=status.review_version,
+        review_status=status.review_status,
+        decision=(
+            WorkbenchExecutionDecisionResponse(
+                decision_id=status.decision.decision_id,
+                decision_version=status.decision.decision_version,
+                selected_workflow=status.decision.selected_workflow,
+            )
+            if status.decision is not None
+            else None
+        ),
+        execution=(
+            WorkbenchExecutionSummaryResponse(
+                execution_id=status.execution.execution_id,
+                mode=status.execution.mode,
+                state=status.execution.state,
+                retry_count=status.execution.retry_count,
+                max_attempts=status.execution.max_attempts,
+                remaining_attempts=status.execution.remaining_attempts,
+                retry_possible=status.execution.retry_possible,
+            )
+            if status.execution is not None
+            else None
+        ),
+        failure=(
+            WorkbenchExecutionFailureResponse(
+                step_key=status.failure.step_key,
+                error_code=status.failure.error_code,
+                safe_message=status.failure.safe_message,
+            )
+            if status.failure is not None
+            else None
+        ),
+        artifacts=[_artifact_response(artifact) for artifact in status.artifacts],
+        evidence=WorkbenchEvidenceStatusResponse(
+            stage_one_present=status.evidence.stage_one_present,
+            stage_one_review_version=status.evidence.stage_one_review_version,
+            stage_two_present=status.evidence.stage_two_present,
+            stage_two_decision_version=status.evidence.stage_two_decision_version,
+        ),
+        authorization=(
+            WorkbenchExecutionAuthorizationResponse(
+                authorization_id=status.authorization.authorization_id,
+                operation_type=status.authorization.operation_type,
+                target_version=status.authorization.target_version,
+                status=status.authorization.status,
+                use_count=status.authorization.use_count,
+                is_expired=status.authorization.is_expired,
+                consumed_by_execution_id=status.authorization.consumed_by_execution_id,
+            )
+            if status.authorization is not None
+            else None
+        ),
+        recovery=WorkbenchRecoveryStatusResponse(
+            execution_completed=status.recovery.execution_completed,
+            waiting_retry=status.recovery.waiting_retry,
+            remaining_attempts=status.recovery.remaining_attempts,
+        ),
     )
 
 

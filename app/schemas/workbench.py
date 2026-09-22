@@ -7,7 +7,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.application.execution import ExecutionArtifactType, ExecutionMode, WorkbenchVendorBillExecutionStatus
+from app.application.execution import (
+    ExecutionArtifactType,
+    ExecutionMode,
+    ExecutionState,
+    WorkbenchVendorBillExecutionStatus,
+)
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
@@ -511,3 +516,80 @@ class OneOffVendorRetirementRecoveryResponse(BaseModel):
 
 OneOffVendorRetirementEnvelope = ApiEnvelope[OneOffVendorRetirementResponse]
 OneOffVendorRetirementRecoveryEnvelope = ApiEnvelope[OneOffVendorRetirementRecoveryResponse]
+
+
+class WorkbenchExecutionDecisionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    decision_id: str | None
+    decision_version: int
+    selected_workflow: WorkflowType | None
+
+
+class WorkbenchExecutionSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    execution_id: str
+    mode: ExecutionMode
+    state: ExecutionState
+    retry_count: int
+    max_attempts: int
+    remaining_attempts: int
+    retry_possible: bool
+
+
+class WorkbenchExecutionFailureResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    step_key: str | None
+    error_code: str
+    safe_message: str
+
+
+class WorkbenchEvidenceStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stage_one_present: bool
+    stage_one_review_version: int | None
+    stage_two_present: bool
+    stage_two_decision_version: int | None
+
+
+class WorkbenchExecutionAuthorizationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    authorization_id: str
+    operation_type: WriteAuthorizationOperationType
+    target_version: int
+    status: WriteAuthorizationStatus
+    use_count: int
+    is_expired: bool
+    consumed_by_execution_id: str | None
+
+
+class WorkbenchRecoveryStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    execution_completed: bool
+    waiting_retry: bool
+    remaining_attempts: int
+
+
+class WorkbenchExecutionStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    review_version: int
+    review_status: ReviewStatus
+
+    decision: WorkbenchExecutionDecisionResponse | None
+    execution: WorkbenchExecutionSummaryResponse | None
+    failure: WorkbenchExecutionFailureResponse | None
+    artifacts: list[ExecutionArtifactResponse]
+    evidence: WorkbenchEvidenceStatusResponse
+    authorization: WorkbenchExecutionAuthorizationResponse | None
+    recovery: WorkbenchRecoveryStatusResponse
+
+
+WorkbenchExecutionStatusEnvelope = ApiEnvelope[WorkbenchExecutionStatusResponse]

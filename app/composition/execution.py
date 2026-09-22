@@ -23,6 +23,7 @@ from app.application.execution import (
 )
 from app.application.execution.contracts import ExecutionStepType
 from app.application.execution.vendor_bill_preview import PreviewVendorBillUseCase
+from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.composition.supplier_remediation import build_archive_one_off_vendor_use_case
@@ -54,6 +55,7 @@ from app.persistence import (
     SqlAlchemyExecutionRuntimeRepository,
     SqlAlchemyExecutionSourceInvoiceReader,
     SqlAlchemyQuotationScenarioEvidenceRepository,
+    SqlAlchemyReviewExecutionEvidenceReader,
     SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyUnitOfWork,
@@ -287,6 +289,24 @@ def build_vendor_bill_preview_use_case(
         vendor_bill_builder=VendorBillBuilder(),
         currency_reader=OdooVendorBillPreviewCurrencyReader(adapter=read_only_adapter),
         product_uom_reader=OdooVendorBillPreviewProductUomReader(adapter=read_only_adapter),
+    )
+
+
+def build_get_workbench_execution_status_use_case(*, session: Session) -> GetWorkbenchExecutionStatusUseCase:
+    """Compose the zero-write operator execution/recovery status read (P0-PROD-12A).
+
+    Every dependency is an existing read-only reader/repository already used
+    elsewhere in this module for preview/execution composition -- this adds no
+    new Odoo dependency and no new write-capable port.
+    """
+
+    return GetWorkbenchExecutionStatusUseCase(
+        review_reader=SqlAlchemyReviewRepository(session),
+        accepted_decision_reader=SqlAlchemyReviewRepository(session),
+        execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(session),
+        stage_one_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+        stage_two_evidence_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
+        write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
     )
 
 
