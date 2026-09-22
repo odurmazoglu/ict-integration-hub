@@ -9,7 +9,13 @@ from app.connectors.exceptions import (
     ConnectorError,
     ConnectorValidationError,
 )
-from app.connectors.odoo.client import OdooJson2Client
+from app.connectors.odoo.client import READ_ONLY_MODELS, OdooJson2Client
+
+
+def test_read_only_models_allowlist_includes_account_move_line_not_uom_uom() -> None:
+    """P0-PROD-12C: account.move.line is the only allowlist change; uom.uom stays out."""
+    assert "account.move.line" in READ_ONLY_MODELS
+    assert "uom.uom" not in READ_ONLY_MODELS
 
 
 async def test_create_account_move_returns_created_id() -> None:
@@ -381,6 +387,40 @@ async def test_search_read_allows_account_move_for_duplicate_detection() -> None
     )
 
     assert await client.search_read(model="account.move", domain=[], fields=["id"]) == []
+
+
+async def test_search_read_allows_account_move_line_for_verification_readback() -> None:
+    """P0-PROD-12C: account.move.line joins the sanctioned read-only allowlist so an
+    already-created Vendor Bill's lines can be independently re-read for verification."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/json/2/account.move.line/search_read"
+        return httpx.Response(200, json=[])
+
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://example.odoo.com"),
+    )
+
+    assert await client.search_read(model="account.move.line", domain=[], fields=["id"]) == []
+
+
+async def test_search_read_still_rejects_uom_uom() -> None:
+    """P0-PROD-12C explicitly does NOT add uom.uom to the allowlist -- UoM resolution
+    remains sanctioned only via product.product/product.template (P0-PROD-10E)."""
+    client = OdooJson2Client(
+        base_url="https://example.odoo.com",
+        database="example",
+        api_key="secret",
+        timeout_seconds=10,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=[]))),
+    )
+
+    with pytest.raises(ConnectorError):
+        await client.search_read(model="uom.uom", domain=[], fields=["id"])
 
 
 async def test_read_model_field_metadata_uses_constrained_read_only_endpoint() -> None:
