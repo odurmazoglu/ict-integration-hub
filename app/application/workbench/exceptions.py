@@ -349,3 +349,64 @@ class OperatingExpenseMappingAccountInvalidError(OperatingExpenseMappingWorkflow
     eligible operating-expense account, or is not scoped to the request's company."""
 
     error_category = "operating_expense_mapping_account_invalid"
+
+
+class PurchasePurposeError(ApplicationError):
+    """Safe base error for the review-scoped purchase-purpose orchestration (P0-PROD-15T)."""
+
+    error_category = "purchase_purpose_error"
+
+
+class PurchasePurposeEligibilityError(PurchasePurposeError):
+    """Safe error raised when the review is not eligible to record a purchase purpose.
+
+    Covers a stale ``expected_version``, a review that is no longer pending, and a
+    review whose reasons carry no operating-expense-shaped blocker to explain.
+    """
+
+    error_category = "purchase_purpose_eligibility_error"
+
+
+class PurchasePurposeConflictError(PurchasePurposeError):
+    """Safe error raised when a different purchase-purpose resolution already exists
+    for this exact review version."""
+
+    error_category = "purchase_purpose_conflict_error"
+
+
+class AccountingResolutionError(ApplicationError):
+    """Safe base error for the review-scoped accounting-resolution orchestration (P0-PROD-15T)."""
+
+    error_category = "accounting_resolution_error"
+
+
+class AccountingResolutionEligibilityError(AccountingResolutionError):
+    """Safe error raised when the review is not eligible for an accounting resolution.
+
+    Covers a stale ``expected_version``, a review that is no longer pending, and a
+    review whose reasons carry no operating-expense-shaped blocker to resolve.
+    """
+
+    error_category = "accounting_resolution_eligibility_error"
+
+
+class AccountingResolutionPurposeRequiredError(AccountingResolutionError):
+    """Safe error raised when no accepted PurchasePurposeResolution exists yet for this
+    exact review version -- purpose must be recorded before an accounting treatment."""
+
+    error_category = "accounting_resolution_purpose_required"
+
+
+class AccountingResolutionPurposeUnsupportedError(AccountingResolutionError):
+    """Safe error raised when the recorded purchase purpose (e.g. RESALE,
+    CUSTOMER_PROJECT) has no implemented accounting treatment yet. Never silently
+    reinterpreted as a plain expense."""
+
+    error_category = "accounting_resolution_purpose_unsupported"
+
+
+class AccountingResolutionConflictError(AccountingResolutionError):
+    """Safe error raised when a different accounting resolution already exists for
+    this exact review version."""
+
+    error_category = "accounting_resolution_conflict_error"

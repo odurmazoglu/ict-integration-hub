@@ -27,6 +27,7 @@ from app.erp.write.odoo_supplier_partner_writer import (
 )
 from app.persistence import (
     SqlAlchemyOperatingExpenseMappingRepository,
+    SqlAlchemyReviewAccountingResolutionRepository,
     SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
@@ -88,6 +89,10 @@ def build_resolve_workbench_supplier_use_case(
         # reclassification also resolve OPERATING_EXPENSE_MAPPING_REQUIRED once a real
         # mapping exists, exactly mirroring the P0-PROD-10D-style Stage-1 substitution.
         operating_expense_matcher=OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session)),
+        # P0-PROD-15T: a review-scoped ReviewAccountingResolution (if any) always takes
+        # precedence over the supplier-wide mapping above -- see
+        # ReclassifyWorkbenchReviewUseCase's own module docstring for the precedence order.
+        review_accounting_resolution_reader=SqlAlchemyReviewAccountingResolutionRepository(session),
     )
 
     # Reuse the existing best-effort Workbench publisher, gated by the existing flag.

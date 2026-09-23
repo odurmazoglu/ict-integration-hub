@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from app.application.workbench.accounting_resolution import ReviewAccountingResolution
 from app.application.workbench.billing_authoring import (
     ValidatedWorkbenchBillingAuthoring,
     WorkbenchBillingAuthoringRow,
@@ -26,6 +27,7 @@ from app.application.workbench.projection import (
     ProjectionPublishResult,
     WorkbenchProjection,
 )
+from app.application.workbench.purchase_purpose import PurchasePurposeResolution
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workbench.reclassification import (
     ReviewReclassificationProposal,
@@ -233,6 +235,50 @@ class SupplierRemediationEffectWriter(Protocol):
         adopt as retirement-eligible. Read-only; never used to decide anything about
         MATCH_EXISTING or CREATE_PERMANENT_SUPPLIER partners.
         """
+
+
+class PurchasePurposeResolutionWriter(Protocol):
+    """Append-only port for a review-scoped purchase-purpose resolution (P0-PROD-15T)."""
+
+    def create_purchase_purpose_resolution(self, resolution: PurchasePurposeResolution) -> PurchasePurposeResolution:
+        pass
+
+    def find_purchase_purpose_resolution(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> PurchasePurposeResolution | None:
+        pass
+
+
+class ReviewAccountingResolutionReader(Protocol):
+    """Read-only port consulted by ``ReclassifyWorkbenchReviewUseCase`` (P0-PROD-15T)."""
+
+    def find_latest_accounting_resolution(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> ReviewAccountingResolution | None:
+        """The most recently recorded resolution for this review, regardless of exact version."""
+
+
+class ReviewAccountingResolutionWriter(ReviewAccountingResolutionReader, Protocol):
+    """Append-only port for a review-scoped accounting resolution (P0-PROD-15T)."""
+
+    def create_accounting_resolution(self, resolution: ReviewAccountingResolution) -> ReviewAccountingResolution:
+        pass
+
+    def find_accounting_resolution(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> ReviewAccountingResolution | None:
+        pass
 
 
 class OneOffVendorRetirementWriter(Protocol):

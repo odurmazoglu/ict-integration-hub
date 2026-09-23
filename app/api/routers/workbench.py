@@ -21,6 +21,8 @@ from app.api.dependencies import (
     ResolveWorkbenchSupplierUseCaseDep,
     RevokeWriteAuthorizationUseCaseDep,
     SubmitOperatingExpenseMappingUseCaseDep,
+    SubmitPurchasePurposeUseCaseDep,
+    SubmitReviewAccountingResolutionUseCaseDep,
     SubmitReviewDecisionUseCaseDep,
     VendorBillPreviewUseCaseDep,
     WorkbenchAcceptedDecisionExecutionDispatcherDep,
@@ -74,7 +76,16 @@ from app.application.workbench import (
     TaxResolution,
     WorkbenchDecisionIngestionResult,
 )
+from app.application.workbench.accounting_resolution import (
+    AccountingTreatmentType,
+    SubmitReviewAccountingResolutionCommand,
+)
 from app.application.workbench.exceptions import (
+    AccountingResolutionConflictError,
+    AccountingResolutionEligibilityError,
+    AccountingResolutionError,
+    AccountingResolutionPurposeRequiredError,
+    AccountingResolutionPurposeUnsupportedError,
     OperatingExpenseMappingAccountInvalidError,
     OperatingExpenseMappingEligibilityError,
     OperatingExpenseMappingSupplierUnresolvedError,
@@ -86,6 +97,9 @@ from app.application.workbench.exceptions import (
     ProductRemediationIdentityAmbiguousError,
     ProductRemediationRaceError,
     ProductRemediationSupplierUnresolvedError,
+    PurchasePurposeConflictError,
+    PurchasePurposeEligibilityError,
+    PurchasePurposeError,
     ReviewDataIntegrityError,
     ReviewDecisionDataIntegrityError,
     ReviewDecisionError,
@@ -111,6 +125,7 @@ from app.application.workbench.expense_account_lookup import ListExpenseAccountC
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorCommand, OneOffVendorRetirementStatus
 from app.application.workbench.operating_expense_mapping_command import SubmitOperatingExpenseMappingCommand
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
+from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.write_authorization import (
     WriteAuthorizationAlreadyConsumedError,
@@ -123,6 +138,9 @@ from app.application.workbench.write_authorization import (
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.billing.exceptions import VendorBillBuildError
 from app.schemas.workbench import (
+    AccountingResolutionEnvelope,
+    AccountingResolutionRequest,
+    AccountingResolutionResponse,
     ApiEnvelope,
     BusinessContextAllocationRequest,
     BusinessContextAllocationSetRequest,
@@ -144,6 +162,9 @@ from app.schemas.workbench import (
     ProductRemediationEnvelope,
     ProductRemediationResponse,
     ProductResolutionRequest,
+    PurchasePurposeEnvelope,
+    PurchasePurposeRequest,
+    PurchasePurposeResponse,
     ReviewDecisionAcknowledgementEnvelope,
     ReviewDecisionAcknowledgementResponse,
     ReviewDecisionRequest,
@@ -606,6 +627,97 @@ async def submit_operating_expense_mapping(
 
 
 @router.post(
+    "/reviews/{review_id}/purchase-purpose",
+    response_model=PurchasePurposeEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Record why a review's purchase was made",
+    description=(
+        "Requires workbench_review_decide. For a review whose reasons include an operating-expense-shaped "
+        "blocker, records an immutable, review-scoped statement of purchase purpose (INTERNAL_USE, RESALE, "
+        "CUSTOMER_PROJECT, OTHER_OPERATING_EXPENSE). This is a business fact, never an accounting decision -- "
+        "recording it never reclassifies the review or advances its version by itself. It exists only as the "
+        "required precondition for the accounting-resolution endpoint, which some purposes (RESALE, "
+        "CUSTOMER_PROJECT) do not yet support."
+    ),
+)
+def submit_purchase_purpose(
+    review_id: str,
+    request_body: PurchasePurposeRequest,
+    response: Response,
+    context: RequestContextDep,
+    use_case: SubmitPurchasePurposeUseCaseDep,
+) -> PurchasePurposeEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
+        result = use_case.execute(
+            SubmitPurchasePurposeCommand(
+                review_id=review_id,
+                company_id=context.company_id,
+                expected_version=request_body.expected_version,
+                purchase_purpose=request_body.purchase_purpose,
+                approved_by=context.user_name or context.user_id,
+                note=request_body.note,
+            )
+        )
+        return _success(
+            response,
+            context.trace_id,
+            _purchase_purpose_response(result),
+            warnings=[],
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/reviews/{review_id}/accounting-resolution",
+    response_model=AccountingResolutionEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Resolve how a review-scoped purchase should be posted, without a supplier-wide mapping",
+    description=(
+        "Requires workbench_review_decide. The review-scoped escape hatch for a mixed-purpose supplier: unlike "
+        "the operating-expense-mapping endpoint, this never writes to the supplier-wide operating_expense_mappings "
+        "table -- the resolution applies only to this exact review version. Requires an accepted purchase-purpose "
+        "resolution to already exist for this exact review version; RESALE/CUSTOMER_PROJECT purposes are rejected "
+        "with a precise not-yet-implemented error rather than silently treated as a plain expense. Only "
+        "treatment_type=expense_account is supported today. The selected expense_account_id is re-validated "
+        "read-only against Odoo before anything is persisted, then the non-destructive reclassification that lets "
+        "the review reach a submittable decision is triggered. This endpoint never executes a Vendor Bill and "
+        "never writes to Odoo."
+    ),
+)
+async def submit_review_accounting_resolution(
+    review_id: str,
+    request_body: AccountingResolutionRequest,
+    response: Response,
+    context: RequestContextDep,
+    use_case: SubmitReviewAccountingResolutionUseCaseDep,
+) -> AccountingResolutionEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
+        result = await use_case.execute(
+            SubmitReviewAccountingResolutionCommand(
+                review_id=review_id,
+                company_id=context.company_id,
+                expected_version=request_body.expected_version,
+                treatment_type=AccountingTreatmentType(request_body.treatment_type),
+                expense_account_id=request_body.expense_account_id,
+                expense_category=request_body.expense_category,
+                approved_by=context.user_name or context.user_id,
+                note=request_body.note,
+            )
+        )
+        return _success(
+            response,
+            context.trace_id,
+            _accounting_resolution_response(result),
+            warnings=[],
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
     "/reviews/{review_id}/product-resolution",
     response_model=ProductRemediationEnvelope,
     responses=COMMON_ERROR_RESPONSES,
@@ -730,6 +842,35 @@ def _operating_expense_mapping_response(result) -> OperatingExpenseMappingRespon
         expense_account_id=result.expense_account_id,
         expense_category=result.expense_category,
         mapping_outcome=result.mapping_outcome,
+        reclassified=result.reclassified,
+        already_applied=result.already_applied,
+        safe_message=result.safe_message,
+    )
+
+
+def _purchase_purpose_response(result) -> PurchasePurposeResponse:
+    return PurchasePurposeResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        review_version=result.review_version,
+        purchase_purpose=result.purchase_purpose,
+        already_applied=result.already_applied,
+        safe_message=result.safe_message,
+    )
+
+
+def _accounting_resolution_response(result) -> AccountingResolutionResponse:
+    return AccountingResolutionResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        resolution_status=result.status,
+        previous_version=result.previous_version,
+        current_version=result.current_version,
+        current_workflow=result.current_workflow,
+        current_review_reasons=[_reason_response(reason) for reason in result.current_review_reasons],
+        treatment_type=result.treatment_type,
+        expense_account_id=result.expense_account_id,
+        expense_category=result.expense_category,
         reclassified=result.reclassified,
         already_applied=result.already_applied,
         safe_message=result.safe_message,
@@ -1199,6 +1340,12 @@ def _status_code_for_exception(exc: Exception) -> int:
             OperatingExpenseMappingEligibilityError,
             OperatingExpenseMappingSupplierUnresolvedError,
             OperatingExpenseMappingConflictError,
+            PurchasePurposeEligibilityError,
+            PurchasePurposeConflictError,
+            AccountingResolutionEligibilityError,
+            AccountingResolutionPurposeRequiredError,
+            AccountingResolutionPurposeUnsupportedError,
+            AccountingResolutionConflictError,
         ),
     ):
         return HTTPStatus.CONFLICT
@@ -1220,6 +1367,8 @@ def _status_code_for_exception(exc: Exception) -> int:
             OperatingExpenseMappingWorkflowError,
             OperatingExpenseMappingDataIntegrityError,
             OperatingExpenseMappingError,
+            PurchasePurposeError,
+            AccountingResolutionError,
         ),
     ):
         return HTTPStatus.INTERNAL_SERVER_ERROR

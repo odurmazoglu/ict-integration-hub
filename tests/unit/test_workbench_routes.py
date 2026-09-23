@@ -1329,11 +1329,13 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/expense-accounts",
         "/api/workbench/reviews",
         "/api/workbench/reviews/{review_id}",
+        "/api/workbench/reviews/{review_id}/accounting-resolution",
         "/api/workbench/reviews/{review_id}/decision",
         "/api/workbench/reviews/{review_id}/execute",
         "/api/workbench/reviews/{review_id}/execution-status",
         "/api/workbench/reviews/{review_id}/operating-expense-mapping",
         "/api/workbench/reviews/{review_id}/product-resolution",
+        "/api/workbench/reviews/{review_id}/purchase-purpose",
         "/api/workbench/reviews/{review_id}/quotation-scenarios",
         "/api/workbench/reviews/{review_id}/supplier-resolution",
         "/api/workbench/reviews/{review_id}/vendor-bill-preview",
@@ -1342,6 +1344,23 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}/write-authorizations",
         "/api/workbench/reviews/{review_id}/write-authorizations/{authorization_id}/revoke",
     }
+    purchase_purpose_schema = response.json()["components"]["schemas"]["PurchasePurposeRequest"]
+    purchase_purpose_text = str(purchase_purpose_schema)
+    for forbidden in ("company_id", "review_id", "approved_by", "source_invoice_id", "vendor_partner_id"):
+        assert forbidden not in purchase_purpose_text
+    assert set(purchase_purpose_schema["properties"]) == {"expected_version", "purchase_purpose", "note"}
+    accounting_resolution_schema = response.json()["components"]["schemas"]["AccountingResolutionRequest"]
+    accounting_resolution_text = str(accounting_resolution_schema)
+    for forbidden in ("company_id", "review_id", "approved_by", "vendor_partner_id"):
+        assert forbidden not in accounting_resolution_text
+    assert set(accounting_resolution_schema["properties"]) == {
+        "expected_version",
+        "treatment_type",
+        "expense_account_id",
+        "expense_category",
+        "note",
+    }
+    assert accounting_resolution_schema["properties"]["treatment_type"]["const"] == "expense_account"
     operating_expense_mapping_schema = response.json()["components"]["schemas"]["OperatingExpenseMappingRequest"]
     operating_expense_mapping_text = str(operating_expense_mapping_schema)
     for forbidden in ("company_id", "review_id", "approved_by", "vendor_partner_id"):

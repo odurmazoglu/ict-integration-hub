@@ -58,6 +58,26 @@ operating-expense matching, and ``_effective_manual_review_reasons`` strips
 OPERATING_EXPENSE_MAPPING_REQUIRED/AMBIGUOUS only when that recomputation
 itself resolves to MATCHED -- never fabricated, never applied when no real
 mapping row exists.
+
+P0-PROD-15T: a supplier-wide ``OperatingExpenseMapping`` is unsafe for a
+mixed-purpose supplier (e.g. one invoice is genuinely internal-use, another
+from the same supplier is resale/a customer project) -- committing either
+review's account to the shared supplier-level table would silently
+contaminate the other. ``ReviewAccountingResolution`` (see
+``app.application.workbench.accounting_resolution``) is the review-scoped
+escape hatch: an operator's explicit, immutable accounting decision for
+*exactly this* review version, never written into the supplier-wide table.
+When wired in (``review_accounting_resolution_reader``, optional -- ``None``
+preserves byte-identical behavior for every existing caller) and an accepted
+resolution exists, it takes precedence over the P0-PROD-15P supplier-wide
+recomputation above -- see
+``_review_accounting_resolution_operating_expense_match`` and the precedence
+order in ``execute()`` -- and, unlike the P0-PROD-15N/15P override, applies
+regardless of ``SupplierRemediationEffect``/mode: it is orthogonal to how (or
+whether) the supplier was resolved, not a consequence of it. Exactly like
+P0-PROD-15P, it only ever strips OPERATING_EXPENSE_MAPPING_REQUIRED/AMBIGUOUS,
+never any other reason, and the raw ``classification_evidence`` stays an
+untouched, truthful record.
 """
 
 from __future__ import annotations
@@ -78,6 +98,7 @@ from app.application.use_cases.review_classification_outcome import (
 )
 from app.application.workbench.exceptions import ReviewPersistenceError, WorkbenchContractError
 from app.application.workbench.ports import (
+    ReviewAccountingResolutionReader,
     ReviewReclassificationWriter,
     ReviewSourceInvoiceEvidenceReader,
     SupplierRemediationEffectWriter,
@@ -106,6 +127,14 @@ REMEDIATION_EFFECT_MATCHED_BY = "supplier_remediation_effect"
 #: ``test_vendor_bill_and_classification_paths_do_not_import_supplier_resolution``).
 _MATCH_EXISTING_MODE = "match_existing"
 
+#: P0-PROD-15T. The exact string value of ``AccountingTreatmentType.EXPENSE_ACCOUNT``
+#: (a ``StrEnum``). Compared as a plain string for the same import-isolation reason
+#: as ``_MATCH_EXISTING_MODE`` -- this module never imports
+#: ``app.application.workbench.accounting_resolution``.
+_EXPENSE_ACCOUNT_TREATMENT = "expense_account"
+
+REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY = "review_accounting_resolution"
+
 
 class _AcceptedRemediationEffect(Protocol):
     """Structural type for ``SupplierRemediationEffect``.
@@ -123,6 +152,24 @@ class _AcceptedRemediationEffect(Protocol):
     resolved_partner_id: int
 
 
+class _AcceptedAccountingResolution(Protocol):
+    """Structural type for ``ReviewAccountingResolution`` (P0-PROD-15T).
+
+    Kept structural for the same import-isolation reason as
+    ``_AcceptedRemediationEffect`` -- this module never imports
+    ``app.application.workbench.accounting_resolution``. ``id`` is the
+    resolution's own persisted row id, reused as ``OperatingExpenseMatchResult
+    .mapping_id`` below (there is no real ``OperatingExpenseMapping`` row for a
+    review-scoped resolution, but a positive, traceable id is still required by
+    ``operating_expense_evidence_errors``).
+    """
+
+    id: int
+    treatment_type: str
+    expense_account_id: int
+    expense_category: str
+
+
 class ReclassifyWorkbenchReviewUseCase:
     """Application boundary for one non-destructive review reclassification."""
 
@@ -134,6 +181,7 @@ class ReclassifyWorkbenchReviewUseCase:
         reclassification_writer: ReviewReclassificationWriter,
         supplier_remediation_effect_reader: SupplierRemediationEffectWriter | None = None,
         operating_expense_matcher: OperatingExpenseMatcher | None = None,
+        review_accounting_resolution_reader: ReviewAccountingResolutionReader | None = None,
     ) -> None:
         self._decision_engine = decision_engine
         self._source_invoice_reader = source_invoice_reader
@@ -150,6 +198,10 @@ class ReclassifyWorkbenchReviewUseCase:
         # DecisionEngine's rule engine uses, so "would this now match" is asked of
         # the identical persistent mapping table -- never a second, divergent one.
         self._operating_expense_matcher = operating_expense_matcher
+        # Optional (P0-PROD-15T): only set by composition roots that want a
+        # review-scoped ReviewAccountingResolution to be consulted at all. None
+        # preserves byte-identical pre-15T behavior for every existing caller.
+        self._review_accounting_resolution_reader = review_accounting_resolution_reader
 
     async def execute(self, command: ReclassifyReviewCommand) -> ReviewReclassificationResult:
         if not isinstance(command, ReclassifyReviewCommand):
@@ -200,9 +252,13 @@ class ReclassifyWorkbenchReviewUseCase:
         matched_rule_code = classification_evidence.matched_rule_code if classification_evidence is not None else None
         matched_rule_id = classification_evidence.matched_rule_id if classification_evidence is not None else None
 
-        recomputed_operating_expense_match = self._effective_operating_expense_match(
-            decision_result, effect, invoice=source.invoice, command=command
-        )
+        # P0-PROD-15T precedence: a review-scoped ReviewAccountingResolution (this
+        # exact review only) always wins over the P0-PROD-15P supplier-wide-effect
+        # recomputation -- see module docstring. `or` is exact here: both return
+        # a real dataclass instance or None, and a real instance is always truthy.
+        recomputed_operating_expense_match = self._review_accounting_resolution_operating_expense_match(
+            decision_result, effect, command=command
+        ) or self._effective_operating_expense_match(decision_result, effect, invoice=source.invoice, command=command)
         effective_review_reasons = _effective_manual_review_reasons(
             decision_result.review_reasons, effect, recomputed_operating_expense_match
         )
@@ -304,6 +360,62 @@ class ReclassifyWorkbenchReviewUseCase:
             partner_match=_synthesized_matched_partner(effect),
         )
 
+    def _review_accounting_resolution_operating_expense_match(
+        self,
+        decision_result: DecisionResult,
+        effect: _AcceptedRemediationEffect | None,
+        *,
+        command: ReclassifyReviewCommand,
+    ) -> OperatingExpenseMatchResult | None:
+        """P0-PROD-15T: the highest-precedence operating-expense override.
+
+        Unlike ``_effective_operating_expense_match`` above, this is not gated on
+        ``effect.mode`` at all -- a review-scoped accounting resolution is orthogonal
+        to *how* (or whether) the supplier was resolved. Returns ``None`` (no
+        override) unless a reader was wired in, the raw operating-expense match is
+        not already MATCHED (nothing to override), an accepted resolution exists for
+        this exact ``(review_id, company_id)``, its ``treatment_type`` is the one
+        supported today (``EXPENSE_ACCOUNT``), and a resolvable supplier partner id
+        is available -- from the raw match if already MATCHED, else from ``effect``
+        (mirrors ``CreateNewProductUseCase``/``SubmitOperatingExpenseMappingUseCase``:
+        a review whose supplier was never resolved by any means has nothing to pin
+        this override's evidence to, so it fails closed to ``None`` rather than
+        guessing a partner id).
+        """
+
+        if self._review_accounting_resolution_reader is None:
+            return None
+        raw_operating_expense_match = decision_result.operating_expense_match
+        if raw_operating_expense_match is not None and raw_operating_expense_match.status is (
+            OperatingExpenseMatchStatus.MATCHED
+        ):
+            return None
+        resolution = self._review_accounting_resolution_reader.find_latest_accounting_resolution(
+            review_id=command.review_id,
+            company_id=command.company_id,
+        )
+        if resolution is None or resolution.treatment_type != _EXPENSE_ACCOUNT_TREATMENT:
+            return None
+        raw_partner_match = decision_result.partner_match
+        if raw_partner_match is not None and raw_partner_match.status is PartnerMatchStatus.MATCHED:
+            vendor_partner_id = raw_partner_match.partner_id
+        elif effect is not None:
+            vendor_partner_id = effect.resolved_partner_id
+        else:
+            return None
+        return OperatingExpenseMatchResult(
+            status=OperatingExpenseMatchStatus.MATCHED,
+            reason="Resolved via an accepted review-scoped accounting resolution for this review.",
+            candidate_count=1,
+            mapping_id=resolution.id,
+            company_id=command.company_id,
+            vendor_partner_id=vendor_partner_id,
+            expense_account_id=resolution.expense_account_id,
+            expense_category=resolution.expense_category,
+            matched_by=REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY,
+            confidence=REMEDIATION_EFFECT_MATCH_CONFIDENCE,
+        )
+
 
 #: Reason codes an accepted MATCH_EXISTING effect may ever strip from the review's
 #: own effective reasons -- SUPPLIER_AMBIGUOUS unconditionally (P0-PROD-15N), and
@@ -334,24 +446,30 @@ def _effective_manual_review_reasons(
     effect: _AcceptedRemediationEffect | None,
     recomputed_operating_expense_match: OperatingExpenseMatchResult | None,
 ) -> tuple[ManualReviewReason, ...]:
-    """P0-PROD-15N/15P: fold an accepted MATCH_EXISTING remediation into the
-    review's own effective classification reasons.
+    """P0-PROD-15N/15P/15T: fold accepted review-scoped remediation/resolution
+    state into the review's own effective classification reasons.
 
-    An accepted ``MATCH_EXISTING`` effect is the operator's authoritative
-    adjudication of which of the raw matcher's valid, active, exact-VAT
-    candidates is the correct supplier for this review -- it does not claim
-    only one candidate exists in Odoo, and it never mutates Odoo, so the raw
-    matcher legitimately keeps finding the same ambiguity forever. Only two
-    things are ever removed here, and only when there is an accepted
-    ``MATCH_EXISTING`` effect for this exact ``(review_id, company_id)`` to
-    justify it:
+    Two completely independent strip decisions, each with its own accepted-state
+    precondition:
 
-    * ``SUPPLIER_AMBIGUOUS``, unconditionally (P0-PROD-15N);
-    * ``OPERATING_EXPENSE_MAPPING_REQUIRED``/``_AMBIGUOUS`` (P0-PROD-15P), but
-      only when ``recomputed_operating_expense_match`` -- a fresh, read-only
-      recomputation against the real persistent mapping table for the effect's
-      resolved supplier -- itself resolves to MATCHED. A mapping that does not
-      yet exist, or that is itself ambiguous, changes nothing here.
+    * ``SUPPLIER_AMBIGUOUS`` is stripped only when there is an accepted
+      ``MATCH_EXISTING`` ``SupplierRemediationEffect`` for this exact
+      ``(review_id, company_id)`` (P0-PROD-15N) -- the operator's authoritative
+      adjudication of which of the raw matcher's valid, active, exact-VAT
+      candidates is correct. It never claims only one candidate exists in Odoo,
+      and never mutates Odoo, so the raw matcher legitimately keeps finding the
+      same ambiguity forever.
+    * ``OPERATING_EXPENSE_MAPPING_REQUIRED``/``_AMBIGUOUS`` is stripped only
+      when ``recomputed_operating_expense_match`` -- already computed by the
+      caller with P0-PROD-15T's review-scoped-resolution-first, then
+      P0-PROD-15P's supplier-wide-effect-recomputation, precedence -- itself
+      resolves to MATCHED. This is deliberately **not** gated on ``effect``/its
+      mode at all: a review-scoped ``ReviewAccountingResolution`` (P0-PROD-15T)
+      is orthogonal to *how*, or whether, the supplier was resolved, unlike the
+      P0-PROD-15P supplier-wide-effect recomputation it can take precedence
+      over (which *is* still gated to ``effect.mode == MATCH_EXISTING`` inside
+      ``_effective_operating_expense_match``, so existing P0-PROD-15N/15P
+      behavior for that source is completely unchanged).
 
     Every other reason -- ``SUPPLIER_NOT_FOUND`` included -- passes through
     completely untouched, so this never overlaps with the P0-PROD-10D
@@ -360,14 +478,14 @@ def _effective_manual_review_reasons(
     (P0-PROD-15L intentionally kept those SUPPLIER_NOT_FOUND-only).
     """
 
-    if effect is None or effect.mode != _MATCH_EXISTING_MODE:
-        return raw_reasons
-    strip_codes = {ManualReviewReasonCode.SUPPLIER_AMBIGUOUS}
+    strip_codes: set[ManualReviewReasonCode] = set()
+    if effect is not None and effect.mode == _MATCH_EXISTING_MODE:
+        strip_codes.add(ManualReviewReasonCode.SUPPLIER_AMBIGUOUS)
     if recomputed_operating_expense_match is not None and (
         recomputed_operating_expense_match.status is OperatingExpenseMatchStatus.MATCHED
     ):
         strip_codes |= _OPERATING_EXPENSE_REASON_CODES
-    if not any(reason.code in strip_codes for reason in raw_reasons):
+    if not strip_codes or not any(reason.code in strip_codes for reason in raw_reasons):
         return raw_reasons
     return tuple(reason for reason in raw_reasons if reason.code not in strip_codes)
 
