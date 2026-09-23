@@ -256,7 +256,20 @@ def _manual_review_reasons(
         # Every line is product-identifier-free, so the product reasons are only
         # "identifier missing" noise; the real blocker is the absent/ambiguous
         # operating-expense mapping. Partner and tax reasons stay authoritative.
-        return partner_reasons + (_operating_expense_review_reason(operating_expense_match),) + tax_reasons
+        #
+        # P0-PROD-15P: this branch is reachable even when operating_expense_match IS
+        # MATCHED -- specifically whenever partner_ok is False (e.g. a supplier whose
+        # raw deterministic match stays ambiguous forever per P0-PROD-15N, MATCH_EXISTING
+        # never mutating Odoo), since the short-circuit vendor-bill branch above requires
+        # partner_ok too and so is never taken. A MATCHED expense result must therefore
+        # contribute no operating-expense reason here -- exactly mirroring how partner_reasons/
+        # tax_reasons are already empty tuples once *their own* match succeeds.
+        expense_reasons = (
+            ()
+            if operating_expense_match.status is OperatingExpenseMatchStatus.MATCHED
+            else (_operating_expense_review_reason(operating_expense_match),)
+        )
+        return partner_reasons + expense_reasons + tax_reasons
     return partner_reasons + product_reasons + tax_reasons
 
 

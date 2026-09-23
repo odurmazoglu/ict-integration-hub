@@ -12,6 +12,7 @@ from app.api.dependencies import (
     CreateNewProductUseCaseDep,
     CreateWriteAuthorizationUseCaseDep,
     GetReviewItemUseCaseDep,
+    ListExpenseAccountCandidatesUseCaseDep,
     ListReviewQueueUseCaseDep,
     ListWriteAuthorizationsUseCaseDep,
     OneOffVendorRetirementUseCaseDep,
@@ -19,6 +20,7 @@ from app.api.dependencies import (
     RequestContextDep,
     ResolveWorkbenchSupplierUseCaseDep,
     RevokeWriteAuthorizationUseCaseDep,
+    SubmitOperatingExpenseMappingUseCaseDep,
     SubmitReviewDecisionUseCaseDep,
     VendorBillPreviewUseCaseDep,
     WorkbenchAcceptedDecisionExecutionDispatcherDep,
@@ -51,6 +53,12 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceNotFoundError,
 )
 from app.application.execution.vendor_bill_preview import PreviewVendorBillRequest, VendorBillPreview
+from app.application.expense_mapping import (
+    OperatingExpenseMappingConflictError,
+    OperatingExpenseMappingContractError,
+    OperatingExpenseMappingDataIntegrityError,
+    OperatingExpenseMappingError,
+)
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceResult
 from app.application.workbench import (
     BusinessContextAllocation,
@@ -67,6 +75,10 @@ from app.application.workbench import (
     WorkbenchDecisionIngestionResult,
 )
 from app.application.workbench.exceptions import (
+    OperatingExpenseMappingAccountInvalidError,
+    OperatingExpenseMappingEligibilityError,
+    OperatingExpenseMappingSupplierUnresolvedError,
+    OperatingExpenseMappingWorkflowError,
     ProductRemediationConflictError,
     ProductRemediationContractError,
     ProductRemediationDataIntegrityError,
@@ -95,7 +107,9 @@ from app.application.workbench.exceptions import (
     WorkbenchContractError,
 )
 from app.application.workbench.execution_status import WorkbenchExecutionStatus
+from app.application.workbench.expense_account_lookup import ListExpenseAccountCandidatesQuery
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorCommand, OneOffVendorRetirementStatus
+from app.application.workbench.operating_expense_mapping_command import SubmitOperatingExpenseMappingCommand
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.write_authorization import (
@@ -114,6 +128,8 @@ from app.schemas.workbench import (
     BusinessContextAllocationSetRequest,
     ExecutionApprovalRequest,
     ExecutionArtifactResponse,
+    ExpenseAccountCandidateResponse,
+    ExpenseAccountCandidatesEnvelope,
     LineResolutionRequest,
     ManualReviewReasonResponse,
     OneOffVendorRetirementEnvelope,
@@ -121,6 +137,9 @@ from app.schemas.workbench import (
     OneOffVendorRetirementRecoveryRequest,
     OneOffVendorRetirementRecoveryResponse,
     OneOffVendorRetirementResponse,
+    OperatingExpenseMappingEnvelope,
+    OperatingExpenseMappingRequest,
+    OperatingExpenseMappingResponse,
     ProductMatchEvidenceResponse,
     ProductRemediationEnvelope,
     ProductRemediationResponse,
@@ -249,6 +268,37 @@ def get_review_detail(
         context = require_permission(Permission.WORKBENCH_REVIEW_READ)(context)
         item = use_case.execute(ReviewDetailQuery(review_id=review_id, company_id=context.company_id))
         return _success(response, context.trace_id, _review_item_response(item), warnings=list(item.warnings))
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/expense-accounts",
+    response_model=ExpenseAccountCandidatesEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="List eligible Odoo operating-expense accounts",
+    description=(
+        "Requires workbench_expense_account_read. Read-only, company-scoped (from RequestContext, never the "
+        "caller) lookup of Odoo account.account rows eligible for an operating-expense mapping. Not a generic "
+        "Odoo browser: the target model, base domain (company + eligible account type), and field list are all "
+        "server-controlled; the caller may only supply an optional free-text query filter."
+    ),
+)
+def list_expense_account_candidates(
+    response: Response,
+    context: RequestContextDep,
+    use_case: ListExpenseAccountCandidatesUseCaseDep,
+    query: Annotated[str | None, Query()] = None,
+) -> ExpenseAccountCandidatesEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXPENSE_ACCOUNT_READ)(context)
+        candidates = use_case.execute(ListExpenseAccountCandidatesQuery(company_id=context.company_id, query=query))
+        return _success(
+            response,
+            context.trace_id,
+            [_expense_account_candidate_response(candidate) for candidate in candidates],
+            warnings=[],
+        )
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -510,6 +560,52 @@ async def resolve_review_supplier(
 
 
 @router.post(
+    "/reviews/{review_id}/operating-expense-mapping",
+    response_model=OperatingExpenseMappingEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Configure an operating-expense mapping for a review's resolved supplier",
+    description=(
+        "Requires workbench_review_decide. For a review whose reasons include OPERATING_EXPENSE_MAPPING_REQUIRED "
+        "and whose supplier is already resolved (see the supplier-resolution endpoint), onboards a durable "
+        "(company, resolved supplier) -> expense-account mapping via the existing "
+        "OnboardOperatingExpenseMappingUseCase, then triggers the non-destructive reclassification that lets the "
+        "review reach a submittable decision. vendor_partner_id is never accepted from the caller -- it comes "
+        "only from the review's own accepted supplier-resolution effect. The selected expense_account_id is "
+        "re-validated read-only against Odoo (exists, eligible operating-expense type, company-scoped) before "
+        "anything is persisted. This endpoint never executes a Vendor Bill and never writes to Odoo."
+    ),
+)
+async def submit_operating_expense_mapping(
+    review_id: str,
+    request_body: OperatingExpenseMappingRequest,
+    response: Response,
+    context: RequestContextDep,
+    use_case: SubmitOperatingExpenseMappingUseCaseDep,
+) -> OperatingExpenseMappingEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
+        result = await use_case.execute(
+            SubmitOperatingExpenseMappingCommand(
+                review_id=review_id,
+                company_id=context.company_id,
+                expected_version=request_body.expected_version,
+                expense_account_id=request_body.expense_account_id,
+                expense_category=request_body.expense_category,
+                approved_by=context.user_name or context.user_id,
+                note=request_body.note,
+            )
+        )
+        return _success(
+            response,
+            context.trace_id,
+            _operating_expense_mapping_response(result),
+            warnings=[],
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
     "/reviews/{review_id}/product-resolution",
     response_model=ProductRemediationEnvelope,
     responses=COMMON_ERROR_RESPONSES,
@@ -608,6 +704,34 @@ def _supplier_remediation_response(result) -> SupplierRemediationResponse:
             if retirement_status is not None
             else None
         ),
+        safe_message=result.safe_message,
+    )
+
+
+def _expense_account_candidate_response(candidate) -> ExpenseAccountCandidateResponse:
+    return ExpenseAccountCandidateResponse(
+        id=candidate.id,
+        code=candidate.code,
+        name=candidate.name,
+        account_type=candidate.account_type,
+    )
+
+
+def _operating_expense_mapping_response(result) -> OperatingExpenseMappingResponse:
+    return OperatingExpenseMappingResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        resolution_status=result.status,
+        previous_version=result.previous_version,
+        current_version=result.current_version,
+        current_workflow=result.current_workflow,
+        current_review_reasons=[_reason_response(reason) for reason in result.current_review_reasons],
+        vendor_partner_id=result.vendor_partner_id,
+        expense_account_id=result.expense_account_id,
+        expense_category=result.expense_category,
+        mapping_outcome=result.mapping_outcome,
+        reclassified=result.reclassified,
+        already_applied=result.already_applied,
         safe_message=result.safe_message,
     )
 
@@ -1047,6 +1171,8 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, ProductRemediationContractError):
         return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, (OperatingExpenseMappingContractError, OperatingExpenseMappingAccountInvalidError)):
+        return HTTPStatus.BAD_REQUEST
     if isinstance(exc, SupplierPartnerWriteSafetyGateError):
         return HTTPStatus.FORBIDDEN
     if isinstance(exc, ProductWriteSafetyGateError):
@@ -1070,6 +1196,9 @@ def _status_code_for_exception(exc: Exception) -> int:
             ProductRemediationSupplierUnresolvedError,
             ProductRemediationConflictError,
             ProductRemediationRaceError,
+            OperatingExpenseMappingEligibilityError,
+            OperatingExpenseMappingSupplierUnresolvedError,
+            OperatingExpenseMappingConflictError,
         ),
     ):
         return HTTPStatus.CONFLICT
@@ -1088,6 +1217,9 @@ def _status_code_for_exception(exc: Exception) -> int:
             ProductRemediationIdentityAmbiguousError,
             ProductWriteError,
             SupplierInfoWriteError,
+            OperatingExpenseMappingWorkflowError,
+            OperatingExpenseMappingDataIntegrityError,
+            OperatingExpenseMappingError,
         ),
     ):
         return HTTPStatus.INTERNAL_SERVER_ERROR

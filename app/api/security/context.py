@@ -35,6 +35,11 @@ class Permission(StrEnum):
     #: Distinct from every Workbench permission -- this is provider-document
     #: access, not a Workbench review action.
     INVOICE_DOCUMENT_READ = "invoice_document_read"
+    #: P0-PROD-15P. Authorizes the read-only Odoo account.account lookup
+    #: (GET /api/workbench/expense-accounts) used to select a valid operating-expense
+    #: account. Distinct from WORKBENCH_REVIEW_READ: it is chart-of-accounts access, not
+    #: a review read, and grants no review-mutation capability.
+    WORKBENCH_EXPENSE_ACCOUNT_READ = "workbench_expense_account_read"
 
 
 @dataclass(frozen=True, slots=True)

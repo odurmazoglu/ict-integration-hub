@@ -309,3 +309,43 @@ class OneOffVendorRetirementDataIntegrityError(OneOffVendorRetirementError):
     """Safe error raised when persisted retirement state cannot hydrate into contracts."""
 
     error_category = "one_off_vendor_retirement_data_integrity_error"
+
+
+class OperatingExpenseMappingWorkflowError(ApplicationError):
+    """Safe base error for the operating-expense-mapping operator orchestration (P0-PROD-15P).
+
+    Distinct from ``app.application.expense_mapping.exceptions.OperatingExpenseMappingError``,
+    which covers the lower-level immutable mapping contract/persistence -- this family covers
+    only this workflow's own review-linked orchestration (eligibility, supplier resolution,
+    selected-account validation).
+    """
+
+    error_category = "operating_expense_mapping_workflow_error"
+
+
+class OperatingExpenseMappingEligibilityError(OperatingExpenseMappingWorkflowError):
+    """Safe error raised when the review is not eligible for an operating-expense mapping.
+
+    Covers a stale ``expected_version``, a review that is no longer pending, and a review
+    whose reasons no longer carry OPERATING_EXPENSE_MAPPING_REQUIRED.
+    """
+
+    error_category = "operating_expense_mapping_eligibility_error"
+
+
+class OperatingExpenseMappingSupplierUnresolvedError(OperatingExpenseMappingWorkflowError):
+    """Safe error raised when no accepted supplier resolution yields a resolved partner_id.
+
+    Mirrors ``ProductRemediationSupplierUnresolvedError`` exactly: the vendor_partner_id an
+    operating-expense mapping is keyed on is derived only from the review's own accepted
+    ``SupplierRemediationEffect``, never inferred or accepted from the caller.
+    """
+
+    error_category = "operating_expense_mapping_supplier_unresolved"
+
+
+class OperatingExpenseMappingAccountInvalidError(OperatingExpenseMappingWorkflowError):
+    """Safe error raised when the selected expense account does not exist, is not an
+    eligible operating-expense account, or is not scoped to the request's company."""
+
+    error_category = "operating_expense_mapping_account_invalid"

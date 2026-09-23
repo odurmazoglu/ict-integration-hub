@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
 from app.application.workbench import (
     ArchiveOneOffVendorUseCase,
@@ -25,6 +26,7 @@ from app.erp.write.odoo_supplier_partner_writer import (
     OdooSupplierPartnerWriter,
 )
 from app.persistence import (
+    SqlAlchemyOperatingExpenseMappingRepository,
     SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
@@ -81,6 +83,11 @@ def build_resolve_workbench_supplier_use_case(
         # archived Hub-owned ONE_OFF_VENDOR reuse -- see ReclassifyWorkbenchReviewUseCase's
         # own docstring for the exact, narrowly-scoped substitution this enables.
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        # P0-PROD-15P: same persistent mapping table the production DecisionEngine's own
+        # rule engine queries (a fresh, session-scoped instance) -- lets a MATCH_EXISTING
+        # reclassification also resolve OPERATING_EXPENSE_MAPPING_REQUIRED once a real
+        # mapping exists, exactly mirroring the P0-PROD-10D-style Stage-1 substitution.
+        operating_expense_matcher=OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session)),
     )
 
     # Reuse the existing best-effort Workbench publisher, gated by the existing flag.

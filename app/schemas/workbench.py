@@ -13,11 +13,13 @@ from app.application.execution import (
     ExecutionState,
     WorkbenchVendorBillExecutionStatus,
 )
+from app.application.expense_mapping import OperatingExpenseMappingOnboardingOutcome
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorStatus, OneOffVendorRetirementStatus
+from app.application.workbench.operating_expense_mapping_command import OperatingExpenseMappingSubmissionStatus
 from app.application.workbench.product_remediation import ProductRemediationStatus
 from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
@@ -385,6 +387,49 @@ class ProductRemediationResponse(BaseModel):
 
 
 ProductRemediationEnvelope = ApiEnvelope[ProductRemediationResponse]
+
+
+class ExpenseAccountCandidateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: int
+    code: str
+    name: str
+    account_type: str
+
+
+ExpenseAccountCandidatesEnvelope = ApiEnvelope[list[ExpenseAccountCandidateResponse]]
+
+
+class OperatingExpenseMappingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_version: int
+    expense_account_id: int
+    expense_category: str
+    note: str | None = None
+
+
+class OperatingExpenseMappingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    resolution_status: OperatingExpenseMappingSubmissionStatus
+    previous_version: int
+    current_version: int
+    current_workflow: WorkflowType
+    current_review_reasons: list[ManualReviewReasonResponse]
+    vendor_partner_id: int
+    expense_account_id: int
+    expense_category: str
+    mapping_outcome: OperatingExpenseMappingOnboardingOutcome
+    reclassified: bool
+    already_applied: bool
+    safe_message: str | None = None
+
+
+OperatingExpenseMappingEnvelope = ApiEnvelope[OperatingExpenseMappingResponse]
 
 
 class WorkbenchDecisionIngestionCandidateResponse(BaseModel):

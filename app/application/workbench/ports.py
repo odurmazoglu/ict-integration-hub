@@ -14,6 +14,7 @@ from app.application.workbench.evidence import (
     ReviewExecutionEvidence,
     ReviewSourceInvoiceEvidence,
 )
+from app.application.workbench.expense_account_lookup import ExpenseAccountCandidate
 from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirement, OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import (
     ProductIdentityClaim,
@@ -157,6 +158,22 @@ class SelectedAccountReader(Protocol):
 
     def find_accounts_by_ids(self, account_ids: tuple[int, ...]) -> tuple[ResolutionAccountRecord, ...]:
         pass
+
+
+class ExpenseAccountCandidateReader(Protocol):
+    """Read-only port for the server-controlled ``account.account`` lookup (P0-PROD-15P).
+
+    There is no method here that accepts a caller-supplied model, domain, or field list --
+    the adapter behind this port owns those entirely; the caller may only narrow by an
+    optional free-text ``query`` and is always scoped by ``company_id``.
+    """
+
+    def find_candidates(self, *, company_id: int, query: str | None) -> tuple[ExpenseAccountCandidate, ...]:
+        pass
+
+    def find_eligible_by_id(self, *, company_id: int, account_id: int) -> ExpenseAccountCandidate | None:
+        """The one candidate matching ``account_id``, or ``None`` if it does not exist, is not
+        an eligible operating-expense account, or is not scoped to ``company_id``."""
 
 
 class SupplierResolutionWriter(Protocol):

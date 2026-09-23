@@ -39,6 +39,25 @@ the generic matcher actually found. This only ever strips
 ``SUPPLIER_AMBIGUOUS``; every other reason (``SUPPLIER_NOT_FOUND`` included)
 is completely unaffected, and the effect lookup is scoped to exactly this
 ``(review_id, company_id)`` exactly like the Stage-1 override.
+
+P0-PROD-15P: the same raw-matcher-stays-stuck problem also blocks operating-
+expense classification for a MATCH_EXISTING-remediated, still-raw-ambiguous
+review. ``OperatingExpenseMatchingEngine.match_invoice`` (see
+``app.application.expense_mapping.matching``) itself requires
+``partner_match.status is MATCHED`` on the *raw* partner match it is handed --
+inherited from the rule engine's own internal call, never the effect-aware
+substitution -- so even once a real ``OperatingExpenseMapping`` row exists for
+the effect's resolved supplier, reclassification would otherwise keep
+reporting OPERATING_EXPENSE_MAPPING_REQUIRED forever, for the exact same
+structural reason SUPPLIER_AMBIGUOUS would. The fix mirrors P0-PROD-15N
+exactly: when wired in (``operating_expense_matcher``, optional -- ``None``
+preserves byte-identical behavior for any existing caller) and only when an
+effect exists and the raw partner is not already MATCHED, the *same*
+synthesized MATCHED partner used for Stage-1 evidence is used to recompute
+operating-expense matching, and ``_effective_manual_review_reasons`` strips
+OPERATING_EXPENSE_MAPPING_REQUIRED/AMBIGUOUS only when that recomputation
+itself resolves to MATCHED -- never fabricated, never applied when no real
+mapping row exists.
 """
 
 from __future__ import annotations
@@ -51,6 +70,8 @@ from app.application.commands import ImportInvoiceCommand
 from app.application.decision import DecisionEngine
 from app.application.dto import DecisionResult
 from app.application.exceptions import ApplicationError
+from app.application.expense_mapping.matcher import OperatingExpenseMatcher
+from app.application.expense_mapping.matching import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
 from app.application.use_cases.review_classification_outcome import (
     build_review_classification_evidence,
     build_review_execution_evidence,
@@ -112,6 +133,7 @@ class ReclassifyWorkbenchReviewUseCase:
         source_invoice_reader: ReviewSourceInvoiceEvidenceReader,
         reclassification_writer: ReviewReclassificationWriter,
         supplier_remediation_effect_reader: SupplierRemediationEffectWriter | None = None,
+        operating_expense_matcher: OperatingExpenseMatcher | None = None,
     ) -> None:
         self._decision_engine = decision_engine
         self._source_invoice_reader = source_invoice_reader
@@ -120,6 +142,14 @@ class ReclassifyWorkbenchReviewUseCase:
         # Hub-owned ONE_OFF_VENDOR reuse to be able to reach a submittable decision.
         # None preserves byte-identical pre-10D behavior for any existing caller.
         self._supplier_remediation_effect_reader = supplier_remediation_effect_reader
+        # Optional (P0-PROD-15P): only set by composition roots that want a
+        # MATCH_EXISTING-remediated (raw-ambiguous-forever) review to be able to
+        # reach OPERATING_EXPENSE_MAPPING_REQUIRED resolution once a real mapping
+        # exists. None preserves byte-identical pre-15P behavior for any existing
+        # caller. Should be the SAME matcher/repository instance the production
+        # DecisionEngine's rule engine uses, so "would this now match" is asked of
+        # the identical persistent mapping table -- never a second, divergent one.
+        self._operating_expense_matcher = operating_expense_matcher
 
     async def execute(self, command: ReclassifyReviewCommand) -> ReviewReclassificationResult:
         if not isinstance(command, ReclassifyReviewCommand):
@@ -170,7 +200,12 @@ class ReclassifyWorkbenchReviewUseCase:
         matched_rule_code = classification_evidence.matched_rule_code if classification_evidence is not None else None
         matched_rule_id = classification_evidence.matched_rule_id if classification_evidence is not None else None
 
-        effective_review_reasons = _effective_manual_review_reasons(decision_result.review_reasons, effect)
+        recomputed_operating_expense_match = self._effective_operating_expense_match(
+            decision_result, effect, invoice=source.invoice, command=command
+        )
+        effective_review_reasons = _effective_manual_review_reasons(
+            decision_result.review_reasons, effect, recomputed_operating_expense_match
+        )
         effective_workflow = _effective_workflow(decision_result.workflow, effective_review_reasons)
 
         proposal = ReviewReclassificationProposal(
@@ -239,45 +274,102 @@ class ReclassifyWorkbenchReviewUseCase:
         partner_match = decision_result.partner_match
         if partner_match is not None and partner_match.status is PartnerMatchStatus.MATCHED:
             return decision_result
-        return replace(
-            decision_result,
-            partner_match=PartnerMatchResult(
-                status=PartnerMatchStatus.MATCHED,
-                partner_id=effect.resolved_partner_id,
-                matched_by=REMEDIATION_EFFECT_MATCHED_BY,
-                reason="Resolved via an accepted supplier remediation effect for this review.",
-                candidate_count=1,
-                confidence=REMEDIATION_EFFECT_MATCH_CONFIDENCE,
-            ),
+        return replace(decision_result, partner_match=_synthesized_matched_partner(effect))
+
+    def _effective_operating_expense_match(
+        self,
+        decision_result: DecisionResult,
+        effect: _AcceptedRemediationEffect | None,
+        *,
+        invoice: object,
+        command: ReclassifyReviewCommand,
+    ) -> OperatingExpenseMatchResult | None:
+        """P0-PROD-15P: ask "would operating-expense matching succeed once the
+        effect's resolved supplier is treated as matched?" -- read-only, using the
+        exact same persistent mapping table the production rule engine itself
+        queries. Returns ``None`` (no override) unless a matcher was wired in, an
+        effect exists, and the raw partner match is not already MATCHED -- the
+        identical gate ``_execution_decision_result`` already uses, so this never
+        fires for a normal active-partner review either.
+        """
+
+        if self._operating_expense_matcher is None or effect is None or effect.mode != _MATCH_EXISTING_MODE:
+            return None
+        partner_match = decision_result.partner_match
+        if partner_match is not None and partner_match.status is PartnerMatchStatus.MATCHED:
+            return None
+        return self._operating_expense_matcher.match_invoice(
+            invoice,
+            company_id=command.company_id,
+            partner_match=_synthesized_matched_partner(effect),
         )
+
+
+#: Reason codes an accepted MATCH_EXISTING effect may ever strip from the review's
+#: own effective reasons -- SUPPLIER_AMBIGUOUS unconditionally (P0-PROD-15N), and
+#: the operating-expense codes only when a fresh, real recomputation against the
+#: persistent mapping table itself resolves to MATCHED (P0-PROD-15P). Every other
+#: reason, SUPPLIER_NOT_FOUND included, is never in this set.
+_OPERATING_EXPENSE_REASON_CODES = frozenset(
+    {
+        ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_REQUIRED,
+        ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_AMBIGUOUS,
+    }
+)
+
+
+def _synthesized_matched_partner(effect: _AcceptedRemediationEffect) -> PartnerMatchResult:
+    return PartnerMatchResult(
+        status=PartnerMatchStatus.MATCHED,
+        partner_id=effect.resolved_partner_id,
+        matched_by=REMEDIATION_EFFECT_MATCHED_BY,
+        reason="Resolved via an accepted supplier remediation effect for this review.",
+        candidate_count=1,
+        confidence=REMEDIATION_EFFECT_MATCH_CONFIDENCE,
+    )
 
 
 def _effective_manual_review_reasons(
     raw_reasons: tuple[ManualReviewReason, ...],
     effect: _AcceptedRemediationEffect | None,
+    recomputed_operating_expense_match: OperatingExpenseMatchResult | None,
 ) -> tuple[ManualReviewReason, ...]:
-    """P0-PROD-15N: fold an accepted MATCH_EXISTING remediation into the review's
-    own effective classification reasons.
+    """P0-PROD-15N/15P: fold an accepted MATCH_EXISTING remediation into the
+    review's own effective classification reasons.
 
     An accepted ``MATCH_EXISTING`` effect is the operator's authoritative
     adjudication of which of the raw matcher's valid, active, exact-VAT
     candidates is the correct supplier for this review -- it does not claim
     only one candidate exists in Odoo, and it never mutates Odoo, so the raw
-    matcher legitimately keeps finding the same ambiguity forever. Only
-    ``SUPPLIER_AMBIGUOUS`` is ever removed here, and only when there is an
-    accepted ``MATCH_EXISTING`` effect for this exact ``(review_id,
-    company_id)`` to justify it; every other reason -- ``SUPPLIER_NOT_FOUND``
-    included -- passes through completely untouched, so this never overlaps
-    with the P0-PROD-10D Stage-1-only override above, and never broadens
+    matcher legitimately keeps finding the same ambiguity forever. Only two
+    things are ever removed here, and only when there is an accepted
+    ``MATCH_EXISTING`` effect for this exact ``(review_id, company_id)`` to
+    justify it:
+
+    * ``SUPPLIER_AMBIGUOUS``, unconditionally (P0-PROD-15N);
+    * ``OPERATING_EXPENSE_MAPPING_REQUIRED``/``_AMBIGUOUS`` (P0-PROD-15P), but
+      only when ``recomputed_operating_expense_match`` -- a fresh, read-only
+      recomputation against the real persistent mapping table for the effect's
+      resolved supplier -- itself resolves to MATCHED. A mapping that does not
+      yet exist, or that is itself ambiguous, changes nothing here.
+
+    Every other reason -- ``SUPPLIER_NOT_FOUND`` included -- passes through
+    completely untouched, so this never overlaps with the P0-PROD-10D
+    Stage-1-only override above, and never broadens
     ``CREATE_PERMANENT_SUPPLIER``/``ONE_OFF_VENDOR``/``USE_ONE_OFF_SUPPLIER``
     (P0-PROD-15L intentionally kept those SUPPLIER_NOT_FOUND-only).
     """
 
     if effect is None or effect.mode != _MATCH_EXISTING_MODE:
         return raw_reasons
-    if not any(reason.code is ManualReviewReasonCode.SUPPLIER_AMBIGUOUS for reason in raw_reasons):
+    strip_codes = {ManualReviewReasonCode.SUPPLIER_AMBIGUOUS}
+    if recomputed_operating_expense_match is not None and (
+        recomputed_operating_expense_match.status is OperatingExpenseMatchStatus.MATCHED
+    ):
+        strip_codes |= _OPERATING_EXPENSE_REASON_CODES
+    if not any(reason.code in strip_codes for reason in raw_reasons):
         return raw_reasons
-    return tuple(reason for reason in raw_reasons if reason.code is not ManualReviewReasonCode.SUPPLIER_AMBIGUOUS)
+    return tuple(reason for reason in raw_reasons if reason.code not in strip_codes)
 
 
 def _effective_workflow(
