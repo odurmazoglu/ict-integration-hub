@@ -122,6 +122,15 @@ def _supplier_not_found_reason() -> ManualReviewReason:
     )
 
 
+def _supplier_ambiguous_reason(*, candidate_count: int = 2) -> ManualReviewReason:
+    return ManualReviewReason(
+        code=ManualReviewReasonCode.SUPPLIER_AMBIGUOUS,
+        message="Supplier match is ambiguous.",
+        source="partner_matching",
+        candidate_count=candidate_count,
+    )
+
+
 def _review_item(
     *,
     version: int = 1,
@@ -493,6 +502,95 @@ async def test_match_existing_reports_incomplete_when_supplier_still_missing(ses
     assert result.status is SupplierRemediationStatus.REMEDIATION_INCOMPLETE
     assert result.reclassified is False
     assert any(r.code is ManualReviewReasonCode.SUPPLIER_NOT_FOUND for r in result.current_review_reasons)
+
+
+# ------------------------------------- Phase 30b: SUPPLIER_AMBIGUOUS (P0-PROD-15L)
+#
+# The deterministic matcher emits SUPPLIER_AMBIGUOUS (not SUPPLIER_NOT_FOUND) when
+# more than one active exact-VAT partner candidate exists. Only MATCH_EXISTING is
+# eligible for it -- the operator is selecting one of several already-existing
+# correct candidates, not creating a new one.
+
+
+async def test_match_existing_resolves_for_supplier_ambiguous(session: Session) -> None:
+    h = _Harness(session, review=_review_item(reasons=(_supplier_ambiguous_reason(),)))
+    result = await h.use_case.execute(h.command())
+
+    assert result.status is SupplierRemediationStatus.RESOLVED
+    assert result.effective_partner_id == PARTNER_ID
+    assert result.partner_write_status is SupplierPartnerWriteEffectStatus.SELECTED
+    assert result.reclassified is True
+    assert h.writer.calls == []  # MATCH_EXISTING never touches the writer, ambiguous or not
+    assert (
+        h.resolution_repo.get_supplier_resolution(
+            review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1
+        ).resolved_partner_id
+        == PARTNER_ID
+    )
+
+
+async def test_match_existing_missing_partner_still_fails_closed_when_supplier_ambiguous(session: Session) -> None:
+    """Eligibility now admits SUPPLIER_AMBIGUOUS, but the existing resolution
+    validator is completely unchanged: an invalid/nonexistent partner_id is still
+    rejected exactly as it already is for SUPPLIER_NOT_FOUND."""
+    h = _Harness(session, review=_review_item(reasons=(_supplier_ambiguous_reason(),)), partner=None)
+    with pytest.raises(SupplierResolutionPartnerNotFoundError):
+        await h.use_case.execute(h.command())
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 0
+    assert h.writer.calls == []
+
+
+async def test_match_existing_wrong_vat_partner_still_fails_closed_when_supplier_ambiguous(session: Session) -> None:
+    h = _Harness(
+        session, review=_review_item(reasons=(_supplier_ambiguous_reason(),)), partner=_partner(vat="9999999999")
+    )
+    with pytest.raises(SupplierResolutionPartnerMismatchError):
+        await h.use_case.execute(h.command())
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 0
+
+
+async def test_create_permanent_supplier_still_rejected_when_only_supplier_ambiguous(session: Session) -> None:
+    """SUPPLIER_AMBIGUOUS must not accidentally authorize supplier creation --
+    an ambiguous match means correct candidates already exist to select from,
+    not that a new partner should be created."""
+    h = _Harness(session, review=_review_item(reasons=(_supplier_ambiguous_reason(),)))
+    with pytest.raises(SupplierResolutionContractError):
+        await h.use_case.execute(
+            h.command(mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, resolved_partner_id=None)
+        )
+    assert h.writer.calls == []
+
+
+async def test_one_off_vendor_still_rejected_when_only_supplier_ambiguous(session: Session) -> None:
+    h = _Harness(session, review=_review_item(reasons=(_supplier_ambiguous_reason(),)))
+    with pytest.raises(SupplierResolutionContractError):
+        await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
+    assert h.writer.calls == []
+
+
+async def test_use_one_off_supplier_still_rejected_when_only_supplier_ambiguous(session: Session) -> None:
+    h = _Harness(session, review=_review_item(reasons=(_supplier_ambiguous_reason(),)))
+    with pytest.raises(SupplierResolutionContractError):
+        await h.use_case.execute(h.command(mode=SupplierResolutionMode.USE_ONE_OFF_SUPPLIER, resolved_partner_id=None))
+
+
+async def test_stale_expected_version_conflicts_when_supplier_ambiguous(session: Session) -> None:
+    """The version/status eligibility checks run before the reason-code check and
+    are completely unmodified by this change."""
+    h = _Harness(session, review=_review_item(version=3, reasons=(_supplier_ambiguous_reason(),)))
+    with pytest.raises(ReviewVersionConflictError):
+        await h.use_case.execute(h.command(expected_version=1))
+
+
+async def test_review_with_unrelated_reason_still_rejected_for_match_existing(session: Session) -> None:
+    """A review carrying neither SUPPLIER_NOT_FOUND nor SUPPLIER_AMBIGUOUS remains
+    ineligible for MATCH_EXISTING, exactly as before this change."""
+    other = ManualReviewReason(
+        code=ManualReviewReasonCode.PRODUCT_NOT_FOUND, message="x", source="product_matching", candidate_count=0
+    )
+    h = _Harness(session, review=_review_item(reasons=(other,)))
+    with pytest.raises(SupplierResolutionContractError):
+        await h.use_case.execute(h.command())
 
 
 # --------------------------------------------------------- Phase 31: CREATE_PERMANENT
