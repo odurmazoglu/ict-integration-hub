@@ -33,6 +33,11 @@ from app.application.workbench import (
     SubmitReviewDecisionUseCase,
     WorkbenchDecisionIngestionWorkflow,
 )
+from app.application.workbench.accounting_resolution import (
+    ReviewAccountingResolutionSubmissionResult,
+    SubmitReviewAccountingResolutionCommand,
+)
+from app.application.workbench.accounting_resolution_use_cases import SubmitReviewAccountingResolutionUseCase
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.expense_account_lookup import (
     ExpenseAccountCandidate,
@@ -45,6 +50,11 @@ from app.application.workbench.operating_expense_mapping_command import (
 )
 from app.application.workbench.operating_expense_mapping_use_cases import SubmitOperatingExpenseMappingUseCase
 from app.application.workbench.product_remediation import CreateNewProductCommand, CreateNewProductResult
+from app.application.workbench.purchase_purpose import (
+    PurchasePurposeSubmissionResult,
+    SubmitPurchasePurposeCommand,
+)
+from app.application.workbench.purchase_purpose_use_cases import SubmitPurchasePurposeUseCase
 from app.application.workbench.retirement_recovery import (
     GetOneOffVendorRetirementUseCase,
     RecoverOneOffVendorRetirementWorkflow,
@@ -74,6 +84,10 @@ from app.composition import (
 from app.composition.operating_expense_mapping import (
     build_list_expense_account_candidates_use_case,
     build_submit_operating_expense_mapping_use_case,
+)
+from app.composition.purchase_purpose_and_accounting_resolution import (
+    build_submit_purchase_purpose_use_case,
+    build_submit_review_accounting_resolution_use_case,
 )
 from app.composition.supplier_remediation import (
     build_get_one_off_vendor_retirement_use_case,
@@ -468,6 +482,65 @@ class _LazySubmitOperatingExpenseMappingUseCase:
 SubmitOperatingExpenseMappingUseCaseDep = Annotated[
     SubmitOperatingExpenseMappingUseCase,
     Depends(get_submit_operating_expense_mapping_use_case),
+]
+
+
+def get_submit_purchase_purpose_use_case(
+    session: DbSessionDep,
+) -> SubmitPurchasePurposeUseCase:
+    return _LazySubmitPurchasePurposeUseCase(session=session)
+
+
+class _LazySubmitPurchasePurposeUseCase:
+    def __init__(self, *, session: Session) -> None:
+        self._session = session
+        self._use_case: SubmitPurchasePurposeUseCase | None = None
+
+    def execute(self, command: SubmitPurchasePurposeCommand) -> PurchasePurposeSubmissionResult:
+        return self._get_use_case().execute(command)
+
+    def _get_use_case(self) -> SubmitPurchasePurposeUseCase:
+        if self._use_case is None:
+            self._use_case = build_submit_purchase_purpose_use_case(session=self._session)
+        return self._use_case
+
+
+SubmitPurchasePurposeUseCaseDep = Annotated[
+    SubmitPurchasePurposeUseCase,
+    Depends(get_submit_purchase_purpose_use_case),
+]
+
+
+def get_submit_review_accounting_resolution_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> SubmitReviewAccountingResolutionUseCase:
+    return _LazySubmitReviewAccountingResolutionUseCase(session=session, settings=settings)
+
+
+class _LazySubmitReviewAccountingResolutionUseCase:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._use_case: SubmitReviewAccountingResolutionUseCase | None = None
+
+    async def execute(
+        self, command: SubmitReviewAccountingResolutionCommand
+    ) -> ReviewAccountingResolutionSubmissionResult:
+        return await self._get_use_case().execute(command)
+
+    def _get_use_case(self) -> SubmitReviewAccountingResolutionUseCase:
+        if self._use_case is None:
+            self._use_case = build_submit_review_accounting_resolution_use_case(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._use_case
+
+
+SubmitReviewAccountingResolutionUseCaseDep = Annotated[
+    SubmitReviewAccountingResolutionUseCase,
+    Depends(get_submit_review_accounting_resolution_use_case),
 ]
 
 

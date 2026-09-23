@@ -15,12 +15,14 @@ from app.application.execution import (
 )
 from app.application.expense_mapping import OperatingExpenseMappingOnboardingOutcome
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
+from app.application.workbench.accounting_resolution import AccountingResolutionStatus, AccountingTreatmentType
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorStatus, OneOffVendorRetirementStatus
 from app.application.workbench.operating_expense_mapping_command import OperatingExpenseMappingSubmissionStatus
 from app.application.workbench.product_remediation import ProductRemediationStatus
+from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
 from app.application.workbench.write_authorization import WriteAuthorizationOperationType, WriteAuthorizationStatus
@@ -430,6 +432,62 @@ class OperatingExpenseMappingResponse(BaseModel):
 
 
 OperatingExpenseMappingEnvelope = ApiEnvelope[OperatingExpenseMappingResponse]
+
+
+class PurchasePurposeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_version: int
+    purchase_purpose: PurchasePurpose
+    note: str | None = None
+
+
+class PurchasePurposeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    review_version: int
+    purchase_purpose: PurchasePurpose
+    already_applied: bool
+    safe_message: str | None = None
+
+
+PurchasePurposeEnvelope = ApiEnvelope[PurchasePurposeResponse]
+
+
+class AccountingResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_version: int
+    #: Deliberately a fixed ``Literal``, not the broader policy enum: any other value
+    #: (e.g. a future "capitalize_fixed_asset") must be rejected by request validation
+    #: itself, never silently accepted and reinterpreted (P0-PROD-15T scope).
+    treatment_type: Literal["expense_account"]
+    expense_account_id: int
+    expense_category: str
+    note: str | None = None
+
+
+class AccountingResolutionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    review_id: str
+    company_id: int
+    resolution_status: AccountingResolutionStatus
+    previous_version: int
+    current_version: int
+    current_workflow: WorkflowType
+    current_review_reasons: list[ManualReviewReasonResponse]
+    treatment_type: AccountingTreatmentType
+    expense_account_id: int
+    expense_category: str
+    reclassified: bool
+    already_applied: bool
+    safe_message: str | None = None
+
+
+AccountingResolutionEnvelope = ApiEnvelope[AccountingResolutionResponse]
 
 
 class WorkbenchDecisionIngestionCandidateResponse(BaseModel):

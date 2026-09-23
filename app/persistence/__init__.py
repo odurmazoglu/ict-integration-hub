@@ -11,6 +11,9 @@ from app.persistence.review_classification_evidence_reader import SqlAlchemyRevi
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.persistence.vendor_bill_execution_evidence_reader import SqlAlchemyVendorBillExecutionEvidenceReader
+from app.persistence.workbench_review_accounting_resolution_repository import (
+    SqlAlchemyReviewAccountingResolutionRepository,
+)
 from app.persistence.workbench_review_one_off_vendor_retirement_repository import (
     SqlAlchemyReviewOneOffVendorRetirementRepository,
 )
@@ -19,6 +22,9 @@ from app.persistence.workbench_review_product_identity_claim_repository import (
 )
 from app.persistence.workbench_review_product_remediation_reservation_repository import (
     SqlAlchemyReviewProductRemediationReservationRepository,
+)
+from app.persistence.workbench_review_purchase_purpose_resolution_repository import (
+    SqlAlchemyReviewPurchasePurposeResolutionRepository,
 )
 from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
 from app.persistence.workbench_review_source_invoice_reader import SqlAlchemyReviewSourceInvoiceEvidenceReader
@@ -35,12 +41,14 @@ __all__ = [
     "SqlAlchemyImportHistory",
     "SqlAlchemyOperatingExpenseMappingRepository",
     "SqlAlchemyQuotationScenarioEvidenceRepository",
+    "SqlAlchemyReviewAccountingResolutionRepository",
     "SqlAlchemyReviewBillingEvidenceReader",
     "SqlAlchemyReviewClassificationEvidenceReader",
     "SqlAlchemyReviewExecutionEvidenceReader",
     "SqlAlchemyReviewOneOffVendorRetirementRepository",
     "SqlAlchemyReviewProductIdentityClaimRepository",
     "SqlAlchemyReviewProductRemediationReservationRepository",
+    "SqlAlchemyReviewPurchasePurposeResolutionRepository",
     "SqlAlchemyReviewSourceInvoiceEvidenceReader",
     "SqlAlchemyReviewSupplierRemediationEffectRepository",
     "SqlAlchemyReviewSupplierResolutionRepository",

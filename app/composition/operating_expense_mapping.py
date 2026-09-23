@@ -13,6 +13,7 @@ from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.expense_account_candidate_reader import OdooExpenseAccountCandidateReader
 from app.persistence import (
     SqlAlchemyOperatingExpenseMappingRepository,
+    SqlAlchemyReviewAccountingResolutionRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
     SqlAlchemyReviewSupplierRemediationEffectRepository,
@@ -66,6 +67,10 @@ def build_submit_operating_expense_mapping_use_case(
         # match would keep operating-expense matching stuck at NOT_FOUND even once the
         # mapping this endpoint just onboarded exists.
         operating_expense_matcher=OperatingExpenseMatchingEngine(mapping_repository),
+        # P0-PROD-15T: a review-scoped ReviewAccountingResolution (if any) always takes
+        # precedence over this endpoint's own supplier-wide mapping -- see
+        # ReclassifyWorkbenchReviewUseCase's own module docstring for the precedence order.
+        review_accounting_resolution_reader=SqlAlchemyReviewAccountingResolutionRepository(session),
     )
 
     return SubmitOperatingExpenseMappingUseCase(

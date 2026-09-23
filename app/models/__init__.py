@@ -9,6 +9,7 @@ from app.models.provider import Provider
 from app.models.quotation_scenario_evidence import QuotationScenarioEvidence
 from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
+from app.models.workbench_review_accounting_resolution import WorkbenchReviewAccountingResolution
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
 from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
@@ -19,6 +20,7 @@ from app.models.workbench_review_product_identity_claim import WorkbenchReviewPr
 from app.models.workbench_review_product_remediation_reservation import (
     WorkbenchReviewProductRemediationReservation,
 )
+from app.models.workbench_review_purchase_purpose_resolution import WorkbenchReviewPurchasePurposeResolution
 from app.models.workbench_review_reclassification import WorkbenchReviewReclassification
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.models.workbench_review_supplier_remediation_effect import WorkbenchReviewSupplierRemediationEffect
@@ -33,6 +35,7 @@ __all__ = [
     "ImportReceipt",
     "WorkbenchReviewExecutionEvidence",
     "WorkbenchReviewSourceInvoiceEvidence",
+    "WorkbenchReviewAccountingResolution",
     "WorkbenchReviewBillingEvidence",
     "WorkbenchReviewClassificationEvidence",
     "InvoiceDocument",
@@ -47,6 +50,7 @@ __all__ = [
     "WorkbenchReviewOneOffVendorRetirement",
     "WorkbenchReviewProductIdentityClaim",
     "WorkbenchReviewProductRemediationReservation",
+    "WorkbenchReviewPurchasePurposeResolution",
     "WorkbenchReviewReclassification",
     "WorkbenchReviewSupplierRemediationEffect",
     "WorkbenchReviewSupplierResolution",

@@ -618,6 +618,56 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
     }
     assert "uq_wrov_retirements_review_version" in retirement_unique_constraints_at_head
 
+    assert "workbench_review_purchase_purpose_resolutions" in inspector.get_table_names()
+    purpose_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_purchase_purpose_resolutions")
+    }
+    assert {
+        "review_id",
+        "company_id",
+        "review_version",
+        "source_invoice_id",
+        "purchase_purpose",
+        "approved_by",
+        "note",
+        "created_at",
+    }.issubset(purpose_columns_at_head)
+    purpose_unique_constraints_at_head = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("workbench_review_purchase_purpose_resolutions")
+    }
+    assert "uq_workbench_review_purchase_purpose_resolutions_review_version" in purpose_unique_constraints_at_head
+
+    assert "workbench_review_accounting_resolutions" in inspector.get_table_names()
+    accounting_resolution_columns_at_head = {
+        column["name"] for column in inspector.get_columns("workbench_review_accounting_resolutions")
+    }
+    assert {
+        "review_id",
+        "company_id",
+        "review_version",
+        "treatment_type",
+        "expense_account_id",
+        "expense_category",
+        "approved_by",
+        "note",
+        "created_at",
+    }.issubset(accounting_resolution_columns_at_head)
+    accounting_resolution_unique_constraints_at_head = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("workbench_review_accounting_resolutions")
+    }
+    assert (
+        "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
+    )
+
+    # P0-PROD-15T added one more migration on top (two new, independent tables) --
+    # one extra "-1" step consumes it before the P0-PROD-09G step below.
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_purchase_purpose_resolutions" not in inspector.get_table_names()
+    assert "workbench_review_accounting_resolutions" not in inspector.get_table_names()
+    assert "workbench_review_write_authorizations" in inspector.get_table_names()
+
     # P0-PROD-09G added one more migration on top (widening the operation_type check
     # constraint only -- no table/column change) -- one extra "-1" step consumes it
     # before P0-PROD-09F's own extension step below.
