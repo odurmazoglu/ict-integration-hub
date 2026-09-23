@@ -533,7 +533,20 @@ class ResolveWorkbenchSupplierUseCase:
         workbench_republished: bool = False,
         retirement: OneOffVendorRetirement | None = None,
     ) -> SupplierRemediationResult:
-        supplier_still_missing = _has_supplier_not_found(reclass.new_review_reasons)
+        # P0-PROD-15N: for MATCH_EXISTING, a lingering SUPPLIER_AMBIGUOUS is exactly as
+        # unresolved as a lingering SUPPLIER_NOT_FOUND would be -- both mean the review
+        # still requires a matched supplier. Checking only SUPPLIER_NOT_FOUND let this
+        # report a false "resolved; reclassified" success in production while
+        # SUPPLIER_AMBIGUOUS (and therefore the actionable supplier blocker) was still
+        # present, because ReclassifyWorkbenchReviewUseCase is what actually clears
+        # SUPPLIER_AMBIGUOUS from new_review_reasons (see _effective_manual_review_reasons
+        # there) -- if that never happened, this must not claim success either. Every
+        # other mode is unaffected: only MATCH_EXISTING was ever eligible for
+        # SUPPLIER_AMBIGUOUS in the first place (P0-PROD-15L).
+        supplier_still_missing = _has_supplier_not_found(reclass.new_review_reasons) or (
+            command.mode is SupplierResolutionMode.MATCH_EXISTING
+            and _has_supplier_ambiguous(reclass.new_review_reasons)
+        )
         status = (
             SupplierRemediationStatus.REMEDIATION_INCOMPLETE
             if supplier_still_missing
