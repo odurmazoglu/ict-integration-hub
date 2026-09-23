@@ -34,6 +34,16 @@ from app.application.workbench import (
     WorkbenchDecisionIngestionWorkflow,
 )
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
+from app.application.workbench.expense_account_lookup import (
+    ExpenseAccountCandidate,
+    ListExpenseAccountCandidatesQuery,
+)
+from app.application.workbench.expense_account_use_cases import ListExpenseAccountCandidatesUseCase
+from app.application.workbench.operating_expense_mapping_command import (
+    OperatingExpenseMappingSubmissionResult,
+    SubmitOperatingExpenseMappingCommand,
+)
+from app.application.workbench.operating_expense_mapping_use_cases import SubmitOperatingExpenseMappingUseCase
 from app.application.workbench.product_remediation import CreateNewProductCommand, CreateNewProductResult
 from app.application.workbench.retirement_recovery import (
     GetOneOffVendorRetirementUseCase,
@@ -60,6 +70,10 @@ from app.composition import (
     build_workbench_accepted_decision_execution_dispatcher,
     build_workbench_quotation_scenario_evidence_workflow,
     build_workbench_vendor_bill_execution_workflow,
+)
+from app.composition.operating_expense_mapping import (
+    build_list_expense_account_candidates_use_case,
+    build_submit_operating_expense_mapping_use_case,
 )
 from app.composition.supplier_remediation import (
     build_get_one_off_vendor_retirement_use_case,
@@ -397,6 +411,63 @@ class _LazyResolveWorkbenchSupplierUseCase:
 ResolveWorkbenchSupplierUseCaseDep = Annotated[
     ResolveWorkbenchSupplierUseCase,
     Depends(get_resolve_workbench_supplier_use_case),
+]
+
+
+def get_list_expense_account_candidates_use_case(
+    settings: SettingsDep,
+) -> ListExpenseAccountCandidatesUseCase:
+    return _LazyListExpenseAccountCandidatesUseCase(settings=settings)
+
+
+class _LazyListExpenseAccountCandidatesUseCase:
+    def __init__(self, *, settings: Settings) -> None:
+        self._settings = settings
+        self._use_case: ListExpenseAccountCandidatesUseCase | None = None
+
+    def execute(self, query: ListExpenseAccountCandidatesQuery) -> tuple[ExpenseAccountCandidate, ...]:
+        return self._get_use_case().execute(query)
+
+    def _get_use_case(self) -> ListExpenseAccountCandidatesUseCase:
+        if self._use_case is None:
+            self._use_case = build_list_expense_account_candidates_use_case(settings=self._settings)
+        return self._use_case
+
+
+ListExpenseAccountCandidatesUseCaseDep = Annotated[
+    ListExpenseAccountCandidatesUseCase,
+    Depends(get_list_expense_account_candidates_use_case),
+]
+
+
+def get_submit_operating_expense_mapping_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> SubmitOperatingExpenseMappingUseCase:
+    return _LazySubmitOperatingExpenseMappingUseCase(session=session, settings=settings)
+
+
+class _LazySubmitOperatingExpenseMappingUseCase:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._use_case: SubmitOperatingExpenseMappingUseCase | None = None
+
+    async def execute(self, command: SubmitOperatingExpenseMappingCommand) -> OperatingExpenseMappingSubmissionResult:
+        return await self._get_use_case().execute(command)
+
+    def _get_use_case(self) -> SubmitOperatingExpenseMappingUseCase:
+        if self._use_case is None:
+            self._use_case = build_submit_operating_expense_mapping_use_case(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._use_case
+
+
+SubmitOperatingExpenseMappingUseCaseDep = Annotated[
+    SubmitOperatingExpenseMappingUseCase,
+    Depends(get_submit_operating_expense_mapping_use_case),
 ]
 
 

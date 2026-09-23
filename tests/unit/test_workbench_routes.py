@@ -1326,11 +1326,13 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
     workbench_paths = {path: methods for path, methods in paths.items() if path.startswith("/api/workbench")}
     assert set(workbench_paths) == {
         "/api/workbench/decisions/sync",
+        "/api/workbench/expense-accounts",
         "/api/workbench/reviews",
         "/api/workbench/reviews/{review_id}",
         "/api/workbench/reviews/{review_id}/decision",
         "/api/workbench/reviews/{review_id}/execute",
         "/api/workbench/reviews/{review_id}/execution-status",
+        "/api/workbench/reviews/{review_id}/operating-expense-mapping",
         "/api/workbench/reviews/{review_id}/product-resolution",
         "/api/workbench/reviews/{review_id}/quotation-scenarios",
         "/api/workbench/reviews/{review_id}/supplier-resolution",
@@ -1339,6 +1341,16 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}/one-off-vendor-retirement/recover",
         "/api/workbench/reviews/{review_id}/write-authorizations",
         "/api/workbench/reviews/{review_id}/write-authorizations/{authorization_id}/revoke",
+    }
+    operating_expense_mapping_schema = response.json()["components"]["schemas"]["OperatingExpenseMappingRequest"]
+    operating_expense_mapping_text = str(operating_expense_mapping_schema)
+    for forbidden in ("company_id", "review_id", "approved_by", "vendor_partner_id"):
+        assert forbidden not in operating_expense_mapping_text
+    assert set(operating_expense_mapping_schema["properties"]) == {
+        "expected_version",
+        "expense_account_id",
+        "expense_category",
+        "note",
     }
     product_resolution_schema = response.json()["components"]["schemas"]["ProductResolutionRequest"]
     product_resolution_text = str(product_resolution_schema)

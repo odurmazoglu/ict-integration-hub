@@ -66,6 +66,10 @@ from app.application.workbench.evidence import (
     ReviewSourceInvoiceEvidence,
 )
 from app.application.workbench.exceptions import (
+    OperatingExpenseMappingAccountInvalidError,
+    OperatingExpenseMappingEligibilityError,
+    OperatingExpenseMappingSupplierUnresolvedError,
+    OperatingExpenseMappingWorkflowError,
     ProductRemediationConflictError,
     ProductRemediationContractError,
     ProductRemediationDataIntegrityError,
@@ -90,6 +94,11 @@ from app.application.workbench.exceptions import (
     WorkbenchSubmissionCompanyMismatchError,
     WorkbenchSubmissionOrchestrationError,
 )
+from app.application.workbench.expense_account_lookup import (
+    ExpenseAccountCandidate,
+    ListExpenseAccountCandidatesQuery,
+)
+from app.application.workbench.expense_account_use_cases import ListExpenseAccountCandidatesUseCase
 from app.application.workbench.odoo_submission_use_cases import (
     OdooWorkbenchSubmissionResult,
     OdooWorkbenchSubmissionStatus,
@@ -107,7 +116,14 @@ from app.application.workbench.one_off_vendor_use_cases import (
     ArchiveOneOffVendorUseCase,
     OneOffVendorRetirementTrigger,
 )
+from app.application.workbench.operating_expense_mapping_command import (
+    OperatingExpenseMappingSubmissionResult,
+    OperatingExpenseMappingSubmissionStatus,
+    SubmitOperatingExpenseMappingCommand,
+)
+from app.application.workbench.operating_expense_mapping_use_cases import SubmitOperatingExpenseMappingUseCase
 from app.application.workbench.ports import (
+    ExpenseAccountCandidateReader,
     ProductIdentityClaimWriter,
     ProductRemediationReservationWriter,
     ReviewBillingEvidenceReader,
@@ -206,8 +222,12 @@ __all__ = [
     "CurrencyReference",
     "CurrencyReferenceRepository",
     "ExistingSupplierInfo",
+    "ExpenseAccountCandidate",
+    "ExpenseAccountCandidateReader",
     "GetReviewItemUseCase",
     "LineResolution",
+    "ListExpenseAccountCandidatesQuery",
+    "ListExpenseAccountCandidatesUseCase",
     "ListReviewQueueUseCase",
     "OdooWorkbenchDecisionCandidate",
     "OdooWorkbenchSubmissionResult",
@@ -215,6 +235,12 @@ __all__ = [
     "OneOffVendorRetirement",
     "OneOffVendorRetirementStatus",
     "OneOffVendorRetirementTrigger",
+    "OperatingExpenseMappingAccountInvalidError",
+    "OperatingExpenseMappingEligibilityError",
+    "OperatingExpenseMappingSubmissionResult",
+    "OperatingExpenseMappingSubmissionStatus",
+    "OperatingExpenseMappingSupplierUnresolvedError",
+    "OperatingExpenseMappingWorkflowError",
     "OpportunityReference",
     "OpportunityReferenceRepository",
     "PartnerReference",
@@ -281,6 +307,8 @@ __all__ = [
     "SupplierResolutionValidation",
     "SupplierResolutionValidationStatus",
     "SupplierResolutionWriter",
+    "SubmitOperatingExpenseMappingCommand",
+    "SubmitOperatingExpenseMappingUseCase",
     "ValidateSupplierResolutionUseCase",
     "apply_selected_product_resolutions",
     "normalize_seller_item_code",

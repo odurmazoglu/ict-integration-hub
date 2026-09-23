@@ -74,6 +74,7 @@ def test_permission_vocabulary_is_canonical() -> None:
         "workbench_execute",
         "uyumsoft_sync_execute",
         "invoice_document_read",
+        "workbench_expense_account_read",
     }
 
 
