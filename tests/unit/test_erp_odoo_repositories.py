@@ -205,24 +205,30 @@ def test_partner_lookup_returns_immutable_dtos() -> None:
         partners[0].name = "Changed"  # type: ignore[misc]
 
 
-def test_partner_lookup_never_requests_company_type() -> None:
-    """P0-PROD-15J regression: the real production Odoo Online instance's JSON-2
-    search_read rejects "company_type" on res.partner with an HTTP 500 ("Invalid
-    field 'company_type' on 'res.partner'"), confirmed live against production
-    for review:b9aacadc-c67e-50b2-9183-bb730cb4709b (VAT 1760390647, two active
-    exact-VAT candidates). That real 500 propagated uncaught through
-    ReviewEvidenceReader.get() (no try/except around this call), through
-    GetReviewItemUseCase, into the Workbench review-detail router's generic
-    exception handler, surfacing as HTTP 500 / review_query_error. This proves
-    the fixed field list is never requested again, restoring the feature
-    (supplier_candidates) rather than merely masking the failure."""
+def test_partner_lookup_never_requests_fields_unsupported_by_production_odoo() -> None:
+    """P0-PROD-15J/15K regression: the real production Odoo Online instance's
+    JSON-2 search_read rejects both "company_type" and "mobile" on res.partner
+    with an HTTP 500 ("Invalid field '<name>' on 'res.partner'"), confirmed live
+    against production for review:b9aacadc-c67e-50b2-9183-bb730cb4709b (VAT
+    1760390647, two active exact-VAT candidates) -- one field at a time, since
+    fixing the first (15J) only revealed the second (15K) once deployed. Each
+    real 500 propagated uncaught through ReviewEvidenceReader.get() (no
+    try/except around this call), through GetReviewItemUseCase, into the
+    Workbench review-detail router's generic exception handler, surfacing as
+    HTTP 500 / review_query_error. This proves the fixed field list never
+    requests either field again, restoring the feature (supplier_candidates)
+    rather than merely masking the failure. Every other field in PARTNER_FIELDS,
+    including the full combined request, was individually verified to succeed
+    against production."""
     adapter = RecordingAdapter(
         {"res.partner": [{"id": 10, "name": "Supplier", "vat": "123", "active": True, "company_id": [7, "Main"]}]}
     )
 
     OdooPartnerRepository(adapter=adapter).find_by_tax_number("123", company_id=7)
 
-    assert "company_type" not in adapter.calls[0]["fields"]
+    requested_fields = adapter.calls[0]["fields"]
+    assert "company_type" not in requested_fields
+    assert "mobile" not in requested_fields
 
 
 def test_product_lookup_by_code_barcode_and_ids() -> None:

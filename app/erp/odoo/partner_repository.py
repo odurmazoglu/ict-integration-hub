@@ -29,7 +29,13 @@ PARTNER_FIELDS = [
     "country_id",
     "email",
     "phone",
-    "mobile",
+    # P0-PROD-15K: "mobile" is deliberately NOT requested either, for the exact
+    # same reason as "company_type" above -- the real production Odoo Online
+    # instance's JSON-2 search_read rejects it too ("Invalid field 'mobile' on
+    # 'res.partner'"), confirmed against production. Every other field in this
+    # list, including the full combined request, was individually verified to
+    # succeed. `Partner.mobile`/`SupplierCandidate.mobile` remain `None` (their
+    # existing default).
     "website",
     "supplier_rank",
     "customer_rank",
