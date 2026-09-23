@@ -218,10 +218,23 @@ class ResolveWorkbenchSupplierUseCase:
             raise ReviewStateConflictError("The review is not pending review.")
         if review.version != command.expected_version:
             raise ReviewVersionConflictError("The review version does not match expected_version.")
-        if not _has_supplier_not_found(review.review_reasons):
-            raise SupplierResolutionContractError(
-                "The review no longer carries SUPPLIER_NOT_FOUND; there is nothing to remediate."
-            )
+        if _has_supplier_not_found(review.review_reasons):
+            return
+        # P0-PROD-15L: the deterministic matcher also emits SUPPLIER_AMBIGUOUS when
+        # more than one active exact-VAT candidate exists (as opposed to
+        # SUPPLIER_NOT_FOUND's zero-candidate case). Only MATCH_EXISTING is
+        # eligible for it -- CREATE_PERMANENT_SUPPLIER/ONE_OFF_VENDOR/
+        # USE_ONE_OFF_SUPPLIER remain restricted to SUPPLIER_NOT_FOUND exactly as
+        # before, since "ambiguous" means a correct existing partner already
+        # exists to select, not that one needs to be created. The same
+        # _resolution_validator below still independently proves the selected
+        # partner is active and exact-VAT-matches the immutable source -- this
+        # eligibility check only decides which reason codes may reach it.
+        if command.mode is SupplierResolutionMode.MATCH_EXISTING and _has_supplier_ambiguous(review.review_reasons):
+            return
+        raise SupplierResolutionContractError(
+            "The review no longer carries SUPPLIER_NOT_FOUND; there is nothing to remediate."
+        )
 
     # ------------------------------------------------------------------ one-off
 
@@ -750,6 +763,10 @@ class ResolveWorkbenchSupplierUseCase:
 
 def _has_supplier_not_found(reasons: tuple[ManualReviewReason, ...]) -> bool:
     return any(reason.code is ManualReviewReasonCode.SUPPLIER_NOT_FOUND for reason in reasons)
+
+
+def _has_supplier_ambiguous(reasons: tuple[ManualReviewReason, ...]) -> bool:
+    return any(reason.code is ManualReviewReasonCode.SUPPLIER_AMBIGUOUS for reason in reasons)
 
 
 def _missing(what: str) -> str:
