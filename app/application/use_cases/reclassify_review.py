@@ -242,23 +242,30 @@ class ReclassifyWorkbenchReviewUseCase:
             review_version=to_version,
             decision_result=decision_result,
         )
-        execution_evidence = build_review_execution_evidence(
-            review_id=command.review_id,
-            company_id=command.company_id,
-            review_version=to_version,
-            invoice=source.invoice,
-            decision_result=self._execution_decision_result(decision_result, effect),
-        )
-        matched_rule_code = classification_evidence.matched_rule_code if classification_evidence is not None else None
-        matched_rule_id = classification_evidence.matched_rule_id if classification_evidence is not None else None
 
         # P0-PROD-15T precedence: a review-scoped ReviewAccountingResolution (this
         # exact review only) always wins over the P0-PROD-15P supplier-wide-effect
         # recomputation -- see module docstring. `or` is exact here: both return
         # a real dataclass instance or None, and a real instance is always truthy.
+        # Computed once, here, and reused for both effective execution evidence
+        # (P0-PROD-15X) and effective reasons/workflow below -- one authoritative
+        # effective result, never independently recomputed in another layer.
         recomputed_operating_expense_match = self._review_accounting_resolution_operating_expense_match(
             decision_result, effect, command=command
         ) or self._effective_operating_expense_match(decision_result, effect, invoice=source.invoice, command=command)
+
+        execution_evidence = build_review_execution_evidence(
+            review_id=command.review_id,
+            company_id=command.company_id,
+            review_version=to_version,
+            invoice=source.invoice,
+            decision_result=self._execution_decision_result(
+                decision_result, effect, recomputed_operating_expense_match
+            ),
+        )
+        matched_rule_code = classification_evidence.matched_rule_code if classification_evidence is not None else None
+        matched_rule_id = classification_evidence.matched_rule_id if classification_evidence is not None else None
+
         effective_review_reasons = _effective_manual_review_reasons(
             decision_result.review_reasons, effect, recomputed_operating_expense_match
         )
@@ -298,26 +305,39 @@ class ReclassifyWorkbenchReviewUseCase:
         )
 
     def _execution_decision_result(
-        self, decision_result: DecisionResult, effect: _AcceptedRemediationEffect | None
+        self,
+        decision_result: DecisionResult,
+        effect: _AcceptedRemediationEffect | None,
+        recomputed_operating_expense_match: OperatingExpenseMatchResult | None,
     ) -> DecisionResult:
-        """P0-PROD-10D: substitute a MATCHED partner for *execution evidence only*.
-
-        Used exclusively as the input to ``build_review_execution_evidence`` above --
-        never for ``new_workflow``/``new_review_reasons``/classification evidence,
-        which stay driven by the raw deterministic ``decision_result`` unchanged (see
-        ``_effective_manual_review_reasons``/``_effective_workflow`` for the one
-        narrow, MATCH_EXISTING-specific exception to that). This keeps the review's
-        own displayed reasons an honest record of what the generic, active-only
+        """Substitute effective, already-authoritative facts for *execution evidence
+        only* -- never for ``new_workflow``/``new_review_reasons``/classification
+        evidence, which stay driven by the raw deterministic ``decision_result``
+        unchanged (see ``_effective_manual_review_reasons``/``_effective_workflow``
+        for the one narrow, MATCH_EXISTING-specific exception to that). This keeps
+        the review's own displayed reasons an honest record of what the generic
         matcher actually found, while still letting a review with a genuine,
-        durable, review-scoped remediation effect reach a submittable decision.
-        Fires only when:
+        durable, review-scoped effect/resolution reach a submittable decision.
 
-        * an accepted ``SupplierRemediationEffect`` exists for this *exact*
+        Two independent substitutions, each gated on its own accepted-state
+        precondition:
+
+        * P0-PROD-10D: partner match, substituted only when an accepted
+          ``SupplierRemediationEffect`` exists for this *exact*
           ``(review_id, company_id)`` -- never any other review's or company's
-          effect, and never a generic broadened search of inactive partners, and
-        * the raw deterministic partner match is not already MATCHED (a normal
-          active-partner review is completely unaffected -- this never runs for it
-          because there is nothing to substitute).
+          effect, and never a generic broadened search of inactive partners --
+          and the raw deterministic partner match is not already MATCHED (a
+          normal active-partner review is completely unaffected).
+        * P0-PROD-15X: operating-expense match, substituted with
+          ``recomputed_operating_expense_match`` whenever the caller has computed
+          one (already gated, by the caller, to require an accepted P0-PROD-15T
+          ``ReviewAccountingResolution`` or a P0-PROD-15P supplier-wide-effect
+          recomputation matching -- never fabricated here). Fixes the gap where
+          the review's effective reasons/workflow already treated the review as
+          operating-expense-resolved, but Stage-1 execution evidence still saw
+          only the raw, unmatched result, so no ``WorkbenchReviewExecutionEvidence``
+          was ever persisted and decision submission failed with
+          ``execution_source_invoice_not_found``.
 
         Product matching is untouched entirely: an unresolved product line is
         already correctly handled by the existing decision-time
@@ -325,12 +345,14 @@ class ReclassifyWorkbenchReviewUseCase:
         override, which needs no involvement here.
         """
 
-        if effect is None:
-            return decision_result
-        partner_match = decision_result.partner_match
-        if partner_match is not None and partner_match.status is PartnerMatchStatus.MATCHED:
-            return decision_result
-        return replace(decision_result, partner_match=_synthesized_matched_partner(effect))
+        result = decision_result
+        if effect is not None:
+            partner_match = result.partner_match
+            if partner_match is None or partner_match.status is not PartnerMatchStatus.MATCHED:
+                result = replace(result, partner_match=_synthesized_matched_partner(effect))
+        if recomputed_operating_expense_match is not None:
+            result = replace(result, operating_expense_match=recomputed_operating_expense_match)
+        return result
 
     def _effective_operating_expense_match(
         self,
