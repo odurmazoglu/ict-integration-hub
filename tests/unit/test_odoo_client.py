@@ -18,6 +18,52 @@ def test_read_only_models_allowlist_includes_account_move_line_not_uom_uom() -> 
     assert "uom.uom" not in READ_ONLY_MODELS
 
 
+def test_read_only_models_allowlist_is_exact_and_adds_only_product_category_for_18d() -> None:
+    """P0-PROD-18D adds product.category (read-only) and nothing else."""
+    assert READ_ONLY_MODELS == frozenset(
+        {
+            "account.move",
+            "account.move.line",
+            "purchase.order",
+            "sale.order",
+            "product.pricelist",
+            "res.company",
+            "res.partner",
+            "product.product",
+            "product.template",
+            "product.category",
+            "product.supplierinfo",
+            "account.tax",
+            "res.currency",
+            "account.journal",
+            "account.account",
+        }
+    )
+    for not_allowed in ("account.fiscal.position", "ir.property", "stock.valuation.layer", "uom.uom"):
+        assert not_allowed not in READ_ONLY_MODELS
+
+
+async def test_product_category_is_readable_but_never_writable() -> None:
+    paths: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(200, json=[{"id": 1, "name": "All"}])
+
+    client = _client(handler)
+
+    assert await client.search_read(model="product.category", domain=[], fields=["id", "name"]) == [
+        {"id": 1, "name": "All"}
+    ]
+    with pytest.raises(ConnectorError):
+        await client.create_studio_record(model="product.category", values={"name": "x"})
+    with pytest.raises(ConnectorError):
+        await client.write_studio_record(model="product.category", record_id=1, values={"name": "x"})
+    with pytest.raises(ConnectorError):
+        await client.call_model_method(model="product.category", method="write", ids=[1])
+    assert paths == ["/json/2/product.category/search_read"]
+
+
 async def test_create_account_move_returns_created_id() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/json/2/account.move/create"

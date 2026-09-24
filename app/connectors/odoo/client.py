@@ -25,6 +25,8 @@ READ_ONLY_MODELS = frozenset(
         "res.partner",
         "product.product",
         "product.template",
+        # P0-PROD-18D: read-only purchase-account discovery (category expense account).
+        "product.category",
         "product.supplierinfo",
         "account.tax",
         "res.currency",

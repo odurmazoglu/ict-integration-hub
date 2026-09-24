@@ -403,6 +403,63 @@ class ExpenseAccountCandidateResponse(BaseModel):
 ExpenseAccountCandidatesEnvelope = ApiEnvelope[list[ExpenseAccountCandidateResponse]]
 
 
+class PurchaseAccountResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    account_id: int
+    code: str
+    name: str
+    account_type: str
+    #: ``None`` when this Odoo version exposes no ``deprecated`` field.
+    deprecated: bool | None
+
+
+class ResolvedPurchaseAccountResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["valid", "not_configured", "unavailable", "deprecated"]
+    configured_account_id: int | None
+    account: PurchaseAccountResponse | None
+
+
+class CategoryPurchaseAccountResponse(BaseModel):
+    """A category's *configured* purchase account -- not any product's final account."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    category_id: int
+    category_name: str
+    category_complete_name: str | None
+    purchase_account: ResolvedPurchaseAccountResponse
+
+
+CategoryPurchaseAccountsEnvelope = ApiEnvelope[list[CategoryPurchaseAccountResponse]]
+
+
+class ProductPurchaseAccountResponse(BaseModel):
+    """One product's pre-fiscal-position purchase account per Odoo configuration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    product_id: int
+    product_template_id: int
+    product_name: str
+    product_active: bool
+    product_company_id: int | None
+    product_type: str
+    is_storable: bool | None
+    category: CategoryPurchaseAccountResponse | None
+    product_override: ResolvedPurchaseAccountResponse
+    pre_fiscal_position_account: PurchaseAccountResponse | None
+    pre_fiscal_position_account_source: Literal["product_override", "category"] | None
+    pre_fiscal_position_account_determinable: bool
+    blockers: list[str]
+    fiscal_position_mapping: Literal["not_evaluated"]
+
+
+ProductPurchaseAccountEnvelope = ApiEnvelope[ProductPurchaseAccountResponse]
+
+
 class OperatingExpenseMappingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
