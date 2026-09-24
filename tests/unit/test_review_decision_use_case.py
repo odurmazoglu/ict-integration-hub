@@ -47,10 +47,11 @@ def test_submit_review_decision_use_case_loads_evidence_for_vendor_bill_and_dele
     )
     writer = RecordingDecisionWriter(result=acknowledgement)
     reader = RecordingEvidenceReader(result=evidence)
+    unit_of_work = _FakeUnitOfWork()
 
-    result = SubmitReviewDecisionUseCase(review_decision_writer=writer, execution_evidence_reader=reader).execute(
-        command
-    )
+    result = SubmitReviewDecisionUseCase(
+        review_decision_writer=writer, unit_of_work=unit_of_work, execution_evidence_reader=reader
+    ).execute(command)
 
     assert result is acknowledgement
     assert writer.commands == ()
@@ -58,11 +59,39 @@ def test_submit_review_decision_use_case_loads_evidence_for_vendor_bill_and_dele
     assert reader.calls == ({"review_id": "review-1", "company_id": 7, "expected_version": 1},)
 
 
+def test_submit_review_decision_use_case_commits_after_a_successful_write() -> None:
+    """P0-PROD-15AB: the use case owns the transaction boundary. A write that the
+    repository reports as successful must be followed by exactly one commit --
+    never left pending for the request-scoped session's close() to silently
+    discard."""
+
+    command = _select_workflow_command(selected_workflow=WorkflowType.RFQ)
+    writer = RecordingDecisionWriter()
+    unit_of_work = _FakeUnitOfWork()
+
+    SubmitReviewDecisionUseCase(review_decision_writer=writer, unit_of_work=unit_of_work).execute(command)
+
+    assert unit_of_work.events == ("commit",)
+
+
+def test_submit_review_decision_use_case_rolls_back_on_writer_failure() -> None:
+    error = ReviewVersionConflictError("Review item version does not match expected_version.")
+    unit_of_work = _FakeUnitOfWork()
+    use_case = SubmitReviewDecisionUseCase(
+        review_decision_writer=RecordingDecisionWriter(error=error), unit_of_work=unit_of_work
+    )
+
+    with pytest.raises(ReviewVersionConflictError):
+        use_case.execute(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
+
+    assert unit_of_work.events == ("rollback",)
+
+
 def test_submit_review_decision_use_case_delegates_non_executable_decision_without_evidence() -> None:
     command = _select_workflow_command(selected_workflow=WorkflowType.RFQ)
     writer = RecordingDecisionWriter()
 
-    SubmitReviewDecisionUseCase(review_decision_writer=writer).execute(command)
+    SubmitReviewDecisionUseCase(review_decision_writer=writer, unit_of_work=_FakeUnitOfWork()).execute(command)
 
     assert writer.commands == (command,)
     assert writer.commands_with_evidence == ()
@@ -70,9 +99,9 @@ def test_submit_review_decision_use_case_delegates_non_executable_decision_witho
 
 def test_submit_review_decision_use_case_requires_evidence_reader_for_vendor_bill() -> None:
     with pytest.raises(ReviewDecisionError) as raised:
-        SubmitReviewDecisionUseCase(review_decision_writer=RecordingDecisionWriter()).execute(
-            _select_workflow_command()
-        )
+        SubmitReviewDecisionUseCase(
+            review_decision_writer=RecordingDecisionWriter(), unit_of_work=_FakeUnitOfWork()
+        ).execute(_select_workflow_command())
 
     assert str(raised.value) == "Execution source evidence is required for Vendor Bill decisions."
 
@@ -84,6 +113,7 @@ def test_submit_review_decision_use_case_missing_evidence_prevents_decision_writ
     with pytest.raises(ExecutionSourceInvoiceNotFoundError):
         SubmitReviewDecisionUseCase(
             review_decision_writer=writer,
+            unit_of_work=_FakeUnitOfWork(),
             execution_evidence_reader=FailingEvidenceReader(error),
         ).execute(_select_workflow_command())
 
@@ -98,6 +128,7 @@ def test_submit_review_decision_use_case_malformed_evidence_prevents_decision_wr
     with pytest.raises(ExecutionSourceInvoiceIntegrityError):
         SubmitReviewDecisionUseCase(
             review_decision_writer=writer,
+            unit_of_work=_FakeUnitOfWork(),
             execution_evidence_reader=FailingEvidenceReader(error),
         ).execute(_select_workflow_command())
 
@@ -106,7 +137,9 @@ def test_submit_review_decision_use_case_malformed_evidence_prevents_decision_wr
 
 
 def test_submit_review_decision_use_case_rejects_non_command_input() -> None:
-    use_case = SubmitReviewDecisionUseCase(review_decision_writer=RecordingDecisionWriter())
+    use_case = SubmitReviewDecisionUseCase(
+        review_decision_writer=RecordingDecisionWriter(), unit_of_work=_FakeUnitOfWork()
+    )
 
     with pytest.raises(WorkbenchContractError):
         use_case.execute("not-a-command")  # type: ignore[arg-type]
@@ -114,7 +147,9 @@ def test_submit_review_decision_use_case_rejects_non_command_input() -> None:
 
 def test_submit_review_decision_use_case_propagates_known_safe_errors() -> None:
     error = ReviewVersionConflictError("Review item version does not match expected_version.")
-    use_case = SubmitReviewDecisionUseCase(review_decision_writer=RecordingDecisionWriter(error=error))
+    use_case = SubmitReviewDecisionUseCase(
+        review_decision_writer=RecordingDecisionWriter(error=error), unit_of_work=_FakeUnitOfWork()
+    )
 
     with pytest.raises(ReviewVersionConflictError) as raised:
         use_case.execute(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
@@ -124,7 +159,9 @@ def test_submit_review_decision_use_case_propagates_known_safe_errors() -> None:
 
 def test_submit_review_decision_use_case_translates_unexpected_errors_safely() -> None:
     sensitive = RuntimeError("sql password=secret token=abc")
-    use_case = SubmitReviewDecisionUseCase(review_decision_writer=RecordingDecisionWriter(error=sensitive))
+    use_case = SubmitReviewDecisionUseCase(
+        review_decision_writer=RecordingDecisionWriter(error=sensitive), unit_of_work=_FakeUnitOfWork()
+    )
 
     with pytest.raises(ReviewDecisionError) as raised:
         use_case.execute(_select_workflow_command(selected_workflow=WorkflowType.RFQ))
@@ -180,17 +217,31 @@ def test_submit_review_decision_use_case_does_not_execute_workflows_or_erp_write
         "account.move",
         "action_post",
         "create_draft",
-        "commit",
-        "rollback",
-        "flush",
         "ai_advisor",
         "ollama",
         "fuzzy",
         "embedding",
     )
+    # "commit"/"rollback" are intentionally NOT forbidden: the use case owns its
+    # transaction boundary via the UnitOfWork port (P0-PROD-15AB), the same
+    # established pattern every other Workbench write use case already follows
+    # (see e.g. ImportInvoiceUseCase). "flush" remains forbidden: only the
+    # repository/session layer ever flushes.
+    assert "flush" not in source
 
     for token in forbidden:
         assert token not in source
+
+
+class _FakeUnitOfWork:
+    def __init__(self) -> None:
+        self.events: tuple[str, ...] = ()
+
+    def commit(self) -> None:
+        self.events = (*self.events, "commit")
+
+    def rollback(self) -> None:
+        self.events = (*self.events, "rollback")
 
 
 class RecordingDecisionWriter:

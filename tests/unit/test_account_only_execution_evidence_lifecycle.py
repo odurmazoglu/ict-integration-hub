@@ -315,6 +315,7 @@ def _submit_decision(
 ):
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=SqlAlchemyReviewRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         selected_product_reader=_FakeSelectedProductReader(records=product_records),
         selected_account_reader=_FakeSelectedAccountReader(records=account_records),

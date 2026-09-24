@@ -603,6 +603,7 @@ async def test_stage1_evidence_enables_accepted_vendor_bill_decision_and_stage2(
 
     submit = SubmitReviewDecisionUseCase(
         review_decision_writer=SqlAlchemyReviewRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
     )
     acknowledgement = submit.execute(

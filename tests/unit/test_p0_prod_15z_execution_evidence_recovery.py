@@ -850,6 +850,7 @@ async def test_decision_can_consume_rebuilt_evidence(session: Session) -> None:
     evidence_reader = SqlAlchemyReviewExecutionEvidenceReader(session)
     decision_use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=SqlAlchemyReviewRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=evidence_reader,
     )
     acknowledgement = decision_use_case.execute(

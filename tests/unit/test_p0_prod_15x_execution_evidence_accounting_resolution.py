@@ -690,6 +690,7 @@ async def test_decision_submission_no_longer_fails_with_execution_source_invoice
 
     decision_use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=SqlAlchemyReviewRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=evidence_reader,
     )
     acknowledgement = decision_use_case.execute(

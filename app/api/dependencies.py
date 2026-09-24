@@ -115,6 +115,7 @@ from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountRead
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBillingEvidenceReader
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
+from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.persistence.workbench_review_repository import SqlAlchemyReviewRepository
 from app.persistence.workbench_review_source_invoice_reader import SqlAlchemyReviewSourceInvoiceEvidenceReader
 from app.services.document_storage import DocumentStorage, LocalDocumentStorage
@@ -243,6 +244,7 @@ def get_submit_review_decision_use_case(
     read_adapter = OdooReadOnlyAdapter(client=odoo_client)
     return SubmitReviewDecisionUseCase(
         review_decision_writer=writer,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
         selected_product_reader=OdooSelectedProductReader(
