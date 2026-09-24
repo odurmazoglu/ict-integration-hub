@@ -310,6 +310,17 @@ class ProductRemediationCategoryError(ProductRemediationEligibilityError):
     error_category = "product_remediation_category_rejected"
 
 
+class ProductRemediationStalePurchasePurposeError(ProductRemediationEligibilityError):
+    """Safe error raised when a RESALE purchase purpose exists only for another review version (P0-PROD-18E-2B).
+
+    A purpose is never carried forward or inferred across review versions, and a
+    stale RESALE purpose never silently degrades into ordinary non-RESALE product
+    remediation: the purpose must be recorded again for the current review version.
+    """
+
+    error_category = "product_remediation_purchase_purpose_stale"
+
+
 class ProductRemediationVerificationError(ProductRemediationError):
     """Safe error raised when a product this workflow created fails post-create verification (P0-PROD-18E-2).
 

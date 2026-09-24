@@ -42,6 +42,8 @@ from app.application.workbench.exceptions import (
     ProductRemediationCategoryError,
     ProductRemediationConflictError,
     ProductRemediationContractError,
+    ProductRemediationEligibilityError,
+    ProductRemediationStalePurchasePurposeError,
     ProductRemediationVerificationError,
     PurchaseAccountProductNotFoundError,
 )
@@ -442,14 +444,94 @@ async def test_resale_exact_allowlisted_categ_id_creates_verified_product(sessio
     assert len(h.supplier_info_writer.calls) == 1
 
 
-async def test_stale_version_resale_purpose_does_not_apply(session: Session) -> None:
-    h = _Harness(session, purposes=(_purpose(PurchasePurpose.RESALE, review_version=1),))
+# --------------------------------------------------------------- version consistency (P0-PROD-18E-2B)
+
+STALE_RESALE = _purpose(PurchasePurpose.RESALE, review_version=1)
+
+
+@pytest.mark.parametrize("categ_id", [None, CHILD_CATEGORY_ID])
+async def test_stale_resale_without_current_purpose_fails_closed(session: Session, categ_id: int | None) -> None:
+    h = _Harness(session, purposes=(STALE_RESALE,))
+    with pytest.raises(ProductRemediationStalePurchasePurposeError, match="record the purchase purpose again"):
+        await h.use_case.execute(h.command(product_type="service", categ_id=categ_id))
+
+    # Neither RESALE nor ordinary remediation ran: no reservation, no discovery, no writes.
+    assert h.reservation() is None
+    assert h.category_lister.calls == []
+    assert h.resolver.calls == []
+    _assert_no_writes(h)
+    # The purpose is never copied forward to the current version.
+    assert h.purpose_reader.resolutions == (STALE_RESALE,)
+
+
+@pytest.mark.parametrize("current", [PurchasePurpose.INTERNAL_USE, PurchasePurpose.OTHER_OPERATING_EXPENSE])
+async def test_explicit_current_non_resale_purpose_wins_over_stale_resale(
+    session: Session, current: PurchasePurpose
+) -> None:
+    h = _Harness(session, purposes=(STALE_RESALE, _purpose(current)))
     result = await h.use_case.execute(h.command(product_type="service"))
 
     assert result.status is ProductRemediationStatus.COMPLETED
     assert h.product_writer.calls[0].category is None
     assert h.category_lister.calls == []
     assert h.resolver.calls == []
+
+
+async def test_current_resale_applies_resale_rules_despite_other_history(session: Session) -> None:
+    h = _Harness(session, purposes=(_purpose(PurchasePurpose.INTERNAL_USE, review_version=1),) + RESALE)
+    with pytest.raises(ProductRemediationCategoryError, match="requires an explicit categ_id"):
+        await h.use_case.execute(h.command())
+    _assert_no_writes(h)
+
+
+async def test_stale_non_resale_without_current_purpose_does_not_activate_resale(session: Session) -> None:
+    h = _Harness(session, purposes=(_purpose(PurchasePurpose.INTERNAL_USE, review_version=1),))
+    result = await h.use_case.execute(h.command(product_type="service"))
+
+    assert result.status is ProductRemediationStatus.COMPLETED
+    assert h.product_writer.calls[0].category is None
+    assert h.category_lister.calls == []
+
+
+async def test_no_purpose_at_any_version_keeps_legacy_non_resale_behaviour(session: Session) -> None:
+    h = _Harness(session, purposes=())
+    result = await h.use_case.execute(h.command(product_type="service"))
+
+    assert result.status is ProductRemediationStatus.COMPLETED
+    assert h.product_writer.calls[0].category is None
+    assert h.category_lister.calls == []
+    assert h.resolver.calls == []
+
+
+async def test_stale_expected_version_is_rejected_before_any_purpose_decision(session: Session) -> None:
+    h = _Harness(session, purposes=(STALE_RESALE,))
+    with pytest.raises(ProductRemediationEligibilityError) as excinfo:
+        await h.use_case.execute(h.command(expected_version=1))
+    assert not isinstance(excinfo.value, ProductRemediationStalePurchasePurposeError)
+    assert h.reservation() is None
+    _assert_no_writes(h)
+
+
+async def test_resume_from_product_created_with_only_stale_resale_fails_closed(session: Session) -> None:
+    h = _Harness(session, purposes=(STALE_RESALE,))
+    h.seed_reservation(
+        status=ProductReservationStatus.PRODUCT_CREATED, product_template_id=TEMPLATE_ID, product_id=PRODUCT_ID
+    )
+    with pytest.raises(ProductRemediationStalePurchasePurposeError):
+        await h.use_case.execute(h.command())
+
+    assert h.reservation().status is ProductReservationStatus.PRODUCT_CREATED
+    _assert_no_writes(h)
+
+
+def test_stale_purchase_purpose_error_maps_to_conflict() -> None:
+    from http import HTTPStatus
+
+    from app.api.routers.workbench import _status_code_for_exception
+
+    error = ProductRemediationStalePurchasePurposeError("stale")
+    assert _status_code_for_exception(error) == HTTPStatus.CONFLICT
+    assert error.error_category == "product_remediation_purchase_purpose_stale"
 
 
 async def test_ambiguous_current_version_purpose_fails_closed(session: Session) -> None:
