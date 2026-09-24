@@ -26,6 +26,7 @@ from app.api.dependencies import (
     SubmitReviewAccountingResolutionUseCaseDep,
     SubmitReviewDecisionUseCaseDep,
     VendorBillPreviewUseCaseDep,
+    VendorBillReadbackUseCaseDep,
     WorkbenchAcceptedDecisionExecutionDispatcherDep,
     WorkbenchDecisionIngestionWorkflowDep,
     WorkbenchExecutionStatusUseCaseDep,
@@ -135,6 +136,13 @@ from app.application.workbench.operating_expense_mapping_command import SubmitOp
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
+from app.application.workbench.vendor_bill_readback import (
+    VendorBillReadback,
+    VendorBillReadbackError,
+    VendorBillReadbackIntegrityError,
+    VendorBillReadbackNotFoundError,
+    VendorBillReadbackUnavailableError,
+)
 from app.application.workbench.write_authorization import (
     WriteAuthorizationAlreadyConsumedError,
     WriteAuthorizationError,
@@ -194,6 +202,9 @@ from app.schemas.workbench import (
     VendorBillPreviewEnvelope,
     VendorBillPreviewLineResponse,
     VendorBillPreviewResponse,
+    VendorBillReadbackEnvelope,
+    VendorBillReadbackLineResponse,
+    VendorBillReadbackResponse,
     WorkbenchDecisionIngestionCandidateResponse,
     WorkbenchDecisionIngestionEnvelope,
     WorkbenchDecisionIngestionResponse,
@@ -467,6 +478,34 @@ def get_workbench_execution_status(
         context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
         status = use_case.execute(review_id=review_id, company_id=context.company_id)
         return _success(response, context.trace_id, _workbench_execution_status_response(status), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/reviews/{review_id}/vendor-bill-readback",
+    response_model=VendorBillReadbackEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Read back an executed Vendor Bill from its persisted Hub artifact",
+    description=(
+        "Requires workbench_execute. Resolves exactly one Vendor Bill artifact from the review's latest completed "
+        "EXECUTE-mode Hub snapshot, derives the Odoo Vendor Bill id server-side, and reads only fixed Vendor Bill "
+        "header and invoice-line fields. The caller cannot provide an Odoo id, model, domain, field list, company, "
+        "or partner. Performs zero Hub writes and zero Odoo writes."
+    ),
+)
+def get_vendor_bill_readback(
+    review_id: str,
+    request: Request,
+    response: Response,
+    context: RequestContextDep,
+    use_case: VendorBillReadbackUseCaseDep,
+) -> VendorBillReadbackEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
+        _reject_unsupported_query_params(request, frozenset())
+        readback = use_case.execute(review_id=review_id, company_id=context.company_id)
+        return _success(response, context.trace_id, _vendor_bill_readback_response(readback), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -1238,6 +1277,36 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
     )
 
 
+def _vendor_bill_readback_response(readback: VendorBillReadback) -> VendorBillReadbackResponse:
+    header = readback.header
+    return VendorBillReadbackResponse(
+        review_id=readback.review_id,
+        execution_id=readback.execution_id,
+        artifact_id=readback.artifact_id,
+        move_id=header.move_id,
+        state=header.state,
+        move_type=header.move_type,
+        partner_id=header.partner_id,
+        currency=header.currency,
+        amount_untaxed=decimal_to_api(header.amount_untaxed),
+        amount_tax=decimal_to_api(header.amount_tax),
+        amount_total=decimal_to_api(header.amount_total),
+        lines=[
+            VendorBillReadbackLineResponse(
+                line_id=line.line_id,
+                account_id=line.account_id,
+                product_id=line.product_id,
+                quantity=decimal_to_api(line.quantity),
+                price_unit=decimal_to_api(line.price_unit),
+                tax_ids=list(line.tax_ids),
+                price_subtotal=decimal_to_api(line.price_subtotal),
+                price_total=decimal_to_api(line.price_total),
+            )
+            for line in readback.lines
+        ],
+    )
+
+
 def _artifact_response(artifact: ExecutionArtifact) -> ExecutionArtifactResponse:
     return ExecutionArtifactResponse(
         artifact_type=artifact.artifact_type,
@@ -1342,6 +1411,12 @@ def _raise_error(exc: Exception, *, trace_id: str) -> JSONResponse:
 
 
 def _status_code_for_exception(exc: Exception) -> int:
+    if isinstance(exc, VendorBillReadbackNotFoundError):
+        return HTTPStatus.NOT_FOUND
+    if isinstance(exc, (VendorBillReadbackUnavailableError, VendorBillReadbackIntegrityError)):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, VendorBillReadbackError):
+        return HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(exc, WriteAuthorizationNotFoundError):
         return HTTPStatus.NOT_FOUND
     if isinstance(

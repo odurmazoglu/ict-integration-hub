@@ -25,12 +25,15 @@ from app.application.execution.contracts import ExecutionStepType
 from app.application.execution.vendor_bill_preview import PreviewVendorBillUseCase
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
+from app.application.workbench.vendor_bill_readback import GetVendorBillReadbackUseCase
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.composition.supplier_remediation import build_archive_one_off_vendor_use_case
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
+from app.erp.odoo.account_move_line_verification_reader import OdooAccountMoveLineVerificationReader
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
+from app.erp.odoo.vendor_bill_header_verification_reader import OdooVendorBillHeaderVerificationReader
 from app.erp.odoo.vendor_bill_preview_currency_reader import OdooVendorBillPreviewCurrencyReader
 from app.erp.odoo.vendor_bill_preview_product_uom_reader import OdooVendorBillPreviewProductUomReader
 from app.erp.odoo.workbench_projection_publisher import (
@@ -307,6 +310,23 @@ def build_get_workbench_execution_status_use_case(*, session: Session) -> GetWor
         stage_one_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         stage_two_evidence_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
+    )
+
+
+def build_get_vendor_bill_readback_use_case(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> GetVendorBillReadbackUseCase:
+    """Compose artifact-derived verification from read-only Hub and Odoo readers."""
+
+    adapter = OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
+    return GetVendorBillReadbackUseCase(
+        review_reader=SqlAlchemyReviewRepository(session),
+        execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(session),
+        header_reader=OdooVendorBillHeaderVerificationReader(adapter=adapter),
+        line_reader=OdooAccountMoveLineVerificationReader(adapter=adapter),
     )
 
 
