@@ -1327,6 +1327,8 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
     assert set(workbench_paths) == {
         "/api/workbench/decisions/sync",
         "/api/workbench/expense-accounts",
+        "/api/workbench/products/{product_id}/purchase-account",
+        "/api/workbench/resale-product-categories",
         "/api/workbench/reviews",
         "/api/workbench/reviews/{review_id}",
         "/api/workbench/reviews/{review_id}/accounting-resolution",
@@ -1346,6 +1348,14 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}/write-authorizations",
         "/api/workbench/reviews/{review_id}/write-authorizations/{authorization_id}/revoke",
     }
+    # P0-PROD-18D discovery routes are GET-only and accept no caller-controlled Odoo inputs.
+    assert set(workbench_paths["/api/workbench/resale-product-categories"]) == {"get"}
+    assert set(workbench_paths["/api/workbench/products/{product_id}/purchase-account"]) == {"get"}
+    assert "parameters" not in workbench_paths["/api/workbench/resale-product-categories"]["get"]
+    product_account_parameters = workbench_paths["/api/workbench/products/{product_id}/purchase-account"]["get"][
+        "parameters"
+    ]
+    assert [(p["name"], p["in"]) for p in product_account_parameters] == [("product_id", "path")]
     purchase_purpose_schema = response.json()["components"]["schemas"]["PurchasePurposeRequest"]
     purchase_purpose_text = str(purchase_purpose_schema)
     for forbidden in ("company_id", "review_id", "approved_by", "source_invoice_id", "vendor_partner_id"):

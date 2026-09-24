@@ -11,7 +11,9 @@ from fastapi.security import HTTPBearer
 from app.api.dependencies import (
     CreateNewProductUseCaseDep,
     CreateWriteAuthorizationUseCaseDep,
+    GetProductPurchaseAccountUseCaseDep,
     GetReviewItemUseCaseDep,
+    ListCategoryPurchaseAccountsUseCaseDep,
     ListExpenseAccountCandidatesUseCaseDep,
     ListReviewQueueUseCaseDep,
     ListWriteAuthorizationsUseCaseDep,
@@ -105,6 +107,9 @@ from app.application.workbench.exceptions import (
     ProductRemediationIdentityAmbiguousError,
     ProductRemediationRaceError,
     ProductRemediationSupplierUnresolvedError,
+    PurchaseAccountCompanyContextError,
+    PurchaseAccountDiscoveryError,
+    PurchaseAccountProductNotFoundError,
     PurchasePurposeConflictError,
     PurchasePurposeEligibilityError,
     PurchasePurposeError,
@@ -134,6 +139,14 @@ from app.application.workbench.expense_account_lookup import ListExpenseAccountC
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorCommand, OneOffVendorRetirementStatus
 from app.application.workbench.operating_expense_mapping_command import SubmitOperatingExpenseMappingCommand
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
+from app.application.workbench.purchase_account_discovery import (
+    CategoryPurchaseAccountConfiguration,
+    GetProductPurchaseAccountQuery,
+    ListCategoryPurchaseAccountsQuery,
+    ProductPurchaseAccountResolution,
+    PurchaseAccountView,
+    ResolvedPurchaseAccount,
+)
 from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.vendor_bill_readback import (
@@ -160,6 +173,8 @@ from app.schemas.workbench import (
     ApiEnvelope,
     BusinessContextAllocationRequest,
     BusinessContextAllocationSetRequest,
+    CategoryPurchaseAccountResponse,
+    CategoryPurchaseAccountsEnvelope,
     ExecutionApprovalRequest,
     ExecutionArtifactResponse,
     ExecutionEvidenceRecoveryEnvelope,
@@ -178,12 +193,16 @@ from app.schemas.workbench import (
     OperatingExpenseMappingRequest,
     OperatingExpenseMappingResponse,
     ProductMatchEvidenceResponse,
+    ProductPurchaseAccountEnvelope,
+    ProductPurchaseAccountResponse,
     ProductRemediationEnvelope,
     ProductRemediationResponse,
     ProductResolutionRequest,
+    PurchaseAccountResponse,
     PurchasePurposeEnvelope,
     PurchasePurposeRequest,
     PurchasePurposeResponse,
+    ResolvedPurchaseAccountResponse,
     ReviewDecisionAcknowledgementEnvelope,
     ReviewDecisionAcknowledgementResponse,
     ReviewDecisionRequest,
@@ -342,6 +361,71 @@ def list_expense_account_candidates(
             [_expense_account_candidate_response(candidate) for candidate in candidates],
             warnings=[],
         )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/resale-product-categories",
+    response_model=CategoryPurchaseAccountsEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Discover Odoo product-category purchase-account configuration",
+    description=(
+        "Requires workbench_expense_account_read. Read-only, company-scoped (from RequestContext) discovery of "
+        "every Odoo product.category and the purchase/expense account its own configuration "
+        "(property_account_expense_categ_id) names, with that account's validity for the company. This is a "
+        "category's configured account only -- not any product's final account: product-level overrides and "
+        "fiscal positions are not applied here. No approval or allowlist semantics; accepts no query parameters. "
+        "Fails closed (409) when Odoo's company context cannot be proven to be the requesting company."
+    ),
+)
+def list_resale_product_categories(
+    request: Request,
+    response: Response,
+    context: RequestContextDep,
+    use_case: ListCategoryPurchaseAccountsUseCaseDep,
+) -> CategoryPurchaseAccountsEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXPENSE_ACCOUNT_READ)(context)
+        _reject_unsupported_query_params(request, frozenset())
+        categories = use_case.execute(ListCategoryPurchaseAccountsQuery(company_id=context.company_id))
+        return _success(
+            response,
+            context.trace_id,
+            [_category_purchase_account_response(category) for category in categories],
+            warnings=[],
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.get(
+    "/products/{product_id}/purchase-account",
+    response_model=ProductPurchaseAccountEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Discover one Odoo product's pre-fiscal-position purchase account",
+    description=(
+        "Requires workbench_expense_account_read. Read-only, company-scoped (from RequestContext) resolution of "
+        "the purchase account Odoo product/category configuration gives one product: a product-level override "
+        "wins (never falling back when unusable), otherwise the category account. The account is presented only "
+        "when determinable; any doubt is reported as blockers instead. Fiscal-position mapping is never "
+        "evaluated, so this is at most the pre-fiscal-position account. Accepts no query parameters."
+    ),
+)
+def get_product_purchase_account(
+    product_id: int,
+    request: Request,
+    response: Response,
+    context: RequestContextDep,
+    use_case: GetProductPurchaseAccountUseCaseDep,
+) -> ProductPurchaseAccountEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_EXPENSE_ACCOUNT_READ)(context)
+        _reject_unsupported_query_params(request, frozenset())
+        resolution = use_case.execute(
+            GetProductPurchaseAccountQuery(company_id=context.company_id, product_id=product_id)
+        )
+        return _success(response, context.trace_id, _product_purchase_account_response(resolution), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -922,6 +1006,64 @@ def _expense_account_candidate_response(candidate) -> ExpenseAccountCandidateRes
     )
 
 
+def _purchase_account_response(view: PurchaseAccountView | None) -> PurchaseAccountResponse | None:
+    if view is None:
+        return None
+    return PurchaseAccountResponse(
+        account_id=view.account_id,
+        code=view.code,
+        name=view.name,
+        account_type=view.account_type,
+        deprecated=view.deprecated,
+    )
+
+
+def _resolved_purchase_account_response(resolved: ResolvedPurchaseAccount) -> ResolvedPurchaseAccountResponse:
+    return ResolvedPurchaseAccountResponse(
+        status=resolved.status.value,
+        configured_account_id=resolved.configured_account_id,
+        account=_purchase_account_response(resolved.account),
+    )
+
+
+def _category_purchase_account_response(
+    category: CategoryPurchaseAccountConfiguration,
+) -> CategoryPurchaseAccountResponse:
+    return CategoryPurchaseAccountResponse(
+        category_id=category.category_id,
+        category_name=category.category_name,
+        category_complete_name=category.category_complete_name,
+        purchase_account=_resolved_purchase_account_response(category.purchase_account),
+    )
+
+
+def _product_purchase_account_response(
+    resolution: ProductPurchaseAccountResolution,
+) -> ProductPurchaseAccountResponse:
+    return ProductPurchaseAccountResponse(
+        product_id=resolution.product_id,
+        product_template_id=resolution.product_template_id,
+        product_name=resolution.product_name,
+        product_active=resolution.product_active,
+        product_company_id=resolution.product_company_id,
+        product_type=resolution.product_type,
+        is_storable=resolution.is_storable,
+        category=(
+            _category_purchase_account_response(resolution.category) if resolution.category is not None else None
+        ),
+        product_override=_resolved_purchase_account_response(resolution.product_override),
+        pre_fiscal_position_account=_purchase_account_response(resolution.pre_fiscal_position_account),
+        pre_fiscal_position_account_source=(
+            resolution.pre_fiscal_position_account_source.value
+            if resolution.pre_fiscal_position_account_source is not None
+            else None
+        ),
+        pre_fiscal_position_account_determinable=resolution.pre_fiscal_position_account_determinable,
+        blockers=[blocker.value for blocker in resolution.blockers],
+        fiscal_position_mapping=resolution.fiscal_position_mapping.value,
+    )
+
+
 def _operating_expense_mapping_response(result) -> OperatingExpenseMappingResponse:
     return OperatingExpenseMappingResponse(
         review_id=result.review_id,
@@ -1430,6 +1572,12 @@ def _status_code_for_exception(exc: Exception) -> int:
     ):
         return HTTPStatus.CONFLICT
     if isinstance(exc, WriteAuthorizationError):
+        return HTTPStatus.INTERNAL_SERVER_ERROR
+    if isinstance(exc, PurchaseAccountProductNotFoundError):
+        return HTTPStatus.NOT_FOUND
+    if isinstance(exc, PurchaseAccountCompanyContextError):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, PurchaseAccountDiscoveryError):
         return HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(exc, WorkbenchContractError):
         return HTTPStatus.BAD_REQUEST

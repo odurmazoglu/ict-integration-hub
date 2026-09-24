@@ -459,3 +459,23 @@ class ExecutionEvidenceRecoveryConflictError(ExecutionEvidenceRecoveryError):
     never overwrites existing evidence silently."""
 
     error_category = "execution_evidence_recovery_conflict"
+
+
+class PurchaseAccountDiscoveryError(ApplicationError):
+    """Safe base error for the read-only purchase-account discovery (P0-PROD-18D)."""
+
+    error_category = "purchase_account_discovery_error"
+
+
+class PurchaseAccountProductNotFoundError(PurchaseAccountDiscoveryError):
+    """Safe error raised when the product does not exist or is not visible to this company."""
+
+    error_category = "purchase_account_product_not_found"
+
+
+class PurchaseAccountCompanyContextError(PurchaseAccountDiscoveryError):
+    """Safe error raised when Odoo's company context for company-dependent accounting
+    fields cannot be proven to be exactly the requesting company. Discovery fails
+    closed rather than presenting another company's configuration."""
+
+    error_category = "purchase_account_company_context_unverified"

@@ -27,6 +27,11 @@ from app.application.workbench.projection import (
     ProjectionPublishResult,
     WorkbenchProjection,
 )
+from app.application.workbench.purchase_account_discovery import (
+    CategoryPurchaseAccountRecord,
+    ProductPurchaseAccountRecord,
+    PurchaseAccountRecord,
+)
 from app.application.workbench.purchase_purpose import PurchasePurposeResolution
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
 from app.application.workbench.reclassification import (
@@ -176,6 +181,29 @@ class ExpenseAccountCandidateReader(Protocol):
     def find_eligible_by_id(self, *, company_id: int, account_id: int) -> ExpenseAccountCandidate | None:
         """The one candidate matching ``account_id``, or ``None`` if it does not exist, is not
         an eligible operating-expense account, or is not scoped to ``company_id``."""
+
+
+class PurchaseAccountDiscoveryReader(Protocol):
+    """Read-only port for product/category purchase-account configuration (P0-PROD-18D).
+
+    Like :class:`ExpenseAccountCandidateReader`, no method accepts a caller-supplied
+    model, domain, or field list -- the adapter owns all of them.
+    """
+
+    def accessible_company_ids(self) -> tuple[int, ...]:
+        """Every Odoo company visible to the integration user, ascending."""
+
+    def list_categories(self) -> tuple[CategoryPurchaseAccountRecord, ...]:
+        """Every product category, bounded; raises rather than truncating."""
+
+    def find_category(self, *, category_id: int) -> CategoryPurchaseAccountRecord | None:
+        pass
+
+    def find_product(self, *, company_id: int, product_id: int) -> ProductPurchaseAccountRecord | None:
+        """The product (active or archived) if shared or owned by ``company_id``, else ``None``."""
+
+    def find_accounts(self, *, company_id: int, account_ids: tuple[int, ...]) -> tuple[PurchaseAccountRecord, ...]:
+        """The subset of ``account_ids`` readable for ``company_id``."""
 
 
 class SupplierResolutionWriter(Protocol):

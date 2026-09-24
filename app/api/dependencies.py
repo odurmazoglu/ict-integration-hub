@@ -55,6 +55,16 @@ from app.application.workbench.operating_expense_mapping_command import (
 )
 from app.application.workbench.operating_expense_mapping_use_cases import SubmitOperatingExpenseMappingUseCase
 from app.application.workbench.product_remediation import CreateNewProductCommand, CreateNewProductResult
+from app.application.workbench.purchase_account_discovery import (
+    CategoryPurchaseAccountConfiguration,
+    GetProductPurchaseAccountQuery,
+    ListCategoryPurchaseAccountsQuery,
+    ProductPurchaseAccountResolution,
+)
+from app.application.workbench.purchase_account_discovery_use_cases import (
+    GetProductPurchaseAccountUseCase,
+    ListCategoryPurchaseAccountsUseCase,
+)
 from app.application.workbench.purchase_purpose import (
     PurchasePurposeSubmissionResult,
     SubmitPurchasePurposeCommand,
@@ -91,6 +101,10 @@ from app.composition import (
 from app.composition.operating_expense_mapping import (
     build_list_expense_account_candidates_use_case,
     build_submit_operating_expense_mapping_use_case,
+)
+from app.composition.purchase_account_discovery import (
+    build_get_product_purchase_account_use_case,
+    build_list_category_purchase_accounts_use_case,
 )
 from app.composition.purchase_purpose_and_accounting_resolution import (
     build_rebuild_review_execution_evidence_use_case,
@@ -461,6 +475,52 @@ class _LazyListExpenseAccountCandidatesUseCase:
 ListExpenseAccountCandidatesUseCaseDep = Annotated[
     ListExpenseAccountCandidatesUseCase,
     Depends(get_list_expense_account_candidates_use_case),
+]
+
+
+def get_list_category_purchase_accounts_use_case(
+    settings: SettingsDep,
+) -> ListCategoryPurchaseAccountsUseCase:
+    return _LazyListCategoryPurchaseAccountsUseCase(settings=settings)
+
+
+class _LazyListCategoryPurchaseAccountsUseCase:
+    def __init__(self, *, settings: Settings) -> None:
+        self._settings = settings
+        self._use_case: ListCategoryPurchaseAccountsUseCase | None = None
+
+    def execute(self, query: ListCategoryPurchaseAccountsQuery) -> tuple[CategoryPurchaseAccountConfiguration, ...]:
+        if self._use_case is None:
+            self._use_case = build_list_category_purchase_accounts_use_case(settings=self._settings)
+        return self._use_case.execute(query)
+
+
+ListCategoryPurchaseAccountsUseCaseDep = Annotated[
+    ListCategoryPurchaseAccountsUseCase,
+    Depends(get_list_category_purchase_accounts_use_case),
+]
+
+
+def get_product_purchase_account_use_case(
+    settings: SettingsDep,
+) -> GetProductPurchaseAccountUseCase:
+    return _LazyGetProductPurchaseAccountUseCase(settings=settings)
+
+
+class _LazyGetProductPurchaseAccountUseCase:
+    def __init__(self, *, settings: Settings) -> None:
+        self._settings = settings
+        self._use_case: GetProductPurchaseAccountUseCase | None = None
+
+    def execute(self, query: GetProductPurchaseAccountQuery) -> ProductPurchaseAccountResolution:
+        if self._use_case is None:
+            self._use_case = build_get_product_purchase_account_use_case(settings=self._settings)
+        return self._use_case.execute(query)
+
+
+GetProductPurchaseAccountUseCaseDep = Annotated[
+    GetProductPurchaseAccountUseCase,
+    Depends(get_product_purchase_account_use_case),
 ]
 
 
