@@ -1143,6 +1143,8 @@ def test_orchestration_module_never_executes_a_vendor_bill() -> None:
     [
         "app/application/use_cases/import_invoice.py",
         "app/application/use_cases/reclassify_review.py",
+        "app/application/use_cases/effective_decision.py",
+        "app/application/workbench/execution_evidence_recovery_use_cases.py",
         "app/application/workbench/reclassification.py",
         "app/matching/partner.py",
     ],

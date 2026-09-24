@@ -490,6 +490,28 @@ class AccountingResolutionResponse(BaseModel):
 AccountingResolutionEnvelope = ApiEnvelope[AccountingResolutionResponse]
 
 
+class ExecutionEvidenceRecoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    expected_version: int
+
+
+class ExecutionEvidenceRecoveryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: str
+    company_id: int
+    review_version: int
+    already_applied: bool
+    partner_id: int | None = None
+    expense_account_id: int | None = None
+    expense_category: str | None = None
+    safe_message: str | None = None
+
+
+ExecutionEvidenceRecoveryEnvelope = ApiEnvelope[ExecutionEvidenceRecoveryResponse]
+
+
 class WorkbenchDecisionIngestionCandidateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
 

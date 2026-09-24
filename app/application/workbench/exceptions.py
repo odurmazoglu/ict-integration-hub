@@ -410,3 +410,52 @@ class AccountingResolutionConflictError(AccountingResolutionError):
     this exact review version."""
 
     error_category = "accounting_resolution_conflict_error"
+
+
+class ExecutionEvidenceRecoveryError(ApplicationError):
+    """Safe base error for the review-scoped execution-evidence recovery/repair
+    operation (P0-PROD-15Z)."""
+
+    error_category = "execution_evidence_recovery_error"
+
+
+class ExecutionEvidenceRecoveryEligibilityError(ExecutionEvidenceRecoveryError):
+    """Safe error raised when the review is not eligible for execution-evidence
+    recovery: not pending review, not currently an execution-capable workflow
+    (vendor_bill), or still carrying an actionable manual-review reason. Recovery
+    only ever materializes derived evidence for an already fully-resolved review --
+    it never makes an unresolved review ready."""
+
+    error_category = "execution_evidence_recovery_eligibility_error"
+
+
+class ExecutionEvidenceRecoverySourceMissingError(ExecutionEvidenceRecoveryError):
+    """Safe error raised when the review's immutable source invoice evidence is
+    missing -- recovery has nothing to recompute execution evidence from."""
+
+    error_category = "execution_evidence_recovery_source_missing"
+
+
+class ExecutionEvidenceRecoveryMismatchError(ExecutionEvidenceRecoveryError):
+    """Safe error raised when recomputing the review's effective classification
+    right now does not reproduce the persisted current reasons/workflow exactly.
+    Recovery fails closed rather than silently accepting business state that has
+    drifted since the review last advanced."""
+
+    error_category = "execution_evidence_recovery_mismatch"
+
+
+class ExecutionEvidenceRecoveryBuildError(ExecutionEvidenceRecoveryError):
+    """Safe error raised when the recomputed effective decision, despite matching
+    the review's persisted reasons/workflow, still cannot produce a buildable
+    execution-evidence result."""
+
+    error_category = "execution_evidence_recovery_build_error"
+
+
+class ExecutionEvidenceRecoveryConflictError(ExecutionEvidenceRecoveryError):
+    """Safe error raised when execution evidence already exists for this review
+    version and materially conflicts with the freshly recomputed evidence. Recovery
+    never overwrites existing evidence silently."""
+
+    error_category = "execution_evidence_recovery_conflict"

@@ -749,6 +749,100 @@ class SqlAlchemyReviewRepository:
         except SQLAlchemyError as exc:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
+    def find_execution_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> ReviewExecutionEvidence | None:
+        """Same lookup as ``get_review_execution_evidence`` but returns ``None``
+        instead of raising when absent (P0-PROD-15Z recovery)."""
+
+        _validate_evidence_query(review_id=review_id, company_id=company_id, review_version=review_version)
+        try:
+            records = tuple(
+                self._session.scalars(
+                    select(WorkbenchReviewExecutionEvidence)
+                    .where(
+                        WorkbenchReviewExecutionEvidence.review_id == review_id,
+                        WorkbenchReviewExecutionEvidence.company_id == company_id,
+                        WorkbenchReviewExecutionEvidence.review_version == review_version,
+                    )
+                    .order_by(WorkbenchReviewExecutionEvidence.id.asc())
+                    .limit(2)
+                )
+            )
+            if not records:
+                return None
+            if len(records) > 1:
+                raise ReviewDataIntegrityError("Review execution evidence is ambiguous.")
+            return _review_evidence_from_model(records[0])
+        except ExecutionSourceInvoiceError as exc:
+            raise ReviewDataIntegrityError("Review execution evidence is invalid.") from exc
+        except ApplicationError:
+            raise
+        except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
+            raise ReviewDataIntegrityError("Review execution evidence is invalid.") from exc
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
+    def create_execution_evidence_for_current_version(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        expected_version: int,
+        evidence: ReviewExecutionEvidence,
+    ) -> ReviewExecutionEvidence:
+        """Insert exactly one ``WorkbenchReviewExecutionEvidence`` row for the
+        review's CURRENT version (P0-PROD-15Z recovery). Never touches
+        ``WorkbenchReviewItem`` -- no version bump, no workflow/reasons write, no
+        ``WorkbenchReviewReclassification`` event -- and never updates/deletes an
+        existing row (the table's own unique constraint on
+        ``(company_id, review_id, review_version)`` is the final backstop against a
+        duplicate; the caller is expected to have already checked for an existing
+        row before calling this).
+        """
+
+        if not isinstance(evidence, ReviewExecutionEvidence):
+            raise WorkbenchContractError("ReviewExecutionEvidence DTO is required.")
+        if evidence.review_id != review_id or evidence.company_id != company_id:
+            raise WorkbenchContractError("Execution evidence review_id/company_id must match the target review.")
+        if evidence.review_version != expected_version:
+            raise WorkbenchContractError("Execution evidence review_version must match expected_version.")
+        try:
+            with self._session.begin_nested():
+                current = self._session.scalar(
+                    select(WorkbenchReviewItem).where(
+                        WorkbenchReviewItem.review_id == review_id,
+                        WorkbenchReviewItem.company_id == company_id,
+                    )
+                )
+                if current is None:
+                    raise ReviewNotFoundError("Review item was not found.")
+                if current.status != ReviewStatus.PENDING_REVIEW.value:
+                    raise ReviewStateConflictError("Review item is not pending review.")
+                if current.version != expected_version:
+                    raise ReviewVersionConflictError("Review item version does not match expected_version.")
+                record = _evidence_model_from_review_evidence(evidence)
+                self._session.add(record)
+                self._session.flush()
+            return evidence
+        except IntegrityError as exc:
+            existing = self.find_execution_evidence(
+                review_id=review_id, company_id=company_id, review_version=expected_version
+            )
+            if existing is not None:
+                return existing
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+        except ApplicationError:
+            self._session.expire_all()
+            raise
+        except SQLAlchemyError as exc:
+            self._session.expire_all()
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+
     def list_review_items(self, query: ReviewQueueQuery) -> ReviewQueueResult:
         try:
             filters = _query_filters(query)
