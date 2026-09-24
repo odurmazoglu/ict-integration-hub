@@ -113,6 +113,31 @@ class SqlAlchemyReviewPurchasePurposeResolutionRepository:
             raise PurchasePurposeError(SAFE_PURCHASE_PURPOSE_PERSISTENCE_ERROR) from exc
         return _resolution_from_model(record) if record is not None else None
 
+    def list_purchase_purpose_resolutions(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> tuple[PurchasePurposeResolution, ...]:
+        """Every purchase purpose recorded for one review, oldest review version first."""
+
+        if not isinstance(review_id, str) or not review_id.strip():
+            raise WorkbenchContractError("review_id is required.")
+        if type(company_id) is not int or company_id <= 0:
+            raise WorkbenchContractError("company_id must be positive.")
+        try:
+            records = self._session.scalars(
+                select(WorkbenchReviewPurchasePurposeResolution)
+                .where(
+                    WorkbenchReviewPurchasePurposeResolution.review_id == review_id,
+                    WorkbenchReviewPurchasePurposeResolution.company_id == company_id,
+                )
+                .order_by(WorkbenchReviewPurchasePurposeResolution.review_version)
+            ).all()
+        except SQLAlchemyError as exc:
+            raise PurchasePurposeError(SAFE_PURCHASE_PURPOSE_PERSISTENCE_ERROR) from exc
+        return tuple(_resolution_from_model(record) for record in records)
+
     def _find(
         self,
         *,

@@ -473,17 +473,3 @@ def test_invalid_company_id_raises(company_id: object) -> None:
 def test_non_resolution_input_raises() -> None:
     with pytest.raises(WorkbenchContractError):
         _evaluate(object())  # type: ignore[arg-type]
-
-
-# =================================================================== no workflow wiring
-
-
-def test_policy_is_not_wired_into_any_workflow() -> None:
-    app_root = Path(policy_module.__file__).resolve().parents[2]
-    importers = [
-        path
-        for path in app_root.rglob("*.py")
-        if path.resolve() != Path(policy_module.__file__).resolve()
-        and "resale_product_eligibility" in path.read_text(encoding="utf-8")
-    ]
-    assert importers == []

@@ -64,6 +64,7 @@ from app.application.workbench.exceptions import (
 from app.application.workbench.expense_account_lookup import ExpenseAccountCandidate
 from app.application.workbench.purchase_purpose import (
     PurchasePurpose,
+    PurchasePurposeResolution,
     PurchasePurposeSubmissionResult,
     SubmitPurchasePurposeCommand,
 )
@@ -603,6 +604,9 @@ async def test_other_operating_expense_purpose_supports_expense_account(session:
 # =================================================================== 10, 11: unsupported purposes rejected
 
 
+# P0-PROD-18E-1B: RESALE can no longer be *submitted* on this identifier-free review, so
+# its case records the purpose directly -- a row that may predate 18E-1B -- and proves
+# accounting resolution still rejects it.
 @pytest.mark.parametrize("purpose", [PurchasePurpose.RESALE, PurchasePurpose.CUSTOMER_PROJECT])
 async def test_unsupported_purpose_rejects_expense_account(session: Session, purpose: PurchasePurpose) -> None:
     invoice = _invoice(ettn=f"P0-PROD-15T-J-{purpose.value}")
@@ -613,7 +617,19 @@ async def test_unsupported_purpose_rejects_expense_account(session: Session, pur
     effect_repo = SqlAlchemyReviewSupplierRemediationEffectRepository(session)
     effect_repo.create_remediation_effect(_effect(review_id=review_id, source_invoice_id=invoice.header.ettn))
     session.commit()
-    _purpose_use_case(session).execute(_purpose_command(review_id, purpose=purpose))
+    if purpose is PurchasePurpose.RESALE:
+        SqlAlchemyReviewPurchasePurposeResolutionRepository(session).create_purchase_purpose_resolution(
+            PurchasePurposeResolution(
+                review_id=review_id,
+                company_id=COMPANY_ID,
+                review_version=1,
+                source_invoice_id=invoice.header.ettn,
+                purchase_purpose=purpose,
+                approved_by="operator",
+            )
+        )
+    else:
+        _purpose_use_case(session).execute(_purpose_command(review_id, purpose=purpose))
     session.commit()
 
     accounting_use_case = _accounting_use_case(session, facts=_ambiguous_facts(invoice))
