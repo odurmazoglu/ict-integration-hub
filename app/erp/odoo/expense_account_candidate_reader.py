@@ -104,9 +104,12 @@ class OdooExpenseAccountCandidateReader:
 
 
 def _query_domain(query: str | None) -> list[Any]:
+    # Flat Odoo prefix notation: the "|" operator and its two leaves are separate
+    # top-level domain elements (P0-PROD-18C). Wrapping them in one nested list made
+    # Odoo parse ["|", leaf, leaf] as a single leaf and fail with HTTP 500.
     if query is None:
         return []
-    return [["|", ["code", "ilike", query], ["name", "ilike", query]]]
+    return ["|", ["code", "ilike", query], ["name", "ilike", query]]
 
 
 def _candidate_from_record(record: object) -> ExpenseAccountCandidate:

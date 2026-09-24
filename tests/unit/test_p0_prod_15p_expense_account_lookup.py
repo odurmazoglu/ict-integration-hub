@@ -87,41 +87,64 @@ class FakeAccountAdapter:
         return matched[:max_records] if max_records is not None else matched
 
 
+class MalformedOdooDomainError(AssertionError):
+    """Raised where real Odoo would reject the domain (P0-PROD-18C: HTTP 500)."""
+
+
+_DOMAIN_OPERATORS = ("&", "|", "!")
+_LEAF_OPERATORS = frozenset({"=", "in", "ilike"})
+
+
 def _matches(record: dict[str, Any], domain: list[Any]) -> bool:
-    for clause in domain:
-        if clause == "|":
-            continue
-        if isinstance(clause, list) and len(clause) == 2 and clause[0] == "|":
-            # nested OR leaves handled below via the flattened list shape emitted
-            # by the reader: ["|", [field, op, value], [field, op, value]]
-            continue
-        if not isinstance(clause, list) or len(clause) != 3:
-            continue
-        field, op, value = clause
-        if field == "company_ids" and op == "in":
-            if not (set(record.get("company_ids", [])) & set(value)):
-                return False
-        elif field == "account_type" and op == "in":
-            if record.get("account_type") not in value:
-                return False
-        elif field == "deprecated" and op == "=":
-            if record.get("deprecated") != value:
-                return False
-        elif field == "id" and op == "=":
-            if record.get("id") != value:
-                return False
-        elif op == "ilike":
-            needle = value.lower()
-            if needle not in str(record.get(field, "")).lower():
-                return False
-    # Handle the OR leaf for the free-text query: ["|", [code ilike], [name ilike]]
-    or_leaf = next((c for c in domain if isinstance(c, list) and c and c[0] == "|"), None)
-    if or_leaf is not None:
-        _, code_leaf, name_leaf = or_leaf
-        needle = code_leaf[2].lower()
-        if needle not in str(record.get("code", "")).lower() and needle not in str(record.get("name", "")).lower():
-            return False
-    return True
+    """Evaluate a real Odoo prefix-notation domain against one record.
+
+    Faithful to Odoo's shape rules rather than to what the reader happens to emit:
+    top-level elements are implicitly AND-ed, ``&``/``|`` are binary and ``!`` unary
+    prefix operators, and every other element must be a ``[field, operator, value]``
+    leaf with a string field and a known string operator. Anything else -- e.g. the
+    pre-18C nested ``["|", leaf, leaf]`` element -- raises instead of being guessed at.
+    """
+
+    if not isinstance(domain, list):
+        raise MalformedOdooDomainError(f"Domain must be a list, got {domain!r}.")
+    results: list[bool] = []
+    position = 0
+    while position < len(domain):
+        value, position = _evaluate(record, domain, position)
+        results.append(value)
+    return all(results)
+
+
+def _evaluate(record: dict[str, Any], domain: list[Any], position: int) -> tuple[bool, int]:
+    if position >= len(domain):
+        raise MalformedOdooDomainError("Domain operator is missing an operand.")
+    element = domain[position]
+    if element == "!":
+        value, position = _evaluate(record, domain, position + 1)
+        return not value, position
+    if element in ("&", "|"):
+        left, position = _evaluate(record, domain, position + 1)
+        right, position = _evaluate(record, domain, position)
+        return (left and right) if element == "&" else (left or right), position
+    return _leaf(record, element), position + 1
+
+
+def _leaf(record: dict[str, Any], element: Any) -> bool:
+    if not isinstance(element, (list, tuple)) or len(element) != 3:
+        raise MalformedOdooDomainError(f"Invalid domain element {element!r}.")
+    field, op, value = element
+    if not isinstance(field, str) or field in _DOMAIN_OPERATORS:
+        raise MalformedOdooDomainError(f"Invalid domain leaf field {field!r}.")
+    if not isinstance(op, str) or op not in _LEAF_OPERATORS:
+        raise MalformedOdooDomainError(f"Invalid domain leaf operator {op!r}.")
+    actual = record.get(field)
+    if op == "=":
+        return actual == value
+    if op == "in":
+        if isinstance(actual, list):
+            return bool(set(actual) & set(value))
+        return actual in value
+    return str(value).lower() in str(actual or "").lower()
 
 
 # --------------------------------------------------------------------------- reader tests
@@ -192,6 +215,120 @@ def test_find_candidates_applies_text_query_as_ilike_on_code_or_name() -> None:
     candidates = reader.find_candidates(company_id=COMPANY_ID, query="Office")
 
     assert {c.id for c in candidates} == {1}
+
+
+# --------------------------------------------------------------------------- P0-PROD-18C query domain regression
+
+
+def test_no_query_domain_is_exactly_the_base_scope() -> None:
+    adapter = FakeAccountAdapter(records=(_account_record(id=1),))
+    reader = OdooExpenseAccountCandidateReader(adapter=adapter)
+
+    reader.find_candidates(company_id=COMPANY_ID, query=None)
+
+    assert adapter.search_calls[-1] == [
+        ["company_ids", "in", [COMPANY_ID]],
+        ["account_type", "in", ["expense"]],
+        ["deprecated", "=", False],
+    ]
+
+
+def test_query_domain_is_flat_odoo_prefix_notation() -> None:
+    adapter = FakeAccountAdapter(records=(_account_record(id=1),))
+    reader = OdooExpenseAccountCandidateReader(adapter=adapter)
+
+    reader.find_candidates(company_id=COMPANY_ID, query="770")
+
+    domain = adapter.search_calls[-1]
+    assert domain == [
+        ["company_ids", "in", [COMPANY_ID]],
+        ["account_type", "in", ["expense"]],
+        ["deprecated", "=", False],
+        "|",
+        ["code", "ilike", "770"],
+        ["name", "ilike", "770"],
+    ]
+    # Every non-operator element is a [str, str, value] leaf -- never a list whose
+    # first item is a domain operator (the pre-18C nested shape Odoo rejected).
+    for element in domain:
+        if isinstance(element, str):
+            assert element in ("&", "|", "!")
+        else:
+            assert len(element) == 3
+            assert isinstance(element[0], str) and element[0] not in ("&", "|", "!")
+            assert isinstance(element[1], str)
+
+
+def test_query_matches_by_account_code() -> None:
+    adapter = FakeAccountAdapter(
+        records=(
+            _account_record(id=1, code="770000", name="General Administrative Expenses"),
+            _account_record(id=2, code="760000", name="Marketing Expenses"),
+        )
+    )
+    reader = OdooExpenseAccountCandidateReader(adapter=adapter)
+
+    candidates = reader.find_candidates(company_id=COMPANY_ID, query="770")
+
+    assert {c.id for c in candidates} == {1}
+
+
+def test_query_matches_by_account_name_case_insensitively() -> None:
+    adapter = FakeAccountAdapter(
+        records=(
+            _account_record(id=1, code="770000", name="General Administrative Expenses"),
+            _account_record(id=2, code="760000", name="Marketing Expenses"),
+        )
+    )
+    reader = OdooExpenseAccountCandidateReader(adapter=adapter)
+
+    candidates = reader.find_candidates(company_id=COMPANY_ID, query="marketing")
+
+    assert {c.id for c in candidates} == {2}
+
+
+def test_query_is_or_across_code_and_name() -> None:
+    adapter = FakeAccountAdapter(
+        records=(
+            _account_record(id=1, code="630100", name="Research Costs"),
+            _account_record(id=2, code="770000", name="General 630 Allocation"),
+            _account_record(id=3, code="760000", name="Marketing Expenses"),
+        )
+    )
+    reader = OdooExpenseAccountCandidateReader(adapter=adapter)
+
+    candidates = reader.find_candidates(company_id=COMPANY_ID, query="630")
+
+    assert {c.id for c in candidates} == {1, 2}
+
+
+def test_query_keeps_company_type_and_deprecated_scope() -> None:
+    adapter = FakeAccountAdapter(
+        records=(
+            _account_record(id=1, code="770000", name="General Expenses"),
+            _account_record(id=2, code="770001", name="General Expenses", company_ids=[OTHER_COMPANY_ID]),
+            _account_record(id=3, code="770002", name="General Expenses", account_type="asset_current"),
+            _account_record(id=4, code="770003", name="General Expenses", deprecated=True),
+        )
+    )
+    reader = OdooExpenseAccountCandidateReader(adapter=adapter)
+
+    candidates = reader.find_candidates(company_id=COMPANY_ID, query="General")
+
+    assert {c.id for c in candidates} == {1}
+
+
+def test_fake_odoo_rejects_the_pre_18c_nested_or_domain() -> None:
+    """Guards the fake itself: the malformed shape that escaped 15P must fail loudly."""
+
+    nested = [
+        ["company_ids", "in", [COMPANY_ID]],
+        ["|", ["code", "ilike", "770"], ["name", "ilike", "770"]],
+    ]
+    with pytest.raises(MalformedOdooDomainError):
+        _matches(_account_record(id=1), nested)
+    with pytest.raises(MalformedOdooDomainError):
+        _matches(_account_record(id=1), ["|", ["code", "ilike", "770"]])
 
 
 def test_find_eligible_by_id_rejects_cross_company_account() -> None:
