@@ -246,7 +246,7 @@ def test_stage_two_replay_removed_billing_key_conflicts(session: Session) -> Non
     )
     assert removed is not None
     session.delete(removed)
-    session.flush()
+    session.commit()
 
     with pytest.raises(ReviewDecisionIdempotencyConflictError):
         use_case.execute(command)
@@ -274,7 +274,7 @@ def test_stage_two_replay_added_billing_key_conflicts(session: Session) -> None:
             ),
         )
     )
-    session.flush()
+    session.commit()
 
     with pytest.raises(ReviewDecisionIdempotencyConflictError):
         use_case.execute(command)
@@ -481,6 +481,7 @@ def test_application_customer_invoice_production_wiring_has_no_sqlalchemy_or_pro
 def _submit_use_case(session: Session, repository: SqlAlchemyReviewRepository) -> SubmitReviewDecisionUseCase:
     return SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
     )

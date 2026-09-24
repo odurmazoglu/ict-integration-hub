@@ -552,6 +552,7 @@ async def test_identifier_present_failed_product_with_expense_match_pins_raw_sta
 def _accept_vendor_bill(session: Session, review_id: str) -> None:
     submit = SubmitReviewDecisionUseCase(
         review_decision_writer=SqlAlchemyReviewRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
     )
     ack = submit.execute(

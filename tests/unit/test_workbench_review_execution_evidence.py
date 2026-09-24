@@ -48,7 +48,7 @@ from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
-from app.persistence import SqlAlchemyReviewExecutionEvidenceReader, SqlAlchemyReviewRepository
+from app.persistence import SqlAlchemyReviewExecutionEvidenceReader, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
 
@@ -474,6 +474,7 @@ def test_submit_use_case_with_concrete_reader_persists_vendor_bill_decision_and_
 
     acknowledgement = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
     ).execute(_select_workflow_command())
 
@@ -496,6 +497,7 @@ def test_submit_use_case_replay_with_concrete_reader_does_not_duplicate_stage_tw
     _create_stage_one_evidence(session, repository=repository)
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
     )
     command = _select_workflow_command()
@@ -513,6 +515,7 @@ def test_submit_use_case_changed_stage_one_evidence_for_same_decision_identity_c
     _create_stage_one_evidence(session, repository=repository)
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
     )
     command = _select_workflow_command()

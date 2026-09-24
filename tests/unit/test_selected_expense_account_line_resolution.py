@@ -66,7 +66,7 @@ from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceE
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
-from app.persistence import SqlAlchemyExecutionSourceInvoiceReader, SqlAlchemyReviewRepository
+from app.persistence import SqlAlchemyExecutionSourceInvoiceReader, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
@@ -363,6 +363,7 @@ def test_n_persist_and_reload_pins_the_exact_expense_account(session: Session) -
 
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         selected_account_reader=_StubSelectedAccountReader((_account_record(),)),
     )
@@ -427,6 +428,7 @@ def test_k_fail_closed_decision_never_persists_when_account_missing(session: Ses
     )
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         selected_account_reader=_StubSelectedAccountReader(()),  # the account will not resolve
     )
@@ -447,6 +449,7 @@ def test_decision_fails_closed_when_no_account_reader_is_configured(session: Ses
     )
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         # selected_account_reader intentionally omitted
     )

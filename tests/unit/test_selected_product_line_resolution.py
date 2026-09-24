@@ -70,7 +70,7 @@ from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceE
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
-from app.persistence import SqlAlchemyExecutionSourceInvoiceReader, SqlAlchemyReviewRepository
+from app.persistence import SqlAlchemyExecutionSourceInvoiceReader, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 
@@ -495,6 +495,7 @@ def test_k_persist_and_reload_preserves_the_human_selection(session: Session) ->
 
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         selected_product_reader=_StubSelectedProductReader((_record(),)),
     )
@@ -561,6 +562,7 @@ def test_k_fail_closed_decision_never_persists_stage_two_evidence(session: Sessi
     )
     use_case = SubmitReviewDecisionUseCase(
         review_decision_writer=repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
         selected_product_reader=_StubSelectedProductReader(()),  # the selected id will not resolve
     )

@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from app.application.exceptions import ApplicationError
+from app.application.services import UnitOfWork
 from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewDecisionType
@@ -39,12 +40,14 @@ class SubmitReviewDecisionUseCase:
         self,
         *,
         review_decision_writer: ReviewDecisionWriter,
+        unit_of_work: UnitOfWork,
         execution_evidence_reader: ReviewExecutionEvidenceReader | None = None,
         billing_evidence_reader: ReviewBillingEvidenceReader | None = None,
         selected_product_reader: SelectedProductReader | None = None,
         selected_account_reader: SelectedAccountReader | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
+        self._unit_of_work = unit_of_work
         self._execution_evidence_reader = execution_evidence_reader
         self._billing_evidence_reader = billing_evidence_reader
         self._selected_product_reader = selected_product_reader
@@ -75,27 +78,49 @@ class SubmitReviewDecisionUseCase:
                 _validate_resolved_execution_inputs(command, evidence)
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
-                return _translate_decision_failure(
+                return self._write_and_commit(
                     lambda: self._review_decision_writer.submit_review_decision_with_execution_and_billing_evidence(
                         command,
                         evidence,
                         billing_instructions,
-                    ),
-                    "Review decision submission failed.",
+                    )
                 )
-            return _translate_decision_failure(
+            return self._write_and_commit(
                 lambda: self._review_decision_writer.submit_review_decision_with_execution_evidence(
                     command,
                     evidence,
-                ),
-                "Review decision submission failed.",
+                )
             )
         if requires_billing_evidence:
             raise ReviewDecisionError("Execution source evidence is required for Customer Invoice creation decisions.")
-        return _translate_decision_failure(
-            lambda: self._review_decision_writer.submit_review_decision(command),
-            "Review decision submission failed.",
-        )
+        return self._write_and_commit(lambda: self._review_decision_writer.submit_review_decision(command))
+
+    def _write_and_commit(
+        self, operation: Callable[[], ReviewDecisionAcknowledgement]
+    ) -> ReviewDecisionAcknowledgement:
+        """Single transaction boundary for one decision write.
+
+        Each of the three ``ReviewDecisionWriter`` write methods already stages its
+        own record set (review item version/status advance, decision row, optionally
+        execution/billing evidence rows) atomically as one internal nested unit of
+        work -- but staging pending changes only makes them visible to code sharing
+        the same persistence context; it never durably commits the outer request
+        transaction. Without an explicit commit here, the request-scoped persistence
+        context is discarded once the request completes, while the acknowledgement
+        returned to the caller is built from the in-memory (staged-but-uncommitted)
+        result -- so the API can report HTTP 200/accepted=true for a decision that
+        was never durably persisted, and a second stale-``expected_version`` request
+        can appear to succeed identically rather than hit the intended optimistic-
+        concurrency conflict. See P0-PROD-15AB.
+        """
+
+        try:
+            result = _translate_decision_failure(operation, "Review decision submission failed.")
+        except BaseException:
+            self._unit_of_work.rollback()
+            raise
+        self._unit_of_work.commit()
+        return result
 
     def has_matching_decision(self, command: ReviewDecisionCommand) -> bool:
         if not isinstance(command, ReviewDecisionCommand):

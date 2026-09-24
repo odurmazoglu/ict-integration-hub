@@ -137,6 +137,7 @@ def build_odoo_workbench_decision_ingestion_workflow(
         ),
         decision_submitter=SubmitReviewDecisionUseCase(
             review_decision_writer=SqlAlchemyReviewRepository(session),
+            unit_of_work=SqlAlchemyUnitOfWork(session),
             execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
             billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
             selected_product_reader=OdooSelectedProductReader(
