@@ -1,13 +1,15 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr
+from pydantic import AnyHttpUrl, Field, SecretStr, StrictInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 UyumsoftEnvironment = Literal["test", "production"]
 AuthenticationMode = Literal["disabled", "development_headers", "oidc_jwt"]
+#: A positive Odoo record id; strict so booleans, floats and numeric strings are refused.
+OdooRecordId = Annotated[StrictInt, Field(gt=0)]
 
 
 class Settings(BaseSettings):
@@ -50,6 +52,10 @@ class Settings(BaseSettings):
     odoo_purchase_journal_id: int | None = None
     odoo_purchase_journal_code: str | None = None
     odoo_workbench_projection_publish_enabled: bool = False
+    #: Exact Odoo ``product.category`` ids approved for RESALE (P0-PROD-18E-1A). Empty means
+    #: no category is approved. Never hierarchical: approving a parent approves no child.
+    #: Holds category ids only -- the purchase account stays Odoo's category configuration.
+    resale_product_category_ids: frozenset[OdooRecordId] = frozenset()
 
     uyumsoft_environment: UyumsoftEnvironment = "test"
     uyumsoft_test_wsdl_url: AnyHttpUrl = Field(default="https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl")
