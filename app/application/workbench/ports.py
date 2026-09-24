@@ -281,6 +281,39 @@ class ReviewAccountingResolutionWriter(ReviewAccountingResolutionReader, Protoco
         pass
 
 
+class ReviewExecutionEvidenceRecoveryWriter(Protocol):
+    """Port for the review-scoped Stage-1 execution-evidence recovery/repair
+    operation (P0-PROD-15Z). Distinct from ``ReviewExecutionEvidenceReader``
+    (which raises when evidence is missing, for the decision-submission path):
+    ``find_execution_evidence`` returns ``None`` instead, so recovery can decide
+    between "create" and "already applied" without an exception-driven control
+    flow. ``create_execution_evidence_for_current_version`` never advances the
+    review version, never writes ``WorkbenchReviewItem``, and never writes a
+    ``WorkbenchReviewReclassification`` event -- it inserts exactly one
+    ``WorkbenchReviewExecutionEvidence`` row, gated on the review still being
+    pending review at ``expected_version`` at the moment of insert.
+    """
+
+    def find_execution_evidence(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+    ) -> ReviewExecutionEvidence | None:
+        pass
+
+    def create_execution_evidence_for_current_version(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        expected_version: int,
+        evidence: ReviewExecutionEvidence,
+    ) -> ReviewExecutionEvidence:
+        pass
+
+
 class OneOffVendorRetirementWriter(Protocol):
     """Durable state-machine persistence for one review's ONE_OFF_VENDOR archive lifecycle."""
 

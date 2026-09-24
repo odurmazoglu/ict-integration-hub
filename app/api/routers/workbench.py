@@ -16,6 +16,7 @@ from app.api.dependencies import (
     ListReviewQueueUseCaseDep,
     ListWriteAuthorizationsUseCaseDep,
     OneOffVendorRetirementUseCaseDep,
+    RebuildReviewExecutionEvidenceUseCaseDep,
     RecoverOneOffVendorRetirementWorkflowDep,
     RequestContextDep,
     ResolveWorkbenchSupplierUseCaseDep,
@@ -86,6 +87,12 @@ from app.application.workbench.exceptions import (
     AccountingResolutionError,
     AccountingResolutionPurposeRequiredError,
     AccountingResolutionPurposeUnsupportedError,
+    ExecutionEvidenceRecoveryBuildError,
+    ExecutionEvidenceRecoveryConflictError,
+    ExecutionEvidenceRecoveryEligibilityError,
+    ExecutionEvidenceRecoveryError,
+    ExecutionEvidenceRecoveryMismatchError,
+    ExecutionEvidenceRecoverySourceMissingError,
     OperatingExpenseMappingAccountInvalidError,
     OperatingExpenseMappingEligibilityError,
     OperatingExpenseMappingSupplierUnresolvedError,
@@ -120,6 +127,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionRaceError,
     WorkbenchContractError,
 )
+from app.application.workbench.execution_evidence_recovery import RebuildExecutionEvidenceCommand
 from app.application.workbench.execution_status import WorkbenchExecutionStatus
 from app.application.workbench.expense_account_lookup import ListExpenseAccountCandidatesQuery
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorCommand, OneOffVendorRetirementStatus
@@ -146,6 +154,9 @@ from app.schemas.workbench import (
     BusinessContextAllocationSetRequest,
     ExecutionApprovalRequest,
     ExecutionArtifactResponse,
+    ExecutionEvidenceRecoveryEnvelope,
+    ExecutionEvidenceRecoveryRequest,
+    ExecutionEvidenceRecoveryResponse,
     ExpenseAccountCandidateResponse,
     ExpenseAccountCandidatesEnvelope,
     LineResolutionRequest,
@@ -718,6 +729,49 @@ async def submit_review_accounting_resolution(
 
 
 @router.post(
+    "/reviews/{review_id}/execution-evidence/rebuild",
+    response_model=ExecutionEvidenceRecoveryEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Repair a pending review's derived Stage-1 execution evidence",
+    description=(
+        "Requires workbench_review_decide. A narrow recovery/repair operation, never a generic reclassification: "
+        "it recomputes this review's current effective classification using the exact same authoritative "
+        "computation reclassification itself uses, and only when that recomputation reproduces exactly the "
+        "review's already-persisted current reasons and workflow does it persist the missing/stale Stage-1 "
+        "WorkbenchReviewExecutionEvidence for the review's CURRENT version. It never advances the review version, "
+        "never changes workflow/reasons, never touches any supplier remediation effect / purchase purpose / "
+        "accounting resolution, never writes a supplier-wide operating-expense mapping, and never writes Odoo. "
+        "Idempotent: if matching evidence already exists, returns already_applied=true; if existing evidence "
+        "conflicts with the freshly recomputed evidence, fails closed rather than overwriting it."
+    ),
+)
+async def rebuild_review_execution_evidence(
+    review_id: str,
+    request_body: ExecutionEvidenceRecoveryRequest,
+    response: Response,
+    context: RequestContextDep,
+    use_case: RebuildReviewExecutionEvidenceUseCaseDep,
+) -> ExecutionEvidenceRecoveryEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_DECIDE)(context)
+        result = await use_case.execute(
+            RebuildExecutionEvidenceCommand(
+                review_id=review_id,
+                company_id=context.company_id,
+                expected_version=request_body.expected_version,
+            )
+        )
+        return _success(
+            response,
+            context.trace_id,
+            _execution_evidence_recovery_response(result),
+            warnings=[],
+        )
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
     "/reviews/{review_id}/product-resolution",
     response_model=ProductRemediationEnvelope,
     responses=COMMON_ERROR_RESPONSES,
@@ -873,6 +927,19 @@ def _accounting_resolution_response(result) -> AccountingResolutionResponse:
         expense_category=result.expense_category,
         reclassified=result.reclassified,
         already_applied=result.already_applied,
+        safe_message=result.safe_message,
+    )
+
+
+def _execution_evidence_recovery_response(result) -> ExecutionEvidenceRecoveryResponse:
+    return ExecutionEvidenceRecoveryResponse(
+        review_id=result.review_id,
+        company_id=result.company_id,
+        review_version=result.review_version,
+        already_applied=result.already_applied,
+        partner_id=result.partner_id,
+        expense_account_id=result.expense_account_id,
+        expense_category=result.expense_category,
         safe_message=result.safe_message,
     )
 
@@ -1346,6 +1413,10 @@ def _status_code_for_exception(exc: Exception) -> int:
             AccountingResolutionPurposeRequiredError,
             AccountingResolutionPurposeUnsupportedError,
             AccountingResolutionConflictError,
+            ExecutionEvidenceRecoveryEligibilityError,
+            ExecutionEvidenceRecoverySourceMissingError,
+            ExecutionEvidenceRecoveryMismatchError,
+            ExecutionEvidenceRecoveryConflictError,
         ),
     ):
         return HTTPStatus.CONFLICT
@@ -1369,6 +1440,8 @@ def _status_code_for_exception(exc: Exception) -> int:
             OperatingExpenseMappingError,
             PurchasePurposeError,
             AccountingResolutionError,
+            ExecutionEvidenceRecoveryBuildError,
+            ExecutionEvidenceRecoveryError,
         ),
     ):
         return HTTPStatus.INTERNAL_SERVER_ERROR

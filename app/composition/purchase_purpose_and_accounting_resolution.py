@@ -3,8 +3,10 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.application.expense_mapping import OperatingExpenseMatchingEngine
+from app.application.use_cases.effective_decision import EffectiveDecisionResolver
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
 from app.application.workbench.accounting_resolution_use_cases import SubmitReviewAccountingResolutionUseCase
+from app.application.workbench.execution_evidence_recovery_use_cases import RebuildReviewExecutionEvidenceUseCase
 from app.application.workbench.purchase_purpose_use_cases import SubmitPurchasePurposeUseCase
 from app.composition.imports import build_deterministic_decision_engine
 from app.connectors.odoo.client import OdooJson2Client
@@ -83,7 +85,47 @@ def build_submit_review_accounting_resolution_use_case(
     )
 
 
+def build_rebuild_review_execution_evidence_use_case(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> RebuildReviewExecutionEvidenceUseCase:
+    """Compose the review-scoped execution-evidence recovery orchestration (P0-PROD-15Z).
+
+    Wires the exact same ``EffectiveDecisionResolver`` inputs (decision engine,
+    supplier-remediation-effect reader, operating-expense matcher, accounting-
+    resolution reader) that ``build_submit_review_accounting_resolution_use_case``
+    wires into its reclassifier -- one authoritative effective-decision computation,
+    reused, never a second divergent one.
+    """
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    review_repository = SqlAlchemyReviewRepository(session)
+    accounting_resolution_repository = SqlAlchemyReviewAccountingResolutionRepository(session)
+
+    resolver = EffectiveDecisionResolver(
+        decision_engine=build_deterministic_decision_engine(
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
+        ),
+        source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
+        supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        operating_expense_matcher=OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session)),
+        review_accounting_resolution_reader=accounting_resolution_repository,
+    )
+
+    return RebuildReviewExecutionEvidenceUseCase(
+        review_reader=review_repository,
+        resolver=resolver,
+        execution_evidence_writer=review_repository,
+        unit_of_work=SqlAlchemyUnitOfWork(session),
+    )
+
+
 __all__ = [
+    "build_rebuild_review_execution_evidence_use_case",
     "build_submit_purchase_purpose_use_case",
     "build_submit_review_accounting_resolution_use_case",
 ]

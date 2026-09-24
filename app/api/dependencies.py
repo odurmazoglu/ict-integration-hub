@@ -38,6 +38,11 @@ from app.application.workbench.accounting_resolution import (
     SubmitReviewAccountingResolutionCommand,
 )
 from app.application.workbench.accounting_resolution_use_cases import SubmitReviewAccountingResolutionUseCase
+from app.application.workbench.execution_evidence_recovery import (
+    RebuildExecutionEvidenceCommand,
+    RebuildExecutionEvidenceResult,
+)
+from app.application.workbench.execution_evidence_recovery_use_cases import RebuildReviewExecutionEvidenceUseCase
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.expense_account_lookup import (
     ExpenseAccountCandidate,
@@ -86,6 +91,7 @@ from app.composition.operating_expense_mapping import (
     build_submit_operating_expense_mapping_use_case,
 )
 from app.composition.purchase_purpose_and_accounting_resolution import (
+    build_rebuild_review_execution_evidence_use_case,
     build_submit_purchase_purpose_use_case,
     build_submit_review_accounting_resolution_use_case,
 )
@@ -541,6 +547,37 @@ class _LazySubmitReviewAccountingResolutionUseCase:
 SubmitReviewAccountingResolutionUseCaseDep = Annotated[
     SubmitReviewAccountingResolutionUseCase,
     Depends(get_submit_review_accounting_resolution_use_case),
+]
+
+
+def get_rebuild_review_execution_evidence_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+) -> RebuildReviewExecutionEvidenceUseCase:
+    return _LazyRebuildReviewExecutionEvidenceUseCase(session=session, settings=settings)
+
+
+class _LazyRebuildReviewExecutionEvidenceUseCase:
+    def __init__(self, *, session: Session, settings: Settings) -> None:
+        self._session = session
+        self._settings = settings
+        self._use_case: RebuildReviewExecutionEvidenceUseCase | None = None
+
+    async def execute(self, command: RebuildExecutionEvidenceCommand) -> RebuildExecutionEvidenceResult:
+        return await self._get_use_case().execute(command)
+
+    def _get_use_case(self) -> RebuildReviewExecutionEvidenceUseCase:
+        if self._use_case is None:
+            self._use_case = build_rebuild_review_execution_evidence_use_case(
+                session=self._session,
+                settings=self._settings,
+            )
+        return self._use_case
+
+
+RebuildReviewExecutionEvidenceUseCaseDep = Annotated[
+    RebuildReviewExecutionEvidenceUseCase,
+    Depends(get_rebuild_review_execution_evidence_use_case),
 ]
 
 

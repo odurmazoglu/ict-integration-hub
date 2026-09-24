@@ -419,6 +419,8 @@ def test_normalization_matches_partner_matching_engine_strip_only() -> None:
         "app/application/workbench/evidence.py",
         "app/application/use_cases/import_invoice.py",
         "app/application/use_cases/reclassify_review.py",
+        "app/application/use_cases/effective_decision.py",
+        "app/application/workbench/execution_evidence_recovery_use_cases.py",
         "app/application/rules/deterministic.py",
         "app/erp/write/odoo_vendor_bill_writer.py",
     ],
