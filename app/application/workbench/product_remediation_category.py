@@ -9,7 +9,11 @@ Rules:
 * ``categ_id`` is an exact Odoo id supplied by the operator -- never a name/code, and
   never inferred from the product name, supplier, SKU, or category hierarchy.
 * Only a review whose *current-version* purchase purpose is RESALE gets RESALE rules.
-  A RESALE purpose recorded for another review version never applies here.
+  An explicit current-version purpose always wins. A RESALE purpose recorded only for
+  another review version fails closed (P0-PROD-18E-2B): it is never carried forward,
+  and never degrades into ordinary non-RESALE remediation either -- the purpose must
+  be recorded again for the current version. A review with no purpose at any version,
+  or only historical non-RESALE purposes, keeps the ordinary non-RESALE behaviour.
 * RESALE requires ``categ_id``, an exact member of ``RESALE_PRODUCT_CATEGORY_IDS``
   (an empty allowlist rejects; approving a parent never approves a child), a
   non-storable product, and a category whose configured purchase account is valid in
@@ -32,6 +36,7 @@ from typing import Protocol
 from app.application.commands.product_remediation import ValidatedProductCategory
 from app.application.workbench.exceptions import (
     ProductRemediationCategoryError,
+    ProductRemediationStalePurchasePurposeError,
     ProductRemediationVerificationError,
     PurchaseAccountProductNotFoundError,
 )
@@ -76,7 +81,11 @@ class ProductRemediationCategoryPolicy:
         self._approved_category_ids = normalize_resale_category_ids(approved_category_ids)
 
     def purpose_is_resale(self, *, review_id: str, company_id: int, review_version: int) -> bool:
-        """True only for a RESALE purpose recorded for exactly ``review_version``."""
+        """True only for a RESALE purpose recorded for exactly ``review_version``.
+
+        Raises ``ProductRemediationStalePurchasePurposeError`` when ``review_version`` has
+        no purpose but another version has RESALE (same rule as the 18E-1B decision gate).
+        """
 
         resolutions = self._purpose_reader.list_purchase_purpose_resolutions(
             review_id=review_id,
@@ -85,7 +94,14 @@ class ProductRemediationCategoryPolicy:
         current = [resolution for resolution in resolutions if resolution.review_version == review_version]
         if len(current) > 1:
             raise ProductRemediationCategoryError("More than one purchase purpose exists for this review version.")
-        return bool(current) and current[0].purchase_purpose is PurchasePurpose.RESALE
+        if current:
+            return current[0].purchase_purpose is PurchasePurpose.RESALE
+        if any(resolution.purchase_purpose is PurchasePurpose.RESALE for resolution in resolutions):
+            raise ProductRemediationStalePurchasePurposeError(
+                "A RESALE purchase purpose exists only for another review version; record the purchase purpose "
+                "again for the current review version."
+            )
+        return False
 
     def validate_before_write(
         self,
