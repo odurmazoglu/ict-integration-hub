@@ -11,6 +11,7 @@ mixed-purpose supplier's review.
 
 from __future__ import annotations
 
+from app.application.expense_mapping.predicates import invoice_has_product_identifier
 from app.application.services import UnitOfWork
 from app.application.workbench.exceptions import (
     PurchasePurposeConflictError,
@@ -25,6 +26,7 @@ from app.application.workbench.ports import (
     ReviewSourceInvoiceEvidenceReader,
 )
 from app.application.workbench.purchase_purpose import (
+    PurchasePurpose,
     PurchasePurposeResolution,
     PurchasePurposeSubmissionResult,
     SubmitPurchasePurposeCommand,
@@ -64,7 +66,7 @@ class SubmitPurchasePurposeUseCase:
             raise ReviewVersionConflictError("The review version does not match expected_version.")
         if review.version != command.expected_version:
             raise ReviewVersionConflictError("The review version does not match expected_version.")
-        self._require_eligible(review)
+        self._require_eligible(review, command.purchase_purpose)
 
         existing = self._purpose_writer.find_purchase_purpose_resolution(
             review_id=command.review_id,
@@ -79,6 +81,8 @@ class SubmitPurchasePurposeUseCase:
             return self._result(existing, already_applied=True)
 
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
+        if command.purchase_purpose is PurchasePurpose.RESALE:
+            _require_product_shaped(source.invoice)
         resolution = PurchasePurposeResolution(
             review_id=command.review_id,
             company_id=command.company_id,
@@ -96,11 +100,15 @@ class SubmitPurchasePurposeUseCase:
             raise
         return self._result(created, already_applied=False)
 
-    def _require_eligible(self, review) -> None:
+    def _require_eligible(self, review, purchase_purpose: PurchasePurpose) -> None:
         from app.application.workbench.dto import ReviewStatus
 
         if review.status is not ReviewStatus.PENDING_REVIEW:
             raise ReviewStateConflictError("The review is not pending review.")
+        if purchase_purpose is PurchasePurpose.RESALE:
+            # P0-PROD-18E-1B: RESALE is product-shaped, never operating-expense-shaped.
+            # Its product identity is checked at decision acceptance, not here.
+            return
         if not _has_operating_expense_reason(review.review_reasons):
             raise PurchasePurposeEligibilityError(
                 "The review does not currently carry an operating-expense-shaped reason; "
@@ -133,6 +141,20 @@ class SubmitPurchasePurposeUseCase:
                 if already_applied
                 else "Purchase purpose recorded. No classification changed."
             ),
+        )
+
+
+def _require_product_shaped(invoice) -> None:
+    """RESALE needs at least one line carrying a product identifier (P0-PROD-18E-1B).
+
+    Uses only the review's own immutable source invoice -- no product match, no
+    selected product and no Odoo read are required to record the purpose.
+    """
+
+    if not invoice_has_product_identifier(invoice):
+        raise PurchasePurposeEligibilityError(
+            "RESALE requires a product-shaped review: no invoice line carries a buyer item code, seller item code "
+            "or barcode."
         )
 
 

@@ -17,6 +17,7 @@ from app.application.workbench.ports import (
     SelectedAccountReader,
     SelectedProductReader,
 )
+from app.application.workbench.resale_decision_gate import ResaleDecisionGate
 from app.application.workbench.selected_expense_account_resolution import (
     selected_expense_account_ids,
     validate_selected_expense_accounts,
@@ -45,6 +46,7 @@ class SubmitReviewDecisionUseCase:
         billing_evidence_reader: ReviewBillingEvidenceReader | None = None,
         selected_product_reader: SelectedProductReader | None = None,
         selected_account_reader: SelectedAccountReader | None = None,
+        resale_decision_gate: ResaleDecisionGate | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
         self._unit_of_work = unit_of_work
@@ -52,6 +54,7 @@ class SubmitReviewDecisionUseCase:
         self._billing_evidence_reader = billing_evidence_reader
         self._selected_product_reader = selected_product_reader
         self._selected_account_reader = selected_account_reader
+        self._resale_decision_gate = resale_decision_gate
 
     def execute(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         if not isinstance(command, ReviewDecisionCommand):
@@ -76,6 +79,7 @@ class SubmitReviewDecisionUseCase:
             )
             if not is_replay:
                 _validate_resolved_execution_inputs(command, evidence)
+                self._enforce_resale_eligibility(command, evidence)
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
                 return self._write_and_commit(
@@ -151,6 +155,21 @@ class SubmitReviewDecisionUseCase:
             products_by_id=products_by_id,
         )
         return replace(evidence, product_match=new_product_match)
+
+    def _enforce_resale_eligibility(self, command: ReviewDecisionCommand, evidence) -> None:
+        """Gate a fresh Vendor Bill decision on RESALE product eligibility (P0-PROD-18E-1B).
+
+        Runs after selected products are applied, so the operator's explicit
+        ``selected_product_id`` is what gets checked. A no-op unless the review's
+        current-version purchase purpose is RESALE; read-only, nothing is pinned.
+        """
+
+        if self._resale_decision_gate is None:
+            return
+        _translate_decision_failure(
+            lambda: self._resale_decision_gate.enforce(command, evidence),
+            "RESALE product eligibility could not be checked safely.",
+        )
 
     def _validate_selected_expense_accounts(self, command: ReviewDecisionCommand) -> None:
         """Validate any explicit ``LineResolution.expense_account_id`` overrides (P0-PROD-08G).

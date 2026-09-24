@@ -20,6 +20,7 @@ from app.application.workbench import (
     WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
+from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings
@@ -144,6 +145,11 @@ def build_odoo_workbench_decision_ingestion_workflow(
                 product_repository=OdooProductRepository(adapter=read_adapter),
             ),
             selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
+            resale_decision_gate=build_resale_decision_gate(
+                session=session,
+                settings=settings,
+                odoo_client=resolved_odoo_client,
+            ),
         ),
         acknowledgement_publisher=OdooWorkbenchProjectionPublisher(
             adapter=projection_adapter,

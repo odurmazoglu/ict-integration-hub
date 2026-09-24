@@ -111,6 +111,7 @@ from app.composition.purchase_purpose_and_accounting_resolution import (
     build_submit_purchase_purpose_use_case,
     build_submit_review_accounting_resolution_use_case,
 )
+from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.composition.supplier_remediation import (
     build_get_one_off_vendor_retirement_use_case,
     build_recover_one_off_vendor_retirement_workflow,
@@ -256,6 +257,7 @@ def get_submit_review_decision_use_case(
     writer: ReviewDecisionWriterDep,
     session: DbSessionDep,
     odoo_client: OdooClientDep,
+    settings: SettingsDep,
 ) -> SubmitReviewDecisionUseCase:
     read_adapter = OdooReadOnlyAdapter(client=odoo_client)
     return SubmitReviewDecisionUseCase(
@@ -267,6 +269,7 @@ def get_submit_review_decision_use_case(
             product_repository=OdooProductRepository(adapter=read_adapter),
         ),
         selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
+        resale_decision_gate=build_resale_decision_gate(session=session, settings=settings, odoo_client=odoo_client),
     )
 
 

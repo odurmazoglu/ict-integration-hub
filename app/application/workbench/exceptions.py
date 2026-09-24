@@ -45,6 +45,17 @@ class ReviewDecisionError(ApplicationError):
     error_category = "review_decision_error"
 
 
+class ResaleDecisionEligibilityError(ReviewDecisionError):
+    """Safe error raised when a RESALE Vendor Bill decision fails product eligibility (P0-PROD-18E-1B).
+
+    Covers a RESALE purpose recorded only for another review version, account-only or
+    identifier-free (operating-expense-shaped) decisions, unresolved/ambiguous product
+    lines, and any P0-PROD-18E-1A product-eligibility blocker.
+    """
+
+    error_category = "resale_decision_eligibility_error"
+
+
 class ReviewVersionConflictError(ReviewDecisionError):
     """Safe error raised when a review decision expected_version is stale."""
 
