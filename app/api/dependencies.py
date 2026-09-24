@@ -69,6 +69,7 @@ from app.application.workbench.supplier_remediation import (
     ResolveWorkbenchSupplierCommand,
     SupplierRemediationResult,
 )
+from app.application.workbench.vendor_bill_readback import GetVendorBillReadbackUseCase
 from app.application.workbench.write_authorization_use_cases import (
     CreateWriteAuthorizationUseCase,
     ListWriteAuthorizationsUseCase,
@@ -76,6 +77,7 @@ from app.application.workbench.write_authorization_use_cases import (
 )
 from app.composition import (
     build_create_new_product_use_case,
+    build_get_vendor_bill_readback_use_case,
     build_get_workbench_execution_status_use_case,
     build_odoo_workbench_decision_ingestion_workflow,
     build_resolve_workbench_supplier_use_case,
@@ -652,6 +654,16 @@ def get_workbench_execution_status_use_case(session: DbSessionDep) -> GetWorkben
 WorkbenchExecutionStatusUseCaseDep = Annotated[
     GetWorkbenchExecutionStatusUseCase,
     Depends(get_workbench_execution_status_use_case),
+]
+
+
+def get_vendor_bill_readback_use_case(session: DbSessionDep, settings: SettingsDep) -> GetVendorBillReadbackUseCase:
+    return build_get_vendor_bill_readback_use_case(session=session, settings=settings)
+
+
+VendorBillReadbackUseCaseDep = Annotated[
+    GetVendorBillReadbackUseCase,
+    Depends(get_vendor_bill_readback_use_case),
 ]
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
+from app.application.workbench.vendor_bill_readback import VendorBillLineVerification
 from app.erp.exceptions import ErpRepositoryResponseError
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 
@@ -31,6 +32,18 @@ ACCOUNT_MOVE_LINE_VERIFICATION_FIELDS = (
     "price_unit",
     "tax_ids",
     "account_id",
+)
+
+VENDOR_BILL_INVOICE_LINE_VERIFICATION_FIELDS = (
+    "id",
+    "move_id",
+    "product_id",
+    "quantity",
+    "price_unit",
+    "tax_ids",
+    "account_id",
+    "price_subtotal",
+    "price_total",
 )
 
 
@@ -69,6 +82,37 @@ class OdooAccountMoveLineVerificationReader:
             fields=list(ACCOUNT_MOVE_LINE_VERIFICATION_FIELDS),
         )
         return tuple(_line_from_record(record, expected_move_id=move_id) for record in records)
+
+    def read_invoice_lines_for_move(self, *, move_id: int) -> tuple[VendorBillLineVerification, ...]:
+        """Read only invoice/product lines, excluding tax and payment-term journal items."""
+        if type(move_id) is not int or isinstance(move_id, bool) or move_id <= 0:
+            raise ErpRepositoryResponseError(SAFE_ACCOUNT_MOVE_LINE_VERIFICATION_ERROR)
+        records = self._adapter.search_read(
+            model="account.move.line",
+            domain=[["move_id", "=", move_id], ["display_type", "=", "product"]],
+            fields=list(VENDOR_BILL_INVOICE_LINE_VERIFICATION_FIELDS),
+        )
+        return tuple(_invoice_line_from_record(record, expected_move_id=move_id) for record in records)
+
+
+def _invoice_line_from_record(record: object, *, expected_move_id: int) -> VendorBillLineVerification:
+    if not isinstance(record, dict):
+        raise ErpRepositoryResponseError(SAFE_ACCOUNT_MOVE_LINE_VERIFICATION_ERROR)
+    line_id = _required_positive_int(record.get("id"))
+    move_id = _required_many2one_id(record.get("move_id"))
+    if move_id != expected_move_id:
+        raise ErpRepositoryResponseError(SAFE_ACCOUNT_MOVE_LINE_VERIFICATION_ERROR)
+    return VendorBillLineVerification(
+        line_id=line_id,
+        move_id=move_id,
+        account_id=_optional_many2one_id(record.get("account_id")),
+        product_id=_optional_many2one_id(record.get("product_id")),
+        quantity=_decimal(record.get("quantity")),
+        price_unit=_decimal(record.get("price_unit")),
+        tax_ids=_tax_ids(record.get("tax_ids")),
+        price_subtotal=_decimal(record.get("price_subtotal")),
+        price_total=_decimal(record.get("price_total")),
+    )
 
 
 def _line_from_record(record: object, *, expected_move_id: int) -> AccountMoveLineVerification:

@@ -612,6 +612,36 @@ class VendorBillPreviewResponse(BaseModel):
     preview_total: str
 
 
+class VendorBillReadbackLineResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_id: int
+    account_id: int | None
+    product_id: int | None
+    quantity: str
+    price_unit: str
+    tax_ids: list[int]
+    price_subtotal: str
+    price_total: str
+
+
+class VendorBillReadbackResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: str
+    execution_id: str
+    artifact_id: str
+    move_id: int
+    state: str
+    move_type: str
+    partner_id: int
+    currency: str
+    amount_untaxed: str
+    amount_tax: str
+    amount_total: str
+    lines: list[VendorBillReadbackLineResponse]
+
+
 class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -636,6 +666,7 @@ ReviewDecisionAcknowledgementEnvelope = ApiEnvelope[ReviewDecisionAcknowledgemen
 WorkbenchDecisionIngestionEnvelope = ApiEnvelope[WorkbenchDecisionIngestionResponse]
 WorkbenchVendorBillExecutionEnvelope = ApiEnvelope[WorkbenchVendorBillExecutionResponse]
 VendorBillPreviewEnvelope = ApiEnvelope[VendorBillPreviewResponse]
+VendorBillReadbackEnvelope = ApiEnvelope[VendorBillReadbackResponse]
 WorkbenchQuotationScenarioEvidenceEnvelope = ApiEnvelope[WorkbenchQuotationScenarioEvidenceResponse]
 ErrorEnvelope = ApiEnvelope[Any]
 
