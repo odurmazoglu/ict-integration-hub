@@ -494,6 +494,25 @@ def _expense_vendor_bill_line(
 # into price_unit -- quantity * net_unit_price reproduces the source's post-discount
 # line economics exactly, with no reliance on Odoo's own rounding behavior at all.
 #
+# P0-PROD-15AD: ``line.unit_price`` is a rounded *display* figure transmitted by the
+# source invoice (typically 2 decimal places) -- for an undiscounted line, it does
+# not, in general, reproduce the line's authoritative net amount when multiplied by
+# quantity (proven against real production data: CloudSpark's CPU/HDD/RAM lines
+# have zero discounts, yet quantity * unit_price differs from the transmitted net
+# by a few kuruş on every line). For that specific, narrow case -- no discount at
+# all -- the line's own ``line_extension_amount`` (UBL: cbc:LineExtensionAmount) is
+# trusted directly as the authoritative net. This is deliberately NOT extended to
+# the discounted case: at least one real historical production invoice in this
+# system's own fixtures carries a ``line_extension_amount`` that is the line's
+# *pre-discount* figure, not net-of-discount as strict UBL would imply -- Uyumsoft's
+# actual transmitted semantics for a discounted line are not uniformly verified
+# here, so the existing, already-correct P0-PROD-08L reconstruction (gross computed
+# from quantity * unit_price, minus the discount amount) remains untouched and
+# authoritative whenever any discount is present. ``unit_price`` remains required,
+# validated, and untouched everywhere it is presented as source evidence (see
+# ``ReviewSourceInvoiceEvidence``/the review-detail API) -- this only changes what
+# *Odoo posting* price_unit is derived from, never the immutable source record.
+#
 # Only a source amount is ever trusted. A rate-only allowance (no cbc:Amount) has no
 # safely-inferable base without inventing accounting logic the immutable evidence does
 # not itself provide -- validate_vendor_bill_inputs fails the whole build closed for
@@ -518,6 +537,19 @@ def _line_total_discount(line: InvoiceLine) -> Decimal:
 
 
 def _line_net_total(line: InvoiceLine) -> Decimal:
+    """The line's authoritative net (tax-exclusive, post-allowance) amount.
+
+    For an undiscounted line, prefers the source's own transmitted
+    ``line_extension_amount`` over quantity * unit_price, which silently drifts
+    whenever the source's rounded display unit_price does not reproduce
+    line_extension_amount exactly (see P0-PROD-15AD). Discounted lines are
+    unaffected -- see that module comment for why ``line_extension_amount`` is not
+    trusted as net-of-discount here -- and keep the pre-15AD
+    quantity/unit_price/discount reconstruction exactly.
+    """
+
+    if not line.discounts and line.line_extension_amount is not None:
+        return line.line_extension_amount
     return _line_gross_total(line) - _line_total_discount(line)
 
 
@@ -525,7 +557,7 @@ def line_gross_total(line: InvoiceLine) -> Decimal:
     """Public reuse point for ``_line_gross_total`` (P0-PROD-09B: Vendor Bill preview).
 
     Preview needs the exact same per-line gross/discount/net economics
-    ``VendorBillBuilder.build`` already computes and validates (P0-PROD-08L) --
+    ``VendorBillBuilder.build`` already computes and validates (P0-PROD-08L/15AD) --
     this and its two siblings below exist so preview never reimplements that
     arithmetic, only reads it.
     """
@@ -546,16 +578,26 @@ def line_net_total(line: InvoiceLine) -> Decimal:
 
 
 def _net_unit_price(line: InvoiceLine) -> Decimal:
-    """``line.unit_price`` unchanged when there are no discounts -- byte-identical to
-    pre-08L behavior. ``validate_vendor_bill_inputs`` has already proven every discount
-    carries a usable amount and the total does not exceed the gross line total before
-    this is ever reached."""
+    """Odoo's posting ``price_unit`` -- reconciled to the line's authoritative net
+    amount (``_line_net_total``: ``line_extension_amount`` when the source
+    transmitted one, else the quantity/unit_price/discount reconstruction), never
+    assumed equal to the source's rounded display ``unit_price`` (P0-PROD-15AD).
+    ``validate_vendor_bill_inputs`` has already proven quantity is positive and
+    every discount carries a usable amount not exceeding the line's gross total
+    before this is ever reached.
+
+    ``line.unit_price`` unchanged -- byte-identical to pre-15AD/pre-08L behavior,
+    including its exact decimal precision -- whenever it already reproduces the
+    authoritative net exactly (quantity * unit_price == net_total): the common
+    case for a well-formed, undiscounted, exact-precision line. Only recomputed
+    (and only then quantized to a higher, explicit precision) when it does not.
+    """
 
     assert line.unit_price is not None
     assert line.quantity is not None
-    if not line.discounts:
-        return line.unit_price
     net_total = _line_net_total(line)
+    if line.unit_price * line.quantity == net_total:
+        return line.unit_price
     return (net_total / line.quantity).quantize(_DISCOUNT_UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
 
 
