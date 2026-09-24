@@ -23,14 +23,35 @@ ALLOWED_PRODUCT_TEMPLATE_TYPES = frozenset({"consu", "service", "combo"})
 
 
 @dataclass(frozen=True, slots=True)
+class ValidatedProductCategory:
+    """An Odoo ``product.category`` id that already passed application-level validation (P0-PROD-18E-2).
+
+    Deliberately a distinct type rather than a bare ``int``: ``CreateProductCommand``
+    refuses a raw category id, so the only way ``categ_id`` reaches the Odoo payload
+    is through the CREATE_NEW_PRODUCT category policy
+    (``app.application.workbench.product_remediation_category``), which produces
+    this value only after read-only validation against Odoo (and, under RESALE,
+    against ``RESALE_PRODUCT_CATEGORY_IDS``). Never inferred from a name, SKU,
+    supplier, or category hierarchy.
+    """
+
+    categ_id: int
+
+    def __post_init__(self) -> None:
+        if type(self.categ_id) is not int or self.categ_id <= 0:
+            raise ProductWriteValidationError("A validated category requires a positive categ_id.")
+
+
+@dataclass(frozen=True, slots=True)
 class CreateProductCommand(Command):
     """Application request to create one Odoo ``product.template`` from operator-supplied identity.
 
     Only the exact fields required for a simple no-attribute product are carried.
     ``default_code`` is operator-controlled or blank -- it is never derived from a
     supplier's own product code (see ``CreateSupplierInfoCommand.product_code``).
-    No category, taxes, barcode, or company are set here; those are left to
-    documented Odoo defaults.
+    No taxes, barcode, or company are set here; those are left to documented Odoo
+    defaults. Category is left to Odoo's default too, unless ``category``
+    (P0-PROD-18E-2) carries a :class:`ValidatedProductCategory` -- never a raw id.
 
     ``authorization`` (P0-PROD-09G) is an optional, already-claimed-and-consumed
     ``WriteAuthorizationRecord`` for this exact write. When present, it lets
@@ -48,10 +69,13 @@ class CreateProductCommand(Command):
     default_code: str | None = None
     approved_by: str | None = None
     authorization: WriteAuthorizationRecord | None = None
+    category: ValidatedProductCategory | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ProductWriteValidationError("name is required.")
+        if self.category is not None and not isinstance(self.category, ValidatedProductCategory):
+            raise ProductWriteValidationError("category must be an application-validated product category.")
         if self.type not in ALLOWED_PRODUCT_TEMPLATE_TYPES:
             raise ProductWriteValidationError("type must be a recognized Odoo product.template type.")
         if type(self.uom_id) is not int or isinstance(self.uom_id, bool) or self.uom_id <= 0:

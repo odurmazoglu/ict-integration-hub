@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.application.commands.product_remediation import CreateProductCommand
+from app.application.commands.product_remediation import CreateProductCommand, ValidatedProductCategory
 from app.application.dto.product_remediation import ProductWriteResult, ProductWriteStatus
 from app.application.exceptions.product_remediation import (
     ProductDataIntegrityError,
@@ -27,10 +27,15 @@ from app.erp.write.odoo_product_write_policy import OdooProductWritePolicy
 PRODUCT_TEMPLATE_MODEL = "product.template"
 PRODUCT_VARIANT_MODEL = "product.product"
 PRODUCT_TEMPLATE_FIELDS = ["id", "name", "default_code", "type", "uom_id"]
+# Read back only when a validated category was written (P0-PROD-18E-2), so the
+# no-category create path keeps its exact existing read-back contract.
+PRODUCT_TEMPLATE_CATEGORY_FIELDS = ["categ_id", "is_storable"]
 PRODUCT_VARIANT_FIELDS = ["id"]
 # The create payload is fixed and never caller-supplied; this scan is defense in depth.
-# category/taxes/barcode/company are explicitly left to documented Odoo defaults (P0-PROD-07F),
+# taxes/barcode/company are explicitly left to documented Odoo defaults (P0-PROD-07F),
 # and a supplier's own product code must never be written here (see odoo_supplierinfo_writer.py).
+# categ_id stays forbidden too: the single exemption is the exact top-level key carrying
+# a ValidatedProductCategory from the command (P0-PROD-18E-2) -- see _reject_forbidden_tokens.
 FORBIDDEN_PRODUCT_TEMPLATE_TOKENS = frozenset(
     {
         "categ_id",
@@ -70,6 +75,8 @@ class ProductTemplateRecord:
     id: int
     name: str | None
     default_code: str | None
+    categ_id: int | None = None
+    is_storable: bool | None = None
 
 
 class OdooProductTemplateRepository:
@@ -82,13 +89,14 @@ class OdooProductTemplateRepository:
         created = await _translate_connector_errors(self._client.create_product_template(payload))
         return _require_positive_id(created, source="Odoo product.template create")
 
-    async def read_template(self, template_id: int) -> ProductTemplateRecord:
+    async def read_template(self, template_id: int, *, include_category: bool = False) -> ProductTemplateRecord:
         template_id = _require_positive_id(template_id, source="product.template lookup")
+        fields = PRODUCT_TEMPLATE_FIELDS + (PRODUCT_TEMPLATE_CATEGORY_FIELDS if include_category else [])
         records = await _translate_connector_errors(
             self._client.search_read(
                 model=PRODUCT_TEMPLATE_MODEL,
                 domain=[["id", "=", template_id]],
-                fields=PRODUCT_TEMPLATE_FIELDS,
+                fields=fields,
                 limit=2,
             )
         )
@@ -146,12 +154,12 @@ class OdooProductWriter(ProductWriter):
         )
 
         payload = _product_template_payload(command)
-        _reject_forbidden_tokens(payload)
+        _reject_forbidden_tokens(payload, category=command.category)
 
         template_id = await self._repository.create_template(payload)
 
         # Read the template back and validate identity fields never drifted from the request.
-        template = await self._repository.read_template(template_id)
+        template = await self._repository.read_template(template_id, include_category=command.category is not None)
         _validate_created_template(template, command=command, template_id=template_id)
 
         # product.template and product.product creation are two separate remote reads/writes;
@@ -178,6 +186,8 @@ def _product_template_payload(command: CreateProductCommand) -> dict[str, Any]:
     # Blank/omitted internal reference stays blank/omitted -- never derived from anything.
     if command.default_code is not None:
         payload["default_code"] = command.default_code.strip()
+    if command.category is not None:
+        payload["categ_id"] = command.category.categ_id
     return payload
 
 
@@ -195,18 +205,32 @@ def _validate_created_template(
     actual_default_code = _optional_text(template.default_code)
     if actual_default_code != expected_default_code:
         raise ProductDataIntegrityError("Read-back product template default_code does not match the exact request.")
+    if command.category is not None:
+        if template.categ_id != command.category.categ_id:
+            raise ProductDataIntegrityError("Read-back product template category does not match the exact request.")
+        if template.is_storable is not command.is_storable:
+            raise ProductDataIntegrityError("Read-back product template storability does not match the exact request.")
 
 
 def _template_record(record: dict[str, Any]) -> ProductTemplateRecord:
+    is_storable = record.get("is_storable")
     return ProductTemplateRecord(
         id=_require_positive_id(record.get("id"), source="Odoo product.template"),
         name=_optional_text(record.get("name")),
         default_code=_optional_text(record.get("default_code")),
+        categ_id=_optional_many2one_id(record.get("categ_id")),
+        is_storable=is_storable if isinstance(is_storable, bool) else None,
     )
 
 
-def _reject_forbidden_tokens(payload: dict[str, Any]) -> None:
-    payload_text = str(payload).lower()
+def _reject_forbidden_tokens(payload: dict[str, Any], *, category: ValidatedProductCategory | None = None) -> None:
+    scanned = dict(payload)
+    if category is not None:
+        # The one narrow exemption: the exact validated id under the exact top-level key.
+        # Anything else mentioning categ_id (or any other forbidden token) still fails.
+        if type(scanned.get("categ_id")) is not int or scanned.pop("categ_id") != category.categ_id:
+            raise ProductWriteValidationError("Product template payload category does not match the validated one.")
+    payload_text = str(scanned).lower()
     for token in FORBIDDEN_PRODUCT_TEMPLATE_TOKENS:
         if token in payload_text:
             raise ProductWriteValidationError("Product template payload contains a forbidden field.")
@@ -232,6 +256,16 @@ async def _translate_connector_errors[T](awaitable: Any) -> T:
 def _require_positive_id(value: object, *, source: str) -> int:
     if type(value) is not int or isinstance(value, bool) or value <= 0:
         raise ProductDataIntegrityError(f"{source} returned an invalid id.")
+    return value
+
+
+def _optional_many2one_id(value: object) -> int | None:
+    if value is None or value is False:
+        return None
+    if isinstance(value, (list, tuple)) and value:
+        value = value[0]
+    if type(value) is not int or value <= 0:
+        raise ProductDataIntegrityError("Odoo product.template returned an invalid category reference.")
     return value
 
 

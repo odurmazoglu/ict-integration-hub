@@ -68,6 +68,10 @@ class WorkbenchReviewProductRemediationReservation(Base):
             name="ck_wrpr_reservations_supplierinfo_id_positive",
         ),
         CheckConstraint(
+            "categ_id IS NULL OR categ_id > 0",
+            name="ck_wrpr_reservations_categ_id_positive",
+        ),
+        CheckConstraint(
             "status IN ('reserved', 'create_attempted', 'needs_reconciliation') OR product_template_id IS NOT NULL",
             name="ck_wrpr_reservations_template_by_status",
         ),
@@ -106,6 +110,9 @@ class WorkbenchReviewProductRemediationReservation(Base):
     product_template_id: Mapped[int | None] = mapped_column(nullable=True)
     product_id: Mapped[int | None] = mapped_column(nullable=True)
     supplierinfo_id: Mapped[int | None] = mapped_column(nullable=True)
+    # P0-PROD-18E-2: the explicitly approved Odoo product.category, part of the
+    # immutable reserved intent. NULL for pre-existing rows / no explicit category.
+    categ_id: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime(), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         AwareDateTime(), server_default=func.now(), onupdate=func.now(), nullable=False

@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from app.application.execution import (
     ExecutionArtifactType,
@@ -367,6 +367,9 @@ class ProductResolutionRequest(BaseModel):
     is_storable: bool = False
     note: str | None = None
     authorization_id: str | None = Field(default=None, min_length=1, max_length=36)
+    # P0-PROD-18E-2: exact Odoo product.category id only -- never a name/code, never
+    # inferred. Required (and allowlisted) when the current-version purchase purpose is RESALE.
+    categ_id: StrictInt | None = Field(default=None, gt=0)
 
 
 class ProductRemediationResponse(BaseModel):

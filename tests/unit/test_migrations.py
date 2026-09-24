@@ -660,6 +660,19 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # P0-PROD-18E-2 added one more migration on top (one additive nullable column) --
+    # one extra "-1" step consumes it before the P0-PROD-15T step below.
+    reservation_columns_at_head = {
+        column["name"]: column for column in inspector.get_columns("workbench_review_product_remediation_reservations")
+    }
+    assert reservation_columns_at_head["categ_id"]["nullable"] is True
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "categ_id" not in {
+        column["name"] for column in inspector.get_columns("workbench_review_product_remediation_reservations")
+    }
+    assert "workbench_review_purchase_purpose_resolutions" in inspector.get_table_names()
+
     # P0-PROD-15T added one more migration on top (two new, independent tables) --
     # one extra "-1" step consumes it before the P0-PROD-09G step below.
     command.downgrade(config, "-1")

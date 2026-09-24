@@ -245,7 +245,7 @@ def one_off_vendor_archive_authorization_consumer_id(*, company_id: int, review_
 
 
 def product_remediation_authorization_consumer_id(
-    *, company_id: int, review_id: str, expected_version: int, line_number: str
+    *, company_id: int, review_id: str, expected_version: int, line_number: str, categ_id: int | None = None
 ) -> str:
     """Deterministic consumer identity for a CREATE_NEW_PRODUCT write attempt
     (P0-PROD-09G). Same construction discipline as the other consumer-id helpers --
@@ -254,7 +254,14 @@ def product_remediation_authorization_consumer_id(
     idempotently, immediately before both the product.template create and the
     product.supplierinfo create/link, and a legitimate crash-then-retry of either
     step resumes against its own already-consumed authorization.
+
+    P0-PROD-18E-2: a reserved ``categ_id`` is bound into the identity, so an
+    authorization consumed for one category can never authorize a write in another.
+    Without a category the identity is byte-identical to before (existing consumed
+    authorizations keep resuming).
     """
 
     identity = f"product-remediation-write:{company_id}:{review_id}:{expected_version}:{line_number}"
+    if categ_id is not None:
+        identity = f"{identity}:categ:{categ_id}"
     return f"product-remediation-write:{uuid5(NAMESPACE_URL, identity)}"

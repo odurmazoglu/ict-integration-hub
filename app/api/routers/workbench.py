@@ -107,6 +107,7 @@ from app.application.workbench.exceptions import (
     ProductRemediationIdentityAmbiguousError,
     ProductRemediationRaceError,
     ProductRemediationSupplierUnresolvedError,
+    ProductRemediationVerificationError,
     PurchaseAccountCompanyContextError,
     PurchaseAccountDiscoveryError,
     PurchaseAccountProductNotFoundError,
@@ -909,7 +910,9 @@ async def rebuild_review_execution_evidence(
         "(authorization_id) issued via the write-authorizations endpoint for this exact review/version -- either "
         "way the production master kill switch and named-approver requirement are never bypassed. It never "
         "submits a review decision, pins selected_product_id, or executes a Vendor Bill -- those remain separate "
-        "explicit operator actions."
+        "explicit operator actions. Optional categ_id is an exact Odoo product.category id, validated read-only "
+        "before any write; when the review's current-version purchase purpose is RESALE it is required, must be in "
+        "RESALE_PRODUCT_CATEGORY_IDS, and the product must be non-storable."
     ),
 )
 async def resolve_review_product(
@@ -935,6 +938,7 @@ async def resolve_review_product(
                 internal_reference=request_body.internal_reference,
                 note=request_body.note,
                 authorization_id=request_body.authorization_id,
+                categ_id=request_body.categ_id,
             )
         )
         return _success(
@@ -1628,6 +1632,7 @@ def _status_code_for_exception(exc: Exception) -> int:
             ProductRemediationSupplierUnresolvedError,
             ProductRemediationConflictError,
             ProductRemediationRaceError,
+            ProductRemediationVerificationError,
             OperatingExpenseMappingEligibilityError,
             OperatingExpenseMappingSupplierUnresolvedError,
             OperatingExpenseMappingConflictError,

@@ -18,13 +18,25 @@ reservation is committed to ``CREATE_ATTEMPTED`` immediately *before* the Odoo c
 a resume that finds this status transitions to ``NEEDS_RECONCILIATION`` and never
 attempts another create. This is intentionally conservative: it is explicit,
 residual ambiguity, not a solved problem -- see the PR description.
+
+P0-PROD-18E-2 adds an optional, explicitly approved Odoo category
+(``CreateNewProductCommand.categ_id``). It is validated read-only before any write
+(required and allowlisted under a current-version RESALE purpose -- see
+``product_remediation_category``), reserved as part of the immutable intent, bound
+into the write-authorization consumer identity, written to Odoo, and re-verified
+after creation before supplierinfo is linked. A post-create verification failure
+never creates another product.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from app.application.commands.product_remediation import CreateProductCommand, CreateSupplierInfoCommand
+from app.application.commands.product_remediation import (
+    CreateProductCommand,
+    CreateSupplierInfoCommand,
+    ValidatedProductCategory,
+)
 from app.application.dto.product_remediation import SupplierInfoWriteStatus
 from app.application.exceptions.product_remediation import (
     ProductWriteAuthenticationError,
@@ -63,6 +75,7 @@ from app.application.workbench.product_remediation import (
     ProductReservationStatus,
     normalize_seller_item_code,
 )
+from app.application.workbench.product_remediation_category import ProductRemediationCategoryPolicy
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.write_authorization import (
     WriteAuthorizationOperationType,
@@ -102,6 +115,7 @@ class CreateNewProductUseCase:
         supplier_info_writer: SupplierInfoWriter,
         unit_of_work: UnitOfWork,
         write_authorization_repository: WriteAuthorizationRepository | None = None,
+        category_policy: ProductRemediationCategoryPolicy | None = None,
         _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
@@ -116,6 +130,9 @@ class CreateNewProductUseCase:
         # Optional (P0-PROD-09G): only set when narrow runtime write authorization is
         # wired in; a command without an authorization_id never touches this.
         self._write_authorization_repository = write_authorization_repository
+        # Optional (P0-PROD-18E-2): without it, no purchase purpose is consulted and a
+        # command carrying categ_id fails closed -- a category is never written unvalidated.
+        self._category_policy = category_policy
         # Test-only seam: invoked on the fresh path just before the reservation INSERT,
         # so a test can commit a competing reservation/claim in another transaction in between.
         self._after_precheck_hook = _after_precheck_hook
@@ -141,6 +158,13 @@ class CreateNewProductUseCase:
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
         seller_item_code = self._require_seller_item_code(source, command)
         resolved_partner_id = self._require_resolved_supplier(command)
+        category = self._validate_category(
+            review_id=command.review_id,
+            company_id=command.company_id,
+            review_version=command.expected_version,
+            categ_id=command.categ_id,
+            is_storable=command.is_storable,
+        )
 
         if self._after_precheck_hook is not None:
             await self._after_precheck_hook()
@@ -163,6 +187,7 @@ class CreateNewProductUseCase:
                     approved_by=command.approved_by,
                     note=_normalize_optional(command.note),
                     idempotency_key=command.idempotency_key,
+                    categ_id=command.categ_id,
                 )
             )
             self._unit_of_work.commit()
@@ -174,7 +199,7 @@ class CreateNewProductUseCase:
             # A concurrent identical request already advanced this reservation past
             # RESERVED between our pre-check and our INSERT; resume from its real state.
             return await self._resume(command, reservation)
-        return await self._proceed(command, reservation)
+        return await self._proceed(command, reservation, category)
 
     # ------------------------------------------------------------------ eligibility
 
@@ -220,10 +245,80 @@ class CreateNewProductUseCase:
             or existing.is_storable != command.is_storable
             or existing.internal_reference != _normalize_optional(command.internal_reference)
             or existing.note != _normalize_optional(command.note)
+            or existing.categ_id != command.categ_id
         ):
             raise ProductRemediationConflictError(
                 "A different CREATE_NEW_PRODUCT decision already exists for this review line."
             )
+
+    # ------------------------------------------------------------------ category (P0-PROD-18E-2)
+
+    def _is_resale(self, *, review_id: str, company_id: int, review_version: int) -> bool:
+        if self._category_policy is None:
+            return False
+        return self._category_policy.purpose_is_resale(
+            review_id=review_id,
+            company_id=company_id,
+            review_version=review_version,
+        )
+
+    def _validate_category(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        review_version: int,
+        categ_id: int | None,
+        is_storable: bool,
+    ) -> ValidatedProductCategory | None:
+        """Read-only category validation; always runs before any reservation-driven Odoo write."""
+
+        if self._category_policy is None:
+            if categ_id is not None:
+                raise ProductRemediationContractError("Product category support is not configured for this workflow.")
+            return None
+        return self._category_policy.validate_before_write(
+            company_id=company_id,
+            categ_id=categ_id,
+            is_storable=is_storable,
+            resale=self._is_resale(review_id=review_id, company_id=company_id, review_version=review_version),
+        )
+
+    def _validate_reserved_category(
+        self, reservation: ProductRemediationReservation
+    ) -> ValidatedProductCategory | None:
+        # Recovery always uses the reserved categ_id, never the caller's.
+        return self._validate_category(
+            review_id=reservation.review_id,
+            company_id=reservation.company_id,
+            review_version=reservation.review_version,
+            categ_id=reservation.categ_id,
+            is_storable=reservation.is_storable,
+        )
+
+    def _verify_created_product(self, reservation: ProductRemediationReservation) -> None:
+        """Re-verify a product this workflow created before linking supplierinfo.
+
+        Skipped only for the unchanged legacy path: no category and no RESALE purpose.
+        """
+
+        if self._category_policy is None or reservation.product_id is None or reservation.product_template_id is None:
+            return
+        resale = self._is_resale(
+            review_id=reservation.review_id,
+            company_id=reservation.company_id,
+            review_version=reservation.review_version,
+        )
+        if reservation.categ_id is None and not resale:
+            return
+        self._category_policy.verify_created_product(
+            company_id=reservation.company_id,
+            product_id=reservation.product_id,
+            product_template_id=reservation.product_template_id,
+            categ_id=reservation.categ_id,
+            is_storable=reservation.is_storable,
+            resale=resale,
+        )
 
     # ------------------------------------------------------------------ fresh path
 
@@ -231,6 +326,7 @@ class CreateNewProductUseCase:
         self,
         command: CreateNewProductCommand,
         reservation: ProductRemediationReservation,
+        category: ValidatedProductCategory | None,
     ) -> CreateNewProductResult:
         # STEP 5: read-before-write natural-identity pre-check against Odoo, before any
         # DB claim or Odoo write. A hit here means Odoo already has a supplierinfo for
@@ -258,7 +354,7 @@ class CreateNewProductUseCase:
             self._unit_of_work.rollback()
             return self._resolve_identity_race(command, reservation)
 
-        return await self._create_product_and_supplierinfo(command, reservation)
+        return await self._create_product_and_supplierinfo(command, reservation, category)
 
     async def _find_existing_supplier_info(
         self,
@@ -375,7 +471,11 @@ class CreateNewProductUseCase:
             ),
         )
 
-    def _claim_write_authorization(self, command: CreateNewProductCommand):
+    def _claim_write_authorization(
+        self,
+        command: CreateNewProductCommand,
+        reservation: ProductRemediationReservation,
+    ):
         """P0-PROD-09G: claim (and durably consume) the narrow write authorization for
         this exact CREATE_NEW_PRODUCT write, if one was supplied. Deterministic
         consumer id from the command's own identity (keyed by line_number, not by
@@ -383,7 +483,9 @@ class CreateNewProductUseCase:
         call again, idempotently, immediately before the product.template create and
         again before the product.supplierinfo create/link -- and so a legitimate
         crash-then-retry of either step resumes against its own already-consumed
-        authorization."""
+        authorization. P0-PROD-18E-2: the reserved ``categ_id`` is part of that
+        consumer identity, so an authorization consumed for one category can never be
+        reused for another."""
 
         if command.authorization_id is None:
             return None
@@ -400,6 +502,7 @@ class CreateNewProductUseCase:
                 review_id=command.review_id,
                 expected_version=command.expected_version,
                 line_number=command.line_number,
+                categ_id=reservation.categ_id,
             ),
         )
 
@@ -407,7 +510,10 @@ class CreateNewProductUseCase:
         self,
         command: CreateNewProductCommand,
         reservation: ProductRemediationReservation,
+        category: ValidatedProductCategory | None,
     ) -> CreateNewProductResult:
+        if (category.categ_id if category is not None else None) != reservation.categ_id:
+            raise ProductRemediationDataIntegrityError("The validated category does not match the reserved category.")
         # Persisted and COMMITTED immediately before the Odoo call: if the process
         # crashes anywhere from here until PRODUCT_CREATED is persisted, the remote
         # outcome is unknown and a resume must never blindly retry -- see module docstring.
@@ -418,7 +524,7 @@ class CreateNewProductUseCase:
         )
         self._unit_of_work.commit()
 
-        authorization = self._claim_write_authorization(command)
+        authorization = self._claim_write_authorization(command, attempted)
         try:
             write_result = await self._product_writer.create_product(
                 CreateProductCommand(
@@ -429,6 +535,7 @@ class CreateNewProductUseCase:
                     default_code=attempted.internal_reference,
                     approved_by=attempted.approved_by,
                     authorization=authorization,
+                    category=category,
                 )
             )
         except _CERTAIN_NO_WRITE_EXCEPTIONS:
@@ -463,6 +570,7 @@ class CreateNewProductUseCase:
             product_id=write_result.product_id,
         )
         self._unit_of_work.commit()
+        self._verify_created_product(created)
         return await self._create_supplierinfo(created, created_product=True, command=command)
 
     async def _create_supplierinfo(
@@ -476,7 +584,7 @@ class CreateNewProductUseCase:
             raise ProductRemediationDataIntegrityError(
                 "Cannot create supplierinfo before the product identity is persisted."
             )
-        authorization = self._claim_write_authorization(command)
+        authorization = self._claim_write_authorization(command, reservation)
         write_result = await self._supplier_info_writer.create_supplier_info(
             CreateSupplierInfoCommand(
                 company_id=reservation.company_id,
@@ -517,10 +625,11 @@ class CreateNewProductUseCase:
         existing: ProductRemediationReservation,
     ) -> CreateNewProductResult:
         if existing.status is ProductReservationStatus.RESERVED:
-            return await self._proceed(command, existing)
+            return await self._proceed(command, existing, self._validate_reserved_category(existing))
         if existing.status is ProductReservationStatus.CREATE_ATTEMPTED:
             return self._reconcile_uncertain_create(existing)
         if existing.status is ProductReservationStatus.PRODUCT_CREATED:
+            self._verify_created_product(existing)
             return await self._create_supplierinfo(existing, created_product=False, command=command)
         if existing.status is ProductReservationStatus.COMPLETED:
             return self._success_result(

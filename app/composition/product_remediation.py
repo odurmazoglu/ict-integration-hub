@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.application.workbench.product_remediation_category import ProductRemediationCategoryPolicy
 from app.application.workbench.product_remediation_use_cases import CreateNewProductUseCase
+from app.composition.purchase_account_discovery import (
+    build_get_product_purchase_account_use_case,
+    build_list_category_purchase_accounts_use_case,
+)
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.existing_supplier_info_reader import OdooExistingSupplierInfoReader
@@ -12,6 +17,7 @@ from app.erp.write.odoo_supplierinfo_writer import OdooSupplierInfoRepository, O
 from app.persistence import (
     SqlAlchemyReviewProductIdentityClaimRepository,
     SqlAlchemyReviewProductRemediationReservationRepository,
+    SqlAlchemyReviewPurchasePurposeResolutionRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
     SqlAlchemyReviewSupplierRemediationEffectRepository,
@@ -34,6 +40,10 @@ def build_create_new_product_use_case(
     ``False``). The supplierinfo *read* path reuses the same
     ``OdooSupplierInfoRepository`` the writer already uses for its own
     read-before-write check -- no new Odoo model access.
+
+    The optional category (P0-PROD-18E-2) is validated and re-verified through
+    P0-PROD-18D's read-only purchase-account discovery on the same Odoo client; the
+    RESALE allowlist comes only from ``RESALE_PRODUCT_CATEGORY_IDS``.
     """
 
     resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
@@ -57,4 +67,14 @@ def build_create_new_product_use_case(
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
+        category_policy=ProductRemediationCategoryPolicy(
+            purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
+            category_lister=build_list_category_purchase_accounts_use_case(
+                settings=settings, odoo_client=resolved_odoo_client
+            ),
+            product_account_resolver=build_get_product_purchase_account_use_case(
+                settings=settings, odoo_client=resolved_odoo_client
+            ),
+            approved_category_ids=settings.resale_product_category_ids,
+        ),
     )
