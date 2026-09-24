@@ -34,9 +34,9 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
             i.name for i in WorkbenchReviewWriteAuthorization.__table__.indexes
         }
         with engine.connect() as connection:
-            # P0-PROD-15T added one more migration on top (two new, unrelated tables) --
-            # "head" now lands one revision further than when this test was written.
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170031"
+            # P0-PROD-15T and P0-PROD-18E-2 each added one more, unrelated migration on
+            # top -- "head" now lands two revisions further than when this test was written.
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170032"
         _assert_operation_type_check_constraint(engine, name)
         # Rows using an operation type must be cleared before downgrading past the
         # migration that introduced it -- SQLite's batch-recreate (and PostgreSQL's

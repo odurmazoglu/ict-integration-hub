@@ -97,6 +97,13 @@ class CreateNewProductCommand(ApplicationDTO):
     gate for exactly this one write, without opening it globally. Never a blanket
     or wildcard grant; the master production kill switch, approval acknowledgement,
     and named-approver checks are never bypassed.
+
+    ``categ_id`` (P0-PROD-18E-2) is the operator's explicit Odoo ``product.category``
+    id -- an exact id, never a name/code, and never inferred from the product name,
+    supplier, SKU, or category hierarchy. Optional in general; required (and
+    restricted to ``RESALE_PRODUCT_CATEGORY_IDS``) when the review's current-version
+    purchase purpose is RESALE. Validated read-only against Odoo before any write
+    (see ``product_remediation_category``).
     """
 
     review_id: str
@@ -112,6 +119,7 @@ class CreateNewProductCommand(ApplicationDTO):
     note: str | None = None
     idempotency_key: str | None = None
     authorization_id: str | None = None
+    categ_id: int | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -141,6 +149,8 @@ class CreateNewProductCommand(ApplicationDTO):
             not isinstance(self.authorization_id, str) or not self.authorization_id.strip()
         ):
             raise ProductRemediationContractError("authorization_id must be non-empty text when provided.")
+        if self.categ_id is not None:
+            _require_positive_int(self.categ_id, "categ_id must be a positive Odoo product.category id when provided.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +159,9 @@ class ProductRemediationReservation(ApplicationDTO):
 
     Immutable identity fields are set once at reservation time; ``status`` and the
     Odoo identity fields advance strictly forward as the orchestration progresses.
+    ``categ_id`` (P0-PROD-18E-2) is part of that immutable intent: ``NULL`` for rows
+    reserved before category support existed or without an explicit category, and a
+    retry/recovery always uses the reserved value, never the caller's.
     """
 
     review_id: str
@@ -167,6 +180,7 @@ class ProductRemediationReservation(ApplicationDTO):
     product_template_id: int | None = None
     product_id: int | None = None
     supplierinfo_id: int | None = None
+    categ_id: int | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -184,6 +198,7 @@ class ProductRemediationReservation(ApplicationDTO):
             (self.product_template_id, "product_template_id"),
             (self.product_id, "product_id"),
             (self.supplierinfo_id, "supplierinfo_id"),
+            (self.categ_id, "categ_id"),
         ):
             if value is not None:
                 _require_positive_int(value, f"{label} must be positive when set.")

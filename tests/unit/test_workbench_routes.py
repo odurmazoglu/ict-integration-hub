@@ -1407,8 +1407,10 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "is_storable",
         "note",
         "authorization_id",
+        "categ_id",
     }
     assert product_resolution_schema.get("additionalProperties") is False
+    assert "categ_id" not in product_resolution_schema.get("required", [])
     assert "product_type" in product_resolution_schema.get("required", [])
     assert product_resolution_schema["properties"]["product_type"]["enum"] == ["consu", "service"]
     supplier_resolution_schema = response.json()["components"]["schemas"]["SupplierResolutionRequest"]

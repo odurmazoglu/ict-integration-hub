@@ -38,6 +38,7 @@ def _reservation_fingerprint(reservation: ProductRemediationReservation) -> tupl
         reservation.is_storable,
         (reservation.internal_reference or None),
         (reservation.note or None),
+        reservation.categ_id,
     )
 
 
@@ -61,6 +62,7 @@ def _model_from_reservation(
         product_template_id=reservation.product_template_id,
         product_id=reservation.product_id,
         supplierinfo_id=reservation.supplierinfo_id,
+        categ_id=reservation.categ_id,
     )
 
 
@@ -89,6 +91,7 @@ def _reservation_from_model(
             product_template_id=record.product_template_id,
             product_id=record.product_id,
             supplierinfo_id=record.supplierinfo_id,
+            categ_id=record.categ_id,
         )
     except (ProductRemediationError, TypeError, ValueError) as exc:
         raise ProductRemediationDataIntegrityError("Persisted product remediation reservation is invalid.") from exc

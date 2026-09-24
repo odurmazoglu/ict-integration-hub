@@ -298,6 +298,29 @@ class ProductRemediationDataIntegrityError(ProductRemediationError):
     error_category = "product_remediation_data_integrity_error"
 
 
+class ProductRemediationCategoryError(ProductRemediationEligibilityError):
+    """Safe error raised when a CREATE_NEW_PRODUCT category is rejected before any Odoo write (P0-PROD-18E-2).
+
+    Covers a RESALE request without ``categ_id``, an empty RESALE allowlist, a
+    ``categ_id`` that is not exactly allowlisted, a storable RESALE product, a category
+    that does not exist in Odoo, a RESALE category without a valid configured purchase
+    account, and an ambiguous current-version purchase purpose.
+    """
+
+    error_category = "product_remediation_category_rejected"
+
+
+class ProductRemediationVerificationError(ProductRemediationError):
+    """Safe error raised when a product this workflow created fails post-create verification (P0-PROD-18E-2).
+
+    The Odoo product exists and its identity is persisted (``PRODUCT_CREATED``); it is
+    never created again. Supplierinfo is not linked while verification fails, and a
+    retry re-runs verification only.
+    """
+
+    error_category = "product_remediation_verification_failed"
+
+
 class OneOffVendorRetirementError(ApplicationError):
     """Safe base error for the ONE_OFF_VENDOR archive-last lifecycle (P0-PROD-08H)."""
 
