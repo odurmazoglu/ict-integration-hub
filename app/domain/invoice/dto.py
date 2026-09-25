@@ -68,10 +68,19 @@ class Discount:
     rate: Decimal | None = None
 
 
+# Provenance of ``InvoiceLine.description``: the parser falls back from UBL
+# ``cac:Item/cbc:Description`` to ``cac:Item/cbc:Name``.
+DESCRIPTION_SOURCE_DESCRIPTION = "Description"
+DESCRIPTION_SOURCE_NAME = "Name"
+
+
 @dataclass(frozen=True, slots=True)
 class InvoiceLine:
     line_number: str | None = None
     description: str | None = None
+    # DESCRIPTION_SOURCE_* when parsed from UBL; None for evidence persisted before
+    # P0-PROD-19A-2 (provenance unknown, so never treated as a UBL Description).
+    description_source: str | None = None
     seller_item_code: str | None = None
     buyer_item_code: str | None = None
     # True product barcode (UBL StandardItemIdentification) only; never a classification.

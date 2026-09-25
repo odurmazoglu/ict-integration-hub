@@ -1,6 +1,8 @@
 """Canonical internal invoice domain model and parser."""
 
 from app.domain.invoice.dto import (
+    DESCRIPTION_SOURCE_DESCRIPTION,
+    DESCRIPTION_SOURCE_NAME,
     Address,
     Attachment,
     Discount,
@@ -16,6 +18,8 @@ from app.domain.invoice.parser import parse_ubl_invoice
 from app.domain.invoice.validation import InvoiceValidationIssue, validate_invoice
 
 __all__ = [
+    "DESCRIPTION_SOURCE_DESCRIPTION",
+    "DESCRIPTION_SOURCE_NAME",
     "Address",
     "Attachment",
     "Discount",

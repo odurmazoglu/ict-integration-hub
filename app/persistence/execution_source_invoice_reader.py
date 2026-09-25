@@ -393,10 +393,10 @@ def _address_from_data(data: dict[str, Any]) -> Address:
 
 def _invoice_line_to_data(line: InvoiceLine) -> dict[str, Any]:
     data = _invoice_line_base_data(line)
-    # P0-PROD-19A-1: additive identity fields are written only when present, so evidence
+    # P0-PROD-19A-1/19A-2: additive identity fields are written only when present, so evidence
     # persisted before they existed deserializes and re-serializes byte-identically and
     # replay fingerprints of already-accepted decisions stay stable (schema_version 1).
-    for key in ("manufacturer_item_code", "commodity_classification"):
+    for key in ("description_source", "manufacturer_item_code", "commodity_classification"):
         value = getattr(line, key)
         if value is not None:
             data[key] = value
@@ -430,6 +430,7 @@ def _invoice_line_from_data(data: dict[str, Any]) -> InvoiceLine:
     return InvoiceLine(
         line_number=_optional_text(data.get("line_number")),
         description=_optional_text(data.get("description")),
+        description_source=_optional_text(data.get("description_source")),
         seller_item_code=_optional_text(data.get("seller_item_code")),
         buyer_item_code=_optional_text(data.get("buyer_item_code")),
         barcode=_optional_text(data.get("barcode")),
