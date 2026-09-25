@@ -20,7 +20,7 @@ Product matching consumes `InternalInvoice` and a `RepositoryProvider`. It does 
 Priority order:
 
 1. buyer item code -> ERP `default_code`
-2. barcode -> ERP barcode
+2. barcode (UBL `StandardItemIdentification` only) -> ERP barcode
 3. seller item code -> ERP `default_code`
 
 Behavior:
@@ -31,6 +31,24 @@ Behavior:
 - missing line identifier, missing deterministic identifiers, or repository failure: `INVALID_INPUT`
 
 The matcher does not use product name, description, fuzzy scoring, keyword search, or AI similarity.
+
+### UBL Item Identity Namespaces (P0-PROD-19A-1)
+
+The parser keeps each UBL item identifier in its own `InvoiceLine` field and never folds one namespace into another:
+
+| UBL element | `InvoiceLine` field | Meaning |
+| --- | --- | --- |
+| `BuyersItemIdentification/ID` | `buyer_item_code` | buyer's own code |
+| `SellersItemIdentification/ID` | `seller_item_code` | supplier/distributor code (e.g. VİTEL `1531012114`), not a manufacturer SKU |
+| `ManufacturersItemIdentification/ID` | `manufacturer_item_code` | manufacturer/vendor SKU; preserved, not yet a lookup key |
+| `StandardItemIdentification/ID` | `barcode` | true barcode only |
+| `CommodityClassification/ItemClassificationCode` | `commodity_classification` | classification (e.g. `Subscription`); never a barcode, never looked up |
+
+Before 19A-1, `CommodityClassification` was a fallback for `barcode`, so a classification such as `Subscription` could reach an Odoo barcode lookup. That fallback is removed.
+
+The operating-expense / RESALE routing predicates (`invoice_is_product_identifier_free`, `invoice_has_product_identifier`) still count `commodity_classification`, which keeps the routing boundary that existed before the fallback was removed. Changing that boundary is a separate business decision.
+
+Source evidence writes `manufacturer_item_code` and `commodity_classification` only when present (schema_version stays 1, no migration). Evidence persisted earlier round-trips byte-identically and keeps any stored `barcode` value verbatim.
 
 ## Supplier Partner Matching
 

@@ -1,0 +1,58 @@
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <!-- Synthetic regression fixture shaped after the VITEL ManageEngine invoice accepted in
+       P0-PROD-18K. Only the item identity structure is reproduced; amounts, UUID and the
+       buyer are fictitious. Line 2 is an invented control line exercising the UBL identity
+       elements that the real invoice does not carry. -->
+  <cbc:ProfileID>TICARIFATURA</cbc:ProfileID>
+  <cbc:ID>VTL2026000009999</cbc:ID>
+  <cbc:UUID>19a10000-0000-4000-8000-000000000001</cbc:UUID>
+  <cbc:IssueDate>2026-09-01</cbc:IssueDate>
+  <cbc:InvoiceTypeCode>SATIS</cbc:InvoiceTypeCode>
+  <cbc:DocumentCurrencyCode>TRY</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyIdentification><cbc:ID schemeID="VKN">9250020961</cbc:ID></cac:PartyIdentification>
+      <cac:PartyName><cbc:Name>VITEL TEST SUPPLIER</cbc:Name></cac:PartyName>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyIdentification><cbc:ID schemeID="VKN">1111111111</cbc:ID></cac:PartyIdentification>
+      <cac:PartyName><cbc:Name>Customer</cbc:Name></cac:PartyName>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="TRY">150.00</cbc:LineExtensionAmount>
+    <cbc:PayableAmount currencyID="TRY">180.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  <cac:InvoiceLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:Note>Annual subscription fee for 50 endpoints and Single User License</cbc:Note>
+    <cbc:InvoicedQuantity unitCode="C62">1</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="TRY">100.00</cbc:LineExtensionAmount>
+    <cac:Item>
+      <cbc:Description>85710.1S1</cbc:Description>
+      <cbc:Name>1531012114</cbc:Name>
+      <cbc:Keyword>ManageEngine Desktop Central Enterprise(Distributed) Edition- Subscription Model</cbc:Keyword>
+      <cbc:BrandName>MANAGE ENGINE</cbc:BrandName>
+      <cac:SellersItemIdentification><cbc:ID>1531012114</cbc:ID></cac:SellersItemIdentification>
+      <cac:CommodityClassification><cbc:ItemClassificationCode>Subscription</cbc:ItemClassificationCode></cac:CommodityClassification>
+    </cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="TRY">100.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>2</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="C62">1</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="TRY">50.00</cbc:LineExtensionAmount>
+    <cac:Item>
+      <cbc:Description>Control line</cbc:Description>
+      <cac:SellersItemIdentification><cbc:ID>SELLER-2</cbc:ID></cac:SellersItemIdentification>
+      <cac:ManufacturersItemIdentification><cbc:ID>85710.0MS5</cbc:ID></cac:ManufacturersItemIdentification>
+      <cac:StandardItemIdentification><cbc:ID>8690000000002</cbc:ID></cac:StandardItemIdentification>
+      <cac:CommodityClassification><cbc:ItemClassificationCode>License</cbc:ItemClassificationCode></cac:CommodityClassification>
+    </cac:Item>
+    <cac:Price><cbc:PriceAmount currencyID="TRY">50.00</cbc:PriceAmount></cac:Price>
+  </cac:InvoiceLine>
+</Invoice>

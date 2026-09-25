@@ -137,15 +137,9 @@ def _invoice_line(line: ElementTree.Element) -> InvoiceLine:
         description=_line_description(item),
         seller_item_code=_optional_text(item, "cac:SellersItemIdentification/cbc:ID"),
         buyer_item_code=_optional_text(item, "cac:BuyersItemIdentification/cbc:ID"),
-        barcode=_first_text(
-            item,
-            (
-                "cac:StandardItemIdentification/cbc:ID",
-                "cac:CommodityClassification/cbc:ItemClassificationCode",
-            ),
-        )
-        if item is not None
-        else None,
+        barcode=_optional_text(item, "cac:StandardItemIdentification/cbc:ID"),
+        manufacturer_item_code=_optional_text(item, "cac:ManufacturersItemIdentification/cbc:ID"),
+        commodity_classification=_optional_text(item, "cac:CommodityClassification/cbc:ItemClassificationCode"),
         quantity=_decimal_from_element(quantity, "Invoice/cac:InvoiceLine/cbc:InvoicedQuantity")
         if quantity is not None
         else None,
