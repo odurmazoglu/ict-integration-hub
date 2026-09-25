@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
+from typing import Protocol
 
 from app.application.commands import VendorBillWriteCommand
 from app.application.exceptions import ApplicationError
@@ -21,12 +23,24 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceError,
     ExecutionSourceInvoiceIntegrityError,
     ExecutionUnsupportedStepError,
+    ResaleExecutionAccountingError,
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
 from app.application.ports import VendorBillWriter
 from app.application.workbench.dto import LineResolution
-from app.billing import VendorBillBuilder
+from app.billing import ValidatedResaleLineAccount, VendorBillBuilder
 from app.billing.exceptions import VendorBillBuildError
+
+
+class ResaleExecutionAccountingCheck(Protocol):
+    """P0-PROD-18F-2 pre-write RESALE account safety (``ResaleExecutionAccountingValidator``).
+
+    ``None`` for a non-RESALE decision; otherwise one validated pinned account per line,
+    or a ``ResaleExecutionAccountingError``.
+    """
+
+    def validate(self, source: ExecutionSourceInvoice) -> Mapping[str, ValidatedResaleLineAccount] | None:
+        pass
 
 
 class VendorBillExecutionStrategy:
@@ -41,10 +55,14 @@ class VendorBillExecutionStrategy:
         source_invoice_reader: ExecutionSourceInvoiceReader,
         vendor_bill_builder: VendorBillBuilder,
         vendor_bill_writer: VendorBillWriter,
+        resale_accounting_check: ResaleExecutionAccountingCheck,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._vendor_bill_builder = vendor_bill_builder
         self._vendor_bill_writer = vendor_bill_writer
+        # Required, never defaulted: a composition that forgot it could otherwise send a
+        # RESALE product line to Odoo without its pinned account.
+        self._resale_accounting_check = resale_accounting_check
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -62,6 +80,16 @@ class VendorBillExecutionStrategy:
                 decision_version=request.decision_version,
             )
             _validate_source(request=request, source=source)
+            # P0-PROD-18F-2: RESALE drift + fiscal-position validation, before the build and
+            # therefore before the writer's first Odoo call. Runs on every attempt, so no
+            # retry or resume can skip it.
+            validated_resale_accounts = self._resale_accounting_check.validate(source)
+            # Only passed when present, so every non-RESALE build call is byte-identical to before.
+            resale_kwargs = (
+                {"validated_resale_accounts": validated_resale_accounts}
+                if validated_resale_accounts is not None
+                else {}
+            )
             account_only_line_numbers, explicit_account_only_accounts = account_only_line_resolution(
                 source.line_resolutions
             )
@@ -77,6 +105,7 @@ class VendorBillExecutionStrategy:
                 # ExecutionSourceInvoice.account_only_expense_match.
                 account_only_expense_match=source.account_only_expense_match,
                 explicit_account_only_accounts=explicit_account_only_accounts,
+                **resale_kwargs,
             )
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,
@@ -89,6 +118,8 @@ class VendorBillExecutionStrategy:
                 ),
             )
         except ExecutionSourceInvoiceError as exc:
+            return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
+        except ResaleExecutionAccountingError as exc:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
         except VendorBillBuildError as exc:
             return _failure_result(request, error_code="vendor_bill_build_error", message=exc.safe_message)

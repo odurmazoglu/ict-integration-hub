@@ -32,6 +32,10 @@ READ_ONLY_MODELS = frozenset(
         "res.currency",
         "account.journal",
         "account.account",
+        # P0-PROD-18F-2: read-only fiscal-position evidence proving a pinned RESALE
+        # account cannot be remapped before it is sent to Odoo.
+        "account.fiscal.position",
+        "account.fiscal.position.account",
     }
 )
 

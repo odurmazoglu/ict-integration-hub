@@ -4,14 +4,66 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
+# P0-PROD-18F-2: the one sanctioned way a product-backed line may also carry an
+# explicit account. Only ``issue_validated_resale_line_account`` can produce a
+# ``ValidatedResaleLineAccount`` (it holds the module-private seal), and only the
+# RESALE execution validator
+# (``app.application.execution.resale_execution_accounting``) calls it -- after the
+# immutable RESALE pin passed execution-time drift and fiscal-position checks. An
+# architecture test pins that single call site.
+_RESALE_LINE_ACCOUNT_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedResaleLineAccount:
+    """Proof that one RESALE line's explicit ``account_id`` is its immutable pinned account.
+
+    ``account_id`` is copied verbatim from the decision's RESALE accounting pin
+    (P0-PROD-18F-1); it is never taken from a request, an operator, or a fresh Odoo
+    read. A directly constructed (or ``dataclasses.replace``-d) instance is unsealed and
+    ``VendorBillLine`` rejects it -- see ``issue_validated_resale_line_account``.
+    """
+
+    line_number: str
+    product_id: int
+    account_id: int
+    _seal: object = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        _require_text(self.line_number, "line_number is required.")
+        _require_positive_int(self.product_id, "product_id must be a positive ERP id.")
+        _require_positive_int(self.account_id, "account_id must be a positive ERP account id.")
+
+    @property
+    def sealed(self) -> bool:
+        return self._seal is _RESALE_LINE_ACCOUNT_SEAL
+
+
+def issue_validated_resale_line_account(
+    *, line_number: str, product_id: int, account_id: int
+) -> ValidatedResaleLineAccount:
+    """Internal to the RESALE execution validator -- see ``_RESALE_LINE_ACCOUNT_SEAL``."""
+
+    issued = ValidatedResaleLineAccount(line_number=line_number, product_id=product_id, account_id=account_id)
+    object.__setattr__(issued, "_seal", _RESALE_LINE_ACCOUNT_SEAL)
+    return issued
+
 
 @dataclass(frozen=True, slots=True)
 class VendorBillLine:
     """One draft Vendor Bill line.
 
-    Exactly one accounting source is set: a matched ``product_id`` (Odoo derives
-    the expense account) or a pinned ``account_id`` for a deterministic operating
-    expense line with no product. ``product_id XOR account_id``.
+    Exactly one of three shapes:
+
+    * product line -- a matched ``product_id``; Odoo derives the expense account;
+    * account-only line -- a pinned ``account_id`` for a deterministic operating
+      expense line with no product;
+    * RESALE pinned product line (P0-PROD-18F-2) -- ``product_id`` *and* ``account_id``,
+      allowed only together with a ``resale_account`` proving the account is the
+      decision's immutable, execution-time-validated RESALE pin for this product.
+
+    ``product_id`` and ``account_id`` without ``resale_account`` stays rejected, so no
+    caller can attach an arbitrary account to a product-backed line.
 
     Carries no UoM of any kind (P0-PROD-10E): the source invoice's raw UN/CEFACT
     unit code is immutable source evidence, never an Odoo id, and must never be
@@ -28,8 +80,20 @@ class VendorBillLine:
     tax_ids: tuple[int, ...] = field(default_factory=tuple)
     description: str | None = None
     account_id: int | None = None
+    resale_account: ValidatedResaleLineAccount | None = None
 
     def __post_init__(self) -> None:
+        if self.resale_account is not None:
+            if not isinstance(self.resale_account, ValidatedResaleLineAccount) or not self.resale_account.sealed:
+                raise ValueError("resale_account must be issued by RESALE execution validation.")
+            _require_positive_int(self.product_id, "product_id must be a positive ERP id.")
+            _require_positive_int(self.account_id, "account_id must be a positive ERP account id.")
+            if (self.product_id, self.account_id) != (
+                self.resale_account.product_id,
+                self.resale_account.account_id,
+            ):
+                raise ValueError("A RESALE line's product and account must be exactly its validated pin.")
+            return
         product_set = self.product_id is not None
         account_set = self.account_id is not None
         if product_set == account_set:

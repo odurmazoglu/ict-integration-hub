@@ -59,6 +59,7 @@ from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEv
 from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRuntimeRepository
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK
 
 
 def test_vendor_bill_execution_strategy_supports_only_vendor_bill_and_modes() -> None:
@@ -673,6 +674,7 @@ def _strategy(
         source_invoice_reader=reader or RecordingSourceInvoiceReader(source=_source()),
         vendor_bill_builder=builder or RecordingVendorBillBuilder(),
         vendor_bill_writer=writer or RecordingVendorBillWriter(),
+        resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
     )
 
 
