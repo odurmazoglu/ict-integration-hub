@@ -207,7 +207,7 @@ class _FixedMatcher:
     def __init__(self, result) -> None:
         self._result = result
 
-    def match_invoice(self, invoice, *, company_id=None):
+    def match_invoice(self, invoice, *, company_id=None, partner_match=None):
         return self._result
 
     def map_invoice(self, invoice, *, company_id=None):

@@ -8,10 +8,13 @@ from app.domain.invoice import InternalInvoice, InvoiceLine
 from app.domain.invoice.source_profiles import profile_manufacturer_sku
 from app.erp.models import Product
 from app.erp.provider import RepositoryProvider
+from app.erp.repositories import SupplierProductRepository
 from app.matching.exceptions import ProductMatchingError
 from app.matching.result import (
     InvoiceProductLineResult,
     InvoiceProductMatchResult,
+    PartnerMatchResult,
+    PartnerMatchStatus,
     ProductMatchResult,
     ProductMatchStatus,
 )
@@ -19,23 +22,46 @@ from app.matching.result import (
 EXACT_MATCH_CONFIDENCE = Decimal("1.00")
 MATCHED_BY_MANUFACTURER_ITEM_CODE = "manufacturer_item_code"
 MATCHED_BY_SUPPLIER_PROFILE_SKU = "supplier_profile_sku"
+MATCHED_BY_SUPPLIER_PRODUCT_CODE = "supplier_product_code"
+# Two rows/variants are enough to prove ambiguity; reads never need to be larger.
+SUPPLIER_PRODUCT_LOOKUP_LIMIT = 2
 
 _Lookup = tuple[str, str | None, Callable[..., Sequence[Product]]]
 
 
 class ProductMatchingEngine:
-    def __init__(self, provider: RepositoryProvider) -> None:
-        self._provider = provider
+    """Deterministic product matcher.
 
-    def match_invoice(self, invoice: object, *, company_id: int | None = None) -> InvoiceProductMatchResult:
+    ``supplier_product_repository`` enables P0-PROD-19A-3 supplier-scoped matching through
+    ``product.supplierinfo``; without it (or without a uniquely MATCHED ``partner_match``)
+    supplierinfo never participates.
+    """
+
+    def __init__(
+        self,
+        provider: RepositoryProvider,
+        *,
+        supplier_product_repository: SupplierProductRepository | None = None,
+    ) -> None:
+        self._provider = provider
+        self._supplier_product_repository = supplier_product_repository
+
+    def match_invoice(
+        self,
+        invoice: object,
+        *,
+        company_id: int | None = None,
+        partner_match: PartnerMatchResult | None = None,
+    ) -> InvoiceProductMatchResult:
         if not isinstance(invoice, InternalInvoice):
             return InvoiceProductMatchResult(errors=("InternalInvoice DTO is required for product matching.",))
         if not invoice.lines:
             return InvoiceProductMatchResult(errors=("Invoice has no lines to match.",))
 
         line_results: list[InvoiceProductLineResult] = []
+        supplier_partner_id = _resolved_supplier_partner_id(partner_match)
         for line in invoice.lines:
-            result = self._match_line(invoice, line, company_id=company_id)
+            result = self._match_line(invoice, line, company_id=company_id, supplier_partner_id=supplier_partner_id)
             line_results.append(InvoiceProductLineResult(line_number=line.line_number, result=result))
         return InvoiceProductMatchResult(line_results=tuple(line_results))
 
@@ -45,6 +71,7 @@ class ProductMatchingEngine:
         line: InvoiceLine,
         *,
         company_id: int | None,
+        supplier_partner_id: int | None,
     ) -> ProductMatchResult:
         if line.line_number is None or not line.line_number.strip():
             return _result(
@@ -80,7 +107,70 @@ class ProductMatchingEngine:
             _lookup_outcome(matched_by, identifier, repository.find_by_default_code, company_id=company_id)
             for matched_by, identifier in sku_plan
         )
+        supplier_outcome = self._supplier_product_outcome(
+            _clean(line.seller_item_code),
+            supplier_partner_id=supplier_partner_id,
+            company_id=company_id,
+        )
+        if supplier_outcome is not None:
+            outcomes.append(supplier_outcome)
         return _combined_result(line, tuple(outcomes))
+
+    def _supplier_product_outcome(
+        self,
+        seller_item_code: str | None,
+        *,
+        supplier_partner_id: int | None,
+        company_id: int | None,
+    ) -> _IdentityOutcome | None:
+        """``(resolved supplier, seller_item_code) -> product.supplierinfo -> one variant``.
+
+        Participates only with a repository, a seller code, a uniquely resolved supplier
+        partner and a company. Exactly one supplierinfo row is required; a row naming a
+        variant identifies that variant; a template-level row identifies a variant only
+        when the template has exactly one active variant in scope. Anything else is
+        ambiguous (more than one) or absent (none) -- never a guessed variant.
+        """
+
+        repository = self._supplier_product_repository
+        if (
+            repository is None
+            or seller_item_code is None
+            or supplier_partner_id is None
+            or type(company_id) is not int
+            or company_id <= 0
+        ):
+            return None
+        try:
+            rows = repository.find_supplier_product_codes(
+                partner_id=supplier_partner_id,
+                product_code=seller_item_code,
+                company_id=company_id,
+                limit=SUPPLIER_PRODUCT_LOOKUP_LIMIT,
+            )
+            if len(rows) != 1:
+                return _IdentityOutcome(matched_by=MATCHED_BY_SUPPLIER_PRODUCT_CODE, candidate_count=len(rows))
+            variants = repository.find_template_variants(
+                product_tmpl_id=rows[0].product_tmpl_id,
+                company_id=company_id,
+                variant_id=rows[0].product_id,
+                limit=SUPPLIER_PRODUCT_LOOKUP_LIMIT,
+            )
+        except Exception as exc:
+            raise ProductMatchingError("Supplier product repository lookup failed.") from exc
+        active_variants = tuple(variant for variant in variants if variant.active)
+        return _IdentityOutcome(
+            matched_by=MATCHED_BY_SUPPLIER_PRODUCT_CODE,
+            product_id=active_variants[0].id if len(active_variants) == 1 else None,
+            candidate_count=len(active_variants),
+        )
+
+
+def _resolved_supplier_partner_id(partner_match: PartnerMatchResult | None) -> int | None:
+    if not isinstance(partner_match, PartnerMatchResult) or partner_match.status is not PartnerMatchStatus.MATCHED:
+        return None
+    partner_id = partner_match.partner_id
+    return partner_id if type(partner_id) is int and partner_id > 0 else None
 
 
 @dataclass(frozen=True, slots=True)

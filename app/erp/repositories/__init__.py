@@ -2,6 +2,7 @@ from app.erp.repositories.company import CompanyRepository
 from app.erp.repositories.currency import CurrencyRepository
 from app.erp.repositories.partner import PartnerRepository
 from app.erp.repositories.product import ProductRepository
+from app.erp.repositories.supplier_product import SupplierProductRepository
 from app.erp.repositories.tax import TaxRepository
 
 __all__ = [
@@ -9,5 +10,6 @@ __all__ = [
     "CurrencyRepository",
     "PartnerRepository",
     "ProductRepository",
+    "SupplierProductRepository",
     "TaxRepository",
 ]

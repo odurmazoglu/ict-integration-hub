@@ -233,7 +233,7 @@ class _FakeMatcher:
         self.result = result
         self.calls: list[tuple[object, int | None]] = []
 
-    def match_invoice(self, invoice: object, *, company_id: int | None = None) -> object:
+    def match_invoice(self, invoice: object, *, company_id: int | None = None, partner_match: object = None) -> object:
         self.calls.append((invoice, company_id))
         return self.result
 

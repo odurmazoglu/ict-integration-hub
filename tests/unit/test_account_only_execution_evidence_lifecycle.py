@@ -128,7 +128,7 @@ class _MatchingFacts:
     def __init__(self, result) -> None:
         self.result = result
 
-    def match_invoice(self, invoice: InternalInvoice, *, company_id: int):
+    def match_invoice(self, invoice: InternalInvoice, *, company_id: int, partner_match: object = None):
         return self.result
 
     def map_invoice(self, invoice: InternalInvoice, *, company_id: int):

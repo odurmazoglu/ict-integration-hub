@@ -67,7 +67,13 @@ class PartnerMatcher(Protocol):
 
 
 class ProductMatcher(Protocol):
-    def match_invoice(self, invoice: InternalInvoice, *, company_id: int | None = None) -> InvoiceProductMatchResult:
+    def match_invoice(
+        self,
+        invoice: InternalInvoice,
+        *,
+        company_id: int | None = None,
+        partner_match: PartnerMatchResult | None = None,
+    ) -> InvoiceProductMatchResult:
         pass
 
 
@@ -101,7 +107,7 @@ class DeterministicRuleEngine:
     def evaluate(self, command: ImportInvoiceCommand) -> RuleEvaluationResult:
         invoice = _invoice(command)
         partner_match = _evaluate_partner(self._partner_matcher, invoice, command.company_id)
-        product_match = _evaluate_products(self._product_matcher, invoice, command.company_id)
+        product_match = _evaluate_products(self._product_matcher, invoice, command.company_id, partner_match)
         tax_match = _evaluate_taxes(self._tax_mapper, invoice, command.company_id)
         operating_expense_match = _evaluate_operating_expense(
             self._operating_expense_matcher,
@@ -183,9 +189,10 @@ def _evaluate_products(
     matcher: ProductMatcher,
     invoice: InternalInvoice,
     company_id: int | None,
+    partner_match: PartnerMatchResult,
 ) -> InvoiceProductMatchResult:
     try:
-        return matcher.match_invoice(invoice, company_id=company_id)
+        return matcher.match_invoice(invoice, company_id=company_id, partner_match=partner_match)
     except ApplicationError:
         raise
     except Exception as exc:
