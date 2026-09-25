@@ -7,6 +7,8 @@ from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree
 
 from app.domain.invoice.dto import (
+    DESCRIPTION_SOURCE_DESCRIPTION,
+    DESCRIPTION_SOURCE_NAME,
     Address,
     Attachment,
     Discount,
@@ -132,9 +134,11 @@ def _monetary_totals(total: ElementTree.Element | None) -> MonetaryTotals:
 def _invoice_line(line: ElementTree.Element) -> InvoiceLine:
     quantity = line.find("cbc:InvoicedQuantity", NS)
     item = line.find("cac:Item", NS)
+    description, description_source = _line_description(item)
     return InvoiceLine(
         line_number=_optional_text(line, "cbc:ID"),
-        description=_line_description(item),
+        description=description,
+        description_source=description_source,
         seller_item_code=_optional_text(item, "cac:SellersItemIdentification/cbc:ID"),
         buyer_item_code=_optional_text(item, "cac:BuyersItemIdentification/cbc:ID"),
         barcode=_optional_text(item, "cac:StandardItemIdentification/cbc:ID"),
@@ -151,10 +155,16 @@ def _invoice_line(line: ElementTree.Element) -> InvoiceLine:
     )
 
 
-def _line_description(item: ElementTree.Element | None) -> str | None:
-    if item is None:
-        return None
-    return _optional_text(item, "cbc:Description") or _optional_text(item, "cbc:Name")
+def _line_description(item: ElementTree.Element | None) -> tuple[str | None, str | None]:
+    """Line description with its provenance (``cbc:Description``, else ``cbc:Name``)."""
+
+    description = _optional_text(item, "cbc:Description")
+    if description is not None:
+        return description, DESCRIPTION_SOURCE_DESCRIPTION
+    name = _optional_text(item, "cbc:Name")
+    if name is not None:
+        return name, DESCRIPTION_SOURCE_NAME
+    return None, None
 
 
 def _discount(element: ElementTree.Element) -> Discount:

@@ -134,7 +134,7 @@ def test_new_identity_fields_are_immutable_and_default_to_none() -> None:
         line.commodity_classification = "x"  # type: ignore[misc]
 
 
-# --- matcher (unchanged engine, corrected input) -----------------------------------
+# --- matcher (corrected input; 19A-2 adds manufacturer SKU lookups) ----------------
 
 
 def test_vitel_line_never_performs_a_subscription_barcode_lookup() -> None:
@@ -145,10 +145,8 @@ def test_vitel_line_never_performs_a_subscription_barcode_lookup() -> None:
 
     assert ("barcode", "Subscription") not in repository.calls
     assert all(kind != "barcode" for kind, _ in repository.calls)
-    # 19A-1 does not yet resolve the ManageEngine SKU (that is 19A-2): the only lookup is the
-    # pre-existing generic seller-code probe, and the Description is never used.
-    assert repository.calls == [("default_code", VITEL_SELLER_CODE)]
-    assert ("default_code", MANAGEENGINE_SKU) not in repository.calls
+    # 19A-2: the pre-existing seller-code probe, then the VİTEL whole-field Description SKU.
+    assert repository.calls == [("default_code", VITEL_SELLER_CODE), ("default_code", MANAGEENGINE_SKU)]
     line_result = result.line_results[0].result
     assert line_result.status is ProductMatchStatus.NOT_FOUND
     assert line_result.barcode is None
@@ -164,7 +162,7 @@ def test_classification_only_line_is_not_a_matchable_identifier() -> None:
     assert result.line_results[0].result.status is ProductMatchStatus.INVALID_INPUT
 
 
-def test_manufacturer_item_code_is_not_yet_a_lookup_key() -> None:
+def test_manufacturer_item_code_is_a_default_code_lookup_key_since_19a_2() -> None:
     repository = RecordingProductRepository(
         {"85710.0MS5": [Product(id=392, name="ME", default_code="85710.0MS5", barcode=None, active=True)]}
     )
@@ -172,8 +170,9 @@ def test_manufacturer_item_code_is_not_yet_a_lookup_key() -> None:
 
     result = ProductMatchingEngine(FakeProvider(repository)).match_invoice(_invoice([line]))
 
-    assert repository.calls == []
-    assert result.line_results[0].result.status is ProductMatchStatus.INVALID_INPUT
+    assert repository.calls == [("default_code", "85710.0MS5")]
+    assert result.line_results[0].result.status is ProductMatchStatus.MATCHED
+    assert result.line_results[0].result.product_id == 392
 
 
 # --- source evidence compatibility --------------------------------------------------
@@ -217,9 +216,11 @@ def test_legacy_evidence_round_trips_byte_identically() -> None:
 
 
 def _pre_19a_line_has_identifier(line: InvoiceLine, standard_id: str | None, classification: str | None) -> bool:
+    # Pre-19A boundary plus the manufacturer SKU, which 19A-2 made a lookup key.
     legacy_barcode = standard_id or classification
     return any(
-        value is not None and value.strip() for value in (line.buyer_item_code, line.seller_item_code, legacy_barcode)
+        value is not None and value.strip()
+        for value in (line.buyer_item_code, line.seller_item_code, legacy_barcode, line.manufacturer_item_code)
     )
 
 
