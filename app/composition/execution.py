@@ -22,16 +22,22 @@ from app.application.execution import (
     WorkbenchVendorBillExecutionWorkflow,
 )
 from app.application.execution.contracts import ExecutionStepType
+from app.application.execution.resale_execution_accounting import ResaleExecutionAccountingValidator
 from app.application.execution.vendor_bill_preview import PreviewVendorBillUseCase
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
-from app.application.workbench.vendor_bill_readback import GetVendorBillReadbackUseCase
+from app.application.workbench.vendor_bill_readback import (
+    GetVendorBillReadbackUseCase,
+    VendorBillResaleReadbackVerifier,
+)
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
+from app.composition.purchase_account_discovery import build_get_product_purchase_account_use_case
 from app.composition.supplier_remediation import build_archive_one_off_vendor_use_case
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.account_move_line_verification_reader import OdooAccountMoveLineVerificationReader
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
+from app.erp.odoo.fiscal_position_reader import OdooFiscalPositionReader
 from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
 from app.erp.odoo.vendor_bill_header_verification_reader import OdooVendorBillHeaderVerificationReader
 from app.erp.odoo.vendor_bill_preview_currency_reader import OdooVendorBillPreviewCurrencyReader
@@ -79,7 +85,8 @@ def build_vendor_bill_execution_use_case(
     runtime_repository = SqlAlchemyExecutionRuntimeRepository(session)
     source_invoice_reader = SqlAlchemyExecutionSourceInvoiceReader(session)
     accepted_billing_reader = SqlAlchemyAcceptedBillingEvidenceReader(session)
-    account_move_repository = AccountMoveRepository(client=odoo_client or OdooJson2Client.from_settings(settings))
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    account_move_repository = AccountMoveRepository(client=resolved_odoo_client)
     vendor_bill_policy = OdooVendorBillWritePolicy.from_settings(settings)
     staging_vendor_bill_execute = vendor_bill_policy.staging_write_sanctioned
     customer_invoice_policy = OdooCustomerInvoiceWritePolicy.from_settings(settings)
@@ -95,6 +102,11 @@ def build_vendor_bill_execution_use_case(
         source_invoice_reader=source_invoice_reader,
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,
+        resale_accounting_check=build_resale_execution_accounting_validator(
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
+        ),
     )
     purchase_order_vendor_bill_repository = PurchaseOrderVendorBillRepository(
         client=odoo_client or OdooJson2Client.from_settings(settings),
@@ -155,6 +167,32 @@ def build_vendor_bill_execution_use_case(
         accepted_billing_evidence_reader=accepted_billing_reader,
         one_off_vendor_retirement_trigger=retirement_trigger,
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
+    )
+
+
+def build_resale_execution_accounting_validator(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client,
+) -> ResaleExecutionAccountingValidator:
+    """Compose the P0-PROD-18F-2 pre-write RESALE account safety check.
+
+    The pin and purchase purpose come from Hub persistence; current accounting
+    configuration from P0-PROD-18D's read-only discovery (same use case as the 18E-1B
+    decision gate); fiscal positions from a metadata-guarded read-only reader. The
+    allowlist comes only from ``RESALE_PRODUCT_CATEGORY_IDS``. Nothing here can write.
+    """
+
+    return ResaleExecutionAccountingValidator(
+        pin_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
+        purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
+        product_account_resolver=build_get_product_purchase_account_use_case(
+            settings=settings,
+            odoo_client=odoo_client,
+        ),
+        fiscal_position_reader=OdooFiscalPositionReader(adapter=OdooReadOnlyAdapter(client=odoo_client)),
+        approved_category_ids=settings.resale_product_category_ids,
     )
 
 
@@ -333,6 +371,12 @@ def build_get_vendor_bill_readback_use_case(
         execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(session),
         header_reader=OdooVendorBillHeaderVerificationReader(adapter=adapter),
         line_reader=OdooAccountMoveLineVerificationReader(adapter=adapter),
+        # P0-PROD-18F-2: RESALE bills are also checked against their immutable pin.
+        resale_verifier=VendorBillResaleReadbackVerifier(
+            pin_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
+            purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
+            fiscal_position_reader=OdooFiscalPositionReader(adapter=adapter),
+        ),
     )
 
 

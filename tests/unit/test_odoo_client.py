@@ -18,8 +18,9 @@ def test_read_only_models_allowlist_includes_account_move_line_not_uom_uom() -> 
     assert "uom.uom" not in READ_ONLY_MODELS
 
 
-def test_read_only_models_allowlist_is_exact_and_adds_only_product_category_for_18d() -> None:
-    """P0-PROD-18D adds product.category (read-only) and nothing else."""
+def test_read_only_models_allowlist_is_exact() -> None:
+    """P0-PROD-18D adds product.category; P0-PROD-18F-2 adds only the two read-only
+    fiscal-position models needed to prove a pinned RESALE account is not remapped."""
     assert READ_ONLY_MODELS == frozenset(
         {
             "account.move",
@@ -37,9 +38,11 @@ def test_read_only_models_allowlist_is_exact_and_adds_only_product_category_for_
             "res.currency",
             "account.journal",
             "account.account",
+            "account.fiscal.position",
+            "account.fiscal.position.account",
         }
     )
-    for not_allowed in ("account.fiscal.position", "ir.property", "stock.valuation.layer", "uom.uom"):
+    for not_allowed in ("account.fiscal.position.tax", "ir.property", "stock.valuation.layer", "uom.uom"):
         assert not_allowed not in READ_ONLY_MODELS
 
 

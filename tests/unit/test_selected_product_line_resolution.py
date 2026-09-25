@@ -73,6 +73,7 @@ from app.models.workbench_review_item import WorkbenchReviewItem
 from app.persistence import SqlAlchemyExecutionSourceInvoiceReader, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK
 
 COMPANY_ID = 1
 SELLER_ITEM_CODE = "HBV000006MHLQ"
@@ -532,6 +533,7 @@ def test_k_persist_and_reload_preserves_the_human_selection(session: Session) ->
         source_invoice_reader=_StaticReader(),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=_NoWriteWriter(),
+        resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
     ).execute(
         ExecutionStepRequest(
             execution_id="execution-1",

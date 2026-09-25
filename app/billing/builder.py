@@ -8,6 +8,7 @@ from app.billing.dto import (
     CustomerInvoice,
     CustomerInvoiceBillingInstruction,
     CustomerInvoiceLine,
+    ValidatedResaleLineAccount,
     VendorBill,
     VendorBillLine,
 )
@@ -38,6 +39,7 @@ class VendorBillBuilder:
         account_only_line_numbers: frozenset[str] = frozenset(),
         account_only_expense_match: OperatingExpenseMatchResult | None = None,
         explicit_account_only_accounts: dict[str, int] | None = None,
+        validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
     ) -> VendorBill:
         """Build a deterministic Vendor Bill.
 
@@ -55,6 +57,13 @@ class VendorBillBuilder:
         for account-only lines with no explicit account of their own (the legacy
         whole-vendor ``OperatingExpenseMappingRecord`` flow, unchanged). Omitting it
         entirely reproduces the pre-08G behavior exactly.
+
+        ``validated_resale_accounts`` (P0-PROD-18F-2) is ``{line_number:
+        ValidatedResaleLineAccount}`` for a RESALE decision whose immutable accounting
+        pin passed execution-time validation. It must cover every line, each line must
+        be product-backed by exactly the validated product, and each such line carries
+        the pinned ``account_id`` alongside ``product_id``. Omitting it (every
+        non-RESALE caller) reproduces the pre-18F-2 behavior exactly.
         """
 
         validation = validate_vendor_bill_inputs(
@@ -67,6 +76,7 @@ class VendorBillBuilder:
             account_only_line_numbers=account_only_line_numbers,
             account_only_expense_match=account_only_expense_match,
             explicit_account_only_accounts=explicit_account_only_accounts,
+            validated_resale_accounts=validated_resale_accounts,
         )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
@@ -87,10 +97,16 @@ class VendorBillBuilder:
             resolved_account_only_account_ids = _resolved_account_only_account_ids(
                 account_only_line_numbers, account_only_expense_match, explicit_account_only_accounts
             )
+            resale_accounts = validated_resale_accounts or {}
             invoice_lines = tuple(
                 _expense_vendor_bill_line(line, resolved_account_only_account_ids[line.line_number], tax_ids_by_line)
                 if line.line_number in resolved_account_only_account_ids
-                else _vendor_bill_line(line, product_by_line[line.line_number], tax_ids_by_line)
+                else _vendor_bill_line(
+                    line,
+                    product_by_line[line.line_number],
+                    tax_ids_by_line,
+                    resale_account=resale_accounts.get(line.line_number),
+                )
                 for line in invoice.lines
             )
         return VendorBill(
@@ -183,6 +199,7 @@ def validate_vendor_bill_inputs(
     account_only_line_numbers: frozenset[str] = frozenset(),
     account_only_expense_match: object | None = None,
     explicit_account_only_accounts: dict[str, int] | None = None,
+    validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
 ) -> VendorBillValidationResult:
     """Validate deterministic Vendor Bill inputs.
 
@@ -264,7 +281,48 @@ def validate_vendor_bill_inputs(
     if not errors and any(line.discounts for line in invoice.lines):
         errors.extend(_totals_invariant_errors(invoice))
 
+    if validated_resale_accounts is not None:
+        errors.extend(
+            _resale_account_errors(
+                invoice,
+                validated_resale_accounts,
+                expense_mode=expense_mode,
+                account_only_line_numbers=account_only_line_numbers,
+                product_by_line=product_by_line,
+            )
+        )
+
     return validation_result(errors)
+
+
+def _resale_account_errors(
+    invoice: InternalInvoice,
+    validated_resale_accounts: object,
+    *,
+    expense_mode: bool,
+    account_only_line_numbers: frozenset[str],
+    product_by_line: dict[str | None, Any],
+) -> list[str]:
+    """P0-PROD-18F-2: a RESALE bill is product-backed on every line, each line carrying
+    exactly the product its validated pin names. Anything else fails the build closed."""
+
+    if not isinstance(validated_resale_accounts, Mapping) or not validated_resale_accounts:
+        return ["RESALE validated accounts must be a non-empty mapping."]
+    if expense_mode or account_only_line_numbers:
+        return ["RESALE lines cannot be account-only or operating-expense lines."]
+    if set(validated_resale_accounts) != {line.line_number for line in invoice.lines}:
+        return ["RESALE validated accounts must cover exactly every invoice line."]
+    errors: list[str] = []
+    for line_number, resale_account in validated_resale_accounts.items():
+        if not isinstance(resale_account, ValidatedResaleLineAccount) or not resale_account.sealed:
+            errors.append(f"RESALE account for line {line_number} was not issued by RESALE validation.")
+            continue
+        product_result = product_by_line.get(line_number)
+        if resale_account.line_number != line_number or product_result is None:
+            errors.append(f"RESALE account for line {line_number} does not match the line.")
+        elif product_result.product_id != resale_account.product_id:
+            errors.append(f"RESALE account for line {line_number} names a different product.")
+    return errors
 
 
 def _operating_expense_mode(invoice: InternalInvoice, operating_expense_match: object | None) -> bool:
@@ -404,8 +462,25 @@ def to_odoo_customer_invoice_payload(
 
 
 def _line_payload(line: VendorBillLine, product_uom_ids: Mapping[int, int]) -> dict[str, Any]:
+    if line.resale_account is not None:
+        return _resale_product_line_payload(line, product_uom_ids)
     if line.account_id is not None:
         return _operating_expense_line_payload(line)
+    return _product_line_payload(line, product_uom_ids)
+
+
+def _resale_product_line_payload(line: VendorBillLine, product_uom_ids: Mapping[int, int]) -> dict[str, Any]:
+    """P0-PROD-18F-2: the ordinary product-line payload plus the explicit, immutable
+    pinned RESALE account -- quantity/price/tax/UoM handling is exactly the product
+    line's. ``VendorBillLine`` has already proven the account is the validated pin."""
+
+    assert line.resale_account is not None
+    payload = _product_line_payload(line, product_uom_ids)
+    payload["account_id"] = line.resale_account.account_id
+    return payload
+
+
+def _product_line_payload(line: VendorBillLine, product_uom_ids: Mapping[int, int]) -> dict[str, Any]:
     # P0-PROD-10E: the source invoice's raw UN/CEFACT unit code (e.g. "C62") must
     # never reach this payload -- Odoo's product_uom_id is a many2one integer id,
     # never an external unit-code string. product_uom_ids is resolved read-only
@@ -455,11 +530,23 @@ def _vendor_bill_line(
     line: InvoiceLine,
     product_result: Any,
     tax_ids_by_line: dict[tuple[str | None, int], int],
+    *,
+    resale_account: ValidatedResaleLineAccount | None = None,
 ) -> VendorBillLine:
     assert product_result.product_id is not None
     assert line.quantity is not None
     assert line.unit_price is not None
     tax_ids = tuple(tax_ids_by_line[(line.line_number, tax_index)] for tax_index, _tax in enumerate(line.taxes))
+    if resale_account is not None:
+        return VendorBillLine(
+            product_id=product_result.product_id,
+            account_id=resale_account.account_id,
+            resale_account=resale_account,
+            quantity=line.quantity,
+            unit_price=_net_unit_price(line),
+            tax_ids=tax_ids,
+            description=line.description,
+        )
     return VendorBillLine(
         product_id=product_result.product_id,
         quantity=line.quantity,

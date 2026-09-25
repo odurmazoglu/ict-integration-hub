@@ -79,6 +79,16 @@ class ExecutionPreviewResaleAccountingError(ExecutionError):
     error_category = "execution_preview_resale_accounting_error"
 
 
+class ResaleExecutionAccountingError(ExecutionError):
+    """Safe error raised when a RESALE Vendor Bill decision's immutable accounting pin
+    cannot be proven safe to send to Odoo (P0-PROD-18F-2): the pin is missing, corrupt or
+    inconsistent, Odoo's accounting configuration drifted from it, or a fiscal position
+    could remap the pinned account. Raised before any Odoo Vendor Bill write; the pin is
+    never updated -- the operator must accept a new decision."""
+
+    error_category = "resale_execution_accounting_error"
+
+
 class ExecutionSourceInvoiceError(ExecutionError):
     """Safe error raised when authoritative source invoice evidence cannot be used."""
 

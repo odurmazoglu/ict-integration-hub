@@ -354,8 +354,9 @@ def test_preview_shows_the_pin_not_current_odoo_configuration(session: Session) 
         accounting_source=ResaleAccountingSource.RESALE_PRODUCT_CATEGORY,
         fiscal_position_mapping=FiscalPositionMapping.NOT_EVALUATED,
     )
-    # What EXECUTE sends is unchanged: 18F-1 never puts the pinned account on the bill line.
-    assert preview.lines[0].account_id is None
+    # P0-PROD-18F-2: EXECUTE sends the pinned account, so preview shows it -- from the pin,
+    # not from "Odoo"'s current account B.
+    assert preview.lines[0].account_id == ACCOUNT_A[0]
     assert preview.lines[0].product_id == PRODUCT_A
 
 
@@ -523,7 +524,10 @@ def test_preview_composition_wires_hub_only_pin_reader() -> None:
 # =========================================================================== execution boundary
 
 
-def test_execution_builder_payload_is_unchanged_for_a_pinned_resale_decision(session: Session) -> None:
+def test_builder_without_validated_resale_accounts_still_derives_no_account(session: Session) -> None:
+    """The pin alone never reaches a bill line: only 18F-2's execution-time validation
+    (``validated_resale_accounts``) can add the account -- see test_p0_prod_18f_2."""
+
     _seed_review(session)
     _accept_resale(session, _FakeProductAccountResolver({PRODUCT_A: _resolution(PRODUCT_A, ACCOUNT_A)}))
     source = SqlAlchemyExecutionSourceInvoiceReader(session).get_source_invoice(
@@ -532,20 +536,15 @@ def test_execution_builder_payload_is_unchanged_for_a_pinned_resale_decision(ses
     bill = VendorBillBuilder().build(
         source.invoice, source.partner_match, source.product_match, source.tax_match, company_id=COMPANY_ID
     )
-    # Odoo still derives the line account itself; the pinned account is not sent (18F-2).
     assert [(line.product_id, line.account_id) for line in bill.invoice_lines] == [(PRODUCT_A, None)]
     assert not any("resale" in field.name for field in dataclasses.fields(type(source)))
 
 
-def test_execution_builder_strategy_and_readback_never_reference_the_pin() -> None:
-    import app.application.execution.vendor_bill_strategy as strategy
+def test_builder_never_reads_the_pin_itself() -> None:
     import app.billing.builder as builder
 
-    for module in (strategy, builder):
-        assert "resale_accounting" not in pyinspect.getsource(module)
-    readback_dir = Path("app/application/execution")
-    for path in readback_dir.glob("*readback*.py"):
-        assert "resale_accounting" not in path.read_text(encoding="utf-8")
+    assert "resale_accounting_pin" not in pyinspect.getsource(builder)
+    assert "ResaleAccountingPin" not in pyinspect.getsource(builder)
 
 
 # =========================================================================== pin contract

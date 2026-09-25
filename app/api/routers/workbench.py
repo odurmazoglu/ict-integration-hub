@@ -162,6 +162,7 @@ from app.application.workbench.vendor_bill_readback import (
     VendorBillReadbackIntegrityError,
     VendorBillReadbackNotFoundError,
     VendorBillReadbackUnavailableError,
+    VendorBillResaleReadbackVerification,
 )
 from app.application.workbench.write_authorization import (
     WriteAuthorizationAlreadyConsumedError,
@@ -232,6 +233,8 @@ from app.schemas.workbench import (
     VendorBillReadbackEnvelope,
     VendorBillReadbackLineResponse,
     VendorBillReadbackResponse,
+    VendorBillResaleReadbackLineResponse,
+    VendorBillResaleReadbackResponse,
     WorkbenchDecisionIngestionCandidateResponse,
     WorkbenchDecisionIngestionEnvelope,
     WorkbenchDecisionIngestionResponse,
@@ -1476,6 +1479,32 @@ def _vendor_bill_readback_response(readback: VendorBillReadback) -> VendorBillRe
             )
             for line in readback.lines
         ],
+        resale_verification=_resale_readback_response(readback.resale_verification),
+    )
+
+
+def _resale_readback_response(
+    verification: VendorBillResaleReadbackVerification | None,
+) -> VendorBillResaleReadbackResponse | None:
+    if verification is None:
+        return None
+    return VendorBillResaleReadbackResponse(
+        status=verification.status.value,
+        pin_review_version=verification.pin_review_version,
+        fiscal_position_supported=verification.fiscal_position_supported,
+        fiscal_position_id=verification.fiscal_position_id,
+        lines=[
+            VendorBillResaleReadbackLineResponse(
+                line_id=line.line_id,
+                product_id=line.product_id,
+                account_id=line.account_id,
+                expected_account_id=line.expected_account_id,
+                product_matches=line.product_matches,
+                account_matches=line.account_matches,
+            )
+            for line in verification.lines
+        ],
+        mismatches=list(verification.mismatches),
     )
 
 

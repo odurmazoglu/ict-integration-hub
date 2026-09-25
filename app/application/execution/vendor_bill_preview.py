@@ -25,9 +25,13 @@ P0-PROD-18F-1: for a decision accepted under a RESALE purchase purpose, each lin
 shows the RESALE accounting pinned *at decision acceptance* (``resale_accounting``) --
 loaded from Hub persistence only, never from Odoo's current accounting configuration,
 so it stays stable if Odoo changes later. A RESALE decision without a valid pin fails
-closed. ``account_id`` is untouched: it still shows exactly what EXECUTE sends, and
-EXECUTE does not send the pinned account yet (P0-PROD-18F-2). Do not execute a real
-RESALE Vendor Bill until 18F-2.
+closed.
+
+P0-PROD-18F-2: EXECUTE now sends the pinned account explicitly on each RESALE product
+line, so a RESALE line's ``account_id`` shows that pinned account (still read only from
+the pin). EXECUTE sends it only after its own pre-write drift and fiscal-position
+checks pass -- preview does not run those Odoo reads; if they fail, EXECUTE fails
+closed and creates nothing.
 """
 
 from __future__ import annotations
@@ -321,7 +325,9 @@ class PreviewVendorBillUseCase:
                 description=bill_line.description,
                 quantity=bill_line.quantity,
                 unit_price=bill_line.unit_price,
-                account_id=bill_line.account_id,
+                account_id=_preview_account_id(
+                    bill_line.account_id, resale_accounting_by_line.get(source_line.line_number)
+                ),
                 product_id=bill_line.product_id,
                 tax_ids=bill_line.tax_ids,
                 product_uom_id=product_uom_ids.get(bill_line.product_id) if bill_line.product_id is not None else None,
@@ -431,6 +437,14 @@ class PreviewVendorBillUseCase:
                 "More than one purchase purpose exists for the decision version."
             )
         return bool(current) and current[0].purchase_purpose is PurchasePurpose.RESALE
+
+
+def _preview_account_id(
+    bill_account_id: int | None, resale_accounting: VendorBillPreviewResaleAccounting | None
+) -> int | None:
+    """The account EXECUTE sends: a RESALE line's pinned account (P0-PROD-18F-2), else the bill's."""
+
+    return resale_accounting.account_id if resale_accounting is not None else bill_account_id
 
 
 def _require_text(value: str | None, message: str) -> None:

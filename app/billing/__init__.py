@@ -15,8 +15,10 @@ from app.billing.dto import (
     CustomerInvoiceBillingInstruction,
     CustomerInvoiceBillingLine,
     CustomerInvoiceLine,
+    ValidatedResaleLineAccount,
     VendorBill,
     VendorBillLine,
+    issue_validated_resale_line_account,
 )
 from app.billing.exceptions import CustomerInvoiceBuildError, VendorBillBuildError
 
@@ -27,10 +29,12 @@ __all__ = [
     "CustomerInvoiceBuildError",
     "CustomerInvoiceBuilder",
     "CustomerInvoiceLine",
+    "ValidatedResaleLineAccount",
     "VendorBill",
     "VendorBillBuildError",
     "VendorBillBuilder",
     "VendorBillLine",
+    "issue_validated_resale_line_account",
     "line_gross_total",
     "line_net_total",
     "line_total_discount",

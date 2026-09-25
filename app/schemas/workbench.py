@@ -707,6 +707,30 @@ class VendorBillReadbackLineResponse(BaseModel):
     price_total: str
 
 
+class VendorBillResaleReadbackLineResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_id: int
+    product_id: int | None
+    account_id: int | None
+    expected_account_id: int | None
+    product_matches: bool
+    account_matches: bool
+
+
+class VendorBillResaleReadbackResponse(BaseModel):
+    """P0-PROD-18F-2: a RESALE bill verified against its decision's immutable pin."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    pin_review_version: int
+    fiscal_position_supported: bool
+    fiscal_position_id: int | None
+    lines: list[VendorBillResaleReadbackLineResponse]
+    mismatches: list[str]
+
+
 class VendorBillReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -722,6 +746,8 @@ class VendorBillReadbackResponse(BaseModel):
     amount_tax: str
     amount_total: str
     lines: list[VendorBillReadbackLineResponse]
+    # P0-PROD-18F-2: additive; null unless the decision was accepted under RESALE.
+    resale_verification: VendorBillResaleReadbackResponse | None = None
 
 
 class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):
