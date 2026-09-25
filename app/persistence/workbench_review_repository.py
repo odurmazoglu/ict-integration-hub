@@ -57,6 +57,7 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationResult,
     ReviewReclassificationTrigger,
 )
+from app.application.workbench.resale_accounting_pin import ResaleAccountingPin, resale_accounting_pin_to_data
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.billing.dto import CustomerInvoiceBillingInstruction
 from app.models.execution_customer_billing_evidence import ExecutionCustomerBillingEvidence
@@ -934,8 +935,11 @@ class SqlAlchemyReviewRepository:
         self,
         command: ReviewDecisionCommand,
         evidence: ExecutionSourceInvoice,
+        *,
+        resale_accounting_pin: ResaleAccountingPin | None = None,
     ) -> ReviewDecisionAcknowledgement:
         _validate_execution_evidence_for_command(command, evidence)
+        _validate_resale_accounting_pin_for_command(command, evidence, resale_accounting_pin)
         try:
             existing = self._find_decision_by_idempotency_key(
                 company_id=command.company_id,
@@ -974,7 +978,7 @@ class SqlAlchemyReviewRepository:
                 self._session.add(decision)
                 self._session.flush()
                 self._session.refresh(decision)
-                self._add_execution_source_evidence(decision, evidence)
+                self._add_execution_source_evidence(decision, evidence, resale_accounting_pin)
                 self._session.flush()
             return _acknowledgement_from_decision_model(decision)
         except IntegrityError as exc:
@@ -991,8 +995,11 @@ class SqlAlchemyReviewRepository:
         command: ReviewDecisionCommand,
         evidence: ExecutionSourceInvoice,
         billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+        *,
+        resale_accounting_pin: ResaleAccountingPin | None = None,
     ) -> ReviewDecisionAcknowledgement:
         _validate_execution_evidence_for_command(command, evidence)
+        _validate_resale_accounting_pin_for_command(command, evidence, resale_accounting_pin)
         _validate_billing_instructions_for_command(command, billing_instructions)
         try:
             existing = self._find_decision_by_idempotency_key(
@@ -1033,7 +1040,7 @@ class SqlAlchemyReviewRepository:
                 self._session.add(decision)
                 self._session.flush()
                 self._session.refresh(decision)
-                self._add_execution_source_evidence(decision, evidence)
+                self._add_execution_source_evidence(decision, evidence, resale_accounting_pin)
                 self._add_execution_customer_billing_evidence(decision, billing_instructions)
                 self._session.flush()
             return _acknowledgement_from_decision_model(decision)
@@ -1438,10 +1445,16 @@ class SqlAlchemyReviewRepository:
         self,
         decision: WorkbenchReviewDecision,
         evidence: ExecutionSourceInvoice,
+        resale_accounting_pin: ResaleAccountingPin | None = None,
     ) -> None:
+        # Same INSERT, same nested transaction as the decision row: the RESALE pin is
+        # either accepted together with the decision or not at all (P0-PROD-18F-1).
         self._session.add(
             ExecutionSourceInvoiceEvidence(
-                **serialize_execution_source_invoice(evidence, decision_id=decision.decision_id)
+                **serialize_execution_source_invoice(evidence, decision_id=decision.decision_id),
+                resale_accounting_pin=(
+                    resale_accounting_pin_to_data(resale_accounting_pin) if resale_accounting_pin is not None else None
+                ),
             )
         )
 
@@ -1720,6 +1733,23 @@ def _validate_billing_instructions_for_command(
             raise WorkbenchContractError("CustomerInvoiceBillingInstruction DTO is required.")
     if len({instruction.billing_key for instruction in billing_instructions}) != len(billing_instructions):
         raise WorkbenchContractError("Customer billing evidence billing_key values must be unique.")
+
+
+def _validate_resale_accounting_pin_for_command(
+    command: ReviewDecisionCommand,
+    evidence: ExecutionSourceInvoice,
+    pin: ResaleAccountingPin | None,
+) -> None:
+    """A pin must describe exactly this decision's version and every source invoice line."""
+
+    if pin is None:
+        return
+    if not isinstance(pin, ResaleAccountingPin):
+        raise ReviewDecisionDataIntegrityError("RESALE accounting pin is not canonical.")
+    if pin.review_version != command.expected_version:
+        raise ReviewDecisionDataIntegrityError("RESALE accounting pin does not belong to this review version.")
+    if {line.line_number for line in pin.lines} != {line.line_number for line in evidence.invoice.lines}:
+        raise ReviewDecisionDataIntegrityError("RESALE accounting pin must cover every invoice line exactly.")
 
 
 def _validate_execution_evidence_for_review_item(

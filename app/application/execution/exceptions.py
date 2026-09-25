@@ -70,6 +70,15 @@ class ExecutionPreviewProductUomResolutionError(ExecutionError):
     error_category = "execution_preview_product_uom_resolution_error"
 
 
+class ExecutionPreviewResaleAccountingError(ExecutionError):
+    """Safe error raised when a Vendor Bill preview cannot show a RESALE decision's
+    pinned accounting (P0-PROD-18F-1): the pin is missing, corrupt, incomplete, does
+    not match the decision's lines/products, or exists for a non-RESALE decision.
+    Preview never falls back to Odoo's current accounting configuration."""
+
+    error_category = "execution_preview_resale_accounting_error"
+
+
 class ExecutionSourceInvoiceError(ExecutionError):
     """Safe error raised when authoritative source invoice evidence cannot be used."""
 

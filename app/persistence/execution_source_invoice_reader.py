@@ -17,6 +17,8 @@ from app.application.execution.exceptions import (
 )
 from app.application.expense_mapping import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
 from app.application.workbench.dto import LineResolution
+from app.application.workbench.exceptions import WorkbenchContractError
+from app.application.workbench.resale_accounting_pin import ResaleAccountingPin, resale_accounting_pin_from_data
 from app.domain.invoice import (
     Address,
     Attachment,
@@ -78,6 +80,35 @@ class SqlAlchemyExecutionSourceInvoiceReader:
         except SQLAlchemyError as exc:
             raise ExecutionSourceInvoiceError(SAFE_SOURCE_ERROR) from exc
         except (InvalidOperation, KeyError, TypeError, ValueError) as exc:
+            raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR) from exc
+
+    def get_resale_accounting_pin(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+    ) -> ResaleAccountingPin | None:
+        """The immutable RESALE accounting pin stored with this accepted decision, if any
+        (P0-PROD-18F-1). A stored-but-invalid pin fails closed; it is never repaired."""
+
+        _validate_query(review_id=review_id, company_id=company_id, decision_version=decision_version)
+        try:
+            decision = self._accepted_decision(
+                review_id=review_id,
+                company_id=company_id,
+                decision_version=decision_version,
+            )
+            evidence = self._evidence_for_decision(decision)
+        except ExecutionSourceInvoiceError:
+            raise
+        except SQLAlchemyError as exc:
+            raise ExecutionSourceInvoiceError(SAFE_SOURCE_ERROR) from exc
+        if evidence.resale_accounting_pin is None:
+            return None
+        try:
+            return resale_accounting_pin_from_data(evidence.resale_accounting_pin)
+        except WorkbenchContractError as exc:
             raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR) from exc
 
     def _accepted_decision(

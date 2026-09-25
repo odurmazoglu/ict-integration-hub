@@ -734,6 +734,10 @@ def test_preview_use_case_never_references_any_write_gate_setting() -> None:
         "vendor_bill_builder",
         "currency_reader",
         "product_uom_reader",
+        # P0-PROD-18F-1: Hub-persistence-only reads of the decision's RESALE pin and the
+        # purchase purpose it was accepted under -- neither is a write gate nor an Odoo reader.
+        "resale_accounting_pin_reader",
+        "purchase_purpose_reader",
     }
 
 

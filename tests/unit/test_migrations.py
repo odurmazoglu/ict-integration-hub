@@ -660,6 +660,18 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # P0-PROD-18F-1 added one more migration on top (one additive nullable JSON column)
+    # -- one extra "-1" step consumes it before the P0-PROD-18E-2 step below.
+    source_evidence_columns_at_head = {
+        column["name"]: column for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+    assert source_evidence_columns_at_head["resale_accounting_pin"]["nullable"] is True
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "resale_accounting_pin" not in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+
     # P0-PROD-18E-2 added one more migration on top (one additive nullable column) --
     # one extra "-1" step consumes it before the P0-PROD-15T step below.
     reservation_columns_at_head = {

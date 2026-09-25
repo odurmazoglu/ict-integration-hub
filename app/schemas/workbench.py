@@ -632,6 +632,26 @@ class WorkbenchVendorBillExecutionResponse(BaseModel):
     message: str | None = None
 
 
+class VendorBillPreviewResaleAccountingResponse(BaseModel):
+    """RESALE accounting pinned at decision acceptance (P0-PROD-18F-1).
+
+    A pre-fiscal-position account only -- fiscal_position_mapping is always
+    "not_evaluated", and this is not the account EXECUTE sends (see account_id).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    product_id: int
+    product_categ_id: int
+    product_categ_name: str | None
+    account_id: int
+    account_code: str
+    account_name: str
+    account_type: str
+    accounting_source: str
+    fiscal_position_mapping: str
+
+
 class VendorBillPreviewLineResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -642,6 +662,8 @@ class VendorBillPreviewLineResponse(BaseModel):
     account_id: int | None
     product_id: int | None
     tax_ids: list[int]
+    # P0-PROD-18F-1: additive; null for every non-RESALE decision.
+    resale_accounting: VendorBillPreviewResaleAccountingResponse | None = None
 
 
 class VendorBillPreviewResponse(BaseModel):

@@ -17,6 +17,7 @@ from app.application.workbench.ports import (
     SelectedAccountReader,
     SelectedProductReader,
 )
+from app.application.workbench.resale_accounting_pin import ResaleAccountingPin
 from app.application.workbench.resale_decision_gate import ResaleDecisionGate
 from app.application.workbench.selected_expense_account_resolution import (
     selected_expense_account_ids,
@@ -77,9 +78,14 @@ class SubmitReviewDecisionUseCase:
             is_replay = _translate_decision_failure(
                 lambda: self.has_matching_decision(command), "Review decision replay could not be checked safely."
             )
+            # A replay never re-runs the RESALE gate or re-pins: the accepted decision keeps the
+            # RESALE accounting pin it was accepted with (P0-PROD-18F-1).
+            resale_pin: ResaleAccountingPin | None = None
             if not is_replay:
                 _validate_resolved_execution_inputs(command, evidence)
-                self._enforce_resale_eligibility(command, evidence)
+                resale_pin = self._enforce_resale_eligibility(command, evidence)
+            # Only passed when present, so every non-RESALE write call is byte-identical to before.
+            pin_kwargs = {"resale_accounting_pin": resale_pin} if resale_pin is not None else {}
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
                 return self._write_and_commit(
@@ -87,12 +93,14 @@ class SubmitReviewDecisionUseCase:
                         command,
                         evidence,
                         billing_instructions,
+                        **pin_kwargs,
                     )
                 )
             return self._write_and_commit(
                 lambda: self._review_decision_writer.submit_review_decision_with_execution_evidence(
                     command,
                     evidence,
+                    **pin_kwargs,
                 )
             )
         if requires_billing_evidence:
@@ -156,17 +164,18 @@ class SubmitReviewDecisionUseCase:
         )
         return replace(evidence, product_match=new_product_match)
 
-    def _enforce_resale_eligibility(self, command: ReviewDecisionCommand, evidence) -> None:
+    def _enforce_resale_eligibility(self, command: ReviewDecisionCommand, evidence) -> ResaleAccountingPin | None:
         """Gate a fresh Vendor Bill decision on RESALE product eligibility (P0-PROD-18E-1B).
 
         Runs after selected products are applied, so the operator's explicit
-        ``selected_product_id`` is what gets checked. A no-op unless the review's
-        current-version purchase purpose is RESALE; read-only, nothing is pinned.
+        ``selected_product_id`` is what gets checked. A no-op (``None``) unless the
+        review's current-version purchase purpose is RESALE; read-only. Returns the
+        accepted evidence to pin with the decision (P0-PROD-18F-1).
         """
 
         if self._resale_decision_gate is None:
-            return
-        _translate_decision_failure(
+            return None
+        return _translate_decision_failure(
             lambda: self._resale_decision_gate.enforce(command, evidence),
             "RESALE product eligibility could not be checked safely.",
         )
