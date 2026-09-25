@@ -74,7 +74,13 @@ class InvoiceLine:
     description: str | None = None
     seller_item_code: str | None = None
     buyer_item_code: str | None = None
+    # True product barcode (UBL StandardItemIdentification) only; never a classification.
     barcode: str | None = None
+    # UBL ManufacturersItemIdentification: the manufacturer/vendor SKU namespace,
+    # distinct from the supplier's own seller_item_code.
+    manufacturer_item_code: str | None = None
+    # UBL CommodityClassification: a category/classification, not a product identifier.
+    commodity_classification: str | None = None
     quantity: Decimal | None = None
     unit_code: str | None = None
     unit_price: Decimal | None = None
