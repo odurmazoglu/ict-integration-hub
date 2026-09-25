@@ -28,9 +28,13 @@ Authoritative manufacturer SKUs (P0-PROD-19A-2), each always looked up when pres
 - `manufacturer_item_code` (UBL `ManufacturersItemIdentification`) -> ERP `default_code`, for every supplier (`matched_by="manufacturer_item_code"`)
 - a supplier source-profile SKU -> ERP `default_code` (`matched_by="supplier_profile_sku"`); see below
 
+Supplier-scoped seller code (P0-PROD-19A-3), looked up when present:
+
+- `(supplier partner, seller_item_code)` -> `product.supplierinfo.product_code` -> one `product.product` (`matched_by="supplier_product_code"`); see below
+
 Behavior:
 
-- the legacy chain outcome and every SKU outcome are combined; no identifier silently wins
+- the legacy chain outcome, every SKU outcome and the supplierinfo outcome are combined; no identifier silently wins
 - all resolving identities agree on one active product: `MATCHED` (`matched_by` is the first agreeing identity, the others are named in `reason` as corroborating)
 - any identity with more than one active candidate: `MULTIPLE_MATCHES`
 - identities resolving to different products: `MULTIPLE_MATCHES` with reason `Conflicting product identities resolve to different products: ...` (fail closed; surfaces as `PRODUCT_AMBIGUOUS`)
@@ -39,6 +43,23 @@ Behavior:
 - a line without an authoritative SKU performs exactly the legacy lookups and returns exactly the legacy result
 
 Conflicts reuse the existing persisted `MULTIPLE_MATCHES` status on purpose: a new status value would make persisted evidence unreadable after a rollback.
+
+### Supplier-Scoped Seller Codes (`product.supplierinfo`)
+
+Implemented by `ProductMatchingEngine` with the read-only `OdooSupplierProductRepository` (`app/erp/odoo/supplier_product_repository.py`), wired in the production deterministic decision engine used by import and reclassification.
+
+It participates only when all are known: a non-empty `seller_item_code` (whitespace-stripped, the same normalization CREATE_NEW_PRODUCT uses for `product_code`), a `partner_match` that is `MATCHED` with a positive `partner_id` (unique active partner by exact VAT), and a positive company id. Otherwise it is not queried at all; seller codes are never matched globally and never matched under another supplier.
+
+Lookups (bounded to 2 records, which is enough to prove ambiguity):
+
+1. `product.supplierinfo` where `partner_id = <partner>`, `product_code = <seller code>`, `company_id in [<company>, False]`. Zero rows: no candidate. More than one row: ambiguous, even if the rows name the same variant (the same rule the supplierinfo writer enforces).
+2. `product.product` where `product_tmpl_id = <row template>`, `company_id in [<company>, False]`, plus `id = <row product_id>` when the row names a variant. Only active variants count.
+
+Variant precision: a row with `product_id` identifies exactly that variant, which must still be active, in company scope and on the row's template; an archived named variant is not replaced by another variant. A template-level row (`product_id` empty, applying to all variants in Odoo) identifies a variant only when the template has exactly one active in-scope variant; a multi-variant template (e.g. ManageEngine families) is ambiguous. Any returned record outside the requested identity fails closed as a malformed response.
+
+The legacy `seller_item_code -> default_code` probe is unchanged and simply joins the same combination, so a supplier whose seller code equals an Internal Reference keeps matching exactly as before, and disagreement with supplierinfo fails closed.
+
+Late supplier resolution: supplierinfo uses only the deterministic raw partner match of the evaluation run. Reclassification re-runs this engine, so a supplier that later becomes deterministically matchable (e.g. a P0-PROD-10D remediation that creates/reactivates the partner) gets supplierinfo matching on reclassification. A P0-PROD-15N `MATCH_EXISTING` supplier stays raw-ambiguous by design, and the effective-decision overlay deliberately does not re-run product matching, so supplierinfo does not participate there; such lines keep the existing Workbench product selection path.
 
 ### Supplier Source Profiles
 

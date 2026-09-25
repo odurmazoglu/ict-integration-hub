@@ -39,6 +39,7 @@ from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountReader
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
+from app.erp.odoo.supplier_product_repository import OdooSupplierProductRepository
 from app.erp.odoo.tax_repository import OdooTaxRepository
 from app.erp.odoo.workbench_reference_repositories import (
     OdooAnalyticAccountReferenceRepository,
@@ -237,7 +238,10 @@ def _build_deterministic_decision_engine(
     return DecisionEngine(
         rule_engine=DeterministicRuleEngine(
             partner_matcher=PartnerMatchingEngine(provider),
-            product_matcher=ProductMatchingEngine(provider),
+            product_matcher=ProductMatchingEngine(
+                provider,
+                supplier_product_repository=OdooSupplierProductRepository(adapter=read_adapter),
+            ),
             tax_mapper=TaxMappingEngine(provider.tax_repository),
             operating_expense_matcher=operating_expense_matcher,
         ),

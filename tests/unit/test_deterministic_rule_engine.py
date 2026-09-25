@@ -368,9 +368,17 @@ class FakeProductMatcher:
     def __init__(self, result: InvoiceProductMatchResult | Exception) -> None:
         self.result = result
         self.calls: list[tuple[InternalInvoice, int | None]] = []
+        self.partner_matches: list[PartnerMatchResult | None] = []
 
-    def match_invoice(self, invoice: InternalInvoice, *, company_id: int | None = None) -> InvoiceProductMatchResult:
+    def match_invoice(
+        self,
+        invoice: InternalInvoice,
+        *,
+        company_id: int | None = None,
+        partner_match: PartnerMatchResult | None = None,
+    ) -> InvoiceProductMatchResult:
         self.calls.append((invoice, company_id))
+        self.partner_matches.append(partner_match)
         if isinstance(self.result, Exception):
             raise self.result
         return self.result

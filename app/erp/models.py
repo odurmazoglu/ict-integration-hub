@@ -41,6 +41,30 @@ class Product:
 
 
 @dataclass(frozen=True, slots=True)
+class SupplierProductCode:
+    """Read-only projection of one ``product.supplierinfo`` row (P0-PROD-19A-3).
+
+    ``product_id`` is the explicit variant when set; ``None`` means the row is
+    template-level (Odoo applies it to every variant of ``product_tmpl_id``).
+    """
+
+    id: int
+    partner_id: int
+    product_code: str
+    product_tmpl_id: int
+    product_id: int | None
+    company_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProductVariant:
+    id: int
+    product_tmpl_id: int
+    active: bool
+    company_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Tax:
     id: int
     company_id: int | None
