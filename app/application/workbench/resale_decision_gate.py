@@ -14,9 +14,14 @@ Scope is deliberately narrow:
 * every invoice line must be product-backed by a concrete existing Odoo product --
   account-only lines, identifier-free (operating-expense-shaped) invoices, and
   unresolved/ambiguous product matches are all rejected, never substituted;
-* the check covers only the *pre-fiscal-position* account. Nothing is pinned,
-  persisted, or sent to Odoo, fiscal positions are not evaluated, and the final
-  Vendor Bill line account is not claimed to be known (P0-PROD-18F).
+* the check covers only the *pre-fiscal-position* account. Nothing is sent to Odoo,
+  fiscal positions are not evaluated, and the final Vendor Bill line account is not
+  claimed to be known.
+
+P0-PROD-18F-1: on success ``enforce`` returns a :class:`ResaleAccountingPin` built
+from exactly the discovery/eligibility evidence it just accepted -- no second Odoo
+read, no second accounting interpretation -- which the decision writer persists
+atomically with the accepted decision. Execution does not use it yet (18F-2).
 """
 
 from __future__ import annotations
@@ -36,6 +41,10 @@ from app.application.workbench.purchase_account_discovery import (
     ProductPurchaseAccountResolution,
 )
 from app.application.workbench.purchase_purpose import PurchasePurpose, PurchasePurposeResolution
+from app.application.workbench.resale_accounting_pin import (
+    ResaleAccountingPin,
+    resale_line_pin_from_accepted_evidence,
+)
 from app.application.workbench.resale_product_eligibility import (
     ResaleProductEligibility,
     evaluate_resale_product_eligibility,
@@ -80,32 +89,40 @@ class ResaleDecisionGate:
         self._product_account_resolver = product_account_resolver
         self._approved_category_ids = normalize_resale_category_ids(approved_category_ids)
 
-    def enforce(self, command: ReviewDecisionCommand, evidence: ExecutionSourceInvoice) -> None:
+    def enforce(self, command: ReviewDecisionCommand, evidence: ExecutionSourceInvoice) -> ResaleAccountingPin | None:
         """Raise ``ResaleDecisionEligibilityError`` unless the decision may proceed.
 
-        A no-op for a review with no RESALE purpose at any version, or whose
-        current-version purpose is not RESALE.
+        Returns ``None`` (no Odoo read at all) for a review with no RESALE purpose at
+        any version, or whose current-version purpose is not RESALE; otherwise the
+        accepted evidence as a :class:`ResaleAccountingPin`.
         """
 
         if not isinstance(command, ReviewDecisionCommand):
             raise WorkbenchContractError("ReviewDecisionCommand is required.")
         if not self._current_purpose_is_resale(command):
-            return
+            return None
         _require_product_shaped_decision(command, evidence)
         product_by_line = _resolved_product_by_line(evidence)
-        eligibility_by_product = {
+        evaluated_by_product = {
             product_id: self._evaluate(command.company_id, product_id)
             for product_id in dict.fromkeys(product_by_line.values())
         }
         failures = [
-            _line_failure(line_number, product_id, eligibility_by_product[product_id])
+            _line_failure(line_number, product_id, evaluated_by_product[product_id][1])
             for line_number, product_id in product_by_line.items()
-            if not eligibility_by_product[product_id].eligible
+            if not evaluated_by_product[product_id][1].eligible
         ]
         if failures:
             raise ResaleDecisionEligibilityError(
                 "RESALE decision rejected: product not eligible for RESALE -- " + "; ".join(failures) + "."
             )
+        return ResaleAccountingPin(
+            review_version=command.expected_version,
+            lines=tuple(
+                resale_line_pin_from_accepted_evidence(line_number, *evaluated_by_product[product_id])
+                for line_number, product_id in product_by_line.items()
+            ),
+        )
 
     def _current_purpose_is_resale(self, command: ReviewDecisionCommand) -> bool:
         resolutions = self._purpose_reader.list_purchase_purpose_resolutions(
@@ -124,18 +141,21 @@ class ResaleDecisionGate:
             )
         return False
 
-    def _evaluate(self, company_id: int, product_id: int) -> ResaleProductEligibility:
+    def _evaluate(
+        self, company_id: int, product_id: int
+    ) -> tuple[ProductPurchaseAccountResolution | None, ResaleProductEligibility]:
         try:
             resolution: ProductPurchaseAccountResolution | None = self._product_account_resolver.execute(
                 GetProductPurchaseAccountQuery(company_id=company_id, product_id=product_id)
             )
         except PurchaseAccountProductNotFoundError:
             resolution = None
-        return evaluate_resale_product_eligibility(
+        eligibility = evaluate_resale_product_eligibility(
             resolution,
             company_id=company_id,
             approved_category_ids=self._approved_category_ids,
         )
+        return resolution, eligibility
 
 
 def _require_product_shaped_decision(command: ReviewDecisionCommand, evidence: ExecutionSourceInvoice) -> None:

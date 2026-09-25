@@ -53,12 +53,17 @@ from app.application.execution import (
 )
 from app.application.execution.exceptions import (
     ExecutionPreviewCurrencyResolutionError,
+    ExecutionPreviewResaleAccountingError,
     ExecutionPreviewUnsupportedWorkflowError,
     ExecutionSourceInvoiceError,
     ExecutionSourceInvoiceIntegrityError,
     ExecutionSourceInvoiceNotFoundError,
 )
-from app.application.execution.vendor_bill_preview import PreviewVendorBillRequest, VendorBillPreview
+from app.application.execution.vendor_bill_preview import (
+    PreviewVendorBillRequest,
+    VendorBillPreview,
+    VendorBillPreviewResaleAccounting,
+)
 from app.application.expense_mapping import (
     OperatingExpenseMappingConflictError,
     OperatingExpenseMappingContractError,
@@ -222,6 +227,7 @@ from app.schemas.workbench import (
     TaxResolutionRequest,
     VendorBillPreviewEnvelope,
     VendorBillPreviewLineResponse,
+    VendorBillPreviewResaleAccountingResponse,
     VendorBillPreviewResponse,
     VendorBillReadbackEnvelope,
     VendorBillReadbackLineResponse,
@@ -1413,6 +1419,7 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
                 account_id=line.account_id,
                 product_id=line.product_id,
                 tax_ids=list(line.tax_ids),
+                resale_accounting=_preview_resale_accounting_response(line.resale_accounting),
             )
             for line in preview.lines
         ],
@@ -1421,6 +1428,24 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
         preview_untaxed=decimal_to_api(preview.preview_untaxed),
         preview_tax=decimal_to_api(preview.preview_tax),
         preview_total=decimal_to_api(preview.preview_total),
+    )
+
+
+def _preview_resale_accounting_response(
+    pinned: VendorBillPreviewResaleAccounting | None,
+) -> VendorBillPreviewResaleAccountingResponse | None:
+    if pinned is None:
+        return None
+    return VendorBillPreviewResaleAccountingResponse(
+        product_id=pinned.product_id,
+        product_categ_id=pinned.product_categ_id,
+        product_categ_name=pinned.product_categ_name,
+        account_id=pinned.account_id,
+        account_code=pinned.account_code,
+        account_name=pinned.account_name,
+        account_type=pinned.account_type,
+        accounting_source=pinned.accounting_source.value,
+        fiscal_position_mapping=pinned.fiscal_position_mapping.value,
     )
 
 
@@ -1597,6 +1622,8 @@ def _status_code_for_exception(exc: Exception) -> int:
         ),
     ):
         return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, ExecutionPreviewResaleAccountingError):
+        return HTTPStatus.CONFLICT
     if isinstance(exc, ExecutionSourceInvoiceNotFoundError):
         return HTTPStatus.NOT_FOUND
     if isinstance(exc, ExecutionSourceInvoiceIntegrityError):

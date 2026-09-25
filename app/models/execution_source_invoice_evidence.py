@@ -48,4 +48,9 @@ class ExecutionSourceInvoiceEvidence(Base):
     # Same shape as operating_expense_match, pinned separately so it survives even when
     # the invoice is not product-identifier-free (see ExecutionSourceInvoice).
     account_only_expense_match: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # P0-PROD-18F-1: the immutable RESALE accounting pin accepted with this decision
+    # (see app.application.workbench.resale_accounting_pin). NULL for every non-RESALE
+    # decision and every decision accepted before 18F-1. Written once, never updated,
+    # and deliberately outside the execution-source fingerprint: a replay keeps it.
+    resale_accounting_pin: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime(), server_default=func.now(), nullable=False)

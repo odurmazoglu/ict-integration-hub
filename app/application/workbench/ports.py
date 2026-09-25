@@ -38,6 +38,7 @@ from app.application.workbench.reclassification import (
     ReviewReclassificationProposal,
     ReviewReclassificationResult,
 )
+from app.application.workbench.resale_accounting_pin import ResaleAccountingPin
 from app.application.workbench.selected_expense_account_resolution import ResolutionAccountRecord
 from app.application.workbench.selected_product_resolution import ResolutionProductRecord
 from app.application.workbench.supplier_remediation import SupplierRemediationEffect
@@ -409,14 +410,19 @@ class ReviewDecisionWriter(Protocol):
         self,
         command: ReviewDecisionCommand,
         evidence: ExecutionSourceInvoice,
+        *,
+        resale_accounting_pin: ResaleAccountingPin | None = None,
     ) -> ReviewDecisionAcknowledgement:
-        pass
+        """``resale_accounting_pin`` (P0-PROD-18F-1) is persisted atomically with a new
+        decision's execution evidence; an existing (replayed) decision keeps its own."""
 
     def submit_review_decision_with_execution_and_billing_evidence(
         self,
         command: ReviewDecisionCommand,
         evidence: ExecutionSourceInvoice,
         billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
+        *,
+        resale_accounting_pin: ResaleAccountingPin | None = None,
     ) -> ReviewDecisionAcknowledgement:
         pass
 

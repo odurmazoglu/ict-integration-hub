@@ -60,6 +60,7 @@ from app.persistence import (
     SqlAlchemyQuotationScenarioEvidenceRepository,
     SqlAlchemyReviewExecutionEvidenceReader,
     SqlAlchemyReviewOneOffVendorRetirementRepository,
+    SqlAlchemyReviewPurchasePurposeResolutionRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyUnitOfWork,
     SqlAlchemyWriteAuthorizationRepository,
@@ -285,13 +286,18 @@ def build_vendor_bill_preview_use_case(
     """
 
     read_only_adapter = OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
+    source_invoice_reader = SqlAlchemyExecutionSourceInvoiceReader(session)
     return PreviewVendorBillUseCase(
         accepted_decision_reader=SqlAlchemyReviewRepository(session),
-        source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
+        source_invoice_reader=source_invoice_reader,
         execution_planner=ExecutionPlanner(),
         vendor_bill_builder=VendorBillBuilder(),
         currency_reader=OdooVendorBillPreviewCurrencyReader(adapter=read_only_adapter),
         product_uom_reader=OdooVendorBillPreviewProductUomReader(adapter=read_only_adapter),
+        # P0-PROD-18F-1: RESALE accounting comes from the decision's own pin in Hub
+        # persistence -- no Odoo accounting reader is composed into preview at all.
+        resale_accounting_pin_reader=source_invoice_reader,
+        purchase_purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
     )
 
 

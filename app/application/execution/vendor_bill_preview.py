@@ -20,6 +20,14 @@ account/product selection of its own (account_only/selected_product_id come from
 ``source.line_resolutions``, pinned at decision-acceptance time), and holds no
 reference to any Odoo write port -- its only ERP dependency type is a narrow,
 structurally read-only currency reader (see ``VendorBillPreviewCurrencyReader``).
+
+P0-PROD-18F-1: for a decision accepted under a RESALE purchase purpose, each line also
+shows the RESALE accounting pinned *at decision acceptance* (``resale_accounting``) --
+loaded from Hub persistence only, never from Odoo's current accounting configuration,
+so it stays stable if Odoo changes later. A RESALE decision without a valid pin fails
+closed. ``account_id`` is untouched: it still shows exactly what EXECUTE sends, and
+EXECUTE does not send the pinned account yet (P0-PROD-18F-2). Do not execute a real
+RESALE Vendor Bill until 18F-2.
 """
 
 from __future__ import annotations
@@ -46,7 +54,9 @@ from app.application.execution.exceptions import (
     ExecutionPlanningError,
     ExecutionPreviewCurrencyResolutionError,
     ExecutionPreviewProductUomResolutionError,
+    ExecutionPreviewResaleAccountingError,
     ExecutionPreviewUnsupportedWorkflowError,
+    ExecutionSourceInvoiceIntegrityError,
 )
 from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.ports import AcceptedReviewDecisionReader, ExecutionSourceInvoiceReader
@@ -54,6 +64,10 @@ from app.application.execution.vendor_bill_strategy import (
     account_only_line_resolution,
     vendor_bill_write_idempotency_key,
 )
+from app.application.workbench.purchase_account_discovery import FiscalPositionMapping
+from app.application.workbench.purchase_purpose import PurchasePurpose
+from app.application.workbench.resale_accounting_pin import ResaleAccountingPin, ResaleAccountingSource
+from app.application.workbench.resale_decision_gate import PurchasePurposeHistoryReader
 from app.application.workflow import WorkflowType
 from app.billing import VendorBillBuilder, line_gross_total, line_net_total, line_total_discount
 
@@ -82,6 +96,19 @@ class VendorBillPreviewProductUomReader(Protocol):
         pass
 
 
+class VendorBillPreviewResaleAccountingPinReader(Protocol):
+    """Hub-persistence-only read of an accepted decision's RESALE pin (P0-PROD-18F-1). No Odoo access."""
+
+    def get_resale_accounting_pin(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+    ) -> ResaleAccountingPin | None:
+        pass
+
+
 @dataclass(frozen=True, slots=True)
 class PreviewVendorBillRequest(Command):
     review_id: str
@@ -92,6 +119,24 @@ class PreviewVendorBillRequest(Command):
         _require_text(self.review_id, "review_id is required.")
         _require_positive_int(self.company_id, "company_id must be positive.")
         _require_positive_int(self.decision_version, "decision_version must be positive.")
+
+
+@dataclass(frozen=True, slots=True)
+class VendorBillPreviewResaleAccounting(ApplicationDTO):
+    """The RESALE accounting pinned at decision acceptance for one line (P0-PROD-18F-1).
+
+    A pre-fiscal-position account only; never the final Vendor Bill line account.
+    """
+
+    product_id: int
+    product_categ_id: int
+    product_categ_name: str | None
+    account_id: int
+    account_code: str
+    account_name: str
+    account_type: str
+    accounting_source: ResaleAccountingSource
+    fiscal_position_mapping: FiscalPositionMapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +152,8 @@ class VendorBillPreviewLine(ApplicationDTO):
     # for an account-only line (no product, no UoM), never the source invoice's own
     # UN/CEFACT unit code.
     product_uom_id: int | None = None
+    # P0-PROD-18F-1: set only for a RESALE decision, from its immutable pin.
+    resale_accounting: VendorBillPreviewResaleAccounting | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +200,8 @@ class PreviewVendorBillUseCase:
         vendor_bill_builder: VendorBillBuilder,
         currency_reader: VendorBillPreviewCurrencyReader,
         product_uom_reader: VendorBillPreviewProductUomReader,
+        resale_accounting_pin_reader: VendorBillPreviewResaleAccountingPinReader | None = None,
+        purchase_purpose_reader: PurchasePurposeHistoryReader | None = None,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
         self._source_invoice_reader = source_invoice_reader
@@ -160,6 +209,8 @@ class PreviewVendorBillUseCase:
         self._vendor_bill_builder = vendor_bill_builder
         self._currency_reader = currency_reader
         self._product_uom_reader = product_uom_reader
+        self._resale_accounting_pin_reader = resale_accounting_pin_reader
+        self._purchase_purpose_reader = purchase_purpose_reader
 
     def preview(self, request: PreviewVendorBillRequest) -> VendorBillPreview:
         if not isinstance(request, PreviewVendorBillRequest):
@@ -228,6 +279,7 @@ class PreviewVendorBillUseCase:
             account_only_expense_match=source.account_only_expense_match,
             explicit_account_only_accounts=explicit_account_only_accounts,
         )
+        resale_accounting_by_line = self._pinned_resale_accounting(decision, source, vendor_bill)
 
         step_request = ExecutionStepRequest(
             execution_id=execution_id,
@@ -273,6 +325,7 @@ class PreviewVendorBillUseCase:
                 product_id=bill_line.product_id,
                 tax_ids=bill_line.tax_ids,
                 product_uom_id=product_uom_ids.get(bill_line.product_id) if bill_line.product_id is not None else None,
+                resale_accounting=resale_accounting_by_line.get(source_line.line_number),
             )
             for source_line, bill_line in zip(source.invoice.lines, vendor_bill.invoice_lines, strict=True)
         )
@@ -312,6 +365,72 @@ class PreviewVendorBillUseCase:
             preview_tax=preview_tax,
             preview_total=preview_total,
         )
+
+    def _pinned_resale_accounting(
+        self, decision, source, vendor_bill
+    ) -> dict[str | None, VendorBillPreviewResaleAccounting]:
+        """The decision's own RESALE pin per line -- Hub persistence only, fail closed.
+
+        RESALE-ness is the purchase purpose of the version the decision was accepted
+        on (``decision_version - 1``), exactly what the decision gate evaluated.
+        """
+
+        if self._resale_accounting_pin_reader is None or self._purchase_purpose_reader is None:
+            return {}
+        accepted_on_version = decision.decision_version - 1
+        is_resale = self._accepted_under_resale(decision, accepted_on_version)
+        try:
+            pin = self._resale_accounting_pin_reader.get_resale_accounting_pin(
+                review_id=decision.review_id,
+                company_id=decision.company_id,
+                decision_version=decision.decision_version,
+            )
+        except ExecutionSourceInvoiceIntegrityError as exc:
+            raise ExecutionPreviewResaleAccountingError("The RESALE accounting pin is invalid.") from exc
+        if not is_resale:
+            if pin is not None:
+                raise ExecutionPreviewResaleAccountingError(
+                    "A RESALE accounting pin exists for a decision not accepted under a RESALE purpose."
+                )
+            return {}
+        if pin is None:
+            raise ExecutionPreviewResaleAccountingError(
+                "This RESALE decision has no pinned accounting evidence; preview does not fall back to Odoo."
+            )
+        if pin.review_version != accepted_on_version:
+            raise ExecutionPreviewResaleAccountingError("The RESALE accounting pin belongs to another review version.")
+        pinned_lines = pin.by_line_number()
+        if set(pinned_lines) != {line.line_number for line in source.invoice.lines}:
+            raise ExecutionPreviewResaleAccountingError("The RESALE accounting pin does not cover every invoice line.")
+        result: dict[str | None, VendorBillPreviewResaleAccounting] = {}
+        for source_line, bill_line in zip(source.invoice.lines, vendor_bill.invoice_lines, strict=True):
+            pinned = pinned_lines[source_line.line_number]
+            if bill_line.product_id != pinned.product_id:
+                raise ExecutionPreviewResaleAccountingError("The RESALE accounting pin names a different product.")
+            result[source_line.line_number] = VendorBillPreviewResaleAccounting(
+                product_id=pinned.product_id,
+                product_categ_id=pinned.product_categ_id,
+                product_categ_name=pinned.product_categ_name,
+                account_id=pinned.pre_fiscal_position_account_id,
+                account_code=pinned.pre_fiscal_position_account_code,
+                account_name=pinned.pre_fiscal_position_account_name,
+                account_type=pinned.pre_fiscal_position_account_type,
+                accounting_source=pinned.account_source,
+                fiscal_position_mapping=pinned.fiscal_position_mapping,
+            )
+        return result
+
+    def _accepted_under_resale(self, decision, accepted_on_version: int) -> bool:
+        resolutions = self._purchase_purpose_reader.list_purchase_purpose_resolutions(
+            review_id=decision.review_id,
+            company_id=decision.company_id,
+        )
+        current = [resolution for resolution in resolutions if resolution.review_version == accepted_on_version]
+        if len(current) > 1:
+            raise ExecutionPreviewResaleAccountingError(
+                "More than one purchase purpose exists for the decision version."
+            )
+        return bool(current) and current[0].purchase_purpose is PurchasePurpose.RESALE
 
 
 def _require_text(value: str | None, message: str) -> None:
