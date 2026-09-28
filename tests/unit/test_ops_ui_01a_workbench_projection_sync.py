@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import io
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
@@ -39,7 +40,7 @@ from app.application.workbench.accounting_resolution_use_cases import SubmitRevi
 from app.application.workbench.dto import ReviewReasonsRole
 from app.application.workbench.operating_expense_mapping_use_cases import SubmitOperatingExpenseMappingUseCase
 from app.application.workbench.ports import ReviewDecisionWriter, ReviewItemWriter, ReviewReclassificationWriter
-from app.application.workbench.projection_sync import WorkbenchProjectionSynchronizer
+from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.application.workbench.projection_sync_contracts import (
     PROJECTION_SYNC_WARNING,
     ProjectionSyncOutcome,
@@ -55,9 +56,11 @@ from app.erp.odoo.workbench_projection_publisher import (
     OdooWorkbenchProjectionPublisher,
 )
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
+from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEvent, WorkflowExecutionStep
 from app.persistence import (
     SqlAlchemyExecutionSourceInvoiceReader,
     SqlAlchemyReviewRepository,
@@ -100,8 +103,10 @@ HTML_FIELDS = frozenset({"x_studio_review_reasons", "x_studio_warnings"})
 
 
 @pytest.fixture()
-def session() -> Session:
-    engine = create_engine("sqlite:///:memory:")
+def session(tmp_path) -> Session:
+    """File-backed SQLite: a fresh session is a real separate connection that only sees committed data."""
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'hub.db'}")
     Base.metadata.create_all(
         engine,
         tables=[
@@ -109,10 +114,15 @@ def session() -> Session:
             WorkbenchReviewExecutionEvidence.__table__,
             WorkbenchReviewDecision.__table__,
             ExecutionSourceInvoiceEvidence.__table__,
+            WorkbenchReviewClassificationEvidence.__table__,
+            WorkflowExecution.__table__,
+            WorkflowExecutionStep.__table__,
+            WorkflowExecutionEvent.__table__,
         ],
     )
     with sessionmaker(bind=engine)() as db_session:
         yield db_session
+    engine.dispose()
 
 
 class StudioFake:
@@ -242,14 +252,32 @@ def _mapping() -> OdooWorkbenchProjectionFieldMapping:
 
 
 def _synchronizer(db: Session, studio: StudioFake, *, snapshot=None, publisher=None) -> WorkbenchProjectionSynchronizer:
-    repository = SqlAlchemyReviewRepository(db)
-    return WorkbenchProjectionSynchronizer(
-        review_reader=repository,
-        accepted_decision_reader=repository,
-        accepted_source_reader=SqlAlchemyExecutionSourceInvoiceReader(db),
-        execution_snapshot_reader=Snapshots(snapshot),
-        publisher=publisher or OdooWorkbenchProjectionPublisher(adapter=studio, mapping=_mapping()),
-    )
+    """A synchronizer whose every call reads through its own fresh session (never ``db``)."""
+
+    engine = db.get_bind()
+
+    @contextmanager
+    def read_scope():
+        read_session = Session(bind=engine)
+        try:
+            repository = SqlAlchemyReviewRepository(read_session)
+            yield WorkbenchProjectionSources(
+                review_reader=repository,
+                accepted_decision_reader=repository,
+                accepted_source_reader=SqlAlchemyExecutionSourceInvoiceReader(read_session),
+                execution_snapshot_reader=Snapshots(snapshot),
+                publisher=publisher or OdooWorkbenchProjectionPublisher(adapter=studio, mapping=_mapping()),
+            )
+        finally:
+            read_session.rollback()
+            read_session.close()
+
+    return WorkbenchProjectionSynchronizer(read_scope=read_scope)
+
+
+def _seed_committed(db: Session, **kwargs: Any) -> None:
+    _seed(db, **kwargs)
+    db.commit()
 
 
 def _execution_snapshot(
@@ -289,7 +317,7 @@ def _row(studio: StudioFake) -> dict[str, Any]:
 
 
 def _accept_vitel(db: Session) -> None:
-    _seed(db, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(db, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     _accept(db, _command((LineResolution(line_number="1", selected_product_id=VITEL_PRODUCT_ID),)))
 
 
@@ -297,7 +325,7 @@ def _accept_vitel(db: Session) -> None:
 
 
 def test_pending_review_projects_current_blockers_as_warning_badges(session: Session) -> None:
-    _seed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     studio = StudioFake()
 
     result = _synchronizer(session, studio).sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
@@ -339,7 +367,7 @@ def test_human_selected_product_decision_projects_decision_basis_and_effective_p
 
 
 def test_automatic_product_match_decision_projects_automatic_source(session: Session) -> None:
-    _seed(session, product_id=LOGOSOFT_BASIC_PRODUCT_ID, seller_item_code=LOGOSOFT_SKU)
+    _seed_committed(session, product_id=LOGOSOFT_BASIC_PRODUCT_ID, seller_item_code=LOGOSOFT_SKU)
     _accept(session, _command(()))
     studio = StudioFake()
 
@@ -351,7 +379,7 @@ def test_automatic_product_match_decision_projects_automatic_source(session: Ses
 
 
 def test_account_only_decision_projects_account_resolution(session: Session) -> None:
-    _seed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     _accept(
         session,
         _command((LineResolution(line_number="1", account_only=True, expense_account_id=EXPENSE_ACCOUNT_ID),)),
@@ -364,7 +392,7 @@ def test_account_only_decision_projects_account_resolution(session: Session) -> 
 
 
 def test_dismissed_decision_projects_dismissed_history_without_effective_lines(session: Session) -> None:
-    _seed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     _accept(session, _command(decision=ReviewDecisionType.DISMISS))
     studio = StudioFake()
 
@@ -380,7 +408,7 @@ def test_dismissed_decision_projects_dismissed_history_without_effective_lines(s
 
 
 def test_decided_review_projects_selected_workflow_without_mutating_hub_workflow(session: Session) -> None:
-    _seed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     session.execute(WorkbenchReviewItem.__table__.update().values(workflow=WorkflowType.MANUAL_REVIEW.value))
     _accept(session, _command((LineResolution(line_number="1", selected_product_id=VITEL_PRODUCT_ID),)))
     studio = StudioFake()
@@ -395,7 +423,7 @@ def test_decided_review_projects_selected_workflow_without_mutating_hub_workflow
 
 
 def test_same_reasons_render_as_blockers_when_pending_and_as_history_when_decided(session: Session) -> None:
-    _seed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     pending_studio = StudioFake()
     _synchronizer(session, pending_studio).sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
     _accept(session, _command((LineResolution(line_number="1", selected_product_id=VITEL_PRODUCT_ID),)))
@@ -481,7 +509,7 @@ def test_execution_of_an_older_decision_version_is_not_projected(session: Sessio
 
 
 def test_projection_failure_after_decision_commit_keeps_the_committed_decision(session: Session) -> None:
-    _seed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     synchronizer = _synchronizer(session, StudioFake(), publisher=RaisingPublisher())
 
     acknowledgement = SubmitReviewDecisionUseCase(
@@ -680,7 +708,7 @@ def test_equal_review_version_snapshot_cannot_clear_stored_execution_facts(sessi
 # --------------------------------------------------------------------------- 14-16. currency
 
 
-def test_currency_resolves_to_exactly_one_odoo_currency_once(session: Session) -> None:
+def test_currency_resolves_to_exactly_one_odoo_currency_per_sync(session: Session) -> None:
     _accept_vitel(session)
     studio = StudioFake()
     synchronizer = _synchronizer(session, studio)
@@ -689,7 +717,8 @@ def test_currency_resolves_to_exactly_one_odoo_currency_once(session: Session) -
     synchronizer.sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
 
     assert _row(studio)["x_studio_currency_id"] == TRY_CURRENCY_ID
-    assert studio.currency_reads == 1
+    # One exact read-only lookup per sync (each sync has its own read scope and publisher).
+    assert studio.currency_reads == 2
 
 
 @pytest.mark.parametrize(
@@ -762,7 +791,7 @@ def test_reconcile_apply_creates_then_reports_no_change(session: Session) -> Non
 def test_reconcile_apply_updates_a_stale_existing_row(session: Session) -> None:
     """The D-Market shape: an Odoo row frozen at v1 / Pending Review while the Hub moved on."""
 
-    _seed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
     studio = StudioFake()
     _synchronizer(session, studio).sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
     _accept(session, _command((LineResolution(line_number="1", selected_product_id=VITEL_PRODUCT_ID),)))
@@ -821,8 +850,8 @@ def test_reconcile_cli_main_is_dry_run_by_default_and_exits_nonzero_on_errors(mo
         "app.composition.imports.build_workbench_projection_synchronizer", lambda **kwargs: RecordingSynchronizer()
     )
 
-    assert cli.main(["--company", "1"], out=io.StringIO(), session_factory=lambda: session) == 1
-    assert cli.main(["--company", "1", "--apply"], out=io.StringIO(), session_factory=lambda: session) == 1
+    assert cli.main(["--company", "1"], out=io.StringIO(), engine=session.get_bind()) == 1
+    assert cli.main(["--company", "1", "--apply"], out=io.StringIO(), engine=session.get_bind()) == 1
     assert calls == [False, True]
 
 
@@ -833,7 +862,7 @@ def test_reconcile_cli_reports_incomplete_mapping_as_configuration_error(monkeyp
         monkeypatch.delenv(f"ODOO_WORKBENCH_PUBLISHER_{suffix}", raising=False)
     out = io.StringIO()
 
-    exit_code = cli.main(["--company", "1"], out=out, session_factory=lambda: session)
+    exit_code = cli.main(["--company", "1"], out=out, engine=session.get_bind())
 
     assert exit_code == cli.EXIT_CONFIGURATION_ERROR
     assert "Configuration error: model mapping is required." in capsys.readouterr().err
@@ -1125,3 +1154,192 @@ def test_unexpected_failure_is_logged_with_its_traceback(session: Session, monke
     assert [(message, kwargs["exc_info"]) for message, kwargs in log.errors] == [
         ("workbench.projection.sync_failed", True)
     ]
+
+
+# --------------------------------------------------------------------------- session / thread boundary
+
+
+def _composed(db: Session, studio: StudioFake) -> WorkbenchProjectionSynchronizer:
+    """The production composition, with only the Odoo adapter and field mapping substituted."""
+
+    from app.composition.imports import build_workbench_projection_synchronizer
+    from app.core.config import Settings
+
+    return build_workbench_projection_synchronizer(
+        session=db, settings=Settings(), projection_adapter=studio, mapping=_mapping()
+    )
+
+
+def _record_read_sessions(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    import threading
+
+    from app.composition import imports
+
+    opened: list[dict[str, Any]] = []
+    real_open = imports.open_read_only_session
+
+    @contextmanager
+    def recording_open(engine):
+        with real_open(engine) as read_session:
+            record = {"session": read_session, "opened_in": threading.get_ident(), "closed_in": None}
+            opened.append(record)
+            try:
+                yield read_session
+            finally:
+                record["closed_in"] = threading.get_ident()
+                record["in_transaction_at_close"] = read_session.in_transaction()
+
+    monkeypatch.setattr(imports, "open_read_only_session", recording_open)
+    return opened
+
+
+async def test_worker_thread_sync_never_uses_the_request_session_and_owns_its_read_session(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import threading
+
+    from sqlalchemy import event
+
+    _accept_vitel(session)
+    request_session_executions: list[int] = []
+    event.listen(session, "do_orm_execute", lambda state: request_session_executions.append(threading.get_ident()))
+    opened = _record_read_sessions(monkeypatch)
+    studio = StudioFake()
+    synchronizer = _composed(session, studio)
+    loop_thread = threading.get_ident()
+
+    result = await asyncio.to_thread(synchronizer.sync, review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result.outcome is ProjectionSyncOutcome.CREATED
+    assert request_session_executions == []
+    assert len(opened) == 1
+    record = opened[0]
+    assert record["session"] is not session
+    # Created, used and closed in the same worker thread -- never the event-loop thread.
+    assert record["opened_in"] == record["closed_in"] != loop_thread
+    assert _row(studio)["x_studio_review_status"] == "Decision Submitted"
+
+
+def test_synchronizer_opens_and_closes_its_own_read_session_on_every_call(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _accept_vitel(session)
+    opened = _record_read_sessions(monkeypatch)
+    synchronizer = _composed(session, StudioFake())
+
+    synchronizer.sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+    synchronizer.plan(review_id=REVIEW_ID, company_id=COMPANY_ID)
+    synchronizer.sync(review_id="review:missing", company_id=COMPANY_ID)  # fails inside the scope
+
+    assert len(opened) == 3
+    assert len({id(record["session"]) for record in opened}) == 3
+    assert all(record["closed_in"] is not None for record in opened)
+
+
+def test_every_sync_enters_and_exits_exactly_one_read_scope_even_on_failure() -> None:
+    events: list[str] = []
+
+    class ExplodingReviewReader:
+        def get_review_item(self, query):
+            raise RuntimeError("read failed")
+
+    @contextmanager
+    def read_scope():
+        events.append("open")
+        try:
+            yield WorkbenchProjectionSources(
+                review_reader=ExplodingReviewReader(),
+                accepted_decision_reader=None,
+                accepted_source_reader=None,
+                execution_snapshot_reader=None,
+                publisher=RaisingPublisher(),
+            )
+        finally:
+            events.append("close")
+
+    result = WorkbenchProjectionSynchronizer(read_scope=read_scope).sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result.outcome is ProjectionSyncOutcome.ERROR
+    assert events == ["open", "close"]
+
+
+def test_projection_reads_only_committed_hub_state(session: Session) -> None:
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    session.execute(WorkbenchReviewItem.__table__.update().values(invoice_number="UNCOMMITTED-EDIT"))
+    session.flush()
+    studio = StudioFake()
+    synchronizer = _composed(session, studio)
+
+    synchronizer.sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+    assert _row(studio)["x_studio_invoice_number"] == "INV-19F"
+
+    session.commit()
+    result = synchronizer.sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+    assert result.outcome is ProjectionSyncOutcome.UPDATED
+    assert _row(studio)["x_studio_invoice_number"] == "UNCOMMITTED-EDIT"
+
+
+def test_projection_failure_cannot_poison_or_roll_back_the_business_transaction(session: Session) -> None:
+    from app.erp.exceptions import ErpRepositoryError
+
+    class UnreachableStudio(StudioFake):
+        def search_read(self, **kwargs):
+            raise ErpRepositoryError("Odoo returned HTTP 503.")
+
+    _accept_vitel(session)
+    # Business work still in progress in the request session when a projection fails.
+    session.execute(WorkbenchReviewItem.__table__.update().values(invoice_number="IN-FLIGHT-BUSINESS-WRITE"))
+    session.flush()
+
+    result = _composed(session, UnreachableStudio()).sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert result.outcome is ProjectionSyncOutcome.ERROR
+    assert session.is_active and session.in_transaction()
+    session.commit()
+    with Session(bind=session.get_bind()) as independent:
+        item = independent.scalars(select(WorkbenchReviewItem)).one()
+        assert item.invoice_number == "IN-FLIGHT-BUSINESS-WRITE"
+        assert (item.status, item.version) == (ReviewStatus.DECISION_SUBMITTED.value, 2)
+        assert independent.scalar(select(WorkbenchReviewDecision.decision_type)) == "select_workflow"
+
+
+def test_repeated_composed_sync_is_idempotent(session: Session) -> None:
+    _accept_vitel(session)
+    studio = StudioFake()
+    synchronizer = _composed(session, studio)
+    first = synchronizer.sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+    writes = studio.write_count
+
+    second = synchronizer.sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    assert first.outcome is ProjectionSyncOutcome.CREATED
+    assert second.outcome is ProjectionSyncOutcome.NO_CHANGE
+    assert studio.write_count == writes
+
+
+def test_synchronous_decision_path_projects_without_touching_the_request_session_after_commit(
+    session: Session,
+) -> None:
+    from sqlalchemy import event
+
+    _seed_committed(session, product_id=None, seller_item_code=VITEL_SKU, reasons=(PRODUCT_NOT_FOUND_REASON,))
+    committed = {"done": False}
+    executions_after_commit: list[bool] = []
+    event.listen(session, "after_commit", lambda db: committed.__setitem__("done", True))
+    event.listen(session, "do_orm_execute", lambda state: executions_after_commit.append(committed["done"]))
+    studio = StudioFake()
+
+    acknowledgement = SubmitReviewDecisionUseCase(
+        review_decision_writer=SqlAlchemyReviewRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
+        execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+        selected_product_reader=_Products(),
+        selected_account_reader=_Accounts(),
+        projection_synchronizer=_composed(session, studio),
+    ).execute(_command((LineResolution(line_number="1", selected_product_id=VITEL_PRODUCT_ID),)))
+
+    assert acknowledgement.accepted is True and acknowledgement.warnings == ()
+    assert committed["done"] is True
+    assert True not in executions_after_commit
+    assert _row(studio)["x_studio_review_status"] == "Decision Submitted"

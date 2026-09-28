@@ -917,6 +917,20 @@ recovery do not change any projected review field and do not sync.
 Async use cases call the synchronizer through `asyncio.to_thread`: the Odoo
 projection adapter is synchronous and deliberately refuses to block a running loop.
 
+### Read isolation (session / thread boundary)
+
+The synchronizer never uses the business/request SQLAlchemy session. The composition
+root (`build_workbench_projection_synchronizer`) takes only the database *engine*
+from the caller's session, in the composing thread and without I/O. Every
+`sync`/`plan` then opens its own read-only session on a fresh connection
+(`open_read_only_session`: PostgreSQL `READ ONLY` transactions), reads the committed
+snapshot, and always rolls back and closes it -- all in the thread that runs the
+sync. For `asyncio.to_thread` call sites that is the worker thread. The request
+session is never touched by the worker thread. Synchronous call sites (decision
+acceptance and the execute dispatcher) use the same private session, so they
+observe only committed state. A projection failure can therefore only discard its
+own read session; it can never roll back or poison the business transaction.
+
 ### Failure behaviour
 
 A projection failure never propagates into the committed business operation. The
@@ -978,7 +992,7 @@ Dry-run performs zero Odoo and zero Hub writes, enumerates every review of the
 company, and reports `CREATE / UPDATE / NO_CHANGE / SKIPPED_STALE / ERROR` with
 field-level differences and totals; one review's error never stops the run (exit code
 1 when any review errored). `--apply` creates/updates Workbench projection rows only,
-through the same synchronizer. The Hub session is opened read-only. The CLI does not
+through the same synchronizer. Every Hub read (listing and each review) uses its own read-only session. The CLI does not
 depend on or change `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED`.
 
 ## Mapping Rules

@@ -18,12 +18,22 @@ A projection failure never propagates into the business operation: ``sync``
 returns an ``ERROR`` result (and logs it) instead of raising, so it can never roll
 back Hub state, change an accepted decision or execution, or make a caller retry a
 committed transition.
+
+Read isolation: the synchronizer never uses the caller's persistence context. Each
+``sync``/``plan``/``build_projection`` call opens its own read scope (a fresh,
+read-only persistence context supplied by the composition root), reads the
+committed snapshot through it, and closes it -- all in the calling thread. A call
+made through ``asyncio.to_thread`` therefore creates, uses and closes its read
+scope entirely inside the worker thread, and a failure can only ever discard that
+private read scope, never the business transaction.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from typing import Protocol
 
 from app.application.exceptions import ApplicationError
@@ -89,28 +99,26 @@ class _ExecutionSnapshotReader(Protocol):
         pass
 
 
+@dataclass(frozen=True, slots=True)
+class WorkbenchProjectionSources:
+    """Everything one sync reads through, bound to one private read scope."""
+
+    review_reader: _ReviewReader
+    accepted_decision_reader: _AcceptedDecisionReader
+    accepted_source_reader: _AcceptedSourceReader
+    execution_snapshot_reader: _ExecutionSnapshotReader
+    publisher: WorkbenchProjectionSyncPublisher
+
+
+#: Opens one private, read-only scope over *committed* Hub state and closes it on exit.
+ProjectionReadScope = Callable[[], AbstractContextManager[WorkbenchProjectionSources]]
+
+
 class WorkbenchProjectionSynchronizer:
     """The single Hub -> Odoo Workbench projection entry point."""
 
-    def __init__(
-        self,
-        *,
-        review_reader: _ReviewReader,
-        accepted_decision_reader: _AcceptedDecisionReader,
-        accepted_source_reader: _AcceptedSourceReader,
-        execution_snapshot_reader: _ExecutionSnapshotReader,
-        publisher: WorkbenchProjectionSyncPublisher,
-        on_failure: Callable[[], None] | None = None,
-    ) -> None:
-        self._review_reader = review_reader
-        self._accepted_decision_reader = accepted_decision_reader
-        self._accepted_source_reader = accepted_source_reader
-        self._execution_snapshot_reader = execution_snapshot_reader
-        self._publisher = publisher
-        # Optional hook (the reconcile CLI passes its transaction reset) that resets a
-        # read transaction aborted by a failed query. It never discards business
-        # writes: sync runs only after the business commit.
-        self._on_failure = on_failure
+    def __init__(self, *, read_scope: ProjectionReadScope) -> None:
+        self._read_scope = read_scope
 
     def sync(self, *, review_id: str, company_id: int) -> ProjectionSyncResult:
         """Project the committed Hub state to Odoo. Never raises for projection failures."""
@@ -123,54 +131,18 @@ class WorkbenchProjectionSynchronizer:
         return self._run(review_id=review_id, company_id=company_id, apply=False)
 
     def build_projection(self, *, review_id: str, company_id: int) -> WorkbenchProjection:
-        """Build the complete projection snapshot from committed Hub records only.
+        """Build the complete projection snapshot from committed Hub records only."""
 
-        No live Odoo product/partner resolution: the effective decision state comes
-        from the persisted accepted decision and its Stage-2 execution evidence.
-        """
-
-        review = self._review_reader.get_review_item(ReviewDetailQuery(review_id=review_id, company_id=company_id))
-        decision, source, effective_state_error = self._accepted_state(review, company_id=company_id)
-        return WorkbenchProjection(
-            review_id=review.review_id,
-            company_id=company_id,
-            invoice_id=review.invoice_id,
-            version=review.version,
-            status=review.status,
-            invoice_number=review.invoice_number,
-            supplier_name=review.supplier_name,
-            supplier_tax_number=review.supplier_tax_number,
-            invoice_date=review.invoice_date,
-            currency=review.currency,
-            total_amount=review.total_amount,
-            # A decided review shows what the accepted decision selected; the Hub
-            # review.workflow itself is never rewritten to make the projection look right.
-            workflow=(
-                decision.selected_workflow
-                if decision is not None and decision.selected_workflow is not None
-                else review.workflow
-            ),
-            review_reasons=review.review_reasons,
-            warnings=review.warnings,
-            updated_at=review.updated_at,
-            review_reasons_role=review_reasons_role(review.status),
-            accepted_decision=_decision_projection(decision) if decision is not None else None,
-            effective_resolutions=_line_resolutions(source) if source is not None else (),
-            effective_state_error=effective_state_error,
-            execution=self._execution(review, decision, company_id=company_id),
-            classification_review_version=(
-                decision.decision_version - 1
-                if decision is not None and decision.decision_version > 1
-                else review.version
-            ),
-        )
+        with self._read_scope() as sources:
+            return _build_projection(sources, review_id=review_id, company_id=company_id)
 
     def _run(self, *, review_id: str, company_id: int, apply: bool) -> ProjectionSyncResult:
         try:
-            projection = self.build_projection(review_id=review_id, company_id=company_id)
-            result = self._publisher.sync_projection(projection, apply=apply)
+            # The read scope is opened, used and closed here, in the calling thread.
+            with self._read_scope() as sources:
+                projection = _build_projection(sources, review_id=review_id, company_id=company_id)
+                result = sources.publisher.sync_projection(projection, apply=apply)
         except Exception as exc:  # noqa: BLE001 - never propagate into a committed business transition
-            self._reset_after_failure()
             error = _safe_error(exc)
             logger.error(
                 "workbench.projection.sync_failed",
@@ -200,51 +172,91 @@ class WorkbenchProjectionSynchronizer:
             )
         return result
 
-    def _reset_after_failure(self) -> None:
-        if self._on_failure is None:
-            return
-        try:
-            self._on_failure()
-        except Exception:  # noqa: BLE001 - best-effort cleanup of a read-only transaction
-            logger.warning("workbench.projection.reset_failed", exc_info=True)
 
-    def _accepted_state(
-        self, review: ReviewItem, *, company_id: int
-    ) -> tuple[AcceptedReviewDecision | None, ExecutionSourceInvoice | None, str | None]:
-        # Same rule as PR #197's ReviewEvidenceReader: only a decision whose
-        # review_version_after is the review's current version governs it.
-        if review.status is ReviewStatus.PENDING_REVIEW or review.version <= 1:
-            return None, None, None
-        try:
-            decision = self._accepted_decision_reader.get_accepted_decision(
-                review_id=review.review_id, company_id=company_id, decision_version=review.version
-            )
-        except ReviewNotFoundError:
-            return None, None, None
-        except ReviewDecisionDataIntegrityError:
-            return None, None, EFFECTIVE_STATE_UNAVAILABLE
-        try:
-            source = self._accepted_source_reader.get_source_invoice(
-                review_id=review.review_id, company_id=company_id, decision_version=decision.decision_version
-            )
-        except ExecutionSourceInvoiceNotFoundError:
-            # Normal for DISMISS and non-Vendor-Bill decisions: no execution evidence is pinned.
-            return decision, None, None
-        except ExecutionSourceInvoiceIntegrityError:
-            return decision, None, EFFECTIVE_STATE_UNAVAILABLE
-        return decision, source, None
+def _build_projection(sources: WorkbenchProjectionSources, *, review_id: str, company_id: int) -> WorkbenchProjection:
+    """The complete snapshot, from committed Hub records only.
 
-    def _execution(
-        self, review: ReviewItem, decision: AcceptedReviewDecision | None, *, company_id: int
-    ) -> WorkbenchProjectionExecution | None:
-        if decision is None:
-            return None
-        snapshot = self._execution_snapshot_reader.find_latest_snapshot_for_review(
-            review_id=review.review_id, company_id=company_id
+    No live Odoo product/partner resolution: the effective decision state comes from
+    the persisted accepted decision and its Stage-2 execution evidence.
+    """
+
+    review = sources.review_reader.get_review_item(ReviewDetailQuery(review_id=review_id, company_id=company_id))
+    decision, source, effective_state_error = _accepted_state(sources, review, company_id=company_id)
+    return WorkbenchProjection(
+        review_id=review.review_id,
+        company_id=company_id,
+        invoice_id=review.invoice_id,
+        version=review.version,
+        status=review.status,
+        invoice_number=review.invoice_number,
+        supplier_name=review.supplier_name,
+        supplier_tax_number=review.supplier_tax_number,
+        invoice_date=review.invoice_date,
+        currency=review.currency,
+        total_amount=review.total_amount,
+        # A decided review shows what the accepted decision selected; the Hub
+        # review.workflow itself is never rewritten to make the projection look right.
+        workflow=(
+            decision.selected_workflow
+            if decision is not None and decision.selected_workflow is not None
+            else review.workflow
+        ),
+        review_reasons=review.review_reasons,
+        warnings=review.warnings,
+        updated_at=review.updated_at,
+        review_reasons_role=review_reasons_role(review.status),
+        accepted_decision=_decision_projection(decision) if decision is not None else None,
+        effective_resolutions=_line_resolutions(source) if source is not None else (),
+        effective_state_error=effective_state_error,
+        execution=_execution(sources, review, decision, company_id=company_id),
+        classification_review_version=(
+            decision.decision_version - 1 if decision is not None and decision.decision_version > 1 else review.version
+        ),
+    )
+
+
+def _accepted_state(
+    sources: WorkbenchProjectionSources, review: ReviewItem, *, company_id: int
+) -> tuple[AcceptedReviewDecision | None, ExecutionSourceInvoice | None, str | None]:
+    # Same rule as PR #197's ReviewEvidenceReader: only a decision whose
+    # review_version_after is the review's current version governs it.
+    if review.status is ReviewStatus.PENDING_REVIEW or review.version <= 1:
+        return None, None, None
+    try:
+        decision = sources.accepted_decision_reader.get_accepted_decision(
+            review_id=review.review_id, company_id=company_id, decision_version=review.version
         )
-        if snapshot is None or snapshot.decision_version != decision.decision_version:
-            return None
-        return _execution_projection(snapshot)
+    except ReviewNotFoundError:
+        return None, None, None
+    except ReviewDecisionDataIntegrityError:
+        return None, None, EFFECTIVE_STATE_UNAVAILABLE
+    try:
+        source = sources.accepted_source_reader.get_source_invoice(
+            review_id=review.review_id, company_id=company_id, decision_version=decision.decision_version
+        )
+    except ExecutionSourceInvoiceNotFoundError:
+        # Normal for DISMISS and non-Vendor-Bill decisions: no execution evidence is pinned.
+        return decision, None, None
+    except ExecutionSourceInvoiceIntegrityError:
+        return decision, None, EFFECTIVE_STATE_UNAVAILABLE
+    return decision, source, None
+
+
+def _execution(
+    sources: WorkbenchProjectionSources,
+    review: ReviewItem,
+    decision: AcceptedReviewDecision | None,
+    *,
+    company_id: int,
+) -> WorkbenchProjectionExecution | None:
+    if decision is None:
+        return None
+    snapshot = sources.execution_snapshot_reader.find_latest_snapshot_for_review(
+        review_id=review.review_id, company_id=company_id
+    )
+    if snapshot is None or snapshot.decision_version != decision.decision_version:
+        return None
+    return _execution_projection(snapshot)
 
 
 def _decision_projection(decision: AcceptedReviewDecision) -> WorkbenchProjectionDecision:
@@ -321,9 +333,11 @@ def _is_classified(exc: Exception) -> bool:
 __all__ = [
     "PROJECTION_SYNC_WARNING",
     "ProjectionFieldChange",
+    "ProjectionReadScope",
     "ProjectionSyncOutcome",
     "ProjectionSyncResult",
     "ReviewProjectionSynchronizer",
+    "WorkbenchProjectionSources",
     "WorkbenchProjectionSyncPublisher",
     "WorkbenchProjectionSynchronizer",
     "projection_sync_warnings",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
 
 from app.application.dto import DecisionResult
 from app.application.use_cases import ImportInvoiceUseCase
@@ -46,9 +47,11 @@ def test_production_import_composition_wires_odoo_publisher_when_flag_is_true(mo
     # publishes through the same Odoo publisher; the legacy direct publisher is unset.
     synchronizer = use_case._workbench_projection_synchronizer
     assert isinstance(synchronizer, WorkbenchProjectionSynchronizer)
-    publisher = synchronizer._publisher
-    assert isinstance(publisher, OdooWorkbenchProjectionPublisher)
-    assert isinstance(publisher._classification_service, WorkbenchClassificationProjectionService)
+    # Each sync reads through its own read scope, never the request session.
+    with synchronizer._read_scope() as sources:
+        publisher = sources.publisher
+        assert isinstance(publisher, OdooWorkbenchProjectionPublisher)
+        assert isinstance(publisher._classification_service, WorkbenchClassificationProjectionService)
     assert use_case._workbench_projection_publisher is None
 
 
@@ -124,12 +127,19 @@ def test_uyumsoft_importer_composition_preserves_workbench_feature_flag_true(mon
 
     synchronizer = use_case._workbench_projection_synchronizer
     assert isinstance(synchronizer, WorkbenchProjectionSynchronizer)
-    assert isinstance(synchronizer._publisher, OdooWorkbenchProjectionPublisher)
+    with synchronizer._read_scope() as sources:
+        assert isinstance(sources.publisher, OdooWorkbenchProjectionPublisher)
 
 
 class FakeSession:
+    _engine = create_engine("sqlite://")
+
     def commit(self) -> None:
         pass
+
+    def get_bind(self):
+        # Composition only learns the database engine from the request session.
+        return self._engine
 
     def rollback(self) -> None:
         pass

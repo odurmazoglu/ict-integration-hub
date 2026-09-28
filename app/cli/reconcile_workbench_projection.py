@@ -24,7 +24,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, TextIO
 
@@ -154,54 +154,34 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     out: TextIO | None = None,
-    session_factory: Callable[[], object] | None = None,
+    engine: object | None = None,
 ) -> int:
     args = _parse_args(argv)
     stream = out or sys.stdout
     # Imported lazily so ``--help`` and argument errors never need a database or Odoo.
-    from app.composition.imports import build_workbench_projection_synchronizer
+    from app.composition.imports import build_workbench_projection_synchronizer, open_read_only_session
     from app.core.config import get_settings
     from app.persistence import SqlAlchemyReviewRepository
 
-    session = (session_factory or _read_only_session)()
+    if engine is None:
+        from app.db.session import engine as default_engine
+
+        engine = default_engine
     try:
-        try:
-            synchronizer = build_workbench_projection_synchronizer(
-                session=session, settings=get_settings(), reset_after_failure=True
-            )
-        except WorkbenchContractError as exc:
-            # e.g. an incomplete ODOO_WORKBENCH_PUBLISHER_* field mapping: nothing was read or written.
-            print(f"Configuration error: {exc}", file=sys.stderr)
-            return EXIT_CONFIGURATION_ERROR
-        review_ids = (
-            tuple(dict.fromkeys(args.review_id))
-            if args.review_id
-            else list_review_ids(SqlAlchemyReviewRepository(session), company_id=args.company)
-        )
-        report = run_reconcile(
-            synchronizer, review_ids=review_ids, company_id=args.company, apply=args.apply, out=stream
-        )
-    finally:
-        # The CLI never writes Hub state: always discard the (read-only) transaction.
-        bind = session.get_bind()
-        session.rollback()
-        session.close()
-        if session_factory is None:
-            bind.close()
+        # Each review is projected through its own private read-only session.
+        synchronizer = build_workbench_projection_synchronizer(engine=engine, settings=get_settings())
+    except WorkbenchContractError as exc:
+        # e.g. an incomplete ODOO_WORKBENCH_PUBLISHER_* field mapping: nothing was read or written.
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return EXIT_CONFIGURATION_ERROR
+    if args.review_id:
+        review_ids: tuple[str, ...] = tuple(dict.fromkeys(args.review_id))
+    else:
+        # The CLI never writes Hub state: listing uses its own read-only session too.
+        with open_read_only_session(engine) as read_session:
+            review_ids = list_review_ids(SqlAlchemyReviewRepository(read_session), company_id=args.company)
+    report = run_reconcile(synchronizer, review_ids=review_ids, company_id=args.company, apply=args.apply, out=stream)
     return EXIT_REVIEW_ERRORS if report.has_errors else 0
-
-
-def _read_only_session():
-    """A Hub session whose PostgreSQL transactions are READ ONLY (defence in depth)."""
-
-    from sqlalchemy.orm import Session
-
-    from app.db.session import engine
-
-    connection = engine.connect()
-    if engine.dialect.name == "postgresql":
-        connection = connection.execution_options(postgresql_readonly=True)
-    return Session(bind=connection, autoflush=False)
 
 
 if __name__ == "__main__":  # pragma: no cover - thin process entry point
