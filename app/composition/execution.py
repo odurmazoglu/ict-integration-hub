@@ -23,11 +23,12 @@ from app.application.execution import (
 )
 from app.application.execution.contracts import ExecutionStepType
 from app.application.execution.resale_execution_accounting import ResaleExecutionAccountingValidator
-from app.application.execution.vendor_bill_preview import PreviewVendorBillUseCase
+from app.application.execution.vendor_bill_preview import PreviewVendorBillExpectationReader, PreviewVendorBillUseCase
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
 from app.application.workbench.vendor_bill_readback import (
     GetVendorBillReadbackUseCase,
+    VendorBillMonetaryReadbackVerifier,
     VendorBillResaleReadbackVerifier,
 )
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
@@ -365,7 +366,8 @@ def build_get_vendor_bill_readback_use_case(
 ) -> GetVendorBillReadbackUseCase:
     """Compose artifact-derived verification from read-only Hub and Odoo readers."""
 
-    adapter = OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    adapter = OdooReadOnlyAdapter(client=resolved_odoo_client)
     return GetVendorBillReadbackUseCase(
         review_reader=SqlAlchemyReviewRepository(session),
         execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(session),
@@ -376,6 +378,15 @@ def build_get_vendor_bill_readback_use_case(
             pin_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
             purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
             fiscal_position_reader=OdooFiscalPositionReader(adapter=adapter),
+        ),
+        # P0-PROD-19E-1: every bill's money is checked against the same zero-write preview
+        # (same builder, same pinned evidence) that real execution mirrors.
+        monetary_verifier=VendorBillMonetaryReadbackVerifier(
+            expectation_reader=PreviewVendorBillExpectationReader(
+                preview_use_case=build_vendor_bill_preview_use_case(
+                    session=session, settings=settings, odoo_client=resolved_odoo_client
+                )
+            )
         ),
     )
 

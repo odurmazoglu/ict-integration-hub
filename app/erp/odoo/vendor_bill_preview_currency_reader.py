@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from app.application.execution.vendor_bill_preview import VendorBillCurrency
+from app.billing.money import MAX_CURRENCY_DECIMAL_PLACES
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.write.exceptions import VendorBillWriteValidationError
 
-CURRENCY_FIELDS = ["id", "name", "active"]
+# P0-PROD-19E-1: decimal_places is the currency's own monetary precision, read in the
+# same single call -- the Hub never assumes a currency has two decimals.
+CURRENCY_FIELDS = ["id", "name", "active", "decimal_places"]
 
 
 class OdooVendorBillPreviewCurrencyReader:
@@ -21,7 +25,7 @@ class OdooVendorBillPreviewCurrencyReader:
     def __init__(self, *, adapter: OdooReadOnlyAdapter) -> None:
         self._adapter = adapter
 
-    def resolve_vendor_bill_currency_id(self, currency_code: str) -> int:
+    def resolve_vendor_bill_currency(self, currency_code: str) -> VendorBillCurrency:
         code = currency_code.strip().upper() if isinstance(currency_code, str) else ""
         if not code:
             raise VendorBillWriteValidationError("Vendor Bill currency code is required.")
@@ -43,4 +47,11 @@ class OdooVendorBillPreviewCurrencyReader:
             or record.get("active") is not True
         ):
             raise VendorBillWriteValidationError("Vendor Bill currency is not an active exact Odoo currency.")
-        return currency_id
+        decimal_places = record.get("decimal_places")
+        if (
+            type(decimal_places) is not int
+            or isinstance(decimal_places, bool)
+            or not 0 <= decimal_places <= MAX_CURRENCY_DECIMAL_PLACES
+        ):
+            raise VendorBillWriteValidationError("Vendor Bill currency precision is not readable from Odoo.")
+        return VendorBillCurrency(currency_id=currency_id, decimal_places=decimal_places)

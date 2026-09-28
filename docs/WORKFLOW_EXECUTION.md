@@ -309,3 +309,19 @@ transaction. If remote creation succeeds and Hub finalization/commit fails, stop
 and reconcile by the deterministic writer idempotency identity before any explicitly
 authorized replay. The change adds no retry loop, scheduler, gate opening, posting,
 or production execution.
+
+## Vendor Bill Monetary Reconciliation (P0-PROD-19E-1)
+
+Monetary amounts are reconciled at the invoice currency's own precision, never within an absolute tolerance:
+
+    currency_round(a) == currency_round(b)      # app.billing.money.monetary_equal
+
+`currency_round` rounds half away from zero (Odoo's `float_round` semantics), with `Decimal` only. The precision is always Odoo's `res.currency.decimal_places` for the bill currency; the Hub never assumes two decimals.
+
+- `price_unit` keeps the source precision (e.g. `59.7378`) and is never rounded. Only monetary amounts (line subtotal, untaxed, tax, total) are presented and compared at the currency's precision. `2 x 59.7378 = 119.4756` is the USD amount `119.48`; `119.46` or `119.47` is not.
+- **Preview** presents `preview_untaxed`/`preview_tax`/`preview_total` at the currency's precision (`currency_decimal_places`), keeps the full-precision `computed_untaxed` and per-line `computed_subtotal`, shows each line's `currency_subtotal` and source `source_line_extension_amount`, and reconciles against the source's own totals (`source_untaxed`/`source_tax`/`source_total`, `monetary_reconciles`, `monetary_mismatches`).
+- **Readback** verifies every created Vendor Bill (`monetary_verification`): currency, each line's quantity, exact `price_unit` and subtotal, and the bill's untaxed/tax/total against the accepted evidence and the source totals. The expectation is the same zero-write preview (same builder, same pinned evidence) that execution mirrors.
+- A **mismatch is reported, never corrected**: the execution stays `COMPLETED` with its single artifact, the draft bill is left for reconciliation, and nothing is posted, edited, deleted or re-created — the same model as the P0-PROD-18F-2 RESALE readback. A retry can never create a second bill: the writer finds the existing bill by its Odoo idempotency key and returns `existing`.
+- A zero-amount `AllowanceCharge` (`Amount=0`) has no economic effect and causes no monetary mismatch. The Vendor Bill payload is unchanged by this rule.
+
+Not yet changed (follow-up): the builder's own pre-build totals invariant still uses its absolute `0.01` tolerance, because currency precision is not available at decision/build time.

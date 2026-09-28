@@ -27,6 +27,7 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceNotFoundError,
 )
 from app.application.execution.planner import ExecutionPlanner
+from app.application.execution.vendor_bill_preview import VendorBillCurrency
 from app.application.workbench import ReviewDecisionType
 from app.application.workbench.dto import LineResolution
 from app.application.workbench.exceptions import ReviewNotFoundError
@@ -83,16 +84,17 @@ class StaticSourceInvoiceReader:
 
 
 class StaticCurrencyReader:
-    def __init__(self, *, currency_id: int = 31, error: Exception | None = None) -> None:
+    def __init__(self, *, currency_id: int = 31, decimal_places: int = 2, error: Exception | None = None) -> None:
         self._currency_id = currency_id
+        self._decimal_places = decimal_places
         self._error = error
         self.calls: list[str] = []
 
-    def resolve_vendor_bill_currency_id(self, currency_code: str) -> int:
+    def resolve_vendor_bill_currency(self, currency_code: str) -> VendorBillCurrency:
         self.calls.append(currency_code)
         if self._error is not None:
             raise self._error
-        return self._currency_id
+        return VendorBillCurrency(currency_id=self._currency_id, decimal_places=self._decimal_places)
 
 
 class StaticProductUomReader:
@@ -123,7 +125,9 @@ class RecordingReadOnlyOdooClient:
     """Only ``search_read`` -- mirrors production res.currency lookup exactly."""
 
     def __init__(self, *, records: list[dict] | None = None) -> None:
-        self._records = records if records is not None else [{"id": 31, "name": "TRY", "active": True}]
+        self._records = (
+            records if records is not None else [{"id": 31, "name": "TRY", "active": True, "decimal_places": 2}]
+        )
         self.calls: list[dict] = []
 
     async def search_read(self, *, model: str, domain, fields, limit: int = 20, offset: int = 0):
@@ -605,7 +609,7 @@ def test_no_discount_invoice_preview_is_unaffected() -> None:
 
 
 def test_currency_resolution_through_real_read_only_adapter() -> None:
-    client = RecordingReadOnlyOdooClient(records=[{"id": 31, "name": "TRY", "active": True}])
+    client = RecordingReadOnlyOdooClient(records=[{"id": 31, "name": "TRY", "active": True, "decimal_places": 2}])
     adapter = OdooReadOnlyAdapter(client=client, retry_backoff_seconds=0)
     reader = OdooVendorBillPreviewCurrencyReader(adapter=adapter)
     use_case, _, _ = _use_case(decision=_d_market_decision(), source=_d_market_source(), currency_reader=reader)
@@ -683,8 +687,8 @@ def test_inactive_currency_fails_closed_through_real_adapter() -> None:
 def test_ambiguous_currency_fails_closed_through_real_adapter() -> None:
     client = RecordingReadOnlyOdooClient(
         records=[
-            {"id": 31, "name": "TRY", "active": True},
-            {"id": 32, "name": "TRY", "active": True},
+            {"id": 31, "name": "TRY", "active": True, "decimal_places": 2},
+            {"id": 32, "name": "TRY", "active": True, "decimal_places": 2},
         ]
     )
     adapter = OdooReadOnlyAdapter(client=client, retry_backoff_seconds=0)
@@ -746,7 +750,7 @@ def test_preview_currency_reader_type_has_no_write_method() -> None:
     no create/write/unlink method at all -- this is a structural, not boolean, guarantee."""
 
     reader_methods = {name for name in dir(OdooVendorBillPreviewCurrencyReader) if not name.startswith("_")}
-    assert reader_methods == {"resolve_vendor_bill_currency_id"}
+    assert reader_methods == {"resolve_vendor_bill_currency"}
     adapter_methods = {name for name in dir(OdooReadOnlyAdapter) if not name.startswith("_")}
     for forbidden in ("create", "write", "unlink", "create_res_partner", "create_account_move"):
         assert forbidden not in adapter_methods

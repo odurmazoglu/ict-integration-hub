@@ -74,8 +74,8 @@ from app.application.workbench.resale_accounting_pin import ResaleAccountingPin,
 from app.application.workbench.resale_decision_gate import PurchasePurposeHistoryReader
 from app.application.workflow import WorkflowType
 from app.billing import VendorBillBuilder, line_gross_total, line_net_total, line_total_discount
-
-TAX_AMOUNT_PRECISION = Decimal("0.01")
+from app.billing.money import MonetaryPrecision, currency_round
+from app.billing.reconciliation import line_currency_subtotal, monetary_mismatches, source_monetary_totals
 
 
 class VendorBillPreviewCurrencyReader(Protocol):
@@ -86,7 +86,7 @@ class VendorBillPreviewCurrencyReader(Protocol):
     read-only adapter this is satisfied by.
     """
 
-    def resolve_vendor_bill_currency_id(self, currency_code: str) -> int:
+    def resolve_vendor_bill_currency(self, currency_code: str) -> VendorBillCurrency:
         pass
 
 
@@ -111,6 +111,14 @@ class VendorBillPreviewResaleAccountingPinReader(Protocol):
         decision_version: int,
     ) -> ResaleAccountingPin | None:
         pass
+
+
+@dataclass(frozen=True, slots=True)
+class VendorBillCurrency(ApplicationDTO):
+    """The Odoo currency a Vendor Bill is written in, with its own monetary precision (P0-PROD-19E-1)."""
+
+    currency_id: int
+    decimal_places: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +166,12 @@ class VendorBillPreviewLine(ApplicationDTO):
     product_uom_id: int | None = None
     # P0-PROD-18F-1: set only for a RESALE decision, from its immutable pin.
     resale_accounting: VendorBillPreviewResaleAccounting | None = None
+    # P0-PROD-19E-1: quantity x unit_price at full precision, the same product at the
+    # currency's precision (what Odoo stores as the line subtotal), and the source's own
+    # transmitted LineExtensionAmount. unit_price itself is never rounded.
+    computed_subtotal: Decimal | None = None
+    currency_subtotal: Decimal | None = None
+    source_line_extension_amount: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,11 +199,23 @@ class VendorBillPreview(ApplicationDTO):
     # Deterministic PREVIEW totals, computed before any Odoo account.move exists --
     # never Odoo-computed values. gross_source_amount/total_discount are exposed so an
     # operator can see why preview_untaxed differs from the source invoice's own gross.
+    # P0-PROD-19E-1: preview_untaxed/preview_tax/preview_total are monetary amounts at
+    # the currency's precision (currency_decimal_places); computed_untaxed keeps the
+    # full-precision sum of quantity x unit_price.
     gross_source_amount: Decimal
     total_discount: Decimal
     preview_untaxed: Decimal
     preview_tax: Decimal
     preview_total: Decimal
+    currency_decimal_places: int | None = None
+    computed_untaxed: Decimal | None = None
+    # The source invoice's own transmitted totals, and whether the preview reconciles
+    # with them at the currency's precision (app.billing.money.monetary_equal).
+    source_untaxed: Decimal | None = None
+    source_tax: Decimal | None = None
+    source_total: Decimal | None = None
+    monetary_reconciles: bool | None = None
+    monetary_mismatches: tuple[str, ...] = field(default_factory=tuple)
 
 
 class PreviewVendorBillUseCase:
@@ -301,9 +327,10 @@ class PreviewVendorBillUseCase:
         # exception here -- callers (including the API router) never need to depend on
         # any ERP-layer exception type to handle a preview currency failure.
         try:
-            currency_id = self._currency_reader.resolve_vendor_bill_currency_id(vendor_bill.currency)
+            currency = self._currency_reader.resolve_vendor_bill_currency(vendor_bill.currency)
         except ApplicationError as exc:
             raise ExecutionPreviewCurrencyResolutionError(exc.safe_message) from exc
+        precision = MonetaryPrecision(currency.decimal_places)
 
         # P0-PROD-10E: resolve the real Odoo uom_id for every product on this bill,
         # via the same read-only, fail-closed path EXECUTE's writer uses -- never the
@@ -332,23 +359,40 @@ class PreviewVendorBillUseCase:
                 tax_ids=bill_line.tax_ids,
                 product_uom_id=product_uom_ids.get(bill_line.product_id) if bill_line.product_id is not None else None,
                 resale_accounting=resale_accounting_by_line.get(source_line.line_number),
+                computed_subtotal=bill_line.quantity * bill_line.unit_price,
+                currency_subtotal=line_currency_subtotal(bill_line.quantity, bill_line.unit_price, precision),
+                source_line_extension_amount=source_line.line_extension_amount,
             )
             for source_line, bill_line in zip(source.invoice.lines, vendor_bill.invoice_lines, strict=True)
         )
 
         gross_source_amount = sum((line_gross_total(line) for line in source.invoice.lines), Decimal("0"))
         total_discount = sum((line_total_discount(line) for line in source.invoice.lines), Decimal("0"))
-        preview_untaxed = sum((line_net_total(line) for line in source.invoice.lines), Decimal("0"))
-        preview_tax = sum(
-            (
-                line_net_total(line) * (tax.rate / Decimal(100))
-                for line in source.invoice.lines
-                for tax in line.taxes
-                if tax.rate is not None
+        # Odoo stores each line subtotal at the currency's precision and sums them.
+        preview_untaxed = sum((line.currency_subtotal for line in lines), Decimal("0"))
+        computed_untaxed = sum((line.computed_subtotal for line in lines), Decimal("0"))
+        preview_tax = currency_round(
+            sum(
+                (
+                    line_net_total(line) * (tax.rate / Decimal(100))
+                    for line in source.invoice.lines
+                    for tax in line.taxes
+                    if tax.rate is not None
+                ),
+                Decimal("0"),
             ),
-            Decimal("0"),
-        ).quantize(TAX_AMOUNT_PRECISION)
+            precision,
+        )
         preview_total = preview_untaxed + preview_tax
+        source_totals = source_monetary_totals(source.invoice)
+        mismatches = monetary_mismatches(
+            (
+                ("untaxed", preview_untaxed, source_totals.untaxed),
+                ("tax", preview_tax, source_totals.tax),
+                ("total", preview_total, source_totals.total),
+            ),
+            precision,
+        )
 
         return VendorBillPreview(
             review_id=decision.review_id,
@@ -362,7 +406,7 @@ class PreviewVendorBillUseCase:
             reference=vendor_bill.reference,
             header_company_id=vendor_bill.company_id,
             currency_code=vendor_bill.currency,
-            currency_id=currency_id,
+            currency_id=currency.currency_id,
             idempotency_key=idempotency_key,
             lines=lines,
             gross_source_amount=gross_source_amount,
@@ -370,6 +414,13 @@ class PreviewVendorBillUseCase:
             preview_untaxed=preview_untaxed,
             preview_tax=preview_tax,
             preview_total=preview_total,
+            currency_decimal_places=precision.decimal_places,
+            computed_untaxed=computed_untaxed,
+            source_untaxed=source_totals.untaxed,
+            source_tax=source_totals.tax,
+            source_total=source_totals.total,
+            monetary_reconciles=not mismatches,
+            monetary_mismatches=mismatches,
         )
 
     def _pinned_resale_accounting(
@@ -455,3 +506,15 @@ def _require_text(value: str | None, message: str) -> None:
 def _require_positive_int(value: int, message: str) -> None:
     if type(value) is not int or value <= 0:
         raise ExecutionPlanningError(message)
+
+
+class PreviewVendorBillExpectationReader:
+    """``VendorBillExpectationReader`` over the zero-write preview (P0-PROD-19E-1)."""
+
+    def __init__(self, *, preview_use_case: PreviewVendorBillUseCase) -> None:
+        self._preview_use_case = preview_use_case
+
+    def expected_vendor_bill(self, *, review_id: str, company_id: int, decision_version: int) -> VendorBillPreview:
+        return self._preview_use_case.preview(
+            PreviewVendorBillRequest(review_id=review_id, company_id=company_id, decision_version=decision_version)
+        )
