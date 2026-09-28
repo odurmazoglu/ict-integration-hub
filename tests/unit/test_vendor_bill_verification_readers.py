@@ -15,19 +15,24 @@ from app.erp.odoo.vendor_bill_header_verification_reader import (
     OdooVendorBillHeaderVerificationReader,
 )
 
+TRY_CURRENCY = {"id": 31, "name": "TRY", "decimal_places": 2}
+
 
 class _ReadOnlyClient:
-    def __init__(self, records) -> None:
+    def __init__(self, records, currency_records=None) -> None:
         self.records = list(records)
+        self.currency_records = list(currency_records if currency_records is not None else [TRY_CURRENCY])
         self.calls = []
 
     async def search_read(self, *, model, domain, fields, limit=20, offset=0):
         self.calls.append({"model": model, "domain": domain, "fields": fields, "limit": limit, "offset": offset})
+        if model == "res.currency":
+            return list(self.currency_records)
         return list(self.records)
 
 
-def _adapter(records):
-    client = _ReadOnlyClient(records)
+def _adapter(records, currency_records=None):
+    client = _ReadOnlyClient(records, currency_records)
     return OdooReadOnlyAdapter(client=client, retry_backoff_seconds=0), client
 
 
@@ -56,11 +61,19 @@ def test_header_reader_uses_fixed_company_scoped_vendor_bill_query_and_preserves
             "fields": list(VENDOR_BILL_HEADER_VERIFICATION_FIELDS),
             "limit": 2,
             "offset": 0,
-        }
+        },
+        {
+            "model": "res.currency",
+            "domain": [["id", "=", 31], ["active", "in", [True, False]]],
+            "fields": ["id", "name", "decimal_places"],
+            "limit": 2,
+            "offset": 0,
+        },
     ]
     assert result is not None
     assert result.partner_id == 439
     assert result.currency == "TRY"
+    assert result.currency_decimal_places == 2
     assert result.amount_untaxed == Decimal("4959.80")
     assert result.amount_tax == Decimal("991.96")
     assert result.amount_total == Decimal("5951.76")

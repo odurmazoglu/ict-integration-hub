@@ -157,6 +157,7 @@ from app.application.workbench.purchase_account_discovery import (
 from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.vendor_bill_readback import (
+    VendorBillMonetaryReadbackVerification,
     VendorBillReadback,
     VendorBillReadbackError,
     VendorBillReadbackIntegrityError,
@@ -226,6 +227,8 @@ from app.schemas.workbench import (
     SupplierRemediationResponse,
     SupplierResolutionRequest,
     TaxResolutionRequest,
+    VendorBillMonetaryReadbackLineResponse,
+    VendorBillMonetaryReadbackResponse,
     VendorBillPreviewEnvelope,
     VendorBillPreviewLineResponse,
     VendorBillPreviewResaleAccountingResponse,
@@ -1423,6 +1426,9 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
                 product_id=line.product_id,
                 tax_ids=list(line.tax_ids),
                 resale_accounting=_preview_resale_accounting_response(line.resale_accounting),
+                computed_subtotal=decimal_to_api(line.computed_subtotal),
+                currency_subtotal=decimal_to_api(line.currency_subtotal),
+                source_line_extension_amount=decimal_to_api(line.source_line_extension_amount),
             )
             for line in preview.lines
         ],
@@ -1431,6 +1437,13 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
         preview_untaxed=decimal_to_api(preview.preview_untaxed),
         preview_tax=decimal_to_api(preview.preview_tax),
         preview_total=decimal_to_api(preview.preview_total),
+        currency_decimal_places=preview.currency_decimal_places,
+        computed_untaxed=decimal_to_api(preview.computed_untaxed),
+        source_untaxed=decimal_to_api(preview.source_untaxed),
+        source_tax=decimal_to_api(preview.source_tax),
+        source_total=decimal_to_api(preview.source_total),
+        monetary_reconciles=preview.monetary_reconciles,
+        monetary_mismatches=list(preview.monetary_mismatches),
     )
 
 
@@ -1480,6 +1493,35 @@ def _vendor_bill_readback_response(readback: VendorBillReadback) -> VendorBillRe
             for line in readback.lines
         ],
         resale_verification=_resale_readback_response(readback.resale_verification),
+        monetary_verification=_monetary_readback_response(readback.monetary_verification),
+    )
+
+
+def _monetary_readback_response(
+    verification: VendorBillMonetaryReadbackVerification | None,
+) -> VendorBillMonetaryReadbackResponse | None:
+    if verification is None:
+        return None
+    return VendorBillMonetaryReadbackResponse(
+        status=verification.status.value,
+        currency=verification.currency,
+        currency_decimal_places=verification.currency_decimal_places,
+        expected_untaxed=decimal_to_api(verification.expected_untaxed),
+        expected_tax=decimal_to_api(verification.expected_tax),
+        expected_total=decimal_to_api(verification.expected_total),
+        lines=[
+            VendorBillMonetaryReadbackLineResponse(
+                line_id=line.line_id,
+                product_id=line.product_id,
+                quantity=decimal_to_api(line.quantity),
+                price_unit=decimal_to_api(line.price_unit),
+                price_subtotal=decimal_to_api(line.price_subtotal),
+                expected_subtotal=decimal_to_api(line.expected_subtotal),
+                matches=line.matches,
+            )
+            for line in verification.lines
+        ],
+        mismatches=list(verification.mismatches),
     )
 
 

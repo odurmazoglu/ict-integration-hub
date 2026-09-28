@@ -36,6 +36,7 @@ from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.vendor_bill_preview import (
     PreviewVendorBillRequest,
     PreviewVendorBillUseCase,
+    VendorBillCurrency,
     VendorBillPreview,
     VendorBillPreviewLine,
     VendorBillPreviewResaleAccounting,
@@ -129,8 +130,8 @@ def _stored_pin(session: Session) -> ResaleAccountingPin | None:
 
 
 class _Currency:
-    def resolve_vendor_bill_currency_id(self, currency_code: str) -> int:
-        return 2
+    def resolve_vendor_bill_currency(self, currency_code: str) -> VendorBillCurrency:
+        return VendorBillCurrency(currency_id=2, decimal_places=2)
 
 
 class _Uom:

@@ -664,6 +664,11 @@ class VendorBillPreviewLineResponse(BaseModel):
     tax_ids: list[int]
     # P0-PROD-18F-1: additive; null for every non-RESALE decision.
     resale_accounting: VendorBillPreviewResaleAccountingResponse | None = None
+    # P0-PROD-19E-1: additive. quantity x unit_price at full precision, at the
+    # currency's precision, and the source's own LineExtensionAmount.
+    computed_subtotal: str | None = None
+    currency_subtotal: str | None = None
+    source_line_extension_amount: str | None = None
 
 
 class VendorBillPreviewResponse(BaseModel):
@@ -692,6 +697,15 @@ class VendorBillPreviewResponse(BaseModel):
     preview_untaxed: str
     preview_tax: str
     preview_total: str
+    # P0-PROD-19E-1: additive. preview_* are monetary amounts at currency_decimal_places;
+    # the source totals are reconciled against them at that precision.
+    currency_decimal_places: int | None = None
+    computed_untaxed: str | None = None
+    source_untaxed: str | None = None
+    source_tax: str | None = None
+    source_total: str | None = None
+    monetary_reconciles: bool | None = None
+    monetary_mismatches: list[str] = Field(default_factory=list)
 
 
 class VendorBillReadbackLineResponse(BaseModel):
@@ -731,6 +745,33 @@ class VendorBillResaleReadbackResponse(BaseModel):
     mismatches: list[str]
 
 
+class VendorBillMonetaryReadbackLineResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_id: int
+    product_id: int | None
+    quantity: str
+    price_unit: str
+    price_subtotal: str
+    expected_subtotal: str | None
+    matches: bool
+
+
+class VendorBillMonetaryReadbackResponse(BaseModel):
+    """P0-PROD-19E-1: a created bill's money verified at the bill currency's precision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    currency: str | None
+    currency_decimal_places: int | None
+    expected_untaxed: str | None
+    expected_tax: str | None
+    expected_total: str | None
+    lines: list[VendorBillMonetaryReadbackLineResponse]
+    mismatches: list[str]
+
+
 class VendorBillReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -748,6 +789,8 @@ class VendorBillReadbackResponse(BaseModel):
     lines: list[VendorBillReadbackLineResponse]
     # P0-PROD-18F-2: additive; null unless the decision was accepted under RESALE.
     resale_verification: VendorBillResaleReadbackResponse | None = None
+    # P0-PROD-19E-1: additive; the monetary verification of every Vendor Bill.
+    monetary_verification: VendorBillMonetaryReadbackResponse | None = None
 
 
 class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):

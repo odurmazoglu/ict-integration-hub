@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 
 from app.application.workbench.vendor_bill_readback import VendorBillHeaderVerification
+from app.billing.money import MAX_CURRENCY_DECIMAL_PLACES
 from app.erp.exceptions import ErpRepositoryResponseError
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 
@@ -45,17 +46,42 @@ class OdooVendorBillHeaderVerificationReader:
         move_type = _required_text(record.get("move_type"))
         if record_id != move_id or record_company_id != company_id or move_type != "in_invoice":
             raise ErpRepositoryResponseError(SAFE_VENDOR_BILL_HEADER_ERROR)
+        currency_id = _required_many2one_id(record.get("currency_id"))
+        currency = _required_many2one_name(record.get("currency_id"))
         return VendorBillHeaderVerification(
             move_id=record_id,
             company_id=record_company_id,
             state=_required_text(record.get("state")),
             move_type=move_type,
             partner_id=_required_many2one_id(record.get("partner_id")),
-            currency=_required_many2one_name(record.get("currency_id")),
+            currency=currency,
             amount_untaxed=_decimal(record.get("amount_untaxed")),
             amount_tax=_decimal(record.get("amount_tax")),
             amount_total=_decimal(record.get("amount_total")),
+            currency_decimal_places=self._currency_decimal_places(currency_id=currency_id, currency=currency),
         )
+
+    def _currency_decimal_places(self, *, currency_id: int, currency: str) -> int:
+        """P0-PROD-19E-1: the bill currency's own monetary precision, read-only."""
+
+        records = self._adapter.search_read(
+            model="res.currency",
+            domain=[["id", "=", currency_id], ["active", "in", [True, False]]],
+            fields=["id", "name", "decimal_places"],
+            limit=2,
+        )
+        if len(records) != 1:
+            raise ErpRepositoryResponseError(SAFE_VENDOR_BILL_HEADER_ERROR)
+        record = records[0]
+        decimal_places = record.get("decimal_places")
+        if (
+            record.get("id") != currency_id
+            or _required_text(record.get("name")) != currency
+            or type(decimal_places) is not int
+            or not 0 <= decimal_places <= MAX_CURRENCY_DECIMAL_PLACES
+        ):
+            raise ErpRepositoryResponseError(SAFE_VENDOR_BILL_HEADER_ERROR)
+        return decimal_places
 
 
 def _positive_int(value: object) -> bool:
