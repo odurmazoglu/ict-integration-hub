@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from app.application.execution.vendor_bill_preview import VendorBillCurrency
 from app.billing.money import MAX_CURRENCY_DECIMAL_PLACES
+from app.erp.exceptions import ErpRepositoryError, ErpRepositoryTimeoutError
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
-from app.erp.write.exceptions import VendorBillWriteValidationError
+from app.erp.write.exceptions import (
+    VendorBillWriteTransportError,
+    VendorBillWriteUnexpectedErpError,
+    VendorBillWriteValidationError,
+)
 
 # P0-PROD-19E-1: decimal_places is the currency's own monetary precision, read in the
 # same single call -- the Hub never assumes a currency has two decimals.
@@ -55,3 +60,22 @@ class OdooVendorBillPreviewCurrencyReader:
         ):
             raise VendorBillWriteValidationError("Vendor Bill currency precision is not readable from Odoo.")
         return VendorBillCurrency(currency_id=currency_id, decimal_places=decimal_places)
+
+
+class OdooVendorBillExecutionCurrencyReader:
+    """The same read-only currency resolution for EXECUTE's pre-write monetary gate
+    (P0-PROD-19E-2), with read failures classified exactly as the writer's own currency
+    lookup classifies them (``_translate_connector_errors``): a timeout stays a retryable
+    transport failure, any other ERP read failure an unexpected ERP error.
+    """
+
+    def __init__(self, *, adapter: OdooReadOnlyAdapter) -> None:
+        self._reader = OdooVendorBillPreviewCurrencyReader(adapter=adapter)
+
+    def resolve_vendor_bill_currency(self, currency_code: str) -> VendorBillCurrency:
+        try:
+            return self._reader.resolve_vendor_bill_currency(currency_code)
+        except ErpRepositoryTimeoutError as exc:
+            raise VendorBillWriteTransportError(exc.safe_message) from exc
+        except ErpRepositoryError as exc:
+            raise VendorBillWriteUnexpectedErpError(exc.safe_message) from exc

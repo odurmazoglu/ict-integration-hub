@@ -3,12 +3,18 @@
 from app.billing.builder import (
     CustomerInvoiceBuilder,
     VendorBillBuilder,
+    VendorBillMoney,
+    economic_discounts,
+    is_economically_neutral,
     line_gross_total,
     line_net_total,
     line_total_discount,
     tax_lines_fully_matched,
     to_odoo_account_move_payload,
     to_odoo_customer_invoice_payload,
+    vendor_bill_line_mismatches,
+    vendor_bill_monetary_errors,
+    vendor_bill_money,
 )
 from app.billing.dto import (
     CustomerInvoice,
@@ -34,6 +40,9 @@ __all__ = [
     "VendorBillBuildError",
     "VendorBillBuilder",
     "VendorBillLine",
+    "VendorBillMoney",
+    "economic_discounts",
+    "is_economically_neutral",
     "issue_validated_resale_line_account",
     "line_gross_total",
     "line_net_total",
@@ -41,4 +50,7 @@ __all__ = [
     "tax_lines_fully_matched",
     "to_odoo_account_move_payload",
     "to_odoo_customer_invoice_payload",
+    "vendor_bill_line_mismatches",
+    "vendor_bill_monetary_errors",
+    "vendor_bill_money",
 ]

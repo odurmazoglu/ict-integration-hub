@@ -346,7 +346,7 @@ class FakeOdooVendorBillClient:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         if model == "res.currency":
-            return [{"id": 31, "name": "TRY", "active": True}]
+            return [{"id": 31, "name": "TRY", "active": True, "decimal_places": 2}]
         if model == "product.product":
             # P0-PROD-10E: resolve every requested product id to a real Odoo uom_id --
             # never touches the source invoice's own unit_code.
@@ -1019,12 +1019,16 @@ def test_consumed_authorization_can_be_revoked_to_block_further_recovery(transac
         authorization_id = _issue_authorization(api)
         first = _execute_authorized(api, authorization_id)
         assert first.json()["data"]["runtime_state"] == "waiting_retry"
+        # P0-PROD-19E-2: the first attempt's pre-write currency read times out (with the
+        # read-only adapter's own retries); nothing reaches Odoo after the revoke.
+        search_calls_before_revoke = len(odoo.search_calls)
+        assert search_calls_before_revoke >= 1
         response = api.post(f"/api/workbench/reviews/review-1/write-authorizations/{authorization_id}/revoke")
         assert response.json()["data"]["status"] == "revoked"
         assert response.json()["data"]["use_count"] == 1
         second = _execute_authorized(api, authorization_id)
         assert second.json()["data"]["status"] == "execution_disabled"
-    assert len(odoo.search_calls) == 1 and odoo.create_calls == []
+    assert len(odoo.search_calls) == search_calls_before_revoke and odoo.create_calls == []
 
 
 def test_expired_consumed_authorization_requires_fresh_grant_same_writer_identity(transaction_engine, monkeypatch):

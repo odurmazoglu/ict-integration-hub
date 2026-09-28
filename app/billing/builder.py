@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -13,8 +14,10 @@ from app.billing.dto import (
     VendorBillLine,
 )
 from app.billing.exceptions import CustomerInvoiceBuildError, VendorBillBuildError
+from app.billing.money import MonetaryPrecision, currency_round, monetary_equal
+from app.billing.reconciliation import line_currency_subtotal, monetary_mismatches, source_monetary_totals
 from app.billing.validation import VendorBillValidationResult, validation_result
-from app.domain.invoice import InternalInvoice, InvoiceLine
+from app.domain.invoice import Discount, InternalInvoice, InvoiceLine
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus, ProductMatchStatus
 from app.tax_mapping import InvoiceTaxMappingResult, TaxMatchStatus
 
@@ -40,6 +43,7 @@ class VendorBillBuilder:
         account_only_expense_match: OperatingExpenseMatchResult | None = None,
         explicit_account_only_accounts: dict[str, int] | None = None,
         validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
+        monetary_precision: MonetaryPrecision | None = None,
     ) -> VendorBill:
         """Build a deterministic Vendor Bill.
 
@@ -64,6 +68,14 @@ class VendorBillBuilder:
         be product-backed by exactly the validated product, and each such line carries
         the pinned ``account_id`` alongside ``product_id``. Omitting it (every
         non-RESALE caller) reproduces the pre-18F-2 behavior exactly.
+
+        ``monetary_precision`` (P0-PROD-19E-2) is the bill currency's own precision
+        (Odoo ``res.currency.decimal_places``), resolved read-only by the caller --
+        preview and execution always pass it. With it, a source ``price_unit`` that
+        reproduces the line amount at the currency's precision is kept exactly and the
+        discounted-line checks compare at that precision. The built bill's own money is
+        then gated by ``vendor_bill_monetary_errors`` -- execution fails closed on it
+        before any Odoo write; preview reports the same findings without raising.
         """
 
         validation = validate_vendor_bill_inputs(
@@ -77,6 +89,7 @@ class VendorBillBuilder:
             account_only_expense_match=account_only_expense_match,
             explicit_account_only_accounts=explicit_account_only_accounts,
             validated_resale_accounts=validated_resale_accounts,
+            monetary_precision=monetary_precision,
         )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
@@ -90,7 +103,8 @@ class VendorBillBuilder:
         )
         if expense_account_id is not None:
             invoice_lines = tuple(
-                _expense_vendor_bill_line(line, expense_account_id, tax_ids_by_line) for line in invoice.lines
+                _expense_vendor_bill_line(line, expense_account_id, tax_ids_by_line, monetary_precision)
+                for line in invoice.lines
             )
         else:
             product_by_line = _product_results_by_line(product_match)
@@ -99,12 +113,15 @@ class VendorBillBuilder:
             )
             resale_accounts = validated_resale_accounts or {}
             invoice_lines = tuple(
-                _expense_vendor_bill_line(line, resolved_account_only_account_ids[line.line_number], tax_ids_by_line)
+                _expense_vendor_bill_line(
+                    line, resolved_account_only_account_ids[line.line_number], tax_ids_by_line, monetary_precision
+                )
                 if line.line_number in resolved_account_only_account_ids
                 else _vendor_bill_line(
                     line,
                     product_by_line[line.line_number],
                     tax_ids_by_line,
+                    monetary_precision,
                     resale_account=resale_accounts.get(line.line_number),
                 )
                 for line in invoice.lines
@@ -200,6 +217,7 @@ def validate_vendor_bill_inputs(
     account_only_expense_match: object | None = None,
     explicit_account_only_accounts: dict[str, int] | None = None,
     validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
+    monetary_precision: MonetaryPrecision | None = None,
 ) -> VendorBillValidationResult:
     """Validate deterministic Vendor Bill inputs.
 
@@ -214,6 +232,11 @@ def validate_vendor_bill_inputs(
     This is independent of, and does not relax, the existing whole-invoice
     ``operating_expense_match``/``expense_mode`` path below, which still requires every
     line to be free of product identifiers.
+
+    ``monetary_precision`` (P0-PROD-19E-2) makes the discount and totals checks compare
+    at the currency's precision. Decision acceptance has no currency context and omits
+    it; it keeps the legacy decision-time pre-check (``_LEGACY_TOTALS_TOLERANCE``), and
+    the authoritative currency-aware check runs when preview/execution build the bill.
     """
 
     errors: list[str] = []
@@ -276,10 +299,10 @@ def validate_vendor_bill_inputs(
             if (line.line_number, tax_index) not in tax_by_line:
                 errors.append(f"{line_path}.taxes[{tax_index}] must be matched.")
         if line.unit_price is not None and line.quantity is not None:
-            errors.extend(_discount_errors(line, line_path))
+            errors.extend(_discount_errors(line, line_path, monetary_precision))
 
-    if not errors and any(line.discounts for line in invoice.lines):
-        errors.extend(_totals_invariant_errors(invoice))
+    if not errors and any(economic_discounts(line) for line in invoice.lines):
+        errors.extend(_totals_invariant_errors(invoice, monetary_precision))
 
     if validated_resale_accounts is not None:
         errors.extend(
@@ -530,6 +553,7 @@ def _vendor_bill_line(
     line: InvoiceLine,
     product_result: Any,
     tax_ids_by_line: dict[tuple[str | None, int], int],
+    monetary_precision: MonetaryPrecision | None,
     *,
     resale_account: ValidatedResaleLineAccount | None = None,
 ) -> VendorBillLine:
@@ -543,14 +567,14 @@ def _vendor_bill_line(
             account_id=resale_account.account_id,
             resale_account=resale_account,
             quantity=line.quantity,
-            unit_price=_net_unit_price(line),
+            unit_price=_net_unit_price(line, monetary_precision),
             tax_ids=tax_ids,
             description=line.description,
         )
     return VendorBillLine(
         product_id=product_result.product_id,
         quantity=line.quantity,
-        unit_price=_net_unit_price(line),
+        unit_price=_net_unit_price(line, monetary_precision),
         tax_ids=tax_ids,
         description=line.description,
     )
@@ -560,6 +584,7 @@ def _expense_vendor_bill_line(
     line: InvoiceLine,
     expense_account_id: int,
     tax_ids_by_line: dict[tuple[str | None, int], int],
+    monetary_precision: MonetaryPrecision | None,
 ) -> VendorBillLine:
     assert line.quantity is not None
     assert line.unit_price is not None
@@ -568,7 +593,7 @@ def _expense_vendor_bill_line(
         product_id=None,
         account_id=expense_account_id,
         quantity=line.quantity,
-        unit_price=_net_unit_price(line),
+        unit_price=_net_unit_price(line, monetary_precision),
         tax_ids=tax_ids,
         description=line.description,
     )
@@ -609,8 +634,31 @@ def _expense_vendor_bill_line(
 # per-invoice totals invariant below is what catches that (and any other unmodeled
 # economic difference, including a header-only allowance -- see MonetaryTotals) rather
 # than this function silently mismatching.
+#
+# P0-PROD-19E-2: a *zero-economic-effect* allowance (cbc:Amount = 0, with no or a zero
+# cbc:MultiplierFactorNumeric) is not a discount -- LOGOSOFT transmits one on every line.
+# It is kept in the immutable evidence untouched but never routes a line down the
+# discounted path above; ``economic_discounts`` is the single place that decides this.
+# A non-zero amount, a missing amount, or a zero amount contradicted by a non-zero rate
+# is still a discount and keeps every existing rule.
 _DISCOUNT_UNIT_PRICE_PRECISION = Decimal("0.000001")  # matches the source's own unit_price precision
-TOTALS_INVARIANT_TOLERANCE = Decimal("0.01")  # one minor currency unit (kuruş/cent)
+# Decision acceptance runs ``validate_vendor_bill_inputs`` without any currency context,
+# so its discounted-line pre-check keeps this historical absolute tolerance. Every
+# preview/execution build passes the currency's own precision instead and compares with
+# ``app.billing.money.monetary_equal`` (P0-PROD-19E-2); this is never used there.
+_LEGACY_TOTALS_TOLERANCE = Decimal("0.01")
+
+
+def is_economically_neutral(discount: Discount) -> bool:
+    """True for an allowance whose transmitted amount is zero and whose rate, if any, is zero."""
+
+    return discount.amount is not None and discount.amount == 0 and (discount.rate is None or discount.rate == 0)
+
+
+def economic_discounts(line: InvoiceLine) -> tuple[Discount, ...]:
+    """The line's allowances that actually change its economics (P0-PROD-19E-2)."""
+
+    return tuple(discount for discount in line.discounts if not is_economically_neutral(discount))
 
 
 def _line_gross_total(line: InvoiceLine) -> Decimal:
@@ -620,7 +668,7 @@ def _line_gross_total(line: InvoiceLine) -> Decimal:
 
 
 def _line_total_discount(line: InvoiceLine) -> Decimal:
-    return sum((discount.amount for discount in line.discounts if discount.amount is not None), Decimal("0"))
+    return sum((discount.amount for discount in economic_discounts(line) if discount.amount is not None), Decimal("0"))
 
 
 def _line_net_total(line: InvoiceLine) -> Decimal:
@@ -632,10 +680,11 @@ def _line_net_total(line: InvoiceLine) -> Decimal:
     line_extension_amount exactly (see P0-PROD-15AD). Discounted lines are
     unaffected -- see that module comment for why ``line_extension_amount`` is not
     trusted as net-of-discount here -- and keep the pre-15AD
-    quantity/unit_price/discount reconstruction exactly.
+    quantity/unit_price/discount reconstruction exactly. Only economic discounts
+    count (P0-PROD-19E-2): a line whose only allowance is zero-effect is undiscounted.
     """
 
-    if not line.discounts and line.line_extension_amount is not None:
+    if not economic_discounts(line) and line.line_extension_amount is not None:
         return line.line_extension_amount
     return _line_gross_total(line) - _line_total_discount(line)
 
@@ -664,7 +713,7 @@ def line_net_total(line: InvoiceLine) -> Decimal:
     return _line_net_total(line)
 
 
-def _net_unit_price(line: InvoiceLine) -> Decimal:
+def _net_unit_price(line: InvoiceLine, monetary_precision: MonetaryPrecision | None) -> Decimal:
     """Odoo's posting ``price_unit`` -- reconciled to the line's authoritative net
     amount (``_line_net_total``: ``line_extension_amount`` when the source
     transmitted one, else the quantity/unit_price/discount reconstruction), never
@@ -676,22 +725,33 @@ def _net_unit_price(line: InvoiceLine) -> Decimal:
     ``line.unit_price`` unchanged -- byte-identical to pre-15AD/pre-08L behavior,
     including its exact decimal precision -- whenever it already reproduces the
     authoritative net exactly (quantity * unit_price == net_total): the common
-    case for a well-formed, undiscounted, exact-precision line. Only recomputed
-    (and only then quantized to a higher, explicit precision) when it does not.
+    case for a well-formed, undiscounted, exact-precision line. P0-PROD-19E-2: for an
+    undiscounted line it is also kept whenever it reproduces the net *at the
+    currency's precision* -- ``2 x 59.7378 = 119.4756`` is the USD amount ``119.48``,
+    so the source price is sent, never ``119.48 / 2 = 59.74``. Only recomputed (and
+    only then quantized to a higher, explicit precision) when it does not.
     """
 
     assert line.unit_price is not None
     assert line.quantity is not None
     net_total = _line_net_total(line)
-    if line.unit_price * line.quantity == net_total:
+    gross_total = line.unit_price * line.quantity
+    if gross_total == net_total:
+        return line.unit_price
+    if (
+        monetary_precision is not None
+        and not economic_discounts(line)
+        and monetary_equal(gross_total, net_total, monetary_precision)
+    ):
         return line.unit_price
     return (net_total / line.quantity).quantize(_DISCOUNT_UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
 
 
-def _discount_errors(line: InvoiceLine, line_path: str) -> list[str]:
-    if not line.discounts:
+def _discount_errors(line: InvoiceLine, line_path: str, monetary_precision: MonetaryPrecision | None) -> list[str]:
+    discounts = economic_discounts(line)
+    if not discounts:
         return []
-    if any(discount.amount is None for discount in line.discounts):
+    if any(discount.amount is None for discount in discounts):
         return [
             f"{line_path}.discounts contains an allowance with no amount; "
             "percentage-only/rate-only allowances are not supported."
@@ -699,12 +759,19 @@ def _discount_errors(line: InvoiceLine, line_path: str) -> list[str]:
     total_discount = _line_total_discount(line)
     if total_discount < Decimal("0"):
         return [f"{line_path}.discounts total must not be negative."]
-    if total_discount > _line_gross_total(line) + TOTALS_INVARIANT_TOLERANCE:
+    gross_total = _line_gross_total(line)
+    if monetary_precision is None:
+        exceeds_gross = total_discount > gross_total + _LEGACY_TOTALS_TOLERANCE
+    else:
+        exceeds_gross = currency_round(total_discount, monetary_precision) > currency_round(
+            gross_total, monetary_precision
+        )
+    if exceeds_gross:
         return [f"{line_path}.discounts total must not exceed the line's gross amount."]
     return []
 
 
-def _totals_invariant_errors(invoice: InternalInvoice) -> list[str]:
+def _totals_invariant_errors(invoice: InternalInvoice, monetary_precision: MonetaryPrecision | None) -> list[str]:
     """P0-PROD-08L: the exact safety net for the defect found in P0-PROD-08K -- never
     build a Vendor Bill whose net line economics silently diverge from the immutable
     source invoice's own authoritative tax-exclusive total. This also fails closed on
@@ -712,24 +779,128 @@ def _totals_invariant_errors(invoice: InternalInvoice) -> list[str]:
     by any line's own discounts) and on a line-level charge (never parsed into
     InvoiceLine at all) -- neither is modeled by this PR, so either would otherwise
     silently produce a Vendor Bill with different economics than the source invoice.
-    Only evaluated when at least one line actually carries a discount; a no-discount
-    invoice never reaches this check, preserving pre-08L behavior exactly.
+    Only evaluated when at least one line actually carries an economic discount; any
+    other invoice never reaches this check, preserving pre-08L behavior exactly.
+
+    P0-PROD-19E-2: with the currency's precision, each line net is rounded as Odoo
+    stores it and the sum must equal the source total at that precision; without it
+    (decision acceptance only), the legacy absolute tolerance applies.
     """
 
     target = invoice.totals.tax_exclusive_amount
     if target is None:
         return ["totals.tax_exclusive_amount is required to validate discounted line economics."]
-    computed = sum(
-        (_line_net_total(line) for line in invoice.lines if line.unit_price is not None and line.quantity is not None),
-        Decimal("0"),
-    )
-    if abs(computed - target) > TOTALS_INVARIANT_TOLERANCE:
+    nets = [
+        _line_net_total(line) for line in invoice.lines if line.unit_price is not None and line.quantity is not None
+    ]
+    if monetary_precision is None:
+        computed = sum(nets, Decimal("0"))
+        reconciles = abs(computed - target) <= _LEGACY_TOTALS_TOLERANCE
+    else:
+        computed = sum((currency_round(net, monetary_precision) for net in nets), Decimal("0"))
+        reconciles = monetary_equal(computed, target, monetary_precision)
+    if not reconciles:
         return [
             f"Computed net line total ({computed}) does not match the source invoice's tax-exclusive "
             f"amount ({target}); refusing to build a Vendor Bill with different economics than the "
             "source invoice."
         ]
     return []
+
+
+@dataclass(frozen=True, slots=True)
+class VendorBillMoney:
+    """A Vendor Bill's money as Odoo stores it, at the currency's precision (P0-PROD-19E-2).
+
+    The single computation shared by the pre-write build check and the zero-write preview,
+    so both reconcile the exact same figures against the source.
+    """
+
+    computed_untaxed: Decimal  # full-precision sum of quantity x price_unit
+    untaxed: Decimal
+    tax: Decimal
+    total: Decimal
+
+
+def vendor_bill_money(
+    invoice: InternalInvoice, bill_lines: Iterable[VendorBillLine], precision: MonetaryPrecision
+) -> VendorBillMoney:
+    bill_lines = tuple(bill_lines)
+    untaxed = sum(
+        (line_currency_subtotal(line.quantity, line.unit_price, precision) for line in bill_lines), Decimal("0")
+    )
+    tax = currency_round(
+        sum(
+            (
+                _line_net_total(line) * (tax.rate / Decimal(100))
+                for line in invoice.lines
+                for tax in line.taxes
+                if tax.rate is not None
+            ),
+            Decimal("0"),
+        ),
+        precision,
+    )
+    return VendorBillMoney(
+        computed_untaxed=sum((line.quantity * line.unit_price for line in bill_lines), Decimal("0")),
+        untaxed=untaxed,
+        tax=tax,
+        total=untaxed + tax,
+    )
+
+
+def vendor_bill_line_mismatches(
+    invoice: InternalInvoice, bill_lines: Iterable[VendorBillLine], precision: MonetaryPrecision
+) -> tuple[str, ...]:
+    """Lines whose ``quantity x price_unit`` is not the line's authoritative net amount
+    (``line_net_total``) at the currency's precision."""
+
+    bill_lines = tuple(bill_lines)
+    if len(bill_lines) != len(invoice.lines):
+        return ("Vendor Bill lines do not correspond one-to-one with the source invoice lines.",)
+    errors: list[str] = []
+    for index, (source_line, bill_line) in enumerate(zip(invoice.lines, bill_lines, strict=True)):
+        subtotal = bill_line.quantity * bill_line.unit_price
+        net_total = _line_net_total(source_line)
+        if not monetary_equal(subtotal, net_total, precision):
+            errors.append(
+                f"lines[{index}]: quantity x price_unit ({currency_round(subtotal, precision)}) does not match "
+                f"the source line amount ({currency_round(net_total, precision)}) at "
+                f"{precision.decimal_places} decimal places."
+            )
+    return tuple(errors)
+
+
+def vendor_bill_monetary_errors(
+    invoice: InternalInvoice, bill_lines: tuple[VendorBillLine, ...], precision: MonetaryPrecision
+) -> tuple[str, ...]:
+    """The pre-write monetary gate (P0-PROD-19E-2): every way the built bill's money
+    differs from the source at the currency's precision.
+
+    Per line, see ``vendor_bill_line_mismatches``; per bill, the untaxed/tax/total the
+    source transmitted must be what Odoo will store (``vendor_bill_money``). A total the
+    source does not carry is not checked here (preview and readback still report it).
+    Execution fails closed on any finding before the Odoo write; the post-write readback
+    remains the independent final verification.
+    """
+
+    errors = list(vendor_bill_line_mismatches(invoice, bill_lines, precision))
+    money = vendor_bill_money(invoice, bill_lines, precision)
+    source = source_monetary_totals(invoice)
+    checks = [
+        (label, actual, expected)
+        for label, actual, expected in (
+            ("untaxed", money.untaxed, source.untaxed),
+            ("tax", money.tax, source.tax),
+            ("total", money.total, source.total),
+        )
+        if expected is not None
+    ]
+    errors.extend(
+        f"Vendor Bill {mismatch} (source invoice); refusing to build a Vendor Bill with different economics."
+        for mismatch in monetary_mismatches(checks, precision)
+    )
+    return tuple(errors)
 
 
 def _customer_invoice_reference(

@@ -28,8 +28,9 @@ from app.application.execution.exceptions import (
 from app.application.execution.ports import ExecutionSourceInvoiceReader
 from app.application.ports import VendorBillWriter
 from app.application.workbench.dto import LineResolution
-from app.billing import ValidatedResaleLineAccount, VendorBillBuilder
+from app.billing import ValidatedResaleLineAccount, VendorBillBuilder, vendor_bill_monetary_errors
 from app.billing.exceptions import VendorBillBuildError
+from app.billing.money import MonetaryPrecision
 
 
 class ResaleExecutionAccountingCheck(Protocol):
@@ -40,6 +41,21 @@ class ResaleExecutionAccountingCheck(Protocol):
     """
 
     def validate(self, source: ExecutionSourceInvoice) -> Mapping[str, ValidatedResaleLineAccount] | None:
+        pass
+
+
+class VendorBillCurrencyDecimalPlaces(Protocol):
+    decimal_places: int
+
+
+class VendorBillCurrencyPrecisionReader(Protocol):
+    """Structurally read-only ``res.currency`` resolution (P0-PROD-19E-2).
+
+    The same reader preview uses (``OdooVendorBillPreviewCurrencyReader``): no
+    create/write/unlink method exists on this type at all.
+    """
+
+    def resolve_vendor_bill_currency(self, currency_code: str) -> VendorBillCurrencyDecimalPlaces:
         pass
 
 
@@ -56,6 +72,7 @@ class VendorBillExecutionStrategy:
         vendor_bill_builder: VendorBillBuilder,
         vendor_bill_writer: VendorBillWriter,
         resale_accounting_check: ResaleExecutionAccountingCheck,
+        currency_reader: VendorBillCurrencyPrecisionReader,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._vendor_bill_builder = vendor_bill_builder
@@ -63,6 +80,9 @@ class VendorBillExecutionStrategy:
         # Required, never defaulted: a composition that forgot it could otherwise send a
         # RESALE product line to Odoo without its pinned account.
         self._resale_accounting_check = resale_accounting_check
+        # Required for the same reason (P0-PROD-19E-2): without the currency's precision a
+        # monetary mismatch could not fail closed before the Odoo write.
+        self._currency_reader = currency_reader
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -90,6 +110,9 @@ class VendorBillExecutionStrategy:
                 if validated_resale_accounts is not None
                 else {}
             )
+            # P0-PROD-19E-2: read-only currency precision, so the bill's money is reconciled at
+            # the currency's precision and a mismatch fails closed before the writer's first call.
+            monetary_precision = self._monetary_precision(source)
             account_only_line_numbers, explicit_account_only_accounts = account_only_line_resolution(
                 source.line_resolutions
             )
@@ -105,8 +128,12 @@ class VendorBillExecutionStrategy:
                 # ExecutionSourceInvoice.account_only_expense_match.
                 account_only_expense_match=source.account_only_expense_match,
                 explicit_account_only_accounts=explicit_account_only_accounts,
+                monetary_precision=monetary_precision,
                 **resale_kwargs,
             )
+            monetary_errors = vendor_bill_monetary_errors(source.invoice, vendor_bill.invoice_lines, monetary_precision)
+            if monetary_errors:
+                raise VendorBillBuildError(monetary_errors)
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,
                 command=VendorBillWriteCommand(
@@ -149,6 +176,15 @@ class VendorBillExecutionStrategy:
                 created=write_result.status == "created",
             ),
         )
+
+    def _monetary_precision(self, source: ExecutionSourceInvoice) -> MonetaryPrecision:
+        currency = self._currency_reader.resolve_vendor_bill_currency(
+            (source.invoice.header.currency_code or "").strip()
+        )
+        try:
+            return MonetaryPrecision(currency.decimal_places)
+        except ValueError as exc:
+            raise VendorBillBuildError(("Vendor Bill currency precision is not usable.",)) from exc
 
 
 def account_only_line_resolution(

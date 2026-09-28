@@ -84,7 +84,7 @@ from app.persistence import (
 )
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK
+from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 
 COMPANY_ID = 7
 IDEMPOTENCY_KEY = "uyumsoft:7:DMARKET-ETTN"
@@ -653,6 +653,7 @@ def _execute_pinned(session: Session, review_id: str):
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     ).execute(
         ExecutionStepRequest(
             execution_id="fixture-execution",

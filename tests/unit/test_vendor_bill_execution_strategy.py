@@ -59,7 +59,7 @@ from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEv
 from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRuntimeRepository
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK
+from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 
 
 def test_vendor_bill_execution_strategy_supports_only_vendor_bill_and_modes() -> None:
@@ -600,6 +600,7 @@ class RecordingVendorBillBuilder(VendorBillBuilder):
         account_only_line_numbers: frozenset[str] = frozenset(),
         account_only_expense_match=None,
         explicit_account_only_accounts=None,
+        monetary_precision=None,
     ) -> VendorBill:
         self.calls += 1
         self.last_operating_expense_match = operating_expense_match
@@ -675,6 +676,7 @@ def _strategy(
         vendor_bill_builder=builder or RecordingVendorBillBuilder(),
         vendor_bill_writer=writer or RecordingVendorBillWriter(),
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     )
 
 
