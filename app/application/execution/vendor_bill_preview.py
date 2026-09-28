@@ -8,10 +8,10 @@ accepted evidence and the *same* billing/building logic real execution uses:
     -> persisted Stage-2 execution evidence (ExecutionSourceInvoiceReader, same reader)
     -> ExecutionPlanner.plan() (same planner, to derive the VENDOR_BILL step + its
        step_key, so the idempotency identity below is byte-identical to execution's)
-    -> VendorBillBuilder.build() (same builder, same call shape as
-       VendorBillExecutionStrategy.execute())
     -> read-only res.currency resolution (mirrors the same currency resolution real
-       execution's Odoo writer already performs before every Vendor Bill write)
+       execution performs before every Vendor Bill build and write; P0-PROD-19E-2)
+    -> VendorBillBuilder.build() (same builder, same call shape and currency precision
+       as VendorBillExecutionStrategy.execute())
     -> VendorBillPreview DTO
 
 This module performs zero current-time business matching (no partner/product/tax
@@ -73,8 +73,14 @@ from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin, ResaleAccountingSource
 from app.application.workbench.resale_decision_gate import PurchasePurposeHistoryReader
 from app.application.workflow import WorkflowType
-from app.billing import VendorBillBuilder, line_gross_total, line_net_total, line_total_discount
-from app.billing.money import MonetaryPrecision, currency_round
+from app.billing import (
+    VendorBillBuilder,
+    line_gross_total,
+    line_total_discount,
+    vendor_bill_line_mismatches,
+    vendor_bill_money,
+)
+from app.billing.money import MonetaryPrecision
 from app.billing.reconciliation import line_currency_subtotal, monetary_mismatches, source_monetary_totals
 
 
@@ -295,6 +301,18 @@ class PreviewVendorBillUseCase:
             decision_version=decision.decision_version,
         )
 
+        # P0-PROD-19E-2: the currency's precision is resolved before the build, exactly as
+        # EXECUTE does, so the builder's currency-aware checks and price_unit are identical.
+        # Any ERP-layer currency-lookup failure becomes a pure application-layer exception
+        # here -- callers (including the API router) never depend on an ERP exception type.
+        try:
+            currency = self._currency_reader.resolve_vendor_bill_currency(
+                (source.invoice.header.currency_code or "").strip()
+            )
+        except ApplicationError as exc:
+            raise ExecutionPreviewCurrencyResolutionError(exc.safe_message) from exc
+        precision = MonetaryPrecision(currency.decimal_places)
+
         account_only_line_numbers, explicit_account_only_accounts = account_only_line_resolution(
             source.line_resolutions
         )
@@ -308,6 +326,7 @@ class PreviewVendorBillUseCase:
             account_only_line_numbers=account_only_line_numbers,
             account_only_expense_match=source.account_only_expense_match,
             explicit_account_only_accounts=explicit_account_only_accounts,
+            monetary_precision=precision,
         )
         resale_accounting_by_line = self._pinned_resale_accounting(decision, source, vendor_bill)
 
@@ -322,15 +341,6 @@ class PreviewVendorBillUseCase:
             decision_id=decision.decision_id,
         )
         idempotency_key = vendor_bill_write_idempotency_key(step_request)
-
-        # Translate any ERP-layer currency-lookup failure into a pure application-layer
-        # exception here -- callers (including the API router) never need to depend on
-        # any ERP-layer exception type to handle a preview currency failure.
-        try:
-            currency = self._currency_reader.resolve_vendor_bill_currency(vendor_bill.currency)
-        except ApplicationError as exc:
-            raise ExecutionPreviewCurrencyResolutionError(exc.safe_message) from exc
-        precision = MonetaryPrecision(currency.decimal_places)
 
         # P0-PROD-10E: resolve the real Odoo uom_id for every product on this bill,
         # via the same read-only, fail-closed path EXECUTE's writer uses -- never the
@@ -368,24 +378,14 @@ class PreviewVendorBillUseCase:
 
         gross_source_amount = sum((line_gross_total(line) for line in source.invoice.lines), Decimal("0"))
         total_discount = sum((line_total_discount(line) for line in source.invoice.lines), Decimal("0"))
-        # Odoo stores each line subtotal at the currency's precision and sums them.
-        preview_untaxed = sum((line.currency_subtotal for line in lines), Decimal("0"))
-        computed_untaxed = sum((line.computed_subtotal for line in lines), Decimal("0"))
-        preview_tax = currency_round(
-            sum(
-                (
-                    line_net_total(line) * (tax.rate / Decimal(100))
-                    for line in source.invoice.lines
-                    for tax in line.taxes
-                    if tax.rate is not None
-                ),
-                Decimal("0"),
-            ),
-            precision,
-        )
-        preview_total = preview_untaxed + preview_tax
+        # P0-PROD-19E-2: the same bill money the builder's pre-write check reconciled.
+        money = vendor_bill_money(source.invoice, vendor_bill.invoice_lines, precision)
+        preview_untaxed, preview_tax, preview_total = money.untaxed, money.tax, money.total
         source_totals = source_monetary_totals(source.invoice)
-        mismatches = monetary_mismatches(
+        # P0-PROD-19E-2: the same line checks EXECUTE's pre-write gate applies, reported here.
+        mismatches = vendor_bill_line_mismatches(
+            source.invoice, vendor_bill.invoice_lines, precision
+        ) + monetary_mismatches(
             (
                 ("untaxed", preview_untaxed, source_totals.untaxed),
                 ("tax", preview_tax, source_totals.tax),
@@ -415,7 +415,7 @@ class PreviewVendorBillUseCase:
             preview_tax=preview_tax,
             preview_total=preview_total,
             currency_decimal_places=precision.decimal_places,
-            computed_untaxed=computed_untaxed,
+            computed_untaxed=money.computed_untaxed,
             source_untaxed=source_totals.untaxed,
             source_tax=source_totals.tax,
             source_total=source_totals.total,

@@ -41,7 +41,10 @@ from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.fiscal_position_reader import OdooFiscalPositionReader
 from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
 from app.erp.odoo.vendor_bill_header_verification_reader import OdooVendorBillHeaderVerificationReader
-from app.erp.odoo.vendor_bill_preview_currency_reader import OdooVendorBillPreviewCurrencyReader
+from app.erp.odoo.vendor_bill_preview_currency_reader import (
+    OdooVendorBillExecutionCurrencyReader,
+    OdooVendorBillPreviewCurrencyReader,
+)
 from app.erp.odoo.vendor_bill_preview_product_uom_reader import OdooVendorBillPreviewProductUomReader
 from app.erp.odoo.workbench_projection_publisher import (
     OdooWorkbenchJson2ProjectionAdapter,
@@ -108,6 +111,8 @@ def build_vendor_bill_execution_use_case(
             settings=settings,
             odoo_client=resolved_odoo_client,
         ),
+        # P0-PROD-19E-2: the same structurally read-only currency resolution preview uses.
+        currency_reader=OdooVendorBillExecutionCurrencyReader(adapter=OdooReadOnlyAdapter(client=resolved_odoo_client)),
     )
     purchase_order_vendor_bill_repository = PurchaseOrderVendorBillRepository(
         client=odoo_client or OdooJson2Client.from_settings(settings),

@@ -49,7 +49,7 @@ from app.matching import (
     ProductMatchStatus,
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK
+from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 
 EXPENSE_ACCOUNT_ID = 9101
 TAX_ID = 401
@@ -569,6 +569,7 @@ class _RecordingBuilder(VendorBillBuilder):
         account_only_line_numbers: frozenset[str] = frozenset(),
         account_only_expense_match=None,
         explicit_account_only_accounts=None,
+        monetary_precision=None,
     ):
         self.calls += 1
         self.last_account_only_line_numbers = account_only_line_numbers
@@ -661,6 +662,7 @@ def test_e_persisted_account_only_resolution_is_consumed_by_execution() -> None:
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     ).execute(_step_request())
 
     assert result.status is ExecutionStepStatus.EXECUTED
@@ -680,6 +682,7 @@ def test_e_no_line_resolution_never_triggers_account_only_mode() -> None:
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     ).execute(_step_request())
 
     assert builder.last_account_only_line_numbers == frozenset()
@@ -695,6 +698,7 @@ def test_e_a_non_account_only_line_resolution_does_not_trigger_account_only_mode
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     ).execute(_step_request())
 
     assert builder.last_account_only_line_numbers == frozenset()
@@ -716,6 +720,7 @@ def test_g_no_automatic_product_not_found_to_expense_conversion() -> None:
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     ).execute(_step_request())
 
     assert result.status is ExecutionStepStatus.FAILED

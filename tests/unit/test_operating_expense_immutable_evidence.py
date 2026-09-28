@@ -65,7 +65,7 @@ from app.persistence.execution_source_invoice_reader import (
 )
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK
+from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 
 COMPANY_ID = 7
 PARTNER_ID = 1001
@@ -652,6 +652,7 @@ def test_execution_strategy_passes_operating_expense_match_to_builder() -> None:
             account_only_line_numbers=frozenset(),
             account_only_expense_match=None,
             explicit_account_only_accounts=None,
+            monetary_precision=None,
         ):
             self.captured = operating_expense_match
             return VendorBill(
@@ -692,6 +693,7 @@ def test_execution_strategy_passes_operating_expense_match_to_builder() -> None:
         vendor_bill_builder=builder,
         vendor_bill_writer=_Writer(),
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     )
     request = ExecutionStepRequest(
         execution_id="execution-1",

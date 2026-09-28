@@ -45,7 +45,7 @@ from app.persistence.execution_source_invoice_reader import (
     serialize_execution_source_invoice,
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK
+from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 
 
 def test_exact_review_company_version_returns_source_evidence(session: Session) -> None:
@@ -307,6 +307,7 @@ def test_vendor_bill_execution_strategy_can_consume_returned_source(session: Ses
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
     )
 
     result = strategy.execute(_step_request())

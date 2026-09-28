@@ -207,8 +207,14 @@ def test_zero_allowance_causes_no_mismatch_and_leaves_payload_price_unchanged() 
     source = _basic_source()
     assert source.invoice.lines[0].discounts == (Discount(amount=Decimal("0"), rate=Decimal("0")),)
 
+    # Preview and execution always build with the currency's precision (P0-PROD-19E-2).
     bill = VendorBillBuilder().build(
-        source.invoice, source.partner_match, source.product_match, source.tax_match, company_id=1
+        source.invoice,
+        source.partner_match,
+        source.product_match,
+        source.tax_match,
+        company_id=1,
+        monetary_precision=USD,
     )
     payload = to_odoo_account_move_payload(bill, currency_id=1, product_uom_ids={PRODUCT_ID: 1})
 
