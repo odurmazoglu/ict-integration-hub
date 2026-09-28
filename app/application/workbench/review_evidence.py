@@ -25,9 +25,12 @@ from enum import StrEnum
 
 from app.application.execution.contracts import AcceptedReviewDecision, ExecutionSourceInvoice
 from app.application.execution.exceptions import (
+    ExecutionPlanningError,
     ExecutionSourceInvoiceIntegrityError,
     ExecutionSourceInvoiceNotFoundError,
 )
+from app.application.expense_mapping import OperatingExpenseMatchStatus, invoice_is_product_identifier_free
+from app.application.expense_mapping.exceptions import OperatingExpenseMappingContractError
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workbench.evidence import ReviewExecutionEvidence
 from app.application.workbench.exceptions import ReviewDecisionDataIntegrityError, ReviewNotFoundError
@@ -41,12 +44,37 @@ logger = logging.getLogger(__name__)
 
 EFFECTIVE_STATE_UNAVAILABLE = "Accepted decision evidence could not be loaded safely."
 
+#: ``operating_expense_match.matched_by`` of an accepted review-scoped accounting
+#: resolution; mirrors ``app.application.use_cases.effective_decision.
+#: REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY`` (pinned equal by a test; not imported,
+#: to keep this read model free of the reclassification use-case graph).
+REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY = "review_accounting_resolution"
+
+#: Persisted accepted-decision evidence that exists but cannot be trusted. Read models
+#: report it as ``effective_state_error`` instead of failing the whole read. Besides the
+#: reader's own integrity error, this covers operating-expense evidence that violates
+#: its DTO contract (e.g. MATCHED without an account) or the ``ExecutionSourceInvoice``
+#: invariants -- both raised while rebuilding the pinned evidence.
+ACCEPTED_EVIDENCE_INTEGRITY_ERRORS = (
+    ReviewDecisionDataIntegrityError,
+    ExecutionSourceInvoiceIntegrityError,
+    OperatingExpenseMappingContractError,
+    ExecutionPlanningError,
+)
+
 
 class EffectiveLineResolutionKind(StrEnum):
     """How the accepted decision resolved one invoice line for execution."""
 
     PRODUCT = "product"
+    #: An explicit per-line human ``LineResolution.account_only`` decision.
     ACCOUNT_ONLY = "account_only"
+    #: OPS-UI-01A-1: the whole invoice is booked to one account by an accepted
+    #: review-scoped accounting resolution (P0-PROD-15T).
+    ACCOUNTING_RESOLUTION = "accounting_resolution"
+    #: OPS-UI-01A-1: the whole invoice is booked to one account by a supplier-wide
+    #: operating-expense mapping.
+    OPERATING_EXPENSE_MAPPING = "operating_expense_mapping"
     UNRESOLVED = "unresolved"
 
 
@@ -212,7 +240,7 @@ class ReviewEvidenceReader:
         try:
             decision = self._accepted_decision(review_id=review_id, company_id=company_id, version=review_version)
             accepted_source = self._accepted_source(decision, review_id=review_id, company_id=company_id)
-        except (ReviewDecisionDataIntegrityError, ExecutionSourceInvoiceIntegrityError):
+        except ACCEPTED_EVIDENCE_INTEGRITY_ERRORS:
             logger.warning(
                 "workbench.review_detail.effective_state_unavailable",
                 extra={"review_id": review_id, "company_id": company_id, "review_version": review_version},
@@ -304,7 +332,39 @@ def effective_resolutions(source: ExecutionSourceInvoice) -> dict[str | None, Ef
 
     Public since OPS-UI-01A: the Odoo Workbench projection reuses this exact
     derivation instead of a second implementation.
+
+    Precedence is the Vendor Bill builder's own (``app.billing.builder``):
+
+    1. Whole-invoice operating-expense mode -- a MATCHED ``operating_expense_match``
+       with a positive account on a product-identifier-free invoice. Execution books
+       *every* line to that one account and ignores per-line account-only decisions;
+       product-backed lines cannot coexist with it (its product results must be
+       INVALID_INPUT). Reported as ``accounting_resolution`` when the match comes from
+       an accepted review-scoped accounting resolution, else
+       ``operating_expense_mapping``.
+    2. Otherwise, per line: an explicit account-only decision, else a matched product
+       (human-selected or automatic), else unresolved.
     """
+
+    invoice_account = _invoice_level_expense_account(source)
+    if invoice_account is not None:
+        match = source.operating_expense_match
+        kind = (
+            EffectiveLineResolutionKind.ACCOUNTING_RESOLUTION
+            if match.matched_by == REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY
+            else EffectiveLineResolutionKind.OPERATING_EXPENSE_MAPPING
+        )
+        return {
+            line.line_number: EffectiveLineResolution(
+                kind=kind,
+                product_id=None,
+                product_source=None,
+                matched_by=match.matched_by,
+                match_status=match.status.value,
+                expense_account_id=invoice_account,
+            )
+            for line in source.invoice.lines
+        }
 
     account_only = {
         resolution.line_number: resolution.expense_account_id
@@ -346,3 +406,22 @@ def effective_resolutions(source: ExecutionSourceInvoice) -> dict[str | None, Ef
                 expense_account_id=None,
             )
     return resolutions
+
+
+def _invoice_level_expense_account(source: ExecutionSourceInvoice) -> int | None:
+    """The whole-invoice expense account execution uses, or ``None``.
+
+    Exactly the builder's ``_operating_expense_mode`` predicate (pinned equal by a
+    parity test): MATCHED status, a positive integer account, and an invoice whose
+    every line is free of deterministic product identifiers.
+    """
+
+    match = source.operating_expense_match
+    if match is None or match.status is not OperatingExpenseMatchStatus.MATCHED:
+        return None
+    account_id = match.expense_account_id
+    if type(account_id) is not int or account_id <= 0:
+        return None
+    if not invoice_is_product_identifier_free(source.invoice):
+        return None
+    return account_id

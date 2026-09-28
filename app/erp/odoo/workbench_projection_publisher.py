@@ -855,13 +855,24 @@ def _reason_code(reason: object) -> str:
     return str(getattr(code, "value", code) or getattr(reason, "message", ""))
 
 
+#: Account-backed effective line kinds (``EffectiveLineResolutionKind`` values) and how
+#: the Workbench names their source. Per-line account-only stays "account only";
+#: OPS-UI-01A-1 adds the whole-invoice accounting-resolution / mapping sources.
+_ACCOUNT_RESOLUTION_LABELS = {
+    "account_only": "account only",
+    "accounting_resolution": "accounting resolution",
+    "operating_expense_mapping": "operating expense mapping",
+}
+
+
 def _resolution_text(resolution: WorkbenchProjectionLineResolution) -> str:
     line = f"Line {resolution.line_number}" if resolution.line_number else "Line"
     if resolution.kind == "product" and resolution.product_id is not None:
         source = (resolution.product_source or "").replace("_", " ")
         return f"{line} \u2192 product {resolution.product_id}" + (f" ({source})" if source else "")
-    if resolution.kind == "account_only" and resolution.expense_account_id is not None:
-        return f"{line} \u2192 account {resolution.expense_account_id} (account only)"
+    account_label = _ACCOUNT_RESOLUTION_LABELS.get(resolution.kind)
+    if account_label is not None and resolution.expense_account_id is not None:
+        return f"{line} \u2192 account {resolution.expense_account_id} ({account_label})"
     return f"{line} \u2192 unresolved"
 
 

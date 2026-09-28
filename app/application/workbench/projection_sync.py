@@ -43,13 +43,11 @@ from app.application.execution.contracts import (
     ExecutionSourceInvoice,
 )
 from app.application.execution.exceptions import (
-    ExecutionSourceInvoiceIntegrityError,
     ExecutionSourceInvoiceNotFoundError,
 )
 from app.application.execution.runtime import ExecutionSnapshot
 from app.application.workbench.dto import ReviewItem, ReviewStatus, review_reasons_role
 from app.application.workbench.exceptions import (
-    ReviewDecisionDataIntegrityError,
     ReviewNotFoundError,
     WorkbenchContractError,
 )
@@ -70,7 +68,11 @@ from app.application.workbench.projection_sync_contracts import (
     sync_after_commit,
 )
 from app.application.workbench.queries import ReviewDetailQuery
-from app.application.workbench.review_evidence import EFFECTIVE_STATE_UNAVAILABLE, effective_resolutions
+from app.application.workbench.review_evidence import (
+    ACCEPTED_EVIDENCE_INTEGRITY_ERRORS,
+    EFFECTIVE_STATE_UNAVAILABLE,
+    effective_resolutions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +230,7 @@ def _accepted_state(
         )
     except ReviewNotFoundError:
         return None, None, None
-    except ReviewDecisionDataIntegrityError:
+    except ACCEPTED_EVIDENCE_INTEGRITY_ERRORS:
         return None, None, EFFECTIVE_STATE_UNAVAILABLE
     try:
         source = sources.accepted_source_reader.get_source_invoice(
@@ -237,7 +239,7 @@ def _accepted_state(
     except ExecutionSourceInvoiceNotFoundError:
         # Normal for DISMISS and non-Vendor-Bill decisions: no execution evidence is pinned.
         return decision, None, None
-    except ExecutionSourceInvoiceIntegrityError:
+    except ACCEPTED_EVIDENCE_INTEGRITY_ERRORS:
         return decision, None, EFFECTIVE_STATE_UNAVAILABLE
     return decision, source, None
 
