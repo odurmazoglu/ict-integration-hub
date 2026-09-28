@@ -951,7 +951,8 @@ path. `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=false` means no runtime Odoo re
   same stored reasons as neutral history under `Decision basis — accepted decision vN`
   (or `— dismissed (decision vN)`) plus the effective line resolution derived by
   PR #197's `effective_resolutions` (`Line 1 → product 392 (human selected)`,
-  `→ product 393 (automatic)`, `→ account 247 (account only)`). Stored
+  `→ product 393 (automatic)`, `→ account 247 (account only)`, and since OPS-UI-01A-1
+  `→ account 247 (accounting resolution)` / `(operating expense mapping)`). Stored
   `review_reasons` are never modified.
 - **Classification** fields show the evidence of the version the decision was
   accepted against (`decision_version - 1`) for decided reviews.
@@ -969,6 +970,24 @@ path. `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=false` means no runtime Odoo re
   required) are checked against the deployed Studio selection values before any
   write; an unrepresentable value (e.g. `Customer Quotation`, absent from the
   deployed Workflow selection) fails that review explicitly.
+
+### Effective line resolution precedence (OPS-UI-01A-1)
+
+`effective_resolutions` (`app/application/workbench/review_evidence.py`) is the single
+source for both the review-detail API (`effective_resolution`) and the Workbench text.
+It mirrors the Vendor Bill builder's precedence exactly:
+
+1. **Whole-invoice expense mode** — a `MATCHED` `operating_expense_match` with a positive
+   account on a product-identifier-free invoice (the builder's `_operating_expense_mode`).
+   Execution books every line to that account and ignores per-line account-only
+   decisions; product-backed lines cannot coexist with it. Kind `accounting_resolution`
+   when `matched_by == "review_accounting_resolution"` (accepted review-scoped
+   accounting resolution, P0-PROD-15T), otherwise `operating_expense_mapping`.
+2. Otherwise per line: explicit `account_only` → matched product (`human_selected` /
+   `automatic`) → `unresolved`.
+
+Accepted evidence that exists but violates its contract (including operating-expense
+evidence) is reported as `effective_state_error`, never as a failed read.
 
 ### Idempotency and stale protection
 
