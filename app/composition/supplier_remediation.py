@@ -13,7 +13,10 @@ from app.application.workbench.retirement_recovery import (
     GetOneOffVendorRetirementUseCase,
     RecoverOneOffVendorRetirementWorkflow,
 )
-from app.composition.imports import build_deterministic_decision_engine, build_odoo_workbench_projection_publisher
+from app.composition.imports import (
+    build_deterministic_decision_engine,
+    build_runtime_workbench_projection_synchronizer,
+)
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -95,16 +98,11 @@ def build_resolve_workbench_supplier_use_case(
         review_accounting_resolution_reader=SqlAlchemyReviewAccountingResolutionRepository(session),
     )
 
-    # Reuse the existing best-effort Workbench publisher, gated by the existing flag.
-    # It updates the row created at import time; there is no new republish flag.
-    workbench_republisher = (
-        build_odoo_workbench_projection_publisher(
-            session=session,
-            settings=settings,
-            odoo_client=resolved_odoo_client,
-        )
-        if settings.odoo_workbench_projection_publish_enabled
-        else None
+    # OPS-UI-01A: the canonical full-snapshot synchronizer (None unless the existing
+    # ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED flag is set) replaces the legacy
+    # update-only republisher.
+    projection_synchronizer = build_runtime_workbench_projection_synchronizer(
+        session=session, settings=settings, odoo_client=resolved_odoo_client
     )
 
     return ResolveWorkbenchSupplierUseCase(
@@ -116,7 +114,7 @@ def build_resolve_workbench_supplier_use_case(
         supplier_partner_writer=supplier_partner_writer,
         reclassifier=reclassifier,
         unit_of_work=SqlAlchemyUnitOfWork(session),
-        workbench_republisher=workbench_republisher,
+        projection_synchronizer=projection_synchronizer,
         retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
     )

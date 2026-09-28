@@ -793,12 +793,12 @@ def test_runtime_is_committed_before_retirement_and_projection(
     def retirement(self, **kwargs):
         assert_durable("retirement")
 
-    def projection(self, result, **kwargs):
+    def projection(self, projection, **kwargs):
         assert_durable("projection")
         raise WorkbenchProjectionPublishError("Injected projection failure")
 
     monkeypatch.setattr(OneOffVendorRetirementTrigger, "try_retire_after_execution", retirement)
-    monkeypatch.setattr(OdooWorkbenchProjectionPublisher, "project_vendor_bill_execution_result", projection)
+    monkeypatch.setattr(OdooWorkbenchProjectionPublisher, "sync_projection", projection)
     settings = _execute_settings().model_copy(update={"odoo_workbench_projection_publish_enabled": True})
     with _normal_execution_api(monkeypatch, transaction_engine, FakeOdooVendorBillClient(), settings=settings) as api:
         response = _api_execute(api)

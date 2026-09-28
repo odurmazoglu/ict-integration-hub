@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from html.parser import HTMLParser
 from typing import Any, Protocol
 
 from app.application.execution import (
@@ -15,7 +16,12 @@ from app.application.execution import (
     WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
 )
-from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewStatus
+from app.application.workbench.dto import (
+    ReviewDecisionAcknowledgement,
+    ReviewDecisionType,
+    ReviewReasonsRole,
+    ReviewStatus,
+)
 from app.application.workbench.exceptions import (
     WorkbenchCandidateAmbiguityError,
     WorkbenchCandidateReadError,
@@ -26,6 +32,13 @@ from app.application.workbench.projection import (
     ProjectionPublishResult,
     WorkbenchClassificationProjection,
     WorkbenchProjection,
+    WorkbenchProjectionExecution,
+    WorkbenchProjectionLineResolution,
+)
+from app.application.workbench.projection_sync_contracts import (
+    ProjectionFieldChange,
+    ProjectionSyncOutcome,
+    ProjectionSyncResult,
 )
 from app.application.workflow import WorkflowType
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
@@ -36,6 +49,9 @@ from app.erp.exceptions import ErpRepositoryError, ErpRepositoryTimeoutError
 SAFE_PROJECTION_READ_ERROR = "Odoo Workbench projection lookup failed."
 SAFE_PROJECTION_WRITE_ERROR = "Odoo Workbench projection publish failed."
 SAFE_PROJECTION_AMBIGUITY_ERROR = "Odoo Workbench projection lookup returned multiple records."
+CURRENCY_MODEL = "res.currency"
+#: Canonical ``ExecutionState.COMPLETED`` value (kept as text: the projection DTO is ERP/runtime neutral).
+EXECUTION_STATE_COMPLETED = "completed"
 
 ODOO_REVIEW_STATUS_BY_CANONICAL: dict[ReviewStatus, str] = {
     ReviewStatus.PENDING_REVIEW: "Pending Review",
@@ -107,6 +123,9 @@ class OdooWorkbenchProjectionAdapter(Protocol):
     def write(self, *, model: str, record_id: int, values: dict[str, Any]) -> None:
         pass
 
+    def read_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
+        pass
+
 
 @dataclass(frozen=True, slots=True)
 class OdooWorkbenchProjectionFieldMapping:
@@ -139,6 +158,8 @@ class OdooWorkbenchProjectionFieldMapping:
     vendor_bill: str | None = None
     vendor_bill_external_identity: str | None = None
     execution_message: str | None = None
+    #: OPS-UI-01A: Many2one ``res.currency`` field, resolved read-only from the ISO code.
+    currency_id: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -192,6 +213,7 @@ class OdooWorkbenchProjectionFieldMapping:
             vendor_bill=_env_optional(prefix, "VENDOR_BILL_FIELD"),
             vendor_bill_external_identity=_env_optional(prefix, "VENDOR_BILL_EXTERNAL_IDENTITY_FIELD"),
             execution_message=_env_optional(prefix, "EXECUTION_MESSAGE_FIELD"),
+            currency_id=_env_optional(prefix, "CURRENCY_ID_FIELD"),
         )
 
 
@@ -249,6 +271,14 @@ class OdooWorkbenchJson2ProjectionAdapter:
         if success is not True:
             raise ErpRepositoryError(SAFE_PROJECTION_WRITE_ERROR)
 
+    def read_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
+        try:
+            return _run_sync(self._client.read_field_selection_values(model=model, field_name=field_name))
+        except ConnectorTimeoutError as exc:
+            raise ErpRepositoryTimeoutError(exc.safe_message) from exc
+        except ConnectorError as exc:
+            raise ErpRepositoryError(exc.safe_message) from exc
+
 
 class OdooWorkbenchProjectionPublisher:
     """Publish Hub-owned Workbench projection fields to a configured Odoo Studio model."""
@@ -263,6 +293,8 @@ class OdooWorkbenchProjectionPublisher:
         self._adapter = adapter
         self._mapping = mapping
         self._classification_service = classification_service
+        self._selection_cache: dict[str, frozenset[str]] = {}
+        self._currency_cache: dict[str, int] = {}
 
     def publish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult:
         records = self._lookup(review_id=projection.review_id, company_id=projection.company_id)
@@ -395,7 +427,236 @@ class OdooWorkbenchProjectionPublisher:
             warnings=_execution_projection_warnings(self._mapping),
         )
 
-    def _lookup(self, *, review_id: str, company_id: int) -> tuple[dict[str, Any], ...]:
+    # ------------------------------------------------------------------ OPS-UI-01A full-snapshot sync
+
+    def sync_projection(self, projection: WorkbenchProjection, *, apply: bool) -> ProjectionSyncResult:
+        """Diff one complete Hub snapshot against its Odoo row; write only a real change.
+
+        * ``apply=False`` is a dry-run: lookups and read-only metadata/currency reads
+          only, never a create or write.
+        * Semantic equality ignores ``Last Sync At``; an equal row is never rewritten.
+        * A snapshot older than the row (lower review version, or the same version
+          with stored execution facts the snapshot would clear) is skipped, not written.
+        * Unrepresentable values (currency, selection values) fail this review
+          explicitly with :class:`WorkbenchProjectionPublishError`.
+        """
+
+        if type(apply) is not bool:
+            raise WorkbenchContractError("apply must be a boolean value.")
+        if projection.review_reasons_role is None:
+            raise WorkbenchContractError("sync_projection requires a full-snapshot projection.")
+        records = self._lookup(
+            review_id=projection.review_id,
+            company_id=projection.company_id,
+            fields=self._sync_read_fields(),
+        )
+        desired = self._desired_values(projection)
+        if not records:
+            changes = _field_changes({}, desired, html_fields=self._html_fields())
+            if not apply:
+                return _sync_result(projection, ProjectionSyncOutcome.CREATED, applied=False, changes=changes)
+            values = {
+                self._mapping.review_id: projection.review_id,
+                self._mapping.company_id: projection.company_id,
+            } | desired
+            values[self._mapping.last_sync_at] = _datetime_text(datetime.now(UTC))
+            try:
+                record_id = self._adapter.create(model=self._mapping.model, values=values)
+            except ErpRepositoryError as exc:
+                raise _projection_publish_error(exc) from exc
+            return _sync_result(
+                projection, ProjectionSyncOutcome.CREATED, applied=True, changes=changes, odoo_record_id=record_id
+            )
+
+        existing = records[0]
+        record_id = _required_record_id(existing)
+        stale_reason = self._stale_reason(existing, projection, desired)
+        if stale_reason is not None:
+            return _sync_result(
+                projection,
+                ProjectionSyncOutcome.SKIPPED_STALE,
+                applied=False,
+                odoo_record_id=record_id,
+                error=stale_reason,
+            )
+        changes = _field_changes(existing, desired, html_fields=self._html_fields())
+        if not changes:
+            return _sync_result(projection, ProjectionSyncOutcome.NO_CHANGE, applied=False, odoo_record_id=record_id)
+        if not apply:
+            return _sync_result(
+                projection, ProjectionSyncOutcome.UPDATED, applied=False, changes=changes, odoo_record_id=record_id
+            )
+        values = {change.field: desired[change.field] for change in changes}
+        values[self._mapping.last_sync_at] = _datetime_text(datetime.now(UTC))
+        try:
+            self._adapter.write(model=self._mapping.model, record_id=record_id, values=values)
+        except ErpRepositoryError as exc:
+            raise _projection_publish_error(exc) from exc
+        return _sync_result(
+            projection, ProjectionSyncOutcome.UPDATED, applied=True, changes=changes, odoo_record_id=record_id
+        )
+
+    def _desired_values(self, projection: WorkbenchProjection) -> dict[str, Any]:
+        """The complete Hub-owned field set for one row (never Last Sync At / trace / Odoo inputs)."""
+
+        mapping = self._mapping
+        values: dict[str, Any] = {
+            mapping.name: projection.review_id,
+            mapping.invoice_number: projection.invoice_number,
+            mapping.supplier: projection.supplier_name,
+            mapping.supplier_tax_number: projection.supplier_tax_number,
+            mapping.invoice_date: _date_text(projection),
+            mapping.currency: projection.currency,
+            mapping.invoice_total: _decimal_value(projection.total_amount),
+            mapping.review_status: _review_status_to_odoo(projection.status),
+            mapping.workflow: _workflow_to_odoo(projection.workflow),
+            mapping.review_version: projection.version,
+        }
+        if mapping.currency_id is not None:
+            values[mapping.currency_id] = self._resolve_currency_id(projection.currency)
+        _put_optional(values, mapping.review_reasons, _render_review_reasons(projection))
+        _put_optional(values, mapping.warnings, _render_warning_badges(projection.warnings))
+        classification = self._classification(projection)
+        if classification is not None:
+            values.update(self._classification_values(classification))
+        values.update(self._execution_values(projection.execution))
+        self._require_representable_selections(values)
+        return values
+
+    def _execution_values(self, execution: WorkbenchProjectionExecution | None) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        completed = execution is not None and execution.state == EXECUTION_STATE_COMPLETED
+        # Stored Hub state only: a completed execution is "Executed". "Already Executed"
+        # describes a replayed *call*, not a state, so a pure snapshot never projects it.
+        _put_optional(
+            values,
+            self._mapping.execution_status,
+            ODOO_EXECUTION_STATUS_BY_CANONICAL[WorkbenchVendorBillExecutionStatus.EXECUTED] if completed else None,
+        )
+        _put_optional(values, self._mapping.vendor_bill, execution.vendor_bill_id if execution is not None else None)
+        _put_optional(
+            values,
+            self._mapping.vendor_bill_external_identity,
+            execution.vendor_bill_external_identity if execution is not None else None,
+        )
+        _put_optional(values, self._mapping.execution_message, _execution_message(execution))
+        return values
+
+    def _stale_reason(
+        self, existing: dict[str, Any], projection: WorkbenchProjection, desired: dict[str, Any]
+    ) -> str | None:
+        existing_version = _normalized(existing.get(self._mapping.review_version))
+        if isinstance(existing_version, int) and existing_version > projection.version:
+            return (
+                f"Odoo row is at review version {existing_version}, newer than the Hub snapshot "
+                f"version {projection.version}; not overwritten."
+            )
+        if existing_version != projection.version:
+            return None
+        # Same review version: stored execution facts for one accepted decision only ever
+        # advance, so a snapshot that would clear them is older than the row.
+        for field_name in (self._mapping.vendor_bill, self._mapping.execution_status):
+            if field_name is None:
+                continue
+            if _normalized(existing.get(field_name)) is not None and _normalized(desired.get(field_name)) is None:
+                return (
+                    f"Odoo row already shows stored execution facts ({field_name}) that this snapshot "
+                    "does not contain; not overwritten."
+                )
+        return None
+
+    def _resolve_currency_id(self, currency_code: str | None) -> int:
+        code = currency_code.strip().upper() if isinstance(currency_code, str) else ""
+        if not code:
+            raise WorkbenchProjectionPublishError("Workbench projection currency code is missing.")
+        cached = self._currency_cache.get(code)
+        if cached is not None:
+            return cached
+        try:
+            records = self._adapter.search_read(
+                model=CURRENCY_MODEL,
+                domain=[["name", "=", code], ["active", "in", [True, False]]],
+                fields=["id", "name"],
+                limit=2,
+            )
+        except ErpRepositoryError as exc:
+            raise _projection_publish_error(exc) from exc
+        if not records:
+            raise WorkbenchProjectionPublishError(f"No Odoo currency matches invoice currency {code}.")
+        if len(records) > 1:
+            raise WorkbenchProjectionPublishError(f"Invoice currency {code} matches more than one Odoo currency.")
+        record = records[0]
+        currency_id = record.get("id")
+        if type(currency_id) is not int or currency_id <= 0 or str(record.get("name", "")).strip().upper() != code:
+            raise WorkbenchProjectionPublishError(f"Invoice currency {code} did not resolve to an exact Odoo currency.")
+        self._currency_cache[code] = currency_id
+        return currency_id
+
+    def _require_representable_selections(self, values: dict[str, Any]) -> None:
+        for field_name in (
+            self._mapping.review_status,
+            self._mapping.workflow,
+            self._mapping.execution_status,
+            self._mapping.review_required,
+            self._mapping.business_context_required,
+        ):
+            if field_name is None or values.get(field_name) is None:
+                continue
+            allowed = self._selection_values(field_name)
+            if values[field_name] not in allowed:
+                raise WorkbenchProjectionPublishError(
+                    f"Odoo field {field_name} has no selection value {values[field_name]!r}; "
+                    "this review is not representable in the Workbench."
+                )
+
+    def _selection_values(self, field_name: str) -> frozenset[str]:
+        cached = self._selection_cache.get(field_name)
+        if cached is not None:
+            return cached
+        try:
+            allowed = frozenset(self._adapter.read_selection_values(model=self._mapping.model, field_name=field_name))
+        except ErpRepositoryError as exc:
+            raise _projection_publish_error(exc) from exc
+        self._selection_cache[field_name] = allowed
+        return allowed
+
+    def _sync_read_fields(self) -> list[str]:
+        mapping = self._mapping
+        names = [
+            mapping.review_id,
+            mapping.company_id,
+            mapping.name,
+            mapping.invoice_number,
+            mapping.supplier,
+            mapping.supplier_tax_number,
+            mapping.invoice_date,
+            mapping.currency,
+            mapping.currency_id,
+            mapping.invoice_total,
+            mapping.review_status,
+            mapping.workflow,
+            mapping.review_version,
+            mapping.review_reasons,
+            mapping.warnings,
+            mapping.classification,
+            mapping.matched_rule,
+            mapping.rule_version,
+            mapping.review_required,
+            mapping.business_context_required,
+            mapping.conflict,
+            mapping.execution_status,
+            mapping.vendor_bill,
+            mapping.vendor_bill_external_identity,
+            mapping.execution_message,
+        ]
+        return ["id", *dict.fromkeys(name for name in names if name is not None)]
+
+    def _html_fields(self) -> frozenset[str]:
+        return frozenset(name for name in (self._mapping.review_reasons, self._mapping.warnings) if name is not None)
+
+    def _lookup(
+        self, *, review_id: str, company_id: int, fields: list[str] | None = None
+    ) -> tuple[dict[str, Any], ...]:
         try:
             records = self._adapter.search_read(
                 model=self._mapping.model,
@@ -403,7 +664,8 @@ class OdooWorkbenchProjectionPublisher:
                     [self._mapping.review_id, "=", review_id],
                     [self._mapping.company_id, "=", company_id],
                 ],
-                fields=["id", self._mapping.review_id, self._mapping.company_id, self._mapping.review_version],
+                fields=fields
+                or ["id", self._mapping.review_id, self._mapping.company_id, self._mapping.review_version],
                 limit=2,
             )
         except ErpRepositoryError as exc:
@@ -431,28 +693,33 @@ class OdooWorkbenchProjectionPublisher:
         _put_optional(values, self._mapping.review_reasons, _render_reason_badges(projection.review_reasons))
         _put_optional(values, self._mapping.warnings, _render_warning_badges(projection.warnings))
         if classification is not None:
-            _put_optional(
-                values,
-                self._mapping.classification,
-                classification.classification_code or classification.status_label,
-            )
-            _put_optional(values, self._mapping.matched_rule, classification.matched_rule_name)
-            _put_optional(values, self._mapping.rule_version, classification.matched_rule_version)
-            _put_optional(
-                values,
-                self._mapping.review_required,
-                ODOO_REVIEW_REQUIRED_BY_CANONICAL[classification.require_review],
-            )
-            _put_optional(
-                values,
-                self._mapping.business_context_required,
-                ODOO_BUSINESS_CONTEXT_REQUIRED_BY_CANONICAL[classification.require_business_context],
-            )
-            _put_optional(
-                values,
-                self._mapping.conflict,
-                classification.conflict_summary or classification.conflict_label,
-            )
+            values.update(self._classification_values(classification))
+        return values
+
+    def _classification_values(self, classification: WorkbenchClassificationProjection) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        _put_optional(
+            values,
+            self._mapping.classification,
+            classification.classification_code or classification.status_label,
+        )
+        _put_optional(values, self._mapping.matched_rule, classification.matched_rule_name)
+        _put_optional(values, self._mapping.rule_version, classification.matched_rule_version)
+        _put_optional(
+            values,
+            self._mapping.review_required,
+            ODOO_REVIEW_REQUIRED_BY_CANONICAL[classification.require_review],
+        )
+        _put_optional(
+            values,
+            self._mapping.business_context_required,
+            ODOO_BUSINESS_CONTEXT_REQUIRED_BY_CANONICAL[classification.require_business_context],
+        )
+        _put_optional(
+            values,
+            self._mapping.conflict,
+            classification.conflict_summary or classification.conflict_label,
+        )
         return values
 
     def _classification(self, projection: WorkbenchProjection) -> WorkbenchClassificationProjection | None:
@@ -461,7 +728,7 @@ class OdooWorkbenchProjectionPublisher:
         return self._classification_service.get_projection(
             review_id=projection.review_id,
             company_id=projection.company_id,
-            review_version=projection.version,
+            review_version=projection.classification_review_version or projection.version,
         )
 
     def _execution_result_payload(
@@ -541,6 +808,182 @@ def _render_reason_badges(reasons: tuple[object, ...]) -> str:
 def _render_warning_badges(warnings: tuple[str, ...]) -> str:
     return "".join(
         f'<span class="badge rounded-pill text-bg-danger">{html.escape(warning)}</span>' for warning in warnings
+    )
+
+
+# ---------------------------------------------------------------------- OPS-UI-01A rendering
+
+
+def _render_review_reasons(projection: WorkbenchProjection) -> str:
+    """Render reasons by their PR #197 lifecycle role.
+
+    * ``current_blockers`` (pending): warning badges, exactly as before OPS-UI-01A.
+    * ``decision_basis`` (decided/dismissed): neutral history under a heading, plus the
+      effective resolution -- never presented as open errors.
+    """
+
+    if projection.review_reasons_role is not ReviewReasonsRole.DECISION_BASIS:
+        return _render_reason_badges(projection.review_reasons)
+    decision = projection.accepted_decision
+    if decision is None:
+        heading = "Decision basis"
+    elif decision.decision_type is ReviewDecisionType.DISMISS:
+        heading = f"Decision basis \u2014 dismissed (decision v{decision.decision_version})"
+    else:
+        heading = f"Decision basis \u2014 accepted decision v{decision.decision_version}"
+    parts = [
+        '<div class="o_ipp_decision_basis">',
+        f'<div class="fw-bold">{html.escape(heading)}</div>',
+        '<div class="text-muted">These findings required the accepted decision; they are not open blockers.</div>',
+    ]
+    parts.extend(
+        f'<span class="badge rounded-pill text-bg-secondary">{html.escape(_reason_code(reason))}</span>'
+        for reason in projection.review_reasons
+    )
+    parts.extend(
+        f'<div class="o_ipp_effective_line">{html.escape(_resolution_text(resolution))}</div>'
+        for resolution in projection.effective_resolutions
+    )
+    if projection.effective_state_error:
+        parts.append(f'<div class="text-danger">{html.escape(projection.effective_state_error)}</div>')
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _reason_code(reason: object) -> str:
+    code = getattr(reason, "code", None)
+    return str(getattr(code, "value", code) or getattr(reason, "message", ""))
+
+
+def _resolution_text(resolution: WorkbenchProjectionLineResolution) -> str:
+    line = f"Line {resolution.line_number}" if resolution.line_number else "Line"
+    if resolution.kind == "product" and resolution.product_id is not None:
+        source = (resolution.product_source or "").replace("_", " ")
+        return f"{line} \u2192 product {resolution.product_id}" + (f" ({source})" if source else "")
+    if resolution.kind == "account_only" and resolution.expense_account_id is not None:
+        return f"{line} \u2192 account {resolution.expense_account_id} (account only)"
+    return f"{line} \u2192 unresolved"
+
+
+def _execution_message(execution: WorkbenchProjectionExecution | None) -> str | None:
+    """A factual description of *stored* Hub execution state -- never a live Odoo verification."""
+
+    if execution is None:
+        return None
+    prefix = f"Stored Hub execution state: {execution.state} (decision v{execution.decision_version})."
+    if execution.state == EXECUTION_STATE_COMPLETED:
+        artifact = (
+            f" Vendor Bill artifact: Odoo record {execution.vendor_bill_id}."
+            if execution.vendor_bill_id is not None
+            else " No Vendor Bill artifact is stored."
+        )
+        return prefix + artifact + " This is not a live Odoo readback."
+    details = f" Retry count {execution.retry_count} of max attempts {execution.max_attempts}."
+    if execution.vendor_bill_id is not None:
+        details += f" Stored Vendor Bill artifact: Odoo record {execution.vendor_bill_id}."
+    if execution.failure_message:
+        details += f" Last failure: {execution.failure_message}"
+    return prefix + details
+
+
+# ---------------------------------------------------------------------- OPS-UI-01A semantic comparison
+
+
+def _normalized(value: Any) -> Any:
+    """Odoo read values vs. write values: False/""/0 are empty, Many2one reads are ids."""
+
+    if value is None or value is False or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, list | tuple) and len(value) == 2 and type(value[0]) is int:
+        return value[0]
+    if isinstance(value, int | float):
+        if value == 0:
+            return None
+        return round(float(value), 6) if isinstance(value, float) else value
+    return value
+
+
+class _HtmlTokens(HTMLParser):
+    """Structure + text of stored HTML, ignoring Odoo's attribute-less wrappers/whitespace."""
+
+    _WRAPPERS = frozenset({"span", "div", "p"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tokens: list[tuple[Any, ...]] = []
+        self._skipped: list[bool] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        skip = tag in self._WRAPPERS and not attrs
+        self._skipped.append(skip)
+        if not skip:
+            self.tokens.append(("start", tag, tuple(sorted((k, " ".join((v or "").split())) for k, v in attrs))))
+
+    def handle_endtag(self, tag: str) -> None:
+        skip = self._skipped.pop() if self._skipped else False
+        if not skip:
+            self.tokens.append(("end", tag))
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if text:
+            self.tokens.append(("text", text))
+
+
+def _html_tokens(value: Any) -> tuple[tuple[Any, ...], ...] | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parser = _HtmlTokens()
+    parser.feed(value)
+    parser.close()
+    return tuple(parser.tokens) or None
+
+
+def _html_text(value: Any) -> str | None:
+    tokens = _html_tokens(value)
+    if tokens is None:
+        return None
+    return " | ".join(token[1] for token in tokens if token[0] == "text")
+
+
+def _field_changes(
+    existing: dict[str, Any], desired: dict[str, Any], *, html_fields: frozenset[str]
+) -> tuple[ProjectionFieldChange, ...]:
+    changes: list[ProjectionFieldChange] = []
+    for field_name, after in desired.items():
+        before = existing.get(field_name)
+        if field_name in html_fields:
+            if _html_tokens(before) != _html_tokens(after):
+                changes.append(
+                    ProjectionFieldChange(field=field_name, before=_html_text(before), after=_html_text(after))
+                )
+            continue
+        if _normalized(before) != _normalized(after):
+            changes.append(
+                ProjectionFieldChange(field=field_name, before=_normalized(before), after=_normalized(after))
+            )
+    return tuple(changes)
+
+
+def _sync_result(
+    projection: WorkbenchProjection,
+    outcome: ProjectionSyncOutcome,
+    *,
+    applied: bool,
+    changes: tuple[ProjectionFieldChange, ...] = (),
+    odoo_record_id: int | None = None,
+    error: str | None = None,
+) -> ProjectionSyncResult:
+    return ProjectionSyncResult(
+        review_id=projection.review_id,
+        outcome=outcome,
+        applied=applied,
+        odoo_record_id=odoo_record_id,
+        review_version=projection.version,
+        changes=changes,
+        error=error,
     )
 
 

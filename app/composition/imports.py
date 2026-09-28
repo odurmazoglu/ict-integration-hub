@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from sqlalchemy import Connection, Engine
 from sqlalchemy.orm import Session
 
 from app.application.decision import (
@@ -20,6 +24,7 @@ from app.application.workbench import (
     WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
+from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
@@ -41,6 +46,7 @@ from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountRead
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.erp.odoo.supplier_product_repository import OdooSupplierProductRepository
 from app.erp.odoo.tax_repository import OdooTaxRepository
+from app.erp.odoo.workbench_projection_publisher import OdooWorkbenchProjectionAdapter
 from app.erp.odoo.workbench_reference_repositories import (
     OdooAnalyticAccountReferenceRepository,
     OdooCompanyReferenceRepository,
@@ -54,6 +60,8 @@ from app.erp.odoo.workbench_reference_repositories import (
 from app.erp.provider import StaticRepositoryProvider
 from app.matching import PartnerMatchingEngine, ProductMatchingEngine
 from app.persistence import (
+    SqlAlchemyExecutionRuntimeRepository,
+    SqlAlchemyExecutionSourceInvoiceReader,
     SqlAlchemyImportHistory,
     SqlAlchemyOperatingExpenseMappingRepository,
     SqlAlchemyReviewBillingEvidenceReader,
@@ -78,18 +86,106 @@ def build_import_invoice_use_case(
 ) -> ImportInvoiceUseCase:
     """Compose import runtime with optional best-effort Odoo Workbench projection publishing."""
 
-    publisher = (
-        build_odoo_workbench_projection_publisher(session=session, settings=settings, odoo_client=odoo_client)
-        if settings.odoo_workbench_projection_publish_enabled
-        else None
-    )
     return ImportInvoiceUseCase(
         import_history=import_history,
         decision_engine=decision_engine,
         review_item_creation_service=ReviewItemCreationService(SqlAlchemyReviewRepository(session)),
-        workbench_projection_publisher=publisher,
         unit_of_work=SqlAlchemyUnitOfWork(session),
+        workbench_projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
     )
+
+
+def build_workbench_projection_synchronizer(
+    *,
+    session: Session | None = None,
+    engine: Engine | None = None,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+    projection_adapter: OdooWorkbenchProjectionAdapter | None = None,
+    mapping: OdooWorkbenchProjectionFieldMapping | None = None,
+) -> WorkbenchProjectionSynchronizer:
+    """The canonical OPS-UI-01A synchronizer, independent of the runtime publish flag.
+
+    The caller's ``session`` is used only to learn which database to read (its
+    engine, taken here in the composing thread, with no I/O). The synchronizer never
+    touches that session: every sync opens its own read-only session on a fresh
+    connection, reads the *committed* snapshot, and closes it -- in whichever thread
+    runs the sync (including an ``asyncio.to_thread`` worker). A projection failure
+    can therefore only discard that private read session, never the business
+    transaction. Used directly by the reconcile CLI; runtime use cases get it through
+    :func:`build_runtime_workbench_projection_synchronizer`, which honours the flag.
+    """
+
+    bound_engine = engine if engine is not None else _engine_of(session)
+    resolved_mapping = mapping or OdooWorkbenchProjectionFieldMapping.from_environment()
+    adapter = projection_adapter or OdooWorkbenchJson2ProjectionAdapter(
+        client=odoo_client or OdooJson2Client.from_settings(settings)
+    )
+
+    @contextmanager
+    def read_scope() -> Iterator[WorkbenchProjectionSources]:
+        with open_read_only_session(bound_engine) as read_session:
+            review_repository = SqlAlchemyReviewRepository(read_session)
+            yield WorkbenchProjectionSources(
+                review_reader=review_repository,
+                accepted_decision_reader=review_repository,
+                accepted_source_reader=SqlAlchemyExecutionSourceInvoiceReader(read_session),
+                execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(read_session),
+                publisher=OdooWorkbenchProjectionPublisher(
+                    adapter=adapter,
+                    mapping=resolved_mapping,
+                    classification_service=WorkbenchClassificationProjectionService(
+                        SqlAlchemyReviewClassificationEvidenceReader(read_session)
+                    ),
+                ),
+            )
+
+    return WorkbenchProjectionSynchronizer(read_scope=read_scope)
+
+
+@contextmanager
+def open_read_only_session(engine: Engine) -> Iterator[Session]:
+    """A private Hub session on its own connection; PostgreSQL transactions are READ ONLY.
+
+    Created, used and closed by the caller's thread. It only ever sees committed data
+    (a separate connection), is always rolled back, and never shares state with any
+    business/request session.
+    """
+
+    connection = engine.connect()
+    try:
+        if engine.dialect.name == "postgresql":
+            connection = connection.execution_options(postgresql_readonly=True)
+        read_session = Session(bind=connection, autoflush=False)
+        try:
+            yield read_session
+        finally:
+            read_session.rollback()
+            read_session.close()
+    finally:
+        connection.close()
+
+
+def _engine_of(session: Session | None) -> Engine:
+    if session is None:
+        raise ValueError("A session or engine is required to locate the Hub database.")
+    bind = session.get_bind()
+    return bind.engine if isinstance(bind, Connection) else bind
+
+
+def build_runtime_workbench_projection_synchronizer(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> WorkbenchProjectionSynchronizer | None:
+    """``None`` unless ``ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED``: disabled means no Odoo read or write."""
+
+    if not settings.odoo_workbench_projection_publish_enabled:
+        return None
+    return build_workbench_projection_synchronizer(session=session, settings=settings, odoo_client=odoo_client)
 
 
 def build_odoo_workbench_projection_publisher(
@@ -150,6 +246,9 @@ def build_odoo_workbench_decision_ingestion_workflow(
                 session=session,
                 settings=settings,
                 odoo_client=resolved_odoo_client,
+            ),
+            projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+                session=session, settings=settings, odoo_client=resolved_odoo_client
             ),
         ),
         acknowledgement_publisher=OdooWorkbenchProjectionPublisher(

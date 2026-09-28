@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from time import perf_counter
@@ -27,6 +28,11 @@ from app.application.workbench import (
     WorkbenchProjection,
     WorkbenchProjectionPublisher,
     WorkbenchProjectionPublishError,
+)
+from app.application.workbench.projection_sync_contracts import (
+    ReviewProjectionSynchronizer,
+    projection_sync_warnings,
+    sync_after_commit,
 )
 from app.domain.invoice import InternalInvoice
 
@@ -57,11 +63,16 @@ class ImportInvoiceUseCase:
         review_item_creation_service: ReviewItemCreationService | None = None,
         workbench_projection_publisher: WorkbenchProjectionPublisher | None = None,
         unit_of_work: UnitOfWork | None = None,
+        workbench_projection_synchronizer: ReviewProjectionSynchronizer | None = None,
     ) -> None:
         self._import_history = import_history
         self._decision_engine = decision_engine
         self._review_item_creation_service = review_item_creation_service
-        self._workbench_projection_publisher = workbench_projection_publisher
+        # Legacy create-or-update publisher; ignored when the OPS-UI-01A synchronizer is set.
+        self._workbench_projection_publisher = (
+            None if workbench_projection_synchronizer is not None else workbench_projection_publisher
+        )
+        self._workbench_projection_synchronizer = workbench_projection_synchronizer
         self._unit_of_work = unit_of_work
 
     async def execute(self, command: ImportInvoiceCommand) -> ImportInvoiceResult:
@@ -94,6 +105,17 @@ class ImportInvoiceUseCase:
             unit_of_work=self._unit_of_work,
             duration=_duration(started),
         )
+        if review_item is not None and self._workbench_projection_synchronizer is not None:
+            # OPS-UI-01A: the review is committed; project the full snapshot off the event
+            # loop. A failure becomes the existing import warning, never an import failure.
+            sync = await asyncio.to_thread(
+                sync_after_commit,
+                self._workbench_projection_synchronizer,
+                review_id=review_item.review_id,
+                company_id=_company_id(command),
+            )
+            if projection_sync_warnings(sync):
+                projection_warnings = projection_warnings + (WORKBENCH_PROJECTION_FAILURE_WARNING,)
         return _result_from_decision(
             invoice_id=invoice_id,
             decision_result=decision_result,

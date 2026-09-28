@@ -91,6 +91,7 @@ from app.composition import (
     build_get_workbench_execution_status_use_case,
     build_odoo_workbench_decision_ingestion_workflow,
     build_resolve_workbench_supplier_use_case,
+    build_runtime_workbench_projection_synchronizer,
     build_uyumsoft_canonical_invoice_importer,
     build_vendor_bill_execution_use_case,
     build_vendor_bill_preview_use_case,
@@ -274,6 +275,9 @@ def get_submit_review_decision_use_case(
         ),
         selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
         resale_decision_gate=build_resale_decision_gate(session=session, settings=settings, odoo_client=odoo_client),
+        projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
     )
 
 

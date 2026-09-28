@@ -235,6 +235,35 @@ class OdooJson2Client:
             records.append(item)
         return records
 
+    async def read_field_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
+        """Read the stored values of one selection field (fixed, read-only metadata query).
+
+        Used to prove a projected selection value is representable *before* any
+        projection write, instead of relying on Odoo to reject it mid-write.
+        """
+
+        if not _is_read_only_model_allowed(model):
+            raise ConnectorError("Odoo metadata target model is not allowed.")
+        if not isinstance(field_name, str) or not field_name.strip():
+            raise ConnectorError("Odoo metadata field name is required.")
+        result = await self._post_json(
+            "/json/2/ir.model.fields.selection/search_read",
+            {
+                "domain": [["field_id.model", "=", model], ["field_id.name", "=", field_name]],
+                "fields": ["value"],
+                "limit": 200,
+                "offset": 0,
+            },
+        )
+        if not isinstance(result, list):
+            raise ConnectorError("Odoo selection metadata search_read returned an unexpected response.")
+        values: list[str] = []
+        for item in result:
+            if not isinstance(item, dict) or not isinstance(item.get("value"), str):
+                raise ConnectorError("Odoo selection metadata search_read returned an unexpected record.")
+            values.append(item["value"])
+        return tuple(values)
+
     async def _create_one(self, *, path: str, values: dict[str, Any], label: str) -> int:
         """Call the fixed JSON-2 ``create(vals_list)`` shape for one record."""
 

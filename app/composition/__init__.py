@@ -15,7 +15,9 @@ from app.composition.imports import (
     build_import_invoice_use_case,
     build_odoo_workbench_decision_ingestion_workflow,
     build_odoo_workbench_projection_publisher,
+    build_runtime_workbench_projection_synchronizer,
     build_uyumsoft_canonical_invoice_importer,
+    build_workbench_projection_synchronizer,
 )
 from app.composition.product_remediation import build_create_new_product_use_case
 from app.composition.quotation import (
@@ -35,11 +37,13 @@ __all__ = [
     "build_odoo_workbench_decision_ingestion_workflow",
     "build_odoo_workbench_projection_publisher",
     "build_resolve_workbench_supplier_use_case",
+    "build_runtime_workbench_projection_synchronizer",
     "build_uyumsoft_canonical_invoice_importer",
     "build_vendor_bill_execution_use_case",
     "build_vendor_bill_preview_use_case",
     "build_workbench_accepted_decision_execution_dispatcher",
     "build_workbench_customer_quotation_execution_workflow",
+    "build_workbench_projection_synchronizer",
     "build_workbench_quotation_scenario_evidence_workflow",
     "build_workbench_vendor_bill_execution_workflow",
 ]

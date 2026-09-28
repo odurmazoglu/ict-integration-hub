@@ -3,11 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
 
 from app.application.dto import DecisionResult
 from app.application.use_cases import ImportInvoiceUseCase
 from app.application.workbench import ReviewItemCreationService
 from app.application.workbench.classification_projection import WorkbenchClassificationProjectionService
+from app.application.workbench.projection_sync import WorkbenchProjectionSynchronizer
 from app.application.workflow import WorkflowType
 from app.composition import build_import_invoice_use_case, build_uyumsoft_canonical_invoice_importer
 from app.core.config import Settings
@@ -27,6 +29,7 @@ def test_production_import_composition_omits_odoo_publisher_when_flag_is_false()
     assert isinstance(use_case._review_item_creation_service, ReviewItemCreationService)
     assert isinstance(use_case._unit_of_work, SqlAlchemyUnitOfWork)
     assert use_case._workbench_projection_publisher is None
+    assert use_case._workbench_projection_synchronizer is None
 
 
 def test_production_import_composition_wires_odoo_publisher_when_flag_is_true(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,9 +43,16 @@ def test_production_import_composition_wires_odoo_publisher_when_flag_is_true(mo
         odoo_client=FakeOdooClient(),
     )
 
-    publisher = use_case._workbench_projection_publisher
-    assert isinstance(publisher, OdooWorkbenchProjectionPublisher)
-    assert isinstance(publisher._classification_service, WorkbenchClassificationProjectionService)
+    # OPS-UI-01A: the flag wires the canonical full-snapshot synchronizer, which
+    # publishes through the same Odoo publisher; the legacy direct publisher is unset.
+    synchronizer = use_case._workbench_projection_synchronizer
+    assert isinstance(synchronizer, WorkbenchProjectionSynchronizer)
+    # Each sync reads through its own read scope, never the request session.
+    with synchronizer._read_scope() as sources:
+        publisher = sources.publisher
+        assert isinstance(publisher, OdooWorkbenchProjectionPublisher)
+        assert isinstance(publisher._classification_service, WorkbenchClassificationProjectionService)
+    assert use_case._workbench_projection_publisher is None
 
 
 def test_app_has_no_unwired_import_invoice_use_case_construction_paths() -> None:
@@ -100,6 +110,7 @@ def test_uyumsoft_importer_composition_preserves_workbench_feature_flag_false() 
 
     assert isinstance(use_case, ImportInvoiceUseCase)
     assert use_case._workbench_projection_publisher is None
+    assert use_case._workbench_projection_synchronizer is None
 
 
 def test_uyumsoft_importer_composition_preserves_workbench_feature_flag_true(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,12 +125,21 @@ def test_uyumsoft_importer_composition_preserves_workbench_feature_flag_true(mon
 
     use_case = importer._import_use_case_factory()  # noqa: SLF001
 
-    assert isinstance(use_case._workbench_projection_publisher, OdooWorkbenchProjectionPublisher)
+    synchronizer = use_case._workbench_projection_synchronizer
+    assert isinstance(synchronizer, WorkbenchProjectionSynchronizer)
+    with synchronizer._read_scope() as sources:
+        assert isinstance(sources.publisher, OdooWorkbenchProjectionPublisher)
 
 
 class FakeSession:
+    _engine = create_engine("sqlite://")
+
     def commit(self) -> None:
         pass
+
+    def get_bind(self):
+        # Composition only learns the database engine from the request session.
+        return self._engine
 
     def rollback(self) -> None:
         pass

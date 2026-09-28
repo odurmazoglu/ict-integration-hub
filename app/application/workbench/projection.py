@@ -12,6 +12,7 @@ from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import (
     LineResolution,
     ReviewDecisionType,
+    ReviewReasonsRole,
     ReviewStatus,
     TaxResolution,
 )
@@ -48,6 +49,65 @@ WORKFLOW_DISPLAY_NAMES: dict[WorkflowType, str] = {
 
 
 @dataclass(frozen=True, slots=True)
+class WorkbenchProjectionDecision(ApplicationDTO):
+    """The accepted decision governing a decided review (OPS-UI-01A)."""
+
+    decision_version: int
+    decision_type: ReviewDecisionType
+    selected_workflow: WorkflowType | None = None
+
+    def __post_init__(self) -> None:
+        _require_positive_int(self.decision_version, "decision_version must be positive.")
+        _require_enum(self.decision_type, ReviewDecisionType, "decision_type must be a canonical ReviewDecisionType.")
+        if self.selected_workflow is not None:
+            _require_enum(self.selected_workflow, WorkflowType, "selected_workflow must be a canonical WorkflowType.")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkbenchProjectionLineResolution(ApplicationDTO):
+    """One line's effective resolution, copied from PR #197's ``EffectiveLineResolution``.
+
+    ``kind``/``product_source`` carry the canonical string values of
+    ``EffectiveLineResolutionKind``/``EffectiveProductSource``.
+    """
+
+    line_number: str | None
+    kind: str
+    product_id: int | None = None
+    product_source: str | None = None
+    expense_account_id: int | None = None
+
+    def __post_init__(self) -> None:
+        _require_text(self.kind, "kind is required.")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkbenchProjectionExecution(ApplicationDTO):
+    """Stored Hub execution facts for the accepted decision; never a live Odoo readback.
+
+    ``state`` is the canonical ``ExecutionState`` value of the latest EXECUTE-mode
+    execution. ``vendor_bill_id`` is set only when exactly one Vendor Bill artifact
+    is stored for it.
+    """
+
+    execution_id: str
+    decision_version: int
+    state: str
+    vendor_bill_id: int | None = None
+    vendor_bill_external_identity: str | None = None
+    retry_count: int = 0
+    max_attempts: int = 0
+    failure_message: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_text(self.execution_id, "execution_id is required.")
+        _require_positive_int(self.decision_version, "decision_version must be positive.")
+        _require_text(self.state, "state is required.")
+        if self.vendor_bill_id is not None:
+            _require_positive_int(self.vendor_bill_id, "vendor_bill_id must be a positive ERP id.")
+
+
+@dataclass(frozen=True, slots=True)
 class WorkbenchProjection(ApplicationDTO):
     """ERP-neutral projection of one Hub-owned Workbench review item."""
 
@@ -68,6 +128,16 @@ class WorkbenchProjection(ApplicationDTO):
     warnings: tuple[str, ...] = field(default_factory=tuple)
     trace_id: str | None = None
     updated_at: datetime | None = None
+    #: OPS-UI-01A full-snapshot fields. ``None``/empty keeps the pre-01A projection
+    #: (legacy callers); the synchronizer always sets ``review_reasons_role``.
+    review_reasons_role: ReviewReasonsRole | None = None
+    accepted_decision: WorkbenchProjectionDecision | None = None
+    effective_resolutions: tuple[WorkbenchProjectionLineResolution, ...] = field(default_factory=tuple)
+    effective_state_error: str | None = None
+    execution: WorkbenchProjectionExecution | None = None
+    #: Review version whose classification evidence is shown; for a decided review this
+    #: is the version the decision was accepted against (``decision_version - 1``).
+    classification_review_version: int | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -83,6 +153,15 @@ class WorkbenchProjection(ApplicationDTO):
         )
         object.__setattr__(self, "review_reasons", tuple(self.review_reasons))
         object.__setattr__(self, "warnings", tuple(str(warning) for warning in self.warnings))
+        if self.review_reasons_role is not None:
+            _require_enum(self.review_reasons_role, ReviewReasonsRole, "review_reasons_role must be canonical.")
+        resolutions = tuple(self.effective_resolutions)
+        for resolution in resolutions:
+            if not isinstance(resolution, WorkbenchProjectionLineResolution):
+                raise WorkbenchContractError("effective_resolutions must contain line resolution projections.")
+        object.__setattr__(self, "effective_resolutions", resolutions)
+        if self.classification_review_version is not None:
+            _require_positive_int(self.classification_review_version, "classification_review_version must be positive.")
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,7 +8,7 @@ from app.application.use_cases.reclassify_review import ReclassifyWorkbenchRevie
 from app.application.workbench.accounting_resolution_use_cases import SubmitReviewAccountingResolutionUseCase
 from app.application.workbench.execution_evidence_recovery_use_cases import RebuildReviewExecutionEvidenceUseCase
 from app.application.workbench.purchase_purpose_use_cases import SubmitPurchasePurposeUseCase
-from app.composition.imports import build_deterministic_decision_engine
+from app.composition.imports import build_deterministic_decision_engine, build_runtime_workbench_projection_synchronizer
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -82,6 +82,9 @@ def build_submit_review_accounting_resolution_use_case(
         accounting_resolution_writer=accounting_resolution_repository,
         reclassifier=reclassifier,
         unit_of_work=SqlAlchemyUnitOfWork(session),
+        projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        ),
     )
 
 

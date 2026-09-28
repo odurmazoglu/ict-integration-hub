@@ -25,6 +25,7 @@ Odoo client.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
@@ -57,6 +58,11 @@ from app.application.workbench.ports import (
     SupplierResolutionWriter,
 )
 from app.application.workbench.projection import ProjectionPublishResult, WorkbenchProjection
+from app.application.workbench.projection_sync_contracts import (
+    ProjectionSyncOutcome,
+    ReviewProjectionSynchronizer,
+    sync_after_commit,
+)
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import ReclassifyReviewCommand, ReviewReclassificationTrigger
 from app.application.workbench.supplier_remediation import (
@@ -127,6 +133,12 @@ class WorkbenchReviewRepublisher(Protocol):
     def republish_projection(self, projection: WorkbenchProjection) -> ProjectionPublishResult: ...
 
 
+#: Outcomes meaning the Odoo row now reflects the committed Hub state.
+_SYNCED_OUTCOMES = frozenset(
+    {ProjectionSyncOutcome.CREATED, ProjectionSyncOutcome.UPDATED, ProjectionSyncOutcome.NO_CHANGE}
+)
+
+
 class ResolveWorkbenchSupplierUseCase:
     """Application boundary for one authenticated supplier-remediation decision."""
 
@@ -144,6 +156,7 @@ class ResolveWorkbenchSupplierUseCase:
         workbench_republisher: WorkbenchReviewRepublisher | None = None,
         retirement_writer: OneOffVendorRetirementWriter | None = None,
         write_authorization_repository: WriteAuthorizationRepository | None = None,
+        projection_synchronizer: ReviewProjectionSynchronizer | None = None,
         _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
@@ -157,6 +170,9 @@ class ResolveWorkbenchSupplierUseCase:
         # Optional: present only when odoo_workbench_projection_publish_enabled is set.
         # None -> republish is not attempted and every result reports republished=False.
         self._workbench_republisher = workbench_republisher
+        # OPS-UI-01A: the canonical full-snapshot synchronizer; when present it replaces
+        # the legacy update-only republisher above.
+        self._projection_synchronizer = projection_synchronizer
         # Optional: required only for ONE_OFF_VENDOR (P0-PROD-08H); every other mode
         # never touches it. None -> ONE_OFF_VENDOR fails closed with a clear error.
         self._retirement_writer = retirement_writer
@@ -374,7 +390,7 @@ class ResolveWorkbenchSupplierUseCase:
         reclass = await self._reclassify(command)
         self._unit_of_work.commit()
         # Best-effort, post-commit: the remediation + reclassification are already durable.
-        republished = self._republish_workbench_projection(command)
+        republished = await self._republish_workbench_projection(command)
         return self._result_from_reclass(
             command,
             effect,
@@ -581,7 +597,7 @@ class ResolveWorkbenchSupplierUseCase:
 
     # ------------------------------------------------------------------ workbench republish
 
-    def _republish_workbench_projection(self, command: ResolveWorkbenchSupplierCommand) -> bool:
+    async def _republish_workbench_projection(self, command: ResolveWorkbenchSupplierCommand) -> bool:
         """Update the existing Odoo Workbench projection row for this review.
 
         Post-commit and strictly best-effort: the supplier resolution, the effect
@@ -593,6 +609,15 @@ class ResolveWorkbenchSupplierUseCase:
         The publisher is update-only -- it can never create a second Workbench row.
         """
 
+        if self._projection_synchronizer is not None:
+            # Off the event loop: the Odoo projection adapter is synchronous by design.
+            sync = await asyncio.to_thread(
+                sync_after_commit,
+                self._projection_synchronizer,
+                review_id=command.review_id,
+                company_id=command.company_id,
+            )
+            return sync is not None and sync.outcome in _SYNCED_OUTCOMES
         if self._workbench_republisher is None:
             return False
         try:
@@ -692,7 +717,7 @@ class ResolveWorkbenchSupplierUseCase:
             # Full remediation already committed on an earlier attempt. Re-attempt the
             # (idempotent, update-only) Workbench republish so a retry after a prior
             # republish failure can still reflect the new review state in the UI.
-            republished = self._republish_workbench_projection(command)
+            republished = await self._republish_workbench_projection(command)
             is_one_off_vendor = command.mode is SupplierResolutionMode.ONE_OFF_VENDOR
             retirement = self._find_retirement(command)
             return SupplierRemediationResult(
@@ -729,7 +754,7 @@ class ResolveWorkbenchSupplierUseCase:
                 return await self._complete(command, review, source, existing, already_applied=True)
             reclass = await self._reclassify(command)
             self._unit_of_work.commit()
-            republished = self._republish_workbench_projection(command)
+            republished = await self._republish_workbench_projection(command)
             return self._result_from_reclass(
                 command,
                 effect,
