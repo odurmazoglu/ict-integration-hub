@@ -130,6 +130,7 @@ from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountReader
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
+from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
 from app.persistence.review_billing_evidence_reader import SqlAlchemyReviewBillingEvidenceReader
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
@@ -236,10 +237,13 @@ def get_list_review_queue_use_case(reader: ReviewQueueReaderDep) -> ListReviewQu
 
 def get_review_evidence_reader(session: DbSessionDep, odoo_client: OdooClientDep) -> ReviewEvidenceReader:
     adapter = OdooReadOnlyAdapter(client=odoo_client)
+    repository = SqlAlchemyReviewRepository(session)
     return ReviewEvidenceReader(
         source_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
-        execution_reader=SqlAlchemyReviewRepository(session),
+        execution_reader=repository,
         partner_repository=OdooPartnerRepository(adapter=adapter),
+        accepted_decision_reader=repository,
+        accepted_source_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
     )
 
 

@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 from app.application.exceptions import ApplicationError
 from app.application.workbench.dto import ReviewItem, ReviewQueueResult
 from app.application.workbench.exceptions import ReviewQueryError, WorkbenchContractError
 from app.application.workbench.ports import ReviewQueueReader
 from app.application.workbench.queries import ReviewDetailQuery, ReviewQueueQuery
-from app.application.workbench.review_evidence import ReviewEvidenceReader
+
+if TYPE_CHECKING:
+    # Annotation only: review_evidence depends on execution contracts, which import this package.
+    from app.application.workbench.review_evidence import ReviewEvidenceReader
 
 
 class ListReviewQueueUseCase:

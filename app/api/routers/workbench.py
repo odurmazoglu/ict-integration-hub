@@ -89,6 +89,7 @@ from app.application.workbench.accounting_resolution import (
     AccountingTreatmentType,
     SubmitReviewAccountingResolutionCommand,
 )
+from app.application.workbench.dto import review_reasons_role
 from app.application.workbench.exceptions import (
     AccountingResolutionConflictError,
     AccountingResolutionEligibilityError,
@@ -155,6 +156,7 @@ from app.application.workbench.purchase_account_discovery import (
     ResolvedPurchaseAccount,
 )
 from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
+from app.application.workbench.review_evidence import EffectiveLineResolution
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.vendor_bill_readback import (
     VendorBillMonetaryReadbackVerification,
@@ -176,6 +178,7 @@ from app.application.workbench.write_authorization import (
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.billing.exceptions import VendorBillBuildError
 from app.schemas.workbench import (
+    AcceptedDecisionSummaryResponse,
     AccountingResolutionEnvelope,
     AccountingResolutionRequest,
     AccountingResolutionResponse,
@@ -184,6 +187,7 @@ from app.schemas.workbench import (
     BusinessContextAllocationSetRequest,
     CategoryPurchaseAccountResponse,
     CategoryPurchaseAccountsEnvelope,
+    EffectiveLineResolutionResponse,
     ExecutionApprovalRequest,
     ExecutionArtifactResponse,
     ExecutionEvidenceRecoveryEnvelope,
@@ -1242,6 +1246,7 @@ def _review_item_response(item: ReviewItem) -> ReviewItemResponse:
         workflow=item.workflow,
         status=item.status,
         review_reasons=[_reason_response(reason) for reason in item.review_reasons],
+        review_reasons_role=review_reasons_role(item.status),
         warnings=list(item.warnings),
         created_at=item.created_at,
         updated_at=item.updated_at,
@@ -1311,9 +1316,37 @@ def _evidence_response(evidence) -> ReviewEvidenceResponse | None:
                     if line.product_match is not None
                     else None
                 ),
+                effective_resolution=_effective_resolution_response(line.effective_resolution),
             )
             for line in evidence.source_lines
         ],
+        product_match_review_version=evidence.product_match_review_version,
+        accepted_decision=(
+            AcceptedDecisionSummaryResponse(
+                decision_id=evidence.accepted_decision.decision_id,
+                decision_version=evidence.accepted_decision.decision_version,
+                decision_type=evidence.accepted_decision.decision_type,
+                selected_workflow=evidence.accepted_decision.selected_workflow,
+            )
+            if evidence.accepted_decision is not None
+            else None
+        ),
+        effective_state_error=evidence.effective_state_error,
+    )
+
+
+def _effective_resolution_response(
+    resolution: EffectiveLineResolution | None,
+) -> EffectiveLineResolutionResponse | None:
+    if resolution is None:
+        return None
+    return EffectiveLineResolutionResponse(
+        kind=resolution.kind,
+        product_id=resolution.product_id,
+        product_source=resolution.product_source,
+        matched_by=resolution.matched_by,
+        match_status=resolution.match_status,
+        expense_account_id=resolution.expense_account_id,
     )
 
 

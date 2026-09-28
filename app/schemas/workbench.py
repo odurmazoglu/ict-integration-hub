@@ -18,11 +18,12 @@ from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.accounting_resolution import AccountingResolutionStatus, AccountingTreatmentType
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
-from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
+from app.application.workbench.dto import ReviewDecisionType, ReviewReasonsRole, ReviewStatus
 from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorStatus, OneOffVendorRetirementStatus
 from app.application.workbench.operating_expense_mapping_command import OperatingExpenseMappingSubmissionStatus
 from app.application.workbench.product_remediation import ProductRemediationStatus
 from app.application.workbench.purchase_purpose import PurchasePurpose
+from app.application.workbench.review_evidence import EffectiveLineResolutionKind, EffectiveProductSource
 from app.application.workbench.supplier_remediation import SupplierPartnerWriteEffectStatus, SupplierRemediationStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
 from app.application.workbench.write_authorization import WriteAuthorizationOperationType, WriteAuthorizationStatus
@@ -72,6 +73,9 @@ class ReviewItemResponse(BaseModel):
     workflow: WorkflowType
     status: ReviewStatus
     review_reasons: list[ManualReviewReasonResponse]
+    #: P0-PROD-19F: ``current_blockers`` while pending review; ``decision_basis`` once
+    #: decided (the reasons that required the decision -- not open blockers).
+    review_reasons_role: ReviewReasonsRole
     warnings: list[str]
     created_at: datetime | None
     updated_at: datetime | None
@@ -137,7 +141,30 @@ class SourceLineResponse(BaseModel):
     taxes: list[SourceTaxResponse]
     seller_item_code: str | None
     buyer_item_code: str | None
+    #: The matcher's pre-decision result (Stage-1 evidence); never rewritten.
     product_match: ProductMatchEvidenceResponse | None
+    #: P0-PROD-19F: what the accepted decision pinned for execution; ``null`` while pending.
+    effective_resolution: EffectiveLineResolutionResponse | None = None
+
+
+class EffectiveLineResolutionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    kind: EffectiveLineResolutionKind
+    product_id: int | None
+    product_source: EffectiveProductSource | None
+    matched_by: str | None
+    match_status: str | None
+    expense_account_id: int | None
+
+
+class AcceptedDecisionSummaryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
+
+    decision_id: str | None
+    decision_version: int
+    decision_type: ReviewDecisionType
+    selected_workflow: WorkflowType | None
 
 
 class ReviewEvidenceResponse(BaseModel):
@@ -145,6 +172,9 @@ class ReviewEvidenceResponse(BaseModel):
 
     supplier_candidates: list[SupplierCandidateResponse]
     source_lines: list[SourceLineResponse]
+    product_match_review_version: int | None = None
+    accepted_decision: AcceptedDecisionSummaryResponse | None = None
+    effective_state_error: str | None = None
 
 
 class ReviewQueueResponse(BaseModel):
