@@ -19,6 +19,26 @@ class ReviewStatus(StrEnum):
     DISMISSED = "dismissed"
 
 
+class ReviewReasonsRole(StrEnum):
+    """What a review's persisted ``review_reasons`` mean at its current status (P0-PROD-19F).
+
+    The stored reasons are never rewritten once a decision is accepted (they are part
+    of the import/reclassification idempotency fingerprints); only their role changes.
+    """
+
+    #: PENDING_REVIEW: the reasons operator action is currently required for.
+    CURRENT_BLOCKERS = "current_blockers"
+    #: Any decided status: the reasons that required the accepted decision -- history,
+    #: not open blockers. The decision/evidence, not these reasons, governs execution.
+    DECISION_BASIS = "decision_basis"
+
+
+def review_reasons_role(status: ReviewStatus) -> ReviewReasonsRole:
+    if status is ReviewStatus.PENDING_REVIEW:
+        return ReviewReasonsRole.CURRENT_BLOCKERS
+    return ReviewReasonsRole.DECISION_BASIS
+
+
 class ReviewDecisionType(StrEnum):
     """Canonical explicit user decisions accepted by the Workbench contract."""
 
