@@ -229,7 +229,7 @@ class ReviewEvidenceReader:
             if execution is not None
             else {}
         )
-        effective_by_line = _effective_resolutions(accepted_source) if accepted_source is not None else {}
+        effective_by_line = effective_resolutions(accepted_source) if accepted_source is not None else {}
         source_lines = tuple(
             SourceLineEvidence.from_line(
                 line, product_by_line.get(line.line_number), effective_by_line.get(line.line_number)
@@ -299,8 +299,12 @@ def _decision_summary(decision: AcceptedReviewDecision) -> AcceptedDecisionSumma
     )
 
 
-def _effective_resolutions(source: ExecutionSourceInvoice) -> dict[str | None, EffectiveLineResolution]:
-    """Per-line resolution exactly as execution consumes it; derived, never re-matched."""
+def effective_resolutions(source: ExecutionSourceInvoice) -> dict[str | None, EffectiveLineResolution]:
+    """Per-line resolution exactly as execution consumes it; derived, never re-matched.
+
+    Public since OPS-UI-01A: the Odoo Workbench projection reuses this exact
+    derivation instead of a second implementation.
+    """
 
     account_only = {
         resolution.line_number: resolution.expense_account_id

@@ -20,6 +20,7 @@ from app.application.workbench import (
     WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
+from app.application.workbench.projection_sync import WorkbenchProjectionSynchronizer
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
@@ -54,6 +55,8 @@ from app.erp.odoo.workbench_reference_repositories import (
 from app.erp.provider import StaticRepositoryProvider
 from app.matching import PartnerMatchingEngine, ProductMatchingEngine
 from app.persistence import (
+    SqlAlchemyExecutionRuntimeRepository,
+    SqlAlchemyExecutionSourceInvoiceReader,
     SqlAlchemyImportHistory,
     SqlAlchemyOperatingExpenseMappingRepository,
     SqlAlchemyReviewBillingEvidenceReader,
@@ -78,18 +81,56 @@ def build_import_invoice_use_case(
 ) -> ImportInvoiceUseCase:
     """Compose import runtime with optional best-effort Odoo Workbench projection publishing."""
 
-    publisher = (
-        build_odoo_workbench_projection_publisher(session=session, settings=settings, odoo_client=odoo_client)
-        if settings.odoo_workbench_projection_publish_enabled
-        else None
-    )
     return ImportInvoiceUseCase(
         import_history=import_history,
         decision_engine=decision_engine,
         review_item_creation_service=ReviewItemCreationService(SqlAlchemyReviewRepository(session)),
-        workbench_projection_publisher=publisher,
         unit_of_work=SqlAlchemyUnitOfWork(session),
+        workbench_projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
     )
+
+
+def build_workbench_projection_synchronizer(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+    reset_after_failure: bool = False,
+) -> WorkbenchProjectionSynchronizer:
+    """The canonical OPS-UI-01A synchronizer, independent of the runtime publish flag.
+
+    Used directly only by the explicit reconcile CLI; runtime use cases get it through
+    :func:`build_runtime_workbench_projection_synchronizer`, which honours the flag.
+    ``reset_after_failure`` lets a long-running caller (the CLI) roll back a read
+    transaction aborted by a failed query before projecting the next review.
+    """
+
+    review_repository = SqlAlchemyReviewRepository(session)
+    return WorkbenchProjectionSynchronizer(
+        review_reader=review_repository,
+        accepted_decision_reader=review_repository,
+        accepted_source_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
+        execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(session),
+        publisher=build_odoo_workbench_projection_publisher(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
+        on_failure=session.rollback if reset_after_failure else None,
+    )
+
+
+def build_runtime_workbench_projection_synchronizer(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> WorkbenchProjectionSynchronizer | None:
+    """``None`` unless ``ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED``: disabled means no Odoo read or write."""
+
+    if not settings.odoo_workbench_projection_publish_enabled:
+        return None
+    return build_workbench_projection_synchronizer(session=session, settings=settings, odoo_client=odoo_client)
 
 
 def build_odoo_workbench_projection_publisher(
@@ -150,6 +191,9 @@ def build_odoo_workbench_decision_ingestion_workflow(
                 session=session,
                 settings=settings,
                 odoo_client=resolved_odoo_client,
+            ),
+            projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+                session=session, settings=settings, odoo_client=resolved_odoo_client
             ),
         ),
         acknowledgement_publisher=OdooWorkbenchProjectionPublisher(

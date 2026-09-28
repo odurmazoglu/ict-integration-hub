@@ -25,6 +25,7 @@ This use case depends only on ports / other use cases -- never on a concrete Odo
 
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from app.application.exceptions import ApplicationError
@@ -55,6 +56,7 @@ from app.application.workbench.ports import (
     ReviewQueueReader,
     SupplierRemediationEffectWriter,
 )
+from app.application.workbench.projection_sync_contracts import ReviewProjectionSynchronizer, sync_after_commit
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import ReclassifyReviewCommand, ReviewReclassificationTrigger
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
@@ -86,6 +88,7 @@ class SubmitOperatingExpenseMappingUseCase:
         onboarding_use_case: OnboardOperatingExpenseMappingUseCase,
         reclassifier: OperatingExpenseReclassifier,
         unit_of_work: UnitOfWork,
+        projection_synchronizer: ReviewProjectionSynchronizer | None = None,
     ) -> None:
         self._review_reader = review_reader
         self._remediation_effect_reader = remediation_effect_reader
@@ -94,8 +97,24 @@ class SubmitOperatingExpenseMappingUseCase:
         self._onboarding_use_case = onboarding_use_case
         self._reclassifier = reclassifier
         self._unit_of_work = unit_of_work
+        self._projection_synchronizer = projection_synchronizer
 
     async def execute(self, command: SubmitOperatingExpenseMappingCommand) -> OperatingExpenseMappingSubmissionResult:
+        result = await self._execute(command)
+        # OPS-UI-01A: every successful return here is committed Hub state (fresh
+        # reclassification, resumed reclassification, or an already-applied retry);
+        # project it afterwards, off the event loop. A projection failure is logged by
+        # the synchronizer and never changes this committed result.
+        if self._projection_synchronizer is not None:
+            await asyncio.to_thread(
+                sync_after_commit,
+                self._projection_synchronizer,
+                review_id=command.review_id,
+                company_id=command.company_id,
+            )
+        return result
+
+    async def _execute(self, command: SubmitOperatingExpenseMappingCommand) -> OperatingExpenseMappingSubmissionResult:
         if not isinstance(command, SubmitOperatingExpenseMappingCommand):
             raise WorkbenchContractError("A canonical SubmitOperatingExpenseMappingCommand is required.")
 

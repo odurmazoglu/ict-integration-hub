@@ -6,7 +6,7 @@ from app.application.expense_mapping import OnboardOperatingExpenseMappingUseCas
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
 from app.application.workbench.expense_account_use_cases import ListExpenseAccountCandidatesUseCase
 from app.application.workbench.operating_expense_mapping_use_cases import SubmitOperatingExpenseMappingUseCase
-from app.composition.imports import build_deterministic_decision_engine
+from app.composition.imports import build_deterministic_decision_engine, build_runtime_workbench_projection_synchronizer
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -81,6 +81,9 @@ def build_submit_operating_expense_mapping_use_case(
         onboarding_use_case=OnboardOperatingExpenseMappingUseCase(mapping_repository),
         reclassifier=reclassifier,
         unit_of_work=SqlAlchemyUnitOfWork(session),
+        projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        ),
     )
 
 

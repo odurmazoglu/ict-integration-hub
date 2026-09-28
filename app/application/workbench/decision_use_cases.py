@@ -17,6 +17,11 @@ from app.application.workbench.ports import (
     SelectedAccountReader,
     SelectedProductReader,
 )
+from app.application.workbench.projection_sync_contracts import (
+    ReviewProjectionSynchronizer,
+    projection_sync_warnings,
+    sync_after_commit,
+)
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin
 from app.application.workbench.resale_decision_gate import ResaleDecisionGate
 from app.application.workbench.selected_expense_account_resolution import (
@@ -48,8 +53,10 @@ class SubmitReviewDecisionUseCase:
         selected_product_reader: SelectedProductReader | None = None,
         selected_account_reader: SelectedAccountReader | None = None,
         resale_decision_gate: ResaleDecisionGate | None = None,
+        projection_synchronizer: ReviewProjectionSynchronizer | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
+        self._projection_synchronizer = projection_synchronizer
         self._unit_of_work = unit_of_work
         self._execution_evidence_reader = execution_evidence_reader
         self._billing_evidence_reader = billing_evidence_reader
@@ -94,21 +101,25 @@ class SubmitReviewDecisionUseCase:
                         evidence,
                         billing_instructions,
                         **pin_kwargs,
-                    )
+                    ),
+                    company_id=command.company_id,
                 )
             return self._write_and_commit(
                 lambda: self._review_decision_writer.submit_review_decision_with_execution_evidence(
                     command,
                     evidence,
                     **pin_kwargs,
-                )
+                ),
+                company_id=command.company_id,
             )
         if requires_billing_evidence:
             raise ReviewDecisionError("Execution source evidence is required for Customer Invoice creation decisions.")
-        return self._write_and_commit(lambda: self._review_decision_writer.submit_review_decision(command))
+        return self._write_and_commit(
+            lambda: self._review_decision_writer.submit_review_decision(command), company_id=command.company_id
+        )
 
     def _write_and_commit(
-        self, operation: Callable[[], ReviewDecisionAcknowledgement]
+        self, operation: Callable[[], ReviewDecisionAcknowledgement], *, company_id: int
     ) -> ReviewDecisionAcknowledgement:
         """Single transaction boundary for one decision write.
 
@@ -132,7 +143,12 @@ class SubmitReviewDecisionUseCase:
             self._unit_of_work.rollback()
             raise
         self._unit_of_work.commit()
-        return result
+        # OPS-UI-01A: the decision (select_workflow or dismiss) is durable; only now
+        # project it. A projection failure is a warning on the committed result, never
+        # a failed decision.
+        sync = sync_after_commit(self._projection_synchronizer, review_id=result.review_id, company_id=company_id)
+        warnings = projection_sync_warnings(sync)
+        return replace(result, warnings=result.warnings + warnings) if warnings else result
 
     def has_matching_decision(self, command: ReviewDecisionCommand) -> bool:
         if not isinstance(command, ReviewDecisionCommand):

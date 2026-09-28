@@ -32,6 +32,7 @@ from app.application.workbench.vendor_bill_readback import (
     VendorBillResaleReadbackVerifier,
 )
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
+from app.composition.imports import build_runtime_workbench_projection_synchronizer
 from app.composition.purchase_account_discovery import build_get_product_purchase_account_use_case
 from app.composition.supplier_remediation import build_archive_one_off_vendor_use_case
 from app.connectors.odoo.client import OdooJson2Client
@@ -46,11 +47,6 @@ from app.erp.odoo.vendor_bill_preview_currency_reader import (
     OdooVendorBillPreviewCurrencyReader,
 )
 from app.erp.odoo.vendor_bill_preview_product_uom_reader import OdooVendorBillPreviewProductUomReader
-from app.erp.odoo.workbench_projection_publisher import (
-    OdooWorkbenchJson2ProjectionAdapter,
-    OdooWorkbenchProjectionFieldMapping,
-    OdooWorkbenchProjectionPublisher,
-)
 from app.erp.write import (
     AccountMoveRepository,
     OdooCustomerInvoiceWritePolicy,
@@ -214,14 +210,8 @@ def build_workbench_vendor_bill_execution_workflow(
     source_invoice_reader = SqlAlchemyExecutionSourceInvoiceReader(session)
     runtime_repository = SqlAlchemyExecutionRuntimeRepository(session)
     resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
-    execution_result_publisher = (
-        OdooWorkbenchProjectionPublisher(
-            adapter=OdooWorkbenchJson2ProjectionAdapter(client=resolved_odoo_client),
-            mapping=OdooWorkbenchProjectionFieldMapping.from_environment(),
-        )
-        if settings.odoo_workbench_projection_publish_enabled
-        else None
-    )
+    # OPS-UI-01A: execution outcomes are projected once, as a full snapshot, by the
+    # execute dispatcher's post-commit hook -- not by this legacy execution-only publisher.
     return WorkbenchVendorBillExecutionWorkflow(
         accepted_decision_reader=review_repository,
         source_invoice_reader=source_invoice_reader,
@@ -231,7 +221,7 @@ def build_workbench_vendor_bill_execution_workflow(
             odoo_client=resolved_odoo_client,
         ),
         runtime_repository=runtime_repository,
-        execution_result_publisher=execution_result_publisher,
+        execution_result_publisher=None,
     )
 
 
@@ -416,5 +406,8 @@ def build_workbench_accepted_decision_execution_dispatcher(
             session=session,
             settings=settings,
             odoo_client=resolved_odoo_client,
+        ),
+        projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
         ),
     )

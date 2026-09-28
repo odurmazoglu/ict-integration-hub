@@ -21,6 +21,7 @@ Ties together the pieces P0-PROD-15T adds, mirroring
 
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 
 from app.application.exceptions import ApplicationError
@@ -50,6 +51,7 @@ from app.application.workbench.ports import (
     ReviewAccountingResolutionWriter,
     ReviewQueueReader,
 )
+from app.application.workbench.projection_sync_contracts import ReviewProjectionSynchronizer, sync_after_commit
 from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import ReclassifyReviewCommand, ReviewReclassificationTrigger
@@ -89,6 +91,7 @@ class SubmitReviewAccountingResolutionUseCase:
         accounting_resolution_writer: ReviewAccountingResolutionWriter,
         reclassifier: AccountingResolutionReclassifier,
         unit_of_work: UnitOfWork,
+        projection_synchronizer: ReviewProjectionSynchronizer | None = None,
     ) -> None:
         self._review_reader = review_reader
         self._purpose_reader = purpose_reader
@@ -96,8 +99,26 @@ class SubmitReviewAccountingResolutionUseCase:
         self._accounting_resolution_writer = accounting_resolution_writer
         self._reclassifier = reclassifier
         self._unit_of_work = unit_of_work
+        self._projection_synchronizer = projection_synchronizer
 
     async def execute(
+        self, command: SubmitReviewAccountingResolutionCommand
+    ) -> ReviewAccountingResolutionSubmissionResult:
+        result = await self._execute(command)
+        # OPS-UI-01A: every successful return here is committed Hub state (fresh
+        # reclassification, resumed reclassification, or an already-applied retry);
+        # project it afterwards, off the event loop. A projection failure is logged by
+        # the synchronizer and never changes this committed result.
+        if self._projection_synchronizer is not None:
+            await asyncio.to_thread(
+                sync_after_commit,
+                self._projection_synchronizer,
+                review_id=command.review_id,
+                company_id=command.company_id,
+            )
+        return result
+
+    async def _execute(
         self, command: SubmitReviewAccountingResolutionCommand
     ) -> ReviewAccountingResolutionSubmissionResult:
         if not isinstance(command, SubmitReviewAccountingResolutionCommand):

@@ -883,8 +883,103 @@ Current publisher mapping keys use `OdooWorkbenchProjectionFieldMapping`:
 | Trace id | optional `ODOO_WORKBENCH_PUBLISHER_TRACE_ID_FIELD` |
 | Review findings HTML | optional `ODOO_WORKBENCH_PUBLISHER_REVIEW_REASONS_FIELD` |
 | Warnings HTML | optional `ODOO_WORKBENCH_PUBLISHER_WARNINGS_FIELD` |
+| Currency (Many2one `res.currency`) | optional `ODOO_WORKBENCH_PUBLISHER_CURRENCY_ID_FIELD` (OPS-UI-01A) |
 
 The legacy duplicate display total `x_studio_total_amount` is not used as the canonical invoice total. Publisher mapping should point canonical invoice total to `x_studio_invoice_total`. The current Odoo Studio `Invoice Date` field is Char; the adapter serializes the date as ISO text at the boundary. A Date field is recommended as a follow-up Studio change.
+
+## Projection Lifecycle Synchronization (OPS-UI-01A)
+
+The Hub is the source of truth; the Odoo Workbench row is a read-only projection of
+it. One canonical entry point, `WorkbenchProjectionSynchronizer.sync(review_id,
+company_id)` (`app/application/workbench/projection_sync.py`), re-reads the
+**committed** Hub state and projects one complete snapshot. No use case builds a
+partial payload.
+
+Ordering for every projection-relevant transition:
+
+```text
+Hub business operation -> Hub commit succeeds -> projection sync attempt
+    -> projection success OR logged, visible warning
+```
+
+| Transition | Post-commit call site |
+| --- | --- |
+| Review creation (import) | `ImportInvoiceUseCase.execute` |
+| Supplier remediation reclassification (`SUPPLIER_RESOLUTION`) | `ResolveWorkbenchSupplierUseCase` (all three committed paths) |
+| Operating-expense mapping reclassification (`MASTER_DATA_CHANGED`) | `SubmitOperatingExpenseMappingUseCase.execute` |
+| Accounting-resolution reclassification (`MASTER_DATA_CHANGED`) | `SubmitReviewAccountingResolutionUseCase.execute` |
+| Accepted decision, including dismiss (API and `/decisions/sync`) | `SubmitReviewDecisionUseCase._write_and_commit` |
+| Execution completed / replayed / failed / waiting_retry (Vendor Bill and Customer Quotation) | `WorkbenchAcceptedDecisionExecutionDispatcher` (EXECUTE mode with a stored execution) |
+
+Product remediation, purchase purpose, write authorizations and execution-evidence
+recovery do not change any projected review field and do not sync.
+
+Async use cases call the synchronizer through `asyncio.to_thread`: the Odoo
+projection adapter is synchronous and deliberately refuses to block a running loop.
+
+### Failure behaviour
+
+A projection failure never propagates into the committed business operation. The
+synchronizer logs `workbench.projection.sync_failed` and returns an `ERROR` result;
+use cases surface it as a warning (decision acknowledgement `warnings`, the import
+warning, the execution `message`, supplier remediation `workbench_republished=false`).
+It never rolls back Hub state, changes an accepted decision or execution, retries a
+Vendor Bill write or touches an authorization. The reconcile CLI is the convergence
+path. `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=false` means no runtime Odoo read or write.
+
+### Projected semantics
+
+- **Workflow**: the accepted decision's `selected_workflow` for a decided review;
+  otherwise (pending, or a dismissal without a selected workflow) the review's
+  workflow. `review.workflow` itself is never rewritten.
+- **Review Findings** follow PR #197's `review_reasons_role`: pending reviews render
+  current blockers as warning badges (unchanged); decided/dismissed reviews render the
+  same stored reasons as neutral history under `Decision basis — accepted decision vN`
+  (or `— dismissed (decision vN)`) plus the effective line resolution derived by
+  PR #197's `effective_resolutions` (`Line 1 → product 392 (human selected)`,
+  `→ product 393 (automatic)`, `→ account 247 (account only)`). Stored
+  `review_reasons` are never modified.
+- **Classification** fields show the evidence of the version the decision was
+  accepted against (`decision_version - 1`) for decided reviews.
+- **Execution** fields reflect stored Hub state of the latest EXECUTE-mode execution
+  for the accepted decision only: `completed` → `Executed` plus the Vendor Bill
+  artifact; any other state leaves Execution Status empty and writes a factual
+  `Stored Hub execution state: …` message (retry counts, last failure, any stored
+  artifact). `Already Executed` is a replayed call, not a state, so a snapshot never
+  projects it. Nothing live (VERIFIED, monetary/RESALE verification, posted/draft) is
+  claimed; those remain readback concepts.
+- **Currency id** (when `ODOO_WORKBENCH_PUBLISHER_CURRENCY_ID_FIELD` is configured) is
+  resolved read-only from the ISO code: exactly one exact `res.currency` match is
+  projected; none or more than one fails that review. No fallback, no creation.
+- **Selections** (review status, workflow, execution status, review/business-context
+  required) are checked against the deployed Studio selection values before any
+  write; an unrepresentable value (e.g. `Customer Quotation`, absent from the
+  deployed Workflow selection) fails that review explicitly.
+
+### Idempotency and stale protection
+
+The desired payload is compared semantically with the Odoo row (Many2one reads as
+ids, empty/False/0 as empty, HTML by structure and text so Odoo's sanitizer wrapping
+does not matter). `Last Sync At` is ignored for equality and written only with a real
+change; an equal row is never rewritten. A snapshot whose review version is lower than
+the row's is `SKIPPED_STALE`. At an equal review version, execution facts may advance
+(a later execution/artifact is written) but a snapshot can never clear an execution
+status or Vendor Bill the row already shows.
+
+### Reconcile CLI
+
+```bash
+python -m app.cli.reconcile_workbench_projection --company 1            # dry-run (default)
+python -m app.cli.reconcile_workbench_projection --company 1 --apply    # create/update rows
+python -m app.cli.reconcile_workbench_projection --company 1 --review-id review:...
+```
+
+Dry-run performs zero Odoo and zero Hub writes, enumerates every review of the
+company, and reports `CREATE / UPDATE / NO_CHANGE / SKIPPED_STALE / ERROR` with
+field-level differences and totals; one review's error never stops the run (exit code
+1 when any review errored). `--apply` creates/updates Workbench projection rows only,
+through the same synchronizer. The Hub session is opened read-only. The CLI does not
+depend on or change `ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED`.
 
 ## Mapping Rules
 

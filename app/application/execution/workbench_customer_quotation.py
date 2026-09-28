@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Protocol
 
 from app.application.execution.accepted_decision_use_cases import (
@@ -18,6 +19,7 @@ from app.application.execution.exceptions import (
 from app.application.execution.ports import AcceptedReviewDecisionReader, ExecutionRuntimeRepository
 from app.application.execution.runtime import ExecutionState
 from app.application.execution.workbench_vendor_bill import (
+    EXECUTION_PROJECTION_FAILURE_MESSAGE,
     WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
     WorkbenchVendorBillExecutionWorkflow,
@@ -29,6 +31,7 @@ from app.application.quotation.evidence import QuotationScenarioEvidenceReposito
 from app.application.quotation.exceptions import QuotationEvidenceError, QuotationEvidenceNotFoundError
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workbench.exceptions import ReviewNotFoundError
+from app.application.workbench.projection_sync_contracts import ReviewProjectionSynchronizer, sync_after_commit
 from app.application.workflow import WorkflowType
 
 
@@ -196,10 +199,13 @@ class WorkbenchAcceptedDecisionExecutionDispatcher:
         accepted_decision_reader: AcceptedReviewDecisionReader,
         vendor_bill_workflow: WorkbenchVendorBillExecutionWorkflow,
         customer_quotation_workflow: WorkbenchAcceptedDecisionExecutionWorkflow,
+        projection_synchronizer: ReviewProjectionSynchronizer | None = None,
     ) -> None:
         self._accepted_decision_reader = accepted_decision_reader
         self._vendor_bill_workflow = vendor_bill_workflow
         self._customer_quotation_workflow = customer_quotation_workflow
+        # OPS-UI-01A: the one post-commit projection hook for every execution outcome.
+        self._projection_synchronizer = projection_synchronizer
 
     def execute(
         self,
@@ -231,7 +237,7 @@ class WorkbenchAcceptedDecisionExecutionDispatcher:
         if authorization_id is not None:
             if decision.selected_workflow is not WorkflowType.VENDOR_BILL:
                 raise ExecutionPlanningError("Runtime authorization is supported only for Vendor Bill decisions.")
-            return self._vendor_bill_workflow.execute(
+            result = self._vendor_bill_workflow.execute(
                 review_id=review_id,
                 company_id=company_id,
                 decision_version=decision_version,
@@ -240,13 +246,14 @@ class WorkbenchAcceptedDecisionExecutionDispatcher:
                 trace_id=trace_id,
                 authorization_id=authorization_id,
             )
+            return self._project_after_commit(result)
 
         workflow = (
             self._customer_quotation_workflow
             if decision.selected_workflow is WorkflowType.CUSTOMER_QUOTATION
             else self._vendor_bill_workflow
         )
-        return workflow.execute(
+        result = workflow.execute(
             review_id=review_id,
             company_id=company_id,
             decision_version=decision_version,
@@ -254,6 +261,35 @@ class WorkbenchAcceptedDecisionExecutionDispatcher:
             approval=approval,
             trace_id=trace_id,
         )
+        return self._project_after_commit(result)
+
+    def _project_after_commit(self, result: WorkbenchVendorBillExecutionResult) -> WorkbenchVendorBillExecutionResult:
+        """Project a stored EXECUTE-mode outcome (completed, replayed, failed, waiting_retry).
+
+        ``RunAcceptedDecisionExecutionUseCase`` has already committed the execution
+        state, steps, events and artifacts when a result carries an ``execution_id``;
+        a DRY_RUN or a pre-runtime rejection stores nothing projection-relevant. A
+        projection failure never changes the execution outcome, never retries the
+        Vendor Bill write and never touches an authorization -- it only adds a warning.
+        """
+
+        if result.mode is not ExecutionMode.EXECUTE or result.execution_id is None:
+            return result
+        sync = sync_after_commit(
+            self._projection_synchronizer, review_id=result.review_id, company_id=result.company_id
+        )
+        if sync is None or not sync.failed:
+            return result
+        if result.status in _SUCCESSFUL_EXECUTION_STATUSES:
+            return replace(result, message=EXECUTION_PROJECTION_FAILURE_MESSAGE)
+        # Keep the stored failure/waiting message visible; append the projection warning.
+        message = " ".join(part for part in (result.message, EXECUTION_PROJECTION_FAILURE_MESSAGE) if part)
+        return replace(result, message=message)
+
+
+_SUCCESSFUL_EXECUTION_STATUSES = frozenset(
+    {WorkbenchVendorBillExecutionStatus.EXECUTED, WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED}
+)
 
 
 def _quotation_eligibility_error(decision: AcceptedReviewDecision) -> str | None:
