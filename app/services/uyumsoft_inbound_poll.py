@@ -10,7 +10,9 @@ projection sync) -- and adds only what unattended polling needs:
 * a read-only "already imported" check keyed on the exact import idempotency key,
   so known invoices are not re-persisted, re-downloaded or re-resolved each cycle;
 * per-invoice isolation, so one unexpected failure cannot block the rest of a batch;
-* a bounded lookback window instead of a mutable watermark.
+* a bounded lookback window instead of a mutable watermark;
+* a read-only preview of exactly what a cycle would import (first-run safety);
+* no ``uyumsoft_sync_runs`` row for a cycle that selected nothing (log only).
 
 Nothing here calls Odoo directly or triggers Vendor Bill execution.
 """
@@ -21,7 +23,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -64,6 +66,11 @@ POLL_STATUS_COMPLETED_WITH_ERRORS = "completed_with_errors"
 POLL_STATUS_FAILED = "failed"
 POLL_STATUS_SKIPPED_LOCKED = "skipped_locked"
 
+#: Preview classification (read-only; see :class:`UyumsoftInboundPollPreview`).
+PREVIEW_ALREADY_KNOWN = "ALREADY_KNOWN"  # receipt/review exists: the poller skips it
+PREVIEW_NEW = "NEW"  # never seen by the Hub: the next cycle imports it
+PREVIEW_WOULD_IMPORT = "WOULD_IMPORT"  # seen before but never imported (e.g. failed): the next cycle retries it
+
 #: Stable PostgreSQL advisory lock key: first 8 bytes (signed, big-endian) of
 #: sha256(b"ict-integration-hub:uyumsoft-inbound-poll").
 POLL_ADVISORY_LOCK_KEY = -2752363236075536948
@@ -104,8 +111,38 @@ class InboundPollCycleResult:
     already_imported: int = 0
     failed: int = 0
     run_id: int | None = None
+    #: False for a successful cycle that selected nothing: its sync-run row is not kept.
+    audit_recorded: bool = False
     failure_type: str | None = None
     failure_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InboundPollPreviewItem:
+    status: str
+    invoice_identity: str
+    ettn: str | None
+    invoice_number: str | None
+    invoice_date: datetime | None
+    sender_tax_number: str | None
+    total_amount: Any
+    currency: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class InboundPollPreview:
+    from_date: datetime
+    to_date: datetime
+    pages_fetched: int
+    truncated: bool
+    items: tuple[InboundPollPreviewItem, ...]
+
+    def count(self, status: str) -> int:
+        return sum(1 for item in self.items if item.status == status)
+
+    @property
+    def would_import(self) -> tuple[InboundPollPreviewItem, ...]:
+        return tuple(item for item in self.items if item.status != PREVIEW_ALREADY_KNOWN)
 
 
 class PollLock(Protocol):
@@ -292,14 +329,7 @@ class UyumsoftInboundPollCycle:
         return result
 
     def _request(self) -> UyumsoftInvoiceSyncRequest:
-        now = self._clock().astimezone(UTC)
-        return UyumsoftInvoiceSyncRequest(
-            from_date=now - timedelta(days=self._config.lookback_days),
-            to_date=now + POLL_WINDOW_FORWARD_SKEW,
-            directions=(_INBOUND_DIRECTION,),
-            page_size=self._config.page_size,
-            max_pages=self._config.max_pages,
-        )
+        return inbound_poll_request(self._config, self._clock())
 
     def _run_locked(
         self,
@@ -317,7 +347,14 @@ class UyumsoftInboundPollCycle:
                 skip_invoice=KnownInboundInvoiceChecker(session).is_known,
             )
             sync_result = workflow.run(request)
-            session.commit()
+            # With nothing selected, no metadata, document, review or receipt was touched:
+            # the sync-run row is the only pending write. Such a cycle is kept as a log
+            # line only; any cycle that selected an invoice keeps its audit row.
+            audit_recorded = sync_result.selected_invoices > 0
+            if audit_recorded:
+                session.commit()
+            else:
+                session.rollback()
         except ConnectorError as exc:
             # Same as the manual route: keep the failed sync-run audit row. Reviews created
             # before the failure were already committed by ImportInvoiceUseCase.
@@ -329,10 +366,103 @@ class UyumsoftInboundPollCycle:
         finally:
             session.close()
         _warn_if_window_truncated(cycle_id, sync_result, request)
-        return _completed(cycle_id, started, sync_result)
+        return _completed(cycle_id, started, sync_result, audit_recorded=audit_recorded)
 
 
-def _completed(cycle_id: str, started: float, sync: UyumsoftInvoiceSyncResult) -> InboundPollCycleResult:
+class UyumsoftInboundPollPreview:
+    """Read-only dry run: what would the next cycle import, and what would it skip?
+
+    Runs the *same* ``UyumsoftInvoiceSyncWorkflow`` listing (same window, directions
+    and pagination as :class:`UyumsoftInboundPollCycle`) with a skip predicate that
+    classifies every invoice and then skips it. So nothing is persisted, downloaded,
+    parsed, resolved against Odoo or imported, and no sync-run row or lock is taken.
+    The session comes from ``read_session_scope`` (PostgreSQL READ ONLY in production).
+    """
+
+    def __init__(
+        self,
+        *,
+        read_session_scope: Callable[[], AbstractContextManager[Session]],
+        client: UyumsoftSoapClient,
+        config: InboundPollConfig,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._read_session_scope = read_session_scope
+        self._client = client
+        self._config = config
+        self._clock = clock
+
+    def run(self) -> InboundPollPreview:
+        request = inbound_poll_request(self._config, self._clock())
+        items: list[InboundPollPreviewItem] = []
+        with self._read_session_scope() as session:
+            known = KnownInboundInvoiceChecker(session)
+            persistence = InvoicePersistenceService(session)
+
+            def classify_and_skip(invoice: UyumsoftInvoiceSummary) -> bool:
+                items.append(_preview_item(invoice, known=known, persistence=persistence))
+                return True
+
+            result = UyumsoftInvoiceSyncWorkflow(
+                client=self._client,
+                persistence=persistence,
+                skip_invoice=classify_and_skip,
+            ).run(request)
+        pages = sum(direction.pages_fetched for direction in result.directions)
+        capacity = request.page_size * request.max_pages
+        return InboundPollPreview(
+            from_date=request.from_date,
+            to_date=request.to_date,
+            pages_fetched=pages,
+            truncated=any(direction.invoices_seen >= capacity for direction in result.directions),
+            items=tuple(items),
+        )
+
+
+def inbound_poll_request(config: InboundPollConfig, now: datetime) -> UyumsoftInvoiceSyncRequest:
+    """The one window/pagination definition shared by the poll cycle and its preview."""
+
+    current = now.astimezone(UTC)
+    return UyumsoftInvoiceSyncRequest(
+        from_date=current - timedelta(days=config.lookback_days),
+        to_date=current + POLL_WINDOW_FORWARD_SKEW,
+        directions=(_INBOUND_DIRECTION,),
+        page_size=config.page_size,
+        max_pages=config.max_pages,
+    )
+
+
+def _preview_item(
+    invoice: UyumsoftInvoiceSummary,
+    *,
+    known: KnownInboundInvoiceChecker,
+    persistence: InvoicePersistenceService,
+) -> InboundPollPreviewItem:
+    if known.is_known(invoice):
+        status = PREVIEW_ALREADY_KNOWN
+    elif persistence.find_invoice_metadata(invoice) is None:
+        status = PREVIEW_NEW
+    else:
+        status = PREVIEW_WOULD_IMPORT
+    return InboundPollPreviewItem(
+        status=status,
+        invoice_identity=build_invoice_identity(invoice).key,
+        ettn=invoice.ettn,
+        invoice_number=invoice.invoice_number,
+        invoice_date=invoice.invoice_date,
+        sender_tax_number=invoice.tax_number,
+        total_amount=invoice.total_amount,
+        currency=invoice.currency,
+    )
+
+
+def _completed(
+    cycle_id: str,
+    started: float,
+    sync: UyumsoftInvoiceSyncResult,
+    *,
+    audit_recorded: bool,
+) -> InboundPollCycleResult:
     discovered = sum(direction.invoices_seen for direction in sync.directions)
     failed = sync.failed_import_count
     return InboundPollCycleResult(
@@ -345,7 +475,8 @@ def _completed(cycle_id: str, started: float, sync: UyumsoftInvoiceSyncResult) -
         review_created=sync.review_count,
         already_imported=sync.already_imported_count,
         failed=failed,
-        run_id=sync.run_id,
+        run_id=sync.run_id if audit_recorded else None,
+        audit_recorded=audit_recorded,
     )
 
 
@@ -407,8 +538,8 @@ def _log_cycle_finished(result: InboundPollCycleResult) -> None:
     logger.log(
         logging.ERROR if result.status == POLL_STATUS_FAILED else logging.INFO,
         "uyumsoft_inbound_poll_finished cycle_id=%s status=%s discovered=%s already_known=%s imported=%s "
-        "review_created=%s already_imported=%s failed=%s duration_ms=%s run_id=%s failure_type=%s "
-        "failure_message=%s",
+        "review_created=%s already_imported=%s failed=%s duration_ms=%s run_id=%s audit_recorded=%s "
+        "failure_type=%s failure_message=%s",
         result.cycle_id,
         result.status,
         result.discovered,
@@ -419,6 +550,7 @@ def _log_cycle_finished(result: InboundPollCycleResult) -> None:
         result.failed,
         result.duration_ms,
         result.run_id,
+        result.audit_recorded,
         result.failure_type,
         result.failure_message,
         extra={
@@ -453,12 +585,19 @@ __all__ = [
     "POLL_STATUS_COMPLETED_WITH_ERRORS",
     "POLL_STATUS_FAILED",
     "POLL_STATUS_SKIPPED_LOCKED",
+    "PREVIEW_ALREADY_KNOWN",
+    "PREVIEW_NEW",
+    "PREVIEW_WOULD_IMPORT",
     "InProcessPollLock",
     "InboundPollConfig",
     "InboundPollCycleResult",
+    "InboundPollPreview",
+    "InboundPollPreviewItem",
     "IsolatingCanonicalImporter",
     "KnownInboundInvoiceChecker",
     "PollLock",
     "PostgresAdvisoryPollLock",
     "UyumsoftInboundPollCycle",
+    "UyumsoftInboundPollPreview",
+    "inbound_poll_request",
 ]

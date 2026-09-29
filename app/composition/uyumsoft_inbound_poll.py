@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.composition.imports import build_uyumsoft_canonical_invoice_importer
+from app.composition.imports import build_uyumsoft_canonical_invoice_importer, open_read_only_session
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings
@@ -17,6 +18,7 @@ from app.services.uyumsoft_inbound_poll import (
     PollLock,
     PostgresAdvisoryPollLock,
     UyumsoftInboundPollCycle,
+    UyumsoftInboundPollPreview,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,6 +58,21 @@ def build_uyumsoft_inbound_poll_cycle(
         client=client,
         importer_factory=importer_factory,
         lock=build_poll_lock(engine),
+        config=inbound_poll_config(settings),
+    )
+
+
+def build_uyumsoft_inbound_poll_preview(
+    *,
+    settings: Settings,
+    engine: Engine,
+    uyumsoft_client: UyumsoftSoapClient | None = None,
+) -> UyumsoftInboundPollPreview:
+    """Read-only preview with the cycle's own window; Hub reads use a READ ONLY session."""
+
+    return UyumsoftInboundPollPreview(
+        read_session_scope=partial(open_read_only_session, engine),
+        client=uyumsoft_client or UyumsoftSoapClient.from_settings(settings),
         config=inbound_poll_config(settings),
     )
 

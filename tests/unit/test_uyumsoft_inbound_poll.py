@@ -9,8 +9,10 @@ engine and the Workbench projection synchronizer are faked.
 from __future__ import annotations
 
 import ast
+import io
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -60,10 +62,14 @@ from app.services.uyumsoft_inbound_poll import (
     POLL_STATUS_COMPLETED_WITH_ERRORS,
     POLL_STATUS_FAILED,
     POLL_STATUS_SKIPPED_LOCKED,
+    PREVIEW_ALREADY_KNOWN,
+    PREVIEW_NEW,
+    PREVIEW_WOULD_IMPORT,
     InboundPollConfig,
     InProcessPollLock,
     KnownInboundInvoiceChecker,
     UyumsoftInboundPollCycle,
+    UyumsoftInboundPollPreview,
 )
 from app.services.uyumsoft_invoice_sync import UyumsoftInvoiceSyncRequest, UyumsoftInvoiceSyncWorkflow
 from app.workers import uyumsoft_inbound_poller
@@ -217,6 +223,18 @@ class Harness:
             lock=lock or InProcessPollLock(),
             config=config or InboundPollConfig(),
             clock=lambda: NOW,
+        )
+
+    def preview(self, client: FakeUyumsoft) -> UyumsoftInboundPollPreview:
+        @contextmanager
+        def read_scope() -> Any:
+            with sessionmaker(bind=self.engine)() as session:
+                yield session
+                assert not (session.new or session.dirty or session.deleted), "preview must not write"
+                session.rollback()
+
+        return UyumsoftInboundPollPreview(
+            read_session_scope=read_scope, client=client, config=InboundPollConfig(), clock=lambda: NOW
         )
 
     def count(self, model: type[Base]) -> int:
@@ -419,7 +437,9 @@ def test_second_cycle_skips_known_invoice_without_download_or_duplicate(harness:
     assert harness.count(UyumsoftInvoiceMetadata) == 1
     assert harness.count(InvoiceDocument) == 1
     assert len(harness.synchronizer.calls) == 1
-    assert harness.count(UyumsoftSyncRun) == 2
+    # The empty second cycle is a log line only; the importing first cycle kept its row.
+    assert second.audit_recorded is False and second.run_id is None
+    assert harness.count(UyumsoftSyncRun) == 1
 
 
 def test_restart_does_not_duplicate_previously_ingested_invoices(harness: Harness) -> None:
@@ -652,3 +672,219 @@ def test_poller_composes_the_same_importer_as_the_manual_sync_route(monkeypatch:
     assert calls[0]["settings"] is settings
     assert calls[0]["uyumsoft_client"] is client
     engine.dispose()
+
+
+# --------------------------------------------------------------------------- sync-run audit volume
+
+
+def test_meaningful_cycles_keep_their_audit_row_and_empty_ones_do_not(harness: Harness) -> None:
+    empty = harness.cycle(FakeUyumsoft([])).run()
+    importing = harness.cycle(FakeUyumsoft([1])).run()
+    all_known = harness.cycle(FakeUyumsoft([1])).run()
+    failing = harness.cycle(FakeUyumsoft([1, 2], documents={2: b"<?xml version='1.0'?><NotAnInvoice/>"})).run()
+
+    assert (empty.status, empty.audit_recorded, empty.run_id) == (POLL_STATUS_COMPLETED, False, None)
+    assert (all_known.audit_recorded, all_known.already_known) == (False, 1)
+    assert importing.audit_recorded is True and importing.run_id is not None
+    assert failing.status == POLL_STATUS_COMPLETED_WITH_ERRORS and failing.audit_recorded is True
+    with sessionmaker(bind=harness.engine)() as session:
+        runs = session.scalars(select(UyumsoftSyncRun).order_by(UyumsoftSyncRun.id)).all()
+        assert [run.id for run in runs] == [importing.run_id, failing.run_id]
+        assert [run.status for run in runs] == ["completed", "completed"]
+        assert runs[1].summary["failed_import_count"] == 1
+
+
+def test_empty_cycle_still_logs_its_counters(harness: Harness) -> None:
+    import logging
+
+    harness.cycle(FakeUyumsoft([1])).run()
+    messages: list[str] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    poll_logger = logging.getLogger("app.services.uyumsoft_inbound_poll")
+    # Another test may have run Alembic's fileConfig(), which disables existing loggers.
+    handler, previous = Collect(level=logging.INFO), (poll_logger.level, poll_logger.disabled)
+    poll_logger.addHandler(handler)
+    poll_logger.setLevel(logging.INFO)
+    poll_logger.disabled = False
+    try:
+        harness.cycle(FakeUyumsoft([1])).run()
+    finally:
+        poll_logger.removeHandler(handler)
+        poll_logger.level, poll_logger.disabled = previous
+
+    [finished] = [message for message in messages if "poll_finished" in message]
+    assert "status=completed discovered=1 already_known=1 imported=0" in finished
+    assert "audit_recorded=False" in finished
+
+
+# --------------------------------------------------------------------------- first-run preview
+
+
+def _seed_already_known_and_retry(harness: Harness) -> None:
+    """Invoice 1 imported; invoice 2 seen by the Hub but failed (never imported)."""
+
+    harness.cycle(FakeUyumsoft([1, 2], documents={2: b"<?xml version='1.0'?><NotAnInvoice/>"})).run()
+
+
+def test_preview_classifies_every_invoice_without_writing_anything(harness: Harness) -> None:
+    _seed_already_known_and_retry(harness)
+    before = {model: harness.count(model) for model in (UyumsoftInvoiceMetadata, InvoiceDocument, UyumsoftSyncRun)}
+    before_reviews = harness.count(WorkbenchReviewItem)
+    client = FakeUyumsoft([1, 2, 3])
+
+    preview = harness.preview(client).run()
+
+    assert [(item.ettn, item.status) for item in preview.items] == [
+        (_ettn(1), PREVIEW_ALREADY_KNOWN),
+        (_ettn(2), PREVIEW_WOULD_IMPORT),
+        (_ettn(3), PREVIEW_NEW),
+    ]
+    assert [item.ettn for item in preview.would_import] == [_ettn(2), _ettn(3)]
+    assert client.download_calls == []
+    assert {model: harness.count(model) for model in before} == before
+    assert harness.count(WorkbenchReviewItem) == before_reviews
+    assert harness.synchronizer.calls == [(harness.reviews()[0].review_id, COMPANY_ID)]  # only the seed import
+
+
+def test_preview_uses_the_exact_window_and_paging_of_the_cycle(harness: Harness) -> None:
+    preview_client = FakeUyumsoft(list(range(1, 151)))
+    cycle_client = FakeUyumsoft(list(range(1, 151)))
+
+    preview = harness.preview(preview_client).run()
+    harness.cycle(cycle_client).run()
+
+    assert preview_client.list_requests == cycle_client.list_requests
+    assert (preview.from_date, preview.to_date, preview.pages_fetched) == (
+        NOW - timedelta(days=10),
+        NOW + timedelta(days=1),
+        2,
+    )
+
+
+def test_preview_predicts_exactly_what_the_next_cycle_attempts(harness: Harness) -> None:
+    _seed_already_known_and_retry(harness)
+    bad_document = {2: b"<?xml version='1.0'?><NotAnInvoice/>"}
+
+    preview = harness.preview(FakeUyumsoft([1, 2, 3], documents=bad_document)).run()
+    cycle_client = FakeUyumsoft([1, 2, 3], documents=bad_document)
+    result = harness.cycle(cycle_client).run()
+
+    # Every WOULD_IMPORT/NEW invoice enters the import pipeline (and is downloaded);
+    # every ALREADY_KNOWN one is skipped. Success still depends on the import itself.
+    assert set(cycle_client.download_calls) == {_invoice_number(2), _invoice_number(3)}
+    assert {item.ettn for item in preview.would_import} == {_ettn(2), _ettn(3)}
+    assert result.already_known == preview.count(PREVIEW_ALREADY_KNOWN)
+    assert (result.review_created, result.failed) == (1, 1)
+
+
+def test_preview_cli_runs_while_polling_is_disabled_and_prints_the_list(
+    isolated_settings_env: None, harness: Harness
+) -> None:
+    _seed_already_known_and_retry(harness)
+    out = io.StringIO()
+
+    exit_code = uyumsoft_inbound_poller.main(
+        ["--preview"],
+        settings=Settings(uyumsoft_inbound_poll_enabled=False),
+        preview_builder=lambda settings: harness.preview(FakeUyumsoft([1, 2, 3])).run,
+        cycle_builder=lambda settings: pytest.fail("preview must never build a poll cycle"),
+        out=out,
+    )
+
+    text = out.getvalue()
+    assert exit_code == 0
+    assert "read-only" in text
+    assert f"ALREADY_KNOWN\t{_ettn(1)}\t" in text
+    assert f"WOULD_IMPORT\t{_ettn(2)}\t" in text
+    assert f"NEW\t{_ettn(3)}\t" in text
+    assert "summary discovered=3 already_known=1 new=1 would_import=1 next_cycle_would_import=2" in text
+    assert "<Invoice" not in text
+
+
+def test_preview_failure_is_reported_with_a_non_zero_exit(
+    isolated_settings_env: None, harness: Harness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = FakeUyumsoft([1], list_error=ConnectorError("Uyumsoft unavailable."))
+
+    exit_code = uyumsoft_inbound_poller.main(
+        ["--preview"], settings=Settings(), preview_builder=lambda settings: harness.preview(client).run
+    )
+
+    assert exit_code == uyumsoft_inbound_poller.EXIT_PREVIEW_FAILED
+    assert "Preview failed: ConnectorError" in capsys.readouterr().err
+    assert harness.count(UyumsoftSyncRun) == 0
+
+
+# --------------------------------------------------------------------------- Workbench projection chain
+
+
+def test_projection_sync_runs_only_after_the_review_is_committed(harness: Harness) -> None:
+    seen_committed: list[bool] = []
+
+    class CommitCheckingSynchronizer(RecordingSynchronizer):
+        def sync(self, *, review_id: str, company_id: int) -> Any:
+            with sessionmaker(bind=harness.engine)() as other_connection:  # sees committed rows only
+                seen_committed.append(
+                    other_connection.scalar(
+                        select(WorkbenchReviewItem).where(WorkbenchReviewItem.review_id == review_id)
+                    )
+                    is not None
+                )
+            return super().sync(review_id=review_id, company_id=company_id)
+
+    harness.synchronizer = CommitCheckingSynchronizer()
+
+    harness.cycle(FakeUyumsoft([1])).run()
+
+    assert seen_committed == [True]
+
+
+@pytest.mark.parametrize("publish_enabled", [True, False])
+def test_poller_import_uses_the_runtime_workbench_synchronizer_and_no_other_odoo_writer(
+    monkeypatch: pytest.MonkeyPatch, publish_enabled: bool
+) -> None:
+    from app.application.workbench.projection_sync import WorkbenchProjectionSynchronizer
+
+    for suffix, value in _PROJECTION_MAPPING_ENV.items():
+        monkeypatch.setenv(f"ODOO_WORKBENCH_PUBLISHER_{suffix}", value)
+    engine = create_engine("sqlite://")
+    settings = Settings(odoo_workbench_projection_publish_enabled=publish_enabled)
+    cycle = poll_composition.build_uyumsoft_inbound_poll_cycle(
+        settings=settings,
+        engine=engine,
+        uyumsoft_client=FakeUyumsoft([]),
+        storage=object(),  # type: ignore[arg-type]
+    )
+
+    with sessionmaker(bind=engine)() as session:
+        use_case = cycle._importer_factory(session)._import_use_case_factory()
+
+    assert isinstance(use_case, ImportInvoiceUseCase)
+    assert use_case._workbench_projection_publisher is None  # the legacy direct publisher is never wired
+    if publish_enabled:
+        assert isinstance(use_case._workbench_projection_synchronizer, WorkbenchProjectionSynchronizer)
+    else:
+        assert use_case._workbench_projection_synchronizer is None
+    engine.dispose()
+
+
+_PROJECTION_MAPPING_ENV = {
+    "PARENT_MODEL": "x_ipp_import_workbench",
+    "NAME_FIELD": "x_name",
+    "REVIEW_ID_FIELD": "x_studio_review_id",
+    "COMPANY_ID_FIELD": "x_studio_company_id",
+    "INVOICE_NUMBER_FIELD": "x_studio_invoice_number",
+    "SUPPLIER_FIELD": "x_studio_supplier",
+    "SUPPLIER_TAX_NUMBER_FIELD": "x_studio_supplier_tax_number",
+    "INVOICE_DATE_FIELD": "x_studio_invoice_date",
+    "CURRENCY_FIELD": "x_studio_currency",
+    "INVOICE_TOTAL_FIELD": "x_studio_invoice_total",
+    "REVIEW_STATUS_FIELD": "x_studio_review_status",
+    "WORKFLOW_FIELD": "x_studio_workflow",
+    "REVIEW_VERSION_FIELD": "x_studio_review_version",
+    "LAST_SYNC_AT_FIELD": "x_studio_last_sync_at",
+}

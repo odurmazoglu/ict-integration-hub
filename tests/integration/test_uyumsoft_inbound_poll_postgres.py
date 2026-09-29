@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from contextlib import nullcontext
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +16,18 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from app.composition.imports import open_read_only_session
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.services.uyumsoft_inbound_poll import (
     POLL_ADVISORY_LOCK_KEY,
     POLL_STATUS_COMPLETED,
     POLL_STATUS_SKIPPED_LOCKED,
+    PREVIEW_ALREADY_KNOWN,
+    PREVIEW_NEW,
+    InboundPollConfig,
     KnownInboundInvoiceChecker,
     PostgresAdvisoryPollLock,
+    UyumsoftInboundPollPreview,
 )
 from tests.unit.test_uyumsoft_inbound_poll import FakeUyumsoft, Harness
 
@@ -145,3 +151,28 @@ def test_concurrent_discovery_without_the_lock_still_creates_one_review(
 
     assert len(results) == 2
     assert harness.count(WorkbenchReviewItem) == 1
+
+
+def test_preview_runs_in_a_postgres_read_only_transaction(harness: Harness, engine: Engine) -> None:
+    harness.cycle(FakeUyumsoft([1])).run()
+    preview = UyumsoftInboundPollPreview(
+        read_session_scope=partial(open_read_only_session, engine),
+        client=FakeUyumsoft([1, 2]),
+        config=InboundPollConfig(),
+    )
+
+    result = preview.run()
+
+    assert [item.status for item in result.items] == [PREVIEW_ALREADY_KNOWN, PREVIEW_NEW]
+    with pytest.raises(Exception, match="read-only transaction"):  # the scope really is READ ONLY
+        with open_read_only_session(engine) as session:
+            session.execute(text("CREATE TEMP TABLE should_fail (id int)"))
+
+
+def test_empty_cycle_leaves_no_sync_run_row_on_postgres(harness: Harness, engine: Engine) -> None:
+    harness.cycle(FakeUyumsoft([1])).run()
+    second = harness.cycle(FakeUyumsoft([1])).run()
+
+    with engine.connect() as connection:
+        runs = connection.scalar(text("SELECT count(*) FROM uyumsoft_sync_runs"))
+    assert (second.audit_recorded, runs) == (False, 1)
