@@ -1,7 +1,8 @@
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,19 @@ MAX_INVOICE_ETTN_FILTER_COUNT = 20
 SYNC_STATUS_RUNNING = "running"
 SYNC_STATUS_COMPLETED = "completed"
 SYNC_STATUS_FAILED = "failed"
+
+#: Optional pre-persistence predicate: True means "already processed, do not persist/import".
+SkipInvoicePredicate = Callable[[UyumsoftInvoiceSummary], bool]
+
+
+class CanonicalBatchImporter(Protocol):
+    def import_invoices(
+        self,
+        invoices: list[UyumsoftInvoiceSummary],
+        *,
+        persisted_records: dict[str, Any],
+    ) -> UyumsoftCanonicalImportBatchResult:
+        pass
 
 
 @dataclass(frozen=True)
@@ -125,12 +139,17 @@ class UyumsoftInvoiceSyncWorkflow:
         client: UyumsoftSoapClient,
         persistence: InvoicePersistenceService,
         run_repository: "SyncRunRepository | None" = None,
-        canonical_importer: UyumsoftCanonicalInvoiceImporter | None = None,
+        canonical_importer: UyumsoftCanonicalInvoiceImporter | CanonicalBatchImporter | None = None,
+        skip_invoice: SkipInvoicePredicate | None = None,
     ) -> None:
         self._client = client
         self._persistence = persistence
         self._run_repository = run_repository
         self._canonical_importer = canonical_importer
+        # None (the manual sync route) preserves current behavior exactly. The inbound
+        # poller passes a read-only "already imported" check so known invoices are neither
+        # re-persisted nor re-downloaded every cycle; they still count in invoices_seen.
+        self._skip_invoice = skip_invoice
 
     def run(self, request: UyumsoftInvoiceSyncRequest) -> UyumsoftInvoiceSyncResult:
         _validate_request(request)
@@ -211,11 +230,15 @@ class UyumsoftInvoiceSyncWorkflow:
                 # is always driven by the full fetched page, unfiltered -- the allowlist
                 # only narrows what gets persisted/imported next.
                 selected_page_invoices = _select_invoices(response.invoices, allowlist)
-                selected_count += len(selected_page_invoices)
                 if allowlist is not None:
                     matched_identities.update(
                         invoice.ettn for invoice in selected_page_invoices if invoice.ettn is not None
                     )
+                if self._skip_invoice is not None:
+                    selected_page_invoices = [
+                        invoice for invoice in selected_page_invoices if not self._skip_invoice(invoice)
+                    ]
+                selected_count += len(selected_page_invoices)
                 persistence_result = persistence_result.add(self._persistence.persist_invoices(selected_page_invoices))
                 import_result = _merge_import_results(
                     import_result,
