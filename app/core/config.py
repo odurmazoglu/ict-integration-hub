@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     uyumsoft_timeout_seconds: float = 20
     uyumsoft_retry_attempts: int = Field(default=3, ge=1, le=5)
     uyumsoft_retry_backoff_seconds: float = Field(default=0.2, ge=0, le=5)
+    #: Hub-owned inbound poller (separate worker process). Off by default; enabling it
+    #: in production is a separate operator step.
+    uyumsoft_inbound_poll_enabled: bool = False
+    uyumsoft_inbound_poll_interval_seconds: int = Field(default=180, ge=60, le=3600)
+    #: Bounded lookback on the Uyumsoft execution (invoice) date. Covers late-arriving
+    #: invoices without a mutable watermark; known invoices are skipped by identity.
+    uyumsoft_inbound_poll_lookback_days: int = Field(default=10, ge=1, le=30)
+    uyumsoft_inbound_poll_page_size: int = Field(default=100, ge=1, le=100)
+    uyumsoft_inbound_poll_max_pages: int = Field(default=10, ge=1, le=10)
 
     @property
     def uyumsoft_wsdl_url(self) -> str:

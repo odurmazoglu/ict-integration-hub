@@ -15,6 +15,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+  # Hub-owned Uyumsoft inbound poller: its own process, never inside the API. Idles
+  # unless UYUMSOFT_INBOUND_POLL_ENABLED=true in the selected env file.
+  uyumsoft-inbound-poller:
+    build: .
+    command: ["python", "-m", "app.workers.uyumsoft_inbound_poller"]
+    env_file:
+      - ${APP_ENV_FILE:-.env.local}
+    environment:
+      DATABASE_URL: postgresql+psycopg://ict:ict@db:5432/ict_integration_hub
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
   db:
     image: postgres:16-alpine
     environment:
