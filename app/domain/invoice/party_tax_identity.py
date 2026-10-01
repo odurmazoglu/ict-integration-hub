@@ -53,6 +53,36 @@ def party_tax_identifier(party: ElementTree.Element | None, *, field_path: str) 
     return None
 
 
+def is_party_tax_identifier(value: str | None) -> bool:
+    """Whether ``value`` has the shape of a VKN (10 digits) or TCKN (11 digits)."""
+
+    return value is not None and value.isdigit() and len(value) in _TAX_REGISTRATION_LENGTHS
+
+
+def legacy_first_party_identifier(party: ElementTree.Element | None) -> str | None:
+    """The identifier the pre-PR #201 parsers stored as a party's tax number.
+
+    That rule took the first non-empty of ``PartyIdentification/cbc:ID`` (any
+    ``schemeID``, only the first element), ``PartyTaxScheme/cbc:CompanyID`` and
+    ``PartyLegalEntity/cbc:CompanyID``. It is **never** used to resolve a tax
+    number; it exists only so a historical correction can prove that a persisted
+    value is exactly what that defective rule produced from the same document.
+    """
+
+    if party is None:
+        return None
+    for path in (
+        "cac:PartyIdentification/cbc:ID",
+        "cac:PartyTaxScheme/cbc:CompanyID",
+        "cac:PartyLegalEntity/cbc:CompanyID",
+    ):
+        element = party.find(path, NS)
+        value = (element.text or "").strip() if element is not None else ""
+        if value:
+            return value
+    return None
+
+
 def _typed_tax_identifiers(party: ElementTree.Element, *, field_path: str) -> list[str]:
     values: list[str] = []
     for element in party.findall("cac:PartyIdentification/cbc:ID", NS):

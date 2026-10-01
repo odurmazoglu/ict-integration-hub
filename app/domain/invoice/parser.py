@@ -24,7 +24,7 @@ from app.domain.invoice.exceptions import (
     MissingMandatoryInvoiceFieldError,
     UnsupportedInvoiceXmlError,
 )
-from app.domain.invoice.party_tax_identity import party_tax_identifier
+from app.domain.invoice.party_tax_identity import legacy_first_party_identifier, party_tax_identifier
 
 UBL_INVOICE_NAMESPACE = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
 NS = {
@@ -65,6 +65,17 @@ def parse_ubl_invoice(content: bytes | str) -> InternalInvoice:
         lines=tuple(_invoice_line(line) for line in root.findall("cac:InvoiceLine", NS)),
         attachments=_attachments(root),
     )
+
+
+def legacy_supplier_tax_identifier(content: bytes | str) -> str | None:
+    """The supplier tax number the pre-PR #201 parser would have produced for ``content``.
+
+    Evidence only -- see :func:`legacy_first_party_identifier`. Never used by import.
+    """
+
+    root = _parse_xml(content)
+    _require_ubl_invoice_root(root)
+    return legacy_first_party_identifier(root.find("cac:AccountingSupplierParty/cac:Party", NS))
 
 
 def _parse_xml(content: bytes | str) -> ElementTree.Element:
