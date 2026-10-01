@@ -8,6 +8,8 @@ from xml.etree import ElementTree
 
 from sqlalchemy.orm import Session
 
+from app.domain.invoice.exceptions import InvoiceDomainError
+from app.domain.invoice.party_tax_identity import party_tax_identifier
 from app.models.invoice_document import InvoiceDocument
 from app.schemas.invoice_document import DocumentType
 from app.schemas.normalized_invoice import (
@@ -56,6 +58,10 @@ class InvalidDecimalValueError(DocumentParseError):
 
 class InvalidDateTimeValueError(DocumentParseError):
     category = "invalid_datetime"
+
+
+class InvalidPartyTaxIdentifierError(DocumentParseError):
+    category = "invalid_party_tax_identifier"
 
 
 class UnsupportedInvoiceStructureError(DocumentParseError):
@@ -188,7 +194,7 @@ def _party(root: ElementTree.Element, path: str, label: str) -> NormalizedParty:
     if party is None:
         raise MissingRequiredFieldError(f"Missing {label} party.", field_path=f"Invoice/{path}/cac:Party")
     return NormalizedParty(
-        tax_id=_party_tax_id(party),
+        tax_id=_party_tax_id(party, field_path=f"Invoice/{path}/cac:Party"),
         party_name=_first_text(party, ("cac:PartyName/cbc:Name", "cac:PartyLegalEntity/cbc:RegistrationName")),
         tax_office=_optional_text(party, "cac:PartyTaxScheme/cac:TaxScheme/cbc:Name"),
         address=_address(party.find("cac:PostalAddress", NS)),
@@ -196,15 +202,12 @@ def _party(root: ElementTree.Element, path: str, label: str) -> NormalizedParty:
     )
 
 
-def _party_tax_id(party: ElementTree.Element) -> str | None:
-    return _first_text(
-        party,
-        (
-            "cac:PartyIdentification/cbc:ID",
-            "cac:PartyTaxScheme/cbc:CompanyID",
-            "cac:PartyLegalEntity/cbc:CompanyID",
-        ),
-    )
+def _party_tax_id(party: ElementTree.Element, *, field_path: str) -> str | None:
+    # Same selection as the canonical domain parser: typed VKN/TCKN only (see party_tax_identity).
+    try:
+        return party_tax_identifier(party, field_path=field_path)
+    except InvoiceDomainError as exc:
+        raise InvalidPartyTaxIdentifierError(exc.safe_message, field_path=exc.field_path) from exc
 
 
 def _address(address: ElementTree.Element | None) -> NormalizedAddress | None:

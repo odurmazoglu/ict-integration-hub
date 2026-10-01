@@ -24,6 +24,7 @@ from app.domain.invoice.exceptions import (
     MissingMandatoryInvoiceFieldError,
     UnsupportedInvoiceXmlError,
 )
+from app.domain.invoice.party_tax_identity import party_tax_identifier
 
 UBL_INVOICE_NAMESPACE = "urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
 NS = {
@@ -52,8 +53,14 @@ def parse_ubl_invoice(content: bytes | str) -> InternalInvoice:
     )
     return InternalInvoice(
         header=header,
-        supplier=_party(root.find("cac:AccountingSupplierParty/cac:Party", NS)),
-        customer=_party(root.find("cac:AccountingCustomerParty/cac:Party", NS)),
+        supplier=_party(
+            root.find("cac:AccountingSupplierParty/cac:Party", NS),
+            field_path="Invoice/cac:AccountingSupplierParty/cac:Party",
+        ),
+        customer=_party(
+            root.find("cac:AccountingCustomerParty/cac:Party", NS),
+            field_path="Invoice/cac:AccountingCustomerParty/cac:Party",
+        ),
         totals=_monetary_totals(root.find("cac:LegalMonetaryTotal", NS)),
         lines=tuple(_invoice_line(line) for line in root.findall("cac:InvoiceLine", NS)),
         attachments=_attachments(root),
@@ -76,7 +83,7 @@ def _require_ubl_invoice_root(root: ElementTree.Element) -> None:
         raise UnsupportedInvoiceXmlError("XML document is not a supported UBL invoice.", field_path="/")
 
 
-def _party(party: ElementTree.Element | None) -> Party:
+def _party(party: ElementTree.Element | None, *, field_path: str) -> Party:
     if party is None:
         return Party()
     contacts = party.findall("cac:Contact", NS)
@@ -88,14 +95,7 @@ def _party(party: ElementTree.Element | None) -> Party:
                 "cac:PartyLegalEntity/cbc:RegistrationName",
             ),
         ),
-        tax_number=_first_text(
-            party,
-            (
-                "cac:PartyIdentification/cbc:ID",
-                "cac:PartyTaxScheme/cbc:CompanyID",
-                "cac:PartyLegalEntity/cbc:CompanyID",
-            ),
-        ),
+        tax_number=party_tax_identifier(party, field_path=field_path),
         tax_office=_optional_text(party, "cac:PartyTaxScheme/cac:TaxScheme/cbc:Name"),
         mersis_number=_mersis_number(party),
         website=_optional_text(party, "cbc:WebsiteURI"),
