@@ -52,6 +52,7 @@ from app.models.workbench_review_classification_evidence import WorkbenchReviewC
 from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
+from app.models.workbench_review_source_invoice_correction import WorkbenchReviewSourceInvoiceCorrection
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence import SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
@@ -535,6 +536,7 @@ def session() -> Session:
             WorkbenchReviewDecision.__table__,
             ExecutionSourceInvoiceEvidence.__table__,
             WorkbenchReviewSourceInvoiceEvidence.__table__,
+            WorkbenchReviewSourceInvoiceCorrection.__table__,
         ],
     )
     factory = sessionmaker(bind=engine)

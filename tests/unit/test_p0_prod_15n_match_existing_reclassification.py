@@ -84,6 +84,7 @@ from app.models.workbench_review_execution_evidence import WorkbenchReviewExecut
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workbench_review_one_off_vendor_retirement import WorkbenchReviewOneOffVendorRetirement
 from app.models.workbench_review_reclassification import WorkbenchReviewReclassification
+from app.models.workbench_review_source_invoice_correction import WorkbenchReviewSourceInvoiceCorrection
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.models.workbench_review_supplier_remediation_effect import WorkbenchReviewSupplierRemediationEffect
 from app.models.workbench_review_supplier_resolution import WorkbenchReviewSupplierResolution
@@ -123,6 +124,7 @@ def session() -> Session:
             WorkbenchReviewExecutionEvidence.__table__,
             WorkbenchReviewClassificationEvidence.__table__,
             WorkbenchReviewSourceInvoiceEvidence.__table__,
+            WorkbenchReviewSourceInvoiceCorrection.__table__,
             WorkbenchReviewReclassification.__table__,
             WorkbenchReviewSupplierResolution.__table__,
             WorkbenchReviewSupplierRemediationEffect.__table__,

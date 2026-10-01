@@ -47,6 +47,7 @@ from app.application.workbench.projection_sync_contracts import (
     ProjectionSyncResult,
 )
 from app.application.workbench.reclassification import ReviewReclassificationTrigger
+from app.application.workbench.source_identity_correction_use_cases import CorrectReviewSourceIdentityUseCase
 from app.application.workbench.supplier_remediation_use_cases import ResolveWorkbenchSupplierUseCase
 from app.application.workflow import WorkflowType
 from app.cli.reconcile_workbench_projection import list_review_ids, run_reconcile
@@ -981,6 +982,7 @@ def test_review_mutation_ports_are_exactly_the_synchronized_transitions() -> Non
             SubmitOperatingExpenseMappingUseCase,
             SubmitReviewAccountingResolutionUseCase,
         ),
+        ReviewReclassificationTrigger.SOURCE_IDENTITY_CORRECTED: (CorrectReviewSourceIdentityUseCase,),
     }
     assert set(reclassifying_use_cases) == set(ReviewReclassificationTrigger)
     synchronized = [
