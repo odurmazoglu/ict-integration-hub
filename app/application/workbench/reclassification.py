@@ -20,6 +20,10 @@ class ReviewReclassificationTrigger(StrEnum):
 
     MASTER_DATA_CHANGED = "master_data_changed"
     SUPPLIER_RESOLUTION = "supplier_resolution"
+    #: Reserved for ``CorrectReviewSourceIdentityUseCase``: the version advance that
+    #: accompanies an append-only source-invoice correction. Never accepted by the
+    #: generic :class:`ReclassifyReviewCommand`.
+    SOURCE_IDENTITY_CORRECTED = "source_identity_corrected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +42,10 @@ class ReclassifyReviewCommand(ApplicationDTO):
         _require_positive_int(self.expected_version, "expected_version must be positive.")
         if not isinstance(self.trigger, ReviewReclassificationTrigger):
             raise WorkbenchContractError("A sanctioned reclassification trigger is required.")
+        if self.trigger is ReviewReclassificationTrigger.SOURCE_IDENTITY_CORRECTED:
+            raise WorkbenchContractError(
+                "SOURCE_IDENTITY_CORRECTED is only produced by an audited source-invoice correction."
+            )
         if self.note is not None and (not isinstance(self.note, str) or not self.note.strip()):
             raise WorkbenchContractError("note must be non-empty text when provided.")
         if self.note is not None and len(self.note) > 1024:
