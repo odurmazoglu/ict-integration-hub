@@ -660,6 +660,28 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # The historical source-identity correction added one more migration on top (one
+    # new append-only table) -- one extra "-1" step consumes it before the
+    # P0-PROD-18F-1 step below. The downgrade leaves the immutable source evidence
+    # table itself untouched.
+    assert "workbench_review_source_invoice_corrections" in inspector.get_table_names()
+    correction_unique_constraints_at_head = {
+        constraint["name"]
+        for constraint in inspector.get_unique_constraints("workbench_review_source_invoice_corrections")
+    }
+    assert {
+        "uq_wr_source_corrections_review_to_version",
+        "uq_wr_source_corrections_review_from_version",
+    }.issubset(correction_unique_constraints_at_head)
+    assert {
+        foreign_key["referred_table"]
+        for foreign_key in inspector.get_foreign_keys("workbench_review_source_invoice_corrections")
+    } == {"workbench_review_items"}
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_review_source_invoice_corrections" not in inspector.get_table_names()
+    assert "workbench_review_source_invoice_evidence" in inspector.get_table_names()
+
     # P0-PROD-18F-1 added one more migration on top (one additive nullable JSON column)
     # -- one extra "-1" step consumes it before the P0-PROD-18E-2 step below.
     source_evidence_columns_at_head = {

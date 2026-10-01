@@ -75,6 +75,7 @@ from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workbench_review_reclassification import WorkbenchReviewReclassification
+from app.models.workbench_review_source_invoice_correction import WorkbenchReviewSourceInvoiceCorrection
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence import (
     SqlAlchemyExecutionSourceInvoiceReader,
@@ -112,6 +113,7 @@ def session() -> Session:
             WorkbenchReviewExecutionEvidence.__table__,
             WorkbenchReviewClassificationEvidence.__table__,
             WorkbenchReviewSourceInvoiceEvidence.__table__,
+            WorkbenchReviewSourceInvoiceCorrection.__table__,
             WorkbenchReviewReclassification.__table__,
             WorkbenchReviewDecision.__table__,
             ExecutionSourceInvoiceEvidence.__table__,

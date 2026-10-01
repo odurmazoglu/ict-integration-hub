@@ -22,6 +22,7 @@ from app.models.workbench_review_product_remediation_reservation import (
 )
 from app.models.workbench_review_purchase_purpose_resolution import WorkbenchReviewPurchasePurposeResolution
 from app.models.workbench_review_reclassification import WorkbenchReviewReclassification
+from app.models.workbench_review_source_invoice_correction import WorkbenchReviewSourceInvoiceCorrection
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.models.workbench_review_supplier_remediation_effect import WorkbenchReviewSupplierRemediationEffect
 from app.models.workbench_review_supplier_resolution import WorkbenchReviewSupplierResolution
@@ -34,6 +35,7 @@ __all__ = [
     "ExecutionSourceInvoiceEvidence",
     "ImportReceipt",
     "WorkbenchReviewExecutionEvidence",
+    "WorkbenchReviewSourceInvoiceCorrection",
     "WorkbenchReviewSourceInvoiceEvidence",
     "WorkbenchReviewAccountingResolution",
     "WorkbenchReviewBillingEvidence",
