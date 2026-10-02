@@ -350,6 +350,17 @@ class OneOffVendorRetirementConflictError(OneOffVendorRetirementError):
     error_category = "one_off_vendor_retirement_conflict"
 
 
+class OneOffVendorArchiveRetiredError(OneOffVendorRetirementError):
+    """Safe error for any request to archive/recover a ONE_OFF_VENDOR partner.
+
+    The archive-after-Vendor-Bill lifecycle is retired: a one-off supplier's own
+    partner stays active (classified ``expense_vendor``). Historical retirement rows
+    stay readable; nothing can advance or act on them any more.
+    """
+
+    error_category = "one_off_vendor_archive_retired"
+
+
 class OneOffVendorRetirementDataIntegrityError(OneOffVendorRetirementError):
     """Safe error raised when persisted retirement state cannot hydrate into contracts."""
 

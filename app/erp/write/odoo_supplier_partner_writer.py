@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -8,6 +9,7 @@ from app.application.commands.supplier_partner import CreateSupplierPartnerComma
 from app.application.dto.supplier_partner import SupplierPartnerWriteResult, SupplierPartnerWriteStatus
 from app.application.exceptions.supplier_partner import (
     SupplierPartnerAmbiguityError,
+    SupplierPartnerClassificationUnavailableError,
     SupplierPartnerDataIntegrityError,
     SupplierPartnerDuplicateRaceError,
     SupplierPartnerInactiveError,
@@ -17,6 +19,12 @@ from app.application.exceptions.supplier_partner import (
     SupplierPartnerWriteTransportError,
     SupplierPartnerWriteUnexpectedErpError,
     SupplierPartnerWriteValidationError,
+)
+from app.application.partner_classification import (
+    PartnerClassificationOutcome,
+    SupplierPartnerClassification,
+    evaluate_existing_classification,
+    normalize_classification_value,
 )
 from app.application.ports.supplier_partner_writer import SupplierPartnerWriter
 from app.application.workbench.write_authorization import WriteAuthorizationRecord
@@ -41,6 +49,9 @@ FORBIDDEN_RES_PARTNER_TOKENS = frozenset(
     {"active", "unlink", "action_", "message_", "__", "parent_id", "company_type", "is_company"}
 )
 _EXACT_VAT_LOOKUP_LIMIT = 5
+#: Only a manually created (Studio/custom) field may carry the classification -- never a
+#: core res.partner field such as ``active``, ``vat`` or ``supplier_rank``.
+_CUSTOM_FIELD_NAME = re.compile(r"^x_[a-z0-9_]{1,62}$")
 
 
 class SupplierPartnerJson2Client(Protocol):
@@ -58,6 +69,12 @@ class SupplierPartnerJson2Client(Protocol):
     ) -> list[dict[str, Any]]:
         pass
 
+    async def read_model_field_metadata(self, *, model: str, field_name: str) -> list[dict[str, Any]]:
+        pass
+
+    async def read_field_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
+        pass
+
 
 @dataclass(frozen=True, slots=True)
 class SupplierPartnerRecord:
@@ -66,6 +83,35 @@ class SupplierPartnerRecord:
     vat: str | None
     active: bool
     company_id: int | None
+    classification: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OdooPartnerClassificationFieldConfig:
+    """Deployment mapping of the ICT partner classification Studio field.
+
+    The field must already exist in Odoo (production: ``x_studio_musteri_tipi``);
+    the Hub never creates Studio schema. Unset or malformed -> every supplier
+    partner create fails closed before any Odoo call.
+    """
+
+    field_name: str | None = None
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> OdooPartnerClassificationFieldConfig:
+        return cls(field_name=settings.odoo_partner_classification_field)
+
+    def require_field(self) -> str:
+        field = (self.field_name or "").strip()
+        if not field:
+            raise SupplierPartnerClassificationUnavailableError(
+                "The Odoo partner classification field is not configured (ODOO_PARTNER_CLASSIFICATION_FIELD)."
+            )
+        if not _CUSTOM_FIELD_NAME.fullmatch(field) or "__" in field:
+            raise SupplierPartnerClassificationUnavailableError(
+                "The configured Odoo partner classification field must be a custom x_ field."
+            )
+        return field
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,9 +190,11 @@ class OdooSupplierPartnerRepository:
         *,
         normalized_vat: str,
         company_id: int,
+        classification_field: str | None = None,
     ) -> tuple[SupplierPartnerRecord, ...]:
         normalized_vat = _require_normalized_vat(normalized_vat)
         company_id = _require_company_id(company_id)
+        fields = [*PARTNER_FIELDS, classification_field] if classification_field else PARTNER_FIELDS
         records = await _translate_connector_errors(
             self._client.search_read(
                 model=RES_PARTNER_MODEL,
@@ -155,11 +203,34 @@ class OdooSupplierPartnerRepository:
                     ["company_id", "in", [company_id, False]],
                     ["active", "in", [True, False]],
                 ],
-                fields=PARTNER_FIELDS,
+                fields=fields,
                 limit=_EXACT_VAT_LOOKUP_LIMIT,
             )
         )
-        return tuple(_record(record) for record in records)
+        return tuple(_record(record, classification_field=classification_field) for record in records)
+
+    async def ensure_classification_value_available(self, *, field_name: str, value: str) -> None:
+        """Read-only proof that ``field_name`` is a ``res.partner`` selection offering ``value``.
+
+        Runs before any create so a missing Studio field or a not-yet-added selection
+        key (e.g. ``expense_vendor``) fails closed instead of Odoo rejecting -- or an
+        ``ir.default`` silently replacing -- the classification mid-write.
+        """
+
+        metadata = await _translate_connector_errors(
+            self._client.read_model_field_metadata(model=RES_PARTNER_MODEL, field_name=field_name)
+        )
+        if len(metadata) != 1 or metadata[0].get("ttype") != "selection":
+            raise SupplierPartnerClassificationUnavailableError(
+                "The configured Odoo partner classification field is missing or is not a selection field."
+            )
+        values = await _translate_connector_errors(
+            self._client.read_field_selection_values(model=RES_PARTNER_MODEL, field_name=field_name)
+        )
+        if value not in values:
+            raise SupplierPartnerClassificationUnavailableError(
+                f"The Odoo partner classification field does not offer the required value {value!r}."
+            )
 
     async def read_partner(self, partner_id: int) -> SupplierPartnerRecord:
         partner_id = _require_partner_id(partner_id)
@@ -177,14 +248,29 @@ class OdooSupplierPartnerRepository:
             raise SupplierPartnerDataIntegrityError("Supplier partner read-back returned more than one record.")
         return _record(records[0])
 
-    async def create_supplier_partner(self, *, name: str, normalized_vat: str) -> int:
-        # P0-PROD-08J: intentionally exactly {name, vat}. res.partner has no writable
-        # company_type field in production Odoo ("Invalid field 'company_type' on
-        # 'res.partner'"); is_company was reported readonly. No substitute field is
-        # added -- see FORBIDDEN_RES_PARTNER_TOKENS for the regression guard.
+    async def create_supplier_partner(
+        self,
+        *,
+        name: str,
+        normalized_vat: str,
+        classification_field: str,
+        classification: SupplierPartnerClassification,
+    ) -> int:
+        # P0-PROD-08J: {name, vat} plus exactly one explicit classification key. res.partner
+        # has no writable company_type field in production Odoo ("Invalid field
+        # 'company_type' on 'res.partner'"); is_company was reported readonly. No substitute
+        # field is added -- see FORBIDDEN_RES_PARTNER_TOKENS for the regression guard. The
+        # classification is always explicit so a production ir.default (customer) never applies.
+        if not isinstance(classification, SupplierPartnerClassification):
+            raise SupplierPartnerWriteValidationError("A canonical SupplierPartnerClassification is required.")
+        if not _CUSTOM_FIELD_NAME.fullmatch(classification_field or ""):
+            raise SupplierPartnerClassificationUnavailableError(
+                "The configured Odoo partner classification field must be a custom x_ field."
+            )
         payload = {
             "name": _require_name(name),
             "vat": _require_normalized_vat(normalized_vat),
+            classification_field: classification.value,
         }
         _reject_forbidden_tokens(payload)
         created = await _translate_connector_errors(self._client.create_res_partner(payload))
@@ -199,9 +285,11 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
         *,
         repository: OdooSupplierPartnerRepository,
         policy: OdooSupplierPartnerWritePolicy,
+        classification_config: OdooPartnerClassificationFieldConfig,
     ) -> None:
         self._repository = repository
         self._policy = policy
+        self._classification_config = classification_config
 
     async def create_supplier(self, command: CreateSupplierPartnerCommand) -> SupplierPartnerWriteResult:
         if not isinstance(command, CreateSupplierPartnerCommand):
@@ -214,11 +302,19 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
         self._policy.ensure_real_write_allowed(
             approved_by=command.approved_by, write_authorization=command.authorization
         )
+        # Classification field mapping: unset/malformed fails closed before any Odoo call.
+        classification_field = self._classification_config.require_field()
+        # Read-only Odoo metadata proof that the field/value exist, before any read or write
+        # of partner data. Applies to reuse too, so a misconfiguration is caught uniformly.
+        await self._repository.ensure_classification_value_available(
+            field_name=classification_field, value=command.classification.value
+        )
 
         # Read before write, always.
         existing = await self._repository.find_by_exact_vat(
             normalized_vat=normalized_vat,
             company_id=command.company_id,
+            classification_field=classification_field,
         )
         if len(existing) > 1:
             raise SupplierPartnerAmbiguityError("Multiple Odoo supplier partners share this exact tax number.")
@@ -228,12 +324,15 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
         created_id = await self._repository.create_supplier_partner(
             name=supplier_name,
             normalized_vat=normalized_vat,
+            classification_field=classification_field,
+            classification=command.classification,
         )
 
         # Post-create exact-VAT re-query: detect a create race and read the record back.
         rechecked = await self._repository.find_by_exact_vat(
             normalized_vat=normalized_vat,
             company_id=command.company_id,
+            classification_field=classification_field,
         )
         if len(rechecked) > 1:
             raise SupplierPartnerDuplicateRaceError(
@@ -253,6 +352,8 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
             supplier_tax_number=normalized_vat,
             idempotency_key=command.idempotency_key,
             safe_message="Supplier partner created in Odoo.",
+            classification_outcome=PartnerClassificationOutcome.CLASSIFIED_ON_CREATE,
+            classification_value=command.classification.value,
         )
 
     def _already_exists_result(
@@ -264,22 +365,27 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
     ) -> SupplierPartnerWriteResult:
         _validate_existing_partner(existing, normalized_vat=normalized_vat, command=command)
         if not existing.active:
-            # P0-PROD-09C: still fails closed by default -- an inactive exact-VAT
-            # match is only ever reused when the caller explicitly authorizes THIS
-            # partner id. This writer never decides ownership itself; it only asks
-            # the caller-supplied predicate (see CreateSupplierPartnerCommand's
-            # authorize_inactive_reuse docstring). CREATE_PERMANENT_SUPPLIER and
-            # every other caller pass no predicate, so their behavior is unchanged.
-            if command.authorize_inactive_reuse is None or not command.authorize_inactive_reuse(existing.id):
-                raise SupplierPartnerInactiveError(
-                    "The existing Odoo supplier partner for this tax number is archived; resolve it manually."
-                )
+            # Always fails closed: a Hub-written supplier stays active, and the retired
+            # P0-PROD-09C archived-reuse path no longer exists. Reactivating a
+            # historically archived partner is an explicit operator action in Odoo.
+            raise SupplierPartnerInactiveError(
+                "The existing Odoo supplier partner for this tax number is archived; an operator must "
+                "reactivate it explicitly (then select it with MATCH_EXISTING)."
+            )
+        # Never changes the classification of a partner this call did not create.
+        classification_outcome = evaluate_existing_classification(
+            existing.classification, target=command.classification
+        )
         name_mismatch = _names_differ(existing.name, command.supplier_name)
         warnings: tuple[str, ...] = ()
         if name_mismatch:
             warnings = (*warnings, "Supplier legal name on file differs from the invoice supplier name; not changed.")
-        if not existing.active:
-            warnings = (*warnings, "The reused Odoo supplier partner for this tax number is archived (inactive).")
+        if classification_outcome is not PartnerClassificationOutcome.ALREADY_CLASSIFIED:
+            warnings = (
+                *warnings,
+                "The existing Odoo partner classification differs from the intended "
+                f"{command.classification.value!r}; it was preserved, not changed.",
+            )
         return SupplierPartnerWriteResult(
             status=SupplierPartnerWriteStatus.ALREADY_EXISTS,
             partner_id=existing.id,
@@ -291,6 +397,8 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
             name_mismatch=name_mismatch,
             safe_message="An Odoo supplier partner already exists for this tax number.",
             warnings=warnings,
+            classification_outcome=classification_outcome,
+            classification_value=existing.classification,
         )
 
 
@@ -338,6 +446,11 @@ def _validate_created_partner(
         raise SupplierPartnerDataIntegrityError("Read-back supplier partner has no name.")
     if partner.company_id not in (None, command.company_id):
         raise SupplierPartnerDataIntegrityError("Created supplier partner is scoped to an unexpected company.")
+    if partner.classification != command.classification.value:
+        # An Odoo ir.default/automation must never silently replace the Hub's explicit value.
+        raise SupplierPartnerDataIntegrityError(
+            "Read-back supplier partner classification does not match the requested classification."
+        )
 
 
 def _names_differ(existing_name: str | None, requested_name: str) -> bool:
@@ -348,16 +461,21 @@ def _folded(value: str | None) -> str:
     return " ".join((value or "").split()).casefold()
 
 
-def _record(record: dict[str, Any]) -> SupplierPartnerRecord:
+def _record(record: dict[str, Any], *, classification_field: str | None = None) -> SupplierPartnerRecord:
     raw_id = record.get("id")
     if type(raw_id) is not int or isinstance(raw_id, bool) or raw_id <= 0:
         raise SupplierPartnerDataIntegrityError("Odoo returned an invalid res.partner id.")
+    if classification_field is not None and classification_field not in record:
+        raise SupplierPartnerDataIntegrityError("Odoo res.partner record is missing the classification field.")
     return SupplierPartnerRecord(
         id=raw_id,
         name=_optional_text(record.get("name")),
         vat=_optional_text(record.get("vat")),
         active=bool(record.get("active", True)),
         company_id=_many2one_id(record.get("company_id")),
+        classification=(
+            normalize_classification_value(record.get(classification_field)) if classification_field else None
+        ),
     )
 
 

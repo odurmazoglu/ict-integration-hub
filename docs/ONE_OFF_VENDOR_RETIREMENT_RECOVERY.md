@@ -1,4 +1,13 @@
-# ONE_OFF_VENDOR retirement status and recovery (P0-PROD-09E)
+# ONE_OFF_VENDOR retirement status and recovery (P0-PROD-09E) -- RETIRED
+
+> **Superseded by the expense-vendor redesign (see `docs/PARTNER_CLASSIFICATION.md`).**
+> ONE_OFF_VENDOR partners are now classified `expense_vendor` and stay active
+> permanently; no retirement row is created and nothing archives a partner. The GET
+> endpoint below still reads historical rows unchanged. `POST .../recover` now always
+> returns **410 Gone** (`one_off_vendor_archive_retired`) without reading or writing
+> anything, and `ONE_OFF_VENDOR_ARCHIVE` write authorizations are refused at issuance
+> and consumption. The original description follows for historical reference.
+
 
 `GET /api/workbench/reviews/{review_id}/one-off-vendor-retirement` requires
 `workbench_review_read`. It returns only persisted Hub retirement identity,

@@ -6,7 +6,7 @@ from uuid import uuid4
 from app.application.execution.ports import AcceptedReviewDecisionReader, ExecutionSourceInvoiceReader
 from app.application.services.unit_of_work import UnitOfWork
 from app.application.workbench.dto import ReviewDecisionType
-from app.application.workbench.ports import OneOffVendorRetirementWriter, ReviewQueueReader
+from app.application.workbench.ports import ReviewQueueReader
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.write_authorization import (
     WriteAuthorizationOperationType,
@@ -35,14 +35,12 @@ class CreateWriteAuthorizationUseCase:
         review_reader: ReviewQueueReader,
         accepted_decision_reader: AcceptedReviewDecisionReader,
         source_invoice_reader: ExecutionSourceInvoiceReader,
-        retirement_reader: OneOffVendorRetirementWriter,
         repository: WriteAuthorizationRepository,
         unit_of_work: UnitOfWork,
     ) -> None:
         self._review_reader = review_reader
         self._accepted_decision_reader = accepted_decision_reader
         self._source_invoice_reader = source_invoice_reader
-        self._retirement_reader = retirement_reader
         self._repository = repository
         self._unit_of_work = unit_of_work
 
@@ -90,18 +88,11 @@ class CreateWriteAuthorizationUseCase:
         operation_type: WriteAuthorizationOperationType,
     ) -> None:
         if operation_type is WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE:
-            # Targets an already-persisted retirement row's OWN version, which by
-            # design is usually behind the review's current version by the time
-            # recovery is needed -- never the review's current version. Consumption
-            # (claim_and_consume) re-checks this exact same distinction.
-            retirement = self._retirement_reader.find(
-                review_id=review_id, company_id=company_id, review_version=target_version
+            # Retired with the ONE_OFF_VENDOR archive lifecycle: the enum value stays only
+            # so historical authorization rows remain readable; none may be issued.
+            raise WriteAuthorizationScopeMismatchError(
+                "ONE_OFF_VENDOR_ARCHIVE is retired; one-off supplier partners are no longer archived."
             )
-            if retirement is None:
-                raise WriteAuthorizationScopeMismatchError(
-                    "No ONE_OFF_VENDOR retirement exists for this review version."
-                )
-            return
 
         review = self._review_reader.get_review_item(ReviewDetailQuery(review_id=review_id, company_id=company_id))
         if review.version != target_version:

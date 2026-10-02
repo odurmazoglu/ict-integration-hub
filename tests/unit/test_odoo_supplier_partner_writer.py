@@ -18,16 +18,19 @@ from app.application.commands import CreateSupplierPartnerCommand
 from app.application.dto import SupplierPartnerWriteStatus
 from app.application.exceptions.supplier_partner import (
     SupplierPartnerAmbiguityError,
+    SupplierPartnerClassificationUnavailableError,
     SupplierPartnerDataIntegrityError,
     SupplierPartnerDuplicateRaceError,
     SupplierPartnerInactiveError,
     SupplierPartnerWriteSafetyGateError,
     SupplierPartnerWriteValidationError,
 )
+from app.application.partner_classification import PartnerClassificationOutcome, SupplierPartnerClassification
 from app.connectors.exceptions import ConnectorAuthenticationError
 from app.core.config import Settings
 from app.core.runtime_checks import PRODUCTION_APPROVAL_ACK
 from app.erp.write import (
+    OdooPartnerClassificationFieldConfig,
     OdooSupplierPartnerRepository,
     OdooSupplierPartnerWritePolicy,
     OdooSupplierPartnerWriter,
@@ -38,6 +41,9 @@ VKN = "0430367181"
 NAME = "Akyaşam Yönetim Hizmetleri A.Ş."
 STAGING_HOST_URL = "https://test-ictteknoloji.odoo.com"
 SECRET_MARKER = "sk-super-secret-odoo-key"
+FIELD = "x_studio_musteri_tipi"
+#: Production selection keys (verified read-only) plus the new expense_vendor key.
+PRODUCTION_KEYS = ("customer", "prospect", "vendor", "partner", "Karma", "expense_vendor")
 
 
 class FakeJson2Client:
@@ -47,7 +53,12 @@ class FakeJson2Client:
         create_result: Any = 501,
         search_results: list[Any] | None = None,
         search_sequence: list[Any] | None = None,
+        field_metadata: list[dict[str, Any]] | None = None,
+        selection_values: tuple[str, ...] = PRODUCTION_KEYS,
     ) -> None:
+        self.field_metadata = field_metadata if field_metadata is not None else [{"name": FIELD, "ttype": "selection"}]
+        self.selection_values = selection_values
+        self.metadata_calls: list[dict[str, Any]] = []
         self.create_result = create_result
         self.search_results = search_results
         self.search_sequence = list(search_sequence) if search_sequence is not None else None
@@ -78,6 +89,14 @@ class FakeJson2Client:
             raise result
         return result
 
+    async def read_model_field_metadata(self, *, model: str, field_name: str) -> list[dict[str, Any]]:
+        self.metadata_calls.append({"kind": "field", "model": model, "field_name": field_name})
+        return self.field_metadata
+
+    async def read_field_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
+        self.metadata_calls.append({"kind": "selection", "model": model, "field_name": field_name})
+        return self.selection_values
+
 
 def _partner_row(
     *,
@@ -86,8 +105,16 @@ def _partner_row(
     vat: str = VKN,
     active: bool = True,
     company_id: Any = False,
+    classification: Any = "vendor",
 ) -> dict[str, Any]:
-    return {"id": partner_id, "name": name, "vat": vat, "active": active, "company_id": company_id}
+    return {
+        "id": partner_id,
+        "name": name,
+        "vat": vat,
+        "active": active,
+        "company_id": company_id,
+        FIELD: classification,
+    }
 
 
 def _command(**overrides: Any) -> CreateSupplierPartnerCommand:
@@ -96,6 +123,7 @@ def _command(**overrides: Any) -> CreateSupplierPartnerCommand:
         "supplier_name": NAME,
         "supplier_tax_number": VKN,
         "idempotency_key": "supplier-remediation:1:0430367181",
+        "classification": SupplierPartnerClassification.VENDOR,
         "approved_by": "finance.operator",
     }
     kwargs.update(overrides)
@@ -111,11 +139,15 @@ def _enabled_policy() -> OdooSupplierPartnerWritePolicy:
 
 
 def _writer(
-    client: FakeJson2Client, *, policy: OdooSupplierPartnerWritePolicy | None = None
+    client: FakeJson2Client,
+    *,
+    policy: OdooSupplierPartnerWritePolicy | None = None,
+    field_name: str | None = FIELD,
 ) -> OdooSupplierPartnerWriter:
     return OdooSupplierPartnerWriter(
         repository=OdooSupplierPartnerRepository(client=client),
         policy=policy if policy is not None else _enabled_policy(),
+        classification_config=OdooPartnerClassificationFieldConfig(field_name=field_name),
     )
 
 
@@ -131,7 +163,9 @@ async def test_creates_supplier_partner_when_no_exact_vat_match(monkeypatch: pyt
     assert result.company_id == COMPANY_ID
     assert result.supplier_tax_number == VKN
     assert len(client.create_calls) == 1
-    assert client.create_calls[0] == {"name": NAME, "vat": VKN}
+    assert client.create_calls[0] == {"name": NAME, "vat": VKN, FIELD: "vendor"}
+    assert result.classification_outcome is PartnerClassificationOutcome.CLASSIFIED_ON_CREATE
+    assert result.classification_value == "vendor"
     # exact-VAT search before create, then the post-create re-query/read-back.
     assert len(client.search_calls) == 2
     assert client.search_calls[0]["domain"] == [
@@ -176,75 +210,21 @@ async def test_archived_exact_vat_partner_fails_closed_without_reactivation() ->
     assert client.create_calls == []
 
 
-# ------------------------------------------- Phase 27b (P0-PROD-09C): authorized inactive reuse
+# ------------------------------------------- archived match: always fail closed (09C reuse retired)
 
 
-async def test_archived_partner_with_no_authorizer_still_fails_closed() -> None:
-    """authorize_inactive_reuse defaults to None -- byte-identical to the pre-09C
-    behavior proven above -- for every caller that does not explicitly supply one."""
+def test_create_command_no_longer_accepts_an_inactive_reuse_predicate() -> None:
+    """The P0-PROD-09C archived-reuse predicate was retired with the archive lifecycle."""
 
-    client = FakeJson2Client(search_results=[_partner_row(partner_id=9, active=False)])
+    with pytest.raises(TypeError):
+        _command(authorize_inactive_reuse=lambda partner_id: True)
+
+
+async def test_archived_exact_vat_partner_fails_closed_for_expense_vendor_too() -> None:
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=9, active=False, classification="expense_vendor")])
     with pytest.raises(SupplierPartnerInactiveError):
-        await _writer(client).create_supplier(_command(authorize_inactive_reuse=None))
+        await _writer(client).create_supplier(_command(classification=SupplierPartnerClassification.EXPENSE_VENDOR))
     assert client.create_calls == []
-
-
-async def test_archived_partner_with_authorizer_returning_false_still_fails_closed() -> None:
-    """An authorizer that declines reuse for THIS partner id behaves identically to
-    having no authorizer at all -- the writer never treats "predicate present" as
-    itself sufficient."""
-
-    client = FakeJson2Client(search_results=[_partner_row(partner_id=9, active=False)])
-    with pytest.raises(SupplierPartnerInactiveError):
-        await _writer(client).create_supplier(_command(authorize_inactive_reuse=lambda partner_id: False))
-    assert client.create_calls == []
-
-
-async def test_archived_partner_with_authorizer_returning_true_is_reused_no_reactivation() -> None:
-    """When the caller's predicate authorizes THIS specific partner id, the writer
-    returns ALREADY_EXISTS -- never raises, never writes anything (no reactivation
-    payload of any kind is ever sent for this or any other scenario)."""
-
-    client = FakeJson2Client(search_results=[_partner_row(partner_id=9, active=False)])
-    calls: list[int] = []
-
-    def _authorize(partner_id: int) -> bool:
-        calls.append(partner_id)
-        return True
-
-    result = await _writer(client).create_supplier(_command(authorize_inactive_reuse=_authorize))
-
-    assert result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS
-    assert result.partner_id == 9
-    assert calls == [9]  # the writer asked about exactly the partner id it found
-    assert client.create_calls == []
-    assert any("archived" in warning.lower() for warning in result.warnings)
-
-
-async def test_authorizer_is_never_consulted_for_an_active_match() -> None:
-    """The predicate is only ever invoked for an INACTIVE exact-VAT match -- an active
-    match reuses exactly as before, with zero new code path involved."""
-
-    client = FakeJson2Client(search_results=[_partner_row(partner_id=42, active=True)])
-    calls: list[int] = []
-    result = await _writer(client).create_supplier(
-        _command(authorize_inactive_reuse=lambda partner_id: calls.append(partner_id) or True)
-    )
-    assert result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS
-    assert calls == []
-
-
-async def test_authorizer_is_never_consulted_when_creating_a_genuinely_new_partner() -> None:
-    """No exact-VAT match at all -> straight to create; the predicate is irrelevant
-    and is never called."""
-
-    client = FakeJson2Client(create_result=777, search_sequence=[[], [_partner_row(partner_id=777)]])
-    calls: list[int] = []
-    result = await _writer(client).create_supplier(
-        _command(authorize_inactive_reuse=lambda partner_id: calls.append(partner_id) or True)
-    )
-    assert result.status is SupplierPartnerWriteStatus.CREATED
-    assert calls == []
 
 
 # --------------------------------------------------------- Phase 28: NAME MISMATCH
@@ -272,6 +252,7 @@ async def test_default_settings_cannot_create_supplier() -> None:
         await _writer(client, policy=default_policy).create_supplier(_command())
     assert client.create_calls == []
     assert client.search_calls == []
+    assert client.metadata_calls == []
 
 
 async def test_bare_default_policy_cannot_create_supplier() -> None:
@@ -280,6 +261,7 @@ async def test_bare_default_policy_cannot_create_supplier() -> None:
         await _writer(client, policy=OdooSupplierPartnerWritePolicy()).create_supplier(_command())
     assert client.create_calls == []
     assert client.search_calls == []
+    assert client.metadata_calls == []
 
 
 async def test_flag_off_policy_refuses_before_any_odoo_call() -> None:
@@ -289,6 +271,7 @@ async def test_flag_off_policy_refuses_before_any_odoo_call() -> None:
         await _writer(client, policy=policy).create_supplier(_command())
     assert client.create_calls == []
     assert client.search_calls == []
+    assert client.metadata_calls == []
 
 
 async def test_staging_gate_requires_named_approver() -> None:
@@ -377,15 +360,15 @@ async def test_post_create_readback_mismatch_is_data_integrity_error() -> None:
 
 
 async def test_create_payload_contains_only_sanctioned_keys() -> None:
-    """P0-PROD-08J: the payload is exactly {name, vat} -- not merely "no forbidden
-    keys present". company_type does not exist on production res.partner ("Invalid
-    field 'company_type' on 'res.partner'"); is_company was reported readonly and is
-    not a safe substitute -- neither is ever written."""
+    """P0-PROD-08J: the payload is exactly {name, vat, <classification field>} -- not
+    merely "no forbidden keys present". company_type does not exist on production
+    res.partner ("Invalid field 'company_type' on 'res.partner'"); is_company was
+    reported readonly and is not a safe substitute -- neither is ever written."""
 
     client = FakeJson2Client(create_result=1, search_sequence=[[], [_partner_row(partner_id=1)]])
     await _writer(client).create_supplier(_command())
 
-    assert set(client.create_calls[0]) == {"name", "vat"}
+    assert set(client.create_calls[0]) == {"name", "vat", FIELD}
     assert "company_type" not in client.create_calls[0]
     assert "is_company" not in client.create_calls[0]
     forbidden = {
@@ -486,6 +469,8 @@ def test_writer_module_never_touches_secret_material() -> None:
         {"supplier_tax_number": ""},
         {"idempotency_key": " "},
         {"approved_by": "  "},
+        {"classification": "vendor"},
+        {"classification": None},
     ],
 )
 def test_create_supplier_command_rejects_invalid_identity(overrides: dict[str, Any]) -> None:
@@ -539,3 +524,168 @@ def test_no_api_router_exposes_supplier_creation() -> None:
         assert "create_supplier" not in source
         assert "resolve-supplier" not in source
         assert "create-supplier" not in source
+
+
+# --------------------------------------------------------- ICT partner classification
+
+
+class _DefaultApplyingOdoo(FakeJson2Client):
+    """Stateful fake: applies a production-style ``ir.default`` (``customer``) to the
+    classification field only when the create payload omits it -- exactly how Odoo
+    defaults behave -- and stores whatever value results."""
+
+    def __init__(self, *, default_value: str = "customer", force_value: str | None = None) -> None:
+        super().__init__()
+        self.records: list[dict[str, Any]] = []
+        self.default_value = default_value
+        self.force_value = force_value  # simulates an automation overwriting the value
+
+    async def create_res_partner(self, payload: dict[str, Any]) -> int:
+        self.create_calls.append(payload)
+        record = {"id": 700 + len(self.records), "active": True, "company_id": False, **payload}
+        record.setdefault(FIELD, self.default_value)
+        if self.force_value is not None:
+            record[FIELD] = self.force_value
+        self.records.append(record)
+        return record["id"]
+
+    async def search_read(self, *, model, domain, fields, limit=20, offset=0):
+        self.search_calls.append({"model": model, "domain": domain, "fields": fields, "limit": limit})
+        vat = domain[0][2]
+        return [{key: record.get(key, False) for key in fields} for record in self.records if record["vat"] == vat]
+
+
+@pytest.mark.parametrize(
+    ("classification", "expected"),
+    [
+        (SupplierPartnerClassification.VENDOR, "vendor"),
+        (SupplierPartnerClassification.EXPENSE_VENDOR, "expense_vendor"),
+    ],
+)
+async def test_create_sets_explicit_classification_so_odoo_default_customer_never_applies(
+    classification: SupplierPartnerClassification, expected: str
+) -> None:
+    odoo = _DefaultApplyingOdoo(default_value="customer")
+    result = await _writer(odoo).create_supplier(_command(classification=classification))
+
+    assert odoo.create_calls == [{"name": NAME, "vat": VKN, FIELD: expected}]
+    assert odoo.records[0][FIELD] == expected  # the ir.default never applied
+    assert result.status is SupplierPartnerWriteStatus.CREATED
+    assert result.classification_outcome is PartnerClassificationOutcome.CLASSIFIED_ON_CREATE
+    assert result.classification_value == expected
+
+
+async def test_readback_classification_overridden_by_odoo_fails_closed() -> None:
+    """If Odoo (an automation, a default) stores anything but the Hub's explicit value,
+    the create is never reported as a success."""
+
+    odoo = _DefaultApplyingOdoo(force_value="customer")
+    with pytest.raises(SupplierPartnerDataIntegrityError):
+        await _writer(odoo).create_supplier(_command(classification=SupplierPartnerClassification.EXPENSE_VENDOR))
+
+
+async def test_second_create_for_same_vat_reuses_the_partner_without_a_second_create() -> None:
+    odoo = _DefaultApplyingOdoo()
+    first = await _writer(odoo).create_supplier(_command(classification=SupplierPartnerClassification.EXPENSE_VENDOR))
+    second = await _writer(odoo).create_supplier(_command(classification=SupplierPartnerClassification.EXPENSE_VENDOR))
+
+    assert first.status is SupplierPartnerWriteStatus.CREATED
+    assert second.status is SupplierPartnerWriteStatus.ALREADY_EXISTS
+    assert second.partner_id == first.partner_id
+    assert len(odoo.create_calls) == 1
+    assert len(odoo.records) == 1
+    assert second.classification_outcome is PartnerClassificationOutcome.ALREADY_CLASSIFIED
+
+
+@pytest.mark.parametrize("existing", ["customer", "vendor", "partner", "Karma", "prospect", "something_new"])
+async def test_existing_meaningful_classification_is_preserved_never_overwritten(existing: str) -> None:
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=42, classification=existing)])
+    result = await _writer(client).create_supplier(
+        _command(classification=SupplierPartnerClassification.EXPENSE_VENDOR)
+    )
+
+    assert result.status is SupplierPartnerWriteStatus.ALREADY_EXISTS
+    assert result.classification_value == existing
+    assert result.classification_outcome is PartnerClassificationOutcome.DIFFERENT_CLASSIFICATION_PRESERVED
+    assert any("preserved" in warning for warning in result.warnings)
+    assert client.create_calls == []  # and the writer has no update capability at all
+
+
+@pytest.mark.parametrize("empty", [False, None, "", "   "])
+async def test_existing_unclassified_partner_is_preserved_and_surfaced(empty: Any) -> None:
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=42, classification=empty)])
+    result = await _writer(client).create_supplier(
+        _command(classification=SupplierPartnerClassification.EXPENSE_VENDOR)
+    )
+
+    assert result.classification_outcome is PartnerClassificationOutcome.UNCLASSIFIED_PRESERVED
+    assert result.classification_value is None
+    assert client.create_calls == []
+
+
+async def test_existing_partner_already_carrying_target_classification_has_no_warning() -> None:
+    client = FakeJson2Client(search_results=[_partner_row(partner_id=42, classification="expense_vendor")])
+    result = await _writer(client).create_supplier(
+        _command(classification=SupplierPartnerClassification.EXPENSE_VENDOR)
+    )
+
+    assert result.classification_outcome is PartnerClassificationOutcome.ALREADY_CLASSIFIED
+    assert result.warnings == ()
+
+
+@pytest.mark.parametrize("field_name", [None, "", "   ", "active", "vat", "supplier_rank", "x__studio", "X_STUDIO_A"])
+async def test_missing_or_malformed_classification_field_config_fails_before_any_odoo_call(
+    field_name: str | None,
+) -> None:
+    client = FakeJson2Client(search_results=[])
+    with pytest.raises(SupplierPartnerClassificationUnavailableError):
+        await _writer(client, field_name=field_name).create_supplier(_command())
+    assert client.metadata_calls == []
+    assert client.search_calls == []
+    assert client.create_calls == []
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [],
+        [{"name": FIELD, "ttype": "char"}],
+        [{"name": FIELD, "ttype": "selection"}, {"name": FIELD, "ttype": "selection"}],
+    ],
+)
+async def test_classification_field_missing_or_not_selection_in_odoo_fails_closed(
+    metadata: list[dict[str, Any]],
+) -> None:
+    client = FakeJson2Client(search_results=[], field_metadata=metadata)
+    with pytest.raises(SupplierPartnerClassificationUnavailableError):
+        await _writer(client).create_supplier(_command())
+    assert client.search_calls == []
+    assert client.create_calls == []
+
+
+async def test_expense_vendor_key_not_yet_added_in_odoo_fails_closed() -> None:
+    """Production today offers customer/prospect/vendor/partner/Karma only: ONE_OFF_VENDOR
+    must refuse until the Studio key expense_vendor is added -- never fall back."""
+
+    current_production_keys = ("customer", "prospect", "vendor", "partner", "Karma")
+    client = FakeJson2Client(search_results=[], selection_values=current_production_keys)
+    with pytest.raises(SupplierPartnerClassificationUnavailableError):
+        await _writer(client).create_supplier(_command(classification=SupplierPartnerClassification.EXPENSE_VENDOR))
+    assert client.search_calls == []
+    assert client.create_calls == []
+
+    # vendor is already offered, so CREATE_PERMANENT_SUPPLIER works against today's keys.
+    ok = FakeJson2Client(
+        create_result=5,
+        search_sequence=[[], [_partner_row(partner_id=5, classification="vendor")]],
+        selection_values=current_production_keys,
+    )
+    result = await _writer(ok).create_supplier(_command(classification=SupplierPartnerClassification.VENDOR))
+    assert result.status is SupplierPartnerWriteStatus.CREATED
+
+
+def test_classification_config_reads_settings_field() -> None:
+    config = OdooPartnerClassificationFieldConfig.from_settings(Settings(odoo_partner_classification_field=FIELD))
+    assert config.require_field() == FIELD
+    with pytest.raises(SupplierPartnerClassificationUnavailableError):
+        OdooPartnerClassificationFieldConfig.from_settings(Settings()).require_field()

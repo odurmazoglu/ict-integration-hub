@@ -31,7 +31,6 @@ from app.application.services.unit_of_work import UnitOfWork
 from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.dto import ReviewDecisionType
 from app.application.workbench.exceptions import ReviewNotFoundError
-from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
 from app.application.workbench.write_authorization import (
     WriteAuthorizationError,
     WriteAuthorizationOperationType,
@@ -113,7 +112,6 @@ class RunAcceptedDecisionExecutionUseCase:
         retry_policy_resolver: RetryPolicyResolver,
         execution_preflight: ExecutionPreflight | None = None,
         accepted_billing_evidence_reader: AcceptedBillingEvidenceReader | None = None,
-        one_off_vendor_retirement_trigger: OneOffVendorRetirementTrigger | None = None,
         write_authorization_repository: WriteAuthorizationRepository | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
@@ -125,38 +123,22 @@ class RunAcceptedDecisionExecutionUseCase:
         self._retry_policy_resolver = retry_policy_resolver
         self._execution_preflight = execution_preflight or ExecutionPreflightPolicy()
         self._accepted_billing_evidence_reader = accepted_billing_evidence_reader
-        # Optional: the P0-PROD-08I post-Vendor-Bill retirement hook. None -> never
-        # attempted; every other execution behaves identically to before this existed.
-        self._one_off_vendor_retirement_trigger = one_off_vendor_retirement_trigger
+        # The P0-PROD-08I post-Vendor-Bill ONE_OFF_VENDOR retirement hook is retired: a
+        # successful Vendor Bill never archives the supplier's partner.
         self._write_authorization_repository = write_authorization_repository
 
     def execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         """Own the Hub transaction; returned runtime failures are persisted outcomes.
 
-        Repositories flush only. Commit state, steps, events and artifacts together
-        before retirement/projection. Pre-commit exceptions (including commit errors)
+        Repositories flush only. Commit state, steps, events and artifacts together.
+        Pre-commit exceptions (including commit errors)
         roll back pending Hub changes; remote ERP writes cannot be rolled back here.
         """
         try:
-            execution_result = self._execute(command)
+            return self._execute(command)
         except Exception:
             self._unit_of_work.rollback()
             raise
-        # P0-PROD-08I: the execution outcome is now committed, including any Vendor Bill
-        # artifact -- only now is it safe to attempt
-        # retirement. Never for DRY_RUN (no real Vendor Bill exists to retire against).
-        # Best-effort and entirely optional: see OneOffVendorRetirementTrigger for why a
-        # failure here can never turn this successful result into a failure.
-        if (
-            command.mode is ExecutionMode.EXECUTE
-            and execution_result.status is AcceptedDecisionExecutionStatus.EXECUTED
-            and self._one_off_vendor_retirement_trigger is not None
-        ):
-            self._one_off_vendor_retirement_trigger.try_retire_after_execution(
-                review_id=command.review_id,
-                company_id=command.company_id,
-            )
-        return execution_result
 
     def _execute(self, command: RunAcceptedDecisionExecutionCommand) -> AcceptedDecisionExecutionResult:
         if not isinstance(command, RunAcceptedDecisionExecutionCommand):

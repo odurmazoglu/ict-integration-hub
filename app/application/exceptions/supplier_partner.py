@@ -55,3 +55,10 @@ class SupplierPartnerDataIntegrityError(SupplierPartnerWriteError):
 
 class SupplierPartnerWriteUnexpectedErpError(SupplierPartnerWriteError):
     error_category = "unexpected_erp_error"
+
+
+class SupplierPartnerClassificationUnavailableError(SupplierPartnerWriteError):
+    """Raised before any partner create when the configured Odoo classification field is
+    unset/malformed, missing in Odoo, not a selection, or lacks the required key."""
+
+    error_category = "supplier_partner_classification_unavailable"

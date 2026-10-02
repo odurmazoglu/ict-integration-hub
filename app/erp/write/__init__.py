@@ -80,6 +80,7 @@ from app.erp.write.odoo_product_writer import (
     ProductTemplateRecord,
 )
 from app.erp.write.odoo_supplier_partner_writer import (
+    OdooPartnerClassificationFieldConfig,
     OdooSupplierPartnerRepository,
     OdooSupplierPartnerWritePolicy,
     OdooSupplierPartnerWriter,
@@ -125,6 +126,7 @@ __all__ = [
     "OdooProductTemplateRepository",
     "OdooProductWriter",
     "OdooProductWritePolicy",
+    "OdooPartnerClassificationFieldConfig",
     "OdooSupplierInfoRepository",
     "OdooSupplierInfoWriter",
     "OdooSupplierPartnerRepository",

@@ -14,12 +14,13 @@ from app.application.execution import (
     WorkbenchVendorBillExecutionStatus,
 )
 from app.application.expense_mapping import OperatingExpenseMappingOnboardingOutcome
+from app.application.partner_classification import PartnerClassificationOutcome
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceStatus
 from app.application.workbench.accounting_resolution import AccountingResolutionStatus, AccountingTreatmentType
 from app.application.workbench.allocations import AllocationCompleteness, BusinessContextAllocationType
 from app.application.workbench.decision_ingestion import WorkbenchDecisionIngestionStatus
 from app.application.workbench.dto import ReviewDecisionType, ReviewReasonsRole, ReviewStatus
-from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorStatus, OneOffVendorRetirementStatus
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.operating_expense_mapping_command import OperatingExpenseMappingSubmissionStatus
 from app.application.workbench.product_remediation import ProductRemediationStatus
 from app.application.workbench.purchase_purpose import PurchasePurpose
@@ -364,6 +365,11 @@ class SupplierRemediationResponse(BaseModel):
     #: ``one_off_vendor_retirement_status`` is set.
     one_off_vendor_awaiting_vendor_bill: bool | None = None
     one_off_vendor_reconciliation_required: bool | None = None
+    #: How this call's Odoo write handled the partner's ICT business classification
+    #: (``classified_on_create`` / ``already_classified`` / ``unclassified_preserved`` /
+    #: ``different_classification_preserved``). ``None`` when no Odoo partner write ran.
+    partner_classification_outcome: PartnerClassificationOutcome | None = None
+    partner_classification: str | None = None
     safe_message: str | None = None
 
 
@@ -903,25 +909,7 @@ class OneOffVendorRetirementResponse(BaseModel):
     status: OneOffVendorRetirementStatus
 
 
-class OneOffVendorRetirementRecoveryRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    review_version: int = Field(gt=0)
-    authorization_id: str | None = Field(default=None, min_length=1, max_length=36)
-
-
-class OneOffVendorRetirementRecoveryResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, from_attributes=True)
-    review_id: str
-    company_id: int
-    review_version: int
-    resolved_partner_id: int | None
-    status: ArchiveOneOffVendorStatus
-    already_applied: bool
-    safe_message: str | None
-
-
 OneOffVendorRetirementEnvelope = ApiEnvelope[OneOffVendorRetirementResponse]
-OneOffVendorRetirementRecoveryEnvelope = ApiEnvelope[OneOffVendorRetirementRecoveryResponse]
 
 
 class WorkbenchExecutionDecisionResponse(BaseModel):

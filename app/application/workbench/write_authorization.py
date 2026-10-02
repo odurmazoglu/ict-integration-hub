@@ -16,13 +16,13 @@ class WriteAuthorizationOperationType(StrEnum):
     EXECUTE_VENDOR_BILL = "EXECUTE_VENDOR_BILL"
     #: P0-PROD-09F. Authorizes one CREATE_PERMANENT_SUPPLIER resolution write.
     CREATE_PERMANENT_SUPPLIER = "CREATE_PERMANENT_SUPPLIER"
-    #: P0-PROD-09F. Authorizes one ONE_OFF_VENDOR resolution write -- covers both a
-    #: genuinely new partner create and reuse of an archived Hub-owned partner (#159):
-    #: both go through the exact same OdooSupplierPartnerWriter.create_supplier call.
+    #: P0-PROD-09F. Authorizes one ONE_OFF_VENDOR resolution write -- the create (as
+    #: ``expense_vendor``) or exact-VAT reuse of the supplier's own active partner, via
+    #: OdooSupplierPartnerWriter.create_supplier.
     ONE_OFF_VENDOR_SUPPLIER = "ONE_OFF_VENDOR_SUPPLIER"
-    #: P0-PROD-09F. Authorizes one explicit ONE_OFF_VENDOR archive/recovery write
-    #: (the #162 recovery endpoint). Never used by the automatic post-execution
-    #: retirement trigger, which remains gated by the existing global flag only.
+    #: RETIRED (was P0-PROD-09F explicit ONE_OFF_VENDOR archive/recovery). Kept only so
+    #: historical authorization rows stay readable and the DB CHECK constraint is
+    #: unchanged; issuance and consumption both refuse it.
     ONE_OFF_VENDOR_ARCHIVE = "ONE_OFF_VENDOR_ARCHIVE"
     #: P0-PROD-09G. Authorizes one CREATE_NEW_PRODUCT remediation write -- covers
     #: both the product.template create and the product.supplierinfo create/link

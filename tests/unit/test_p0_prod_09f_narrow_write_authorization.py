@@ -1,5 +1,6 @@
-"""P0-PROD-09F: narrow runtime write authorization for CREATE_PERMANENT_SUPPLIER,
-ONE_OFF_VENDOR supplier creation/reuse, and ONE_OFF_VENDOR archive/recovery.
+"""P0-PROD-09F: narrow runtime write authorization for CREATE_PERMANENT_SUPPLIER and
+ONE_OFF_VENDOR supplier creation/reuse. (ONE_OFF_VENDOR archive/recovery authorization
+is retired with the archive lifecycle: issuance and consumption both refuse it.)
 
 Reuses the exact P0-PROD-09D1 WriteAuthorization state machine (TTL, single-use,
 audit, row-locking, replay semantics) unchanged -- extended only with three new
@@ -8,7 +9,7 @@ validation (current review version for supplier ops; the retirement row's own,
 generally older, version for ONE_OFF_VENDOR_ARCHIVE).
 
 Three layers of coverage:
-  A. Application-layer: real ResolveWorkbenchSupplierUseCase / ArchiveOneOffVendorUseCase
+  A. Application-layer: real ResolveWorkbenchSupplierUseCase
      / CreateWriteAuthorizationUseCase / SqlAlchemyWriteAuthorizationRepository, real
      OdooSupplierPartnerWriter, fake Odoo JSON-2 boundary and fake review/source
      readers -- proves the full issue -> claim -> consume -> scope-check chain for
@@ -18,8 +19,8 @@ Three layers of coverage:
      single-use/idempotent-resume semantics, exercised directly against the new
      operation types (the same shared code path EXECUTE_VENDOR_BILL already proves;
      this confirms it is not accidentally bypassed for the new types).
-  C. HTTP-level wiring smoke test: the new authorization_id field reaches the
-     command on both endpoints, using a fake use-case dependency override (no DB).
+  C. HTTP-level wiring smoke test: the authorization_id field reaches the
+     supplier-resolution command, using a fake use-case dependency override (no DB).
 """
 
 from __future__ import annotations
@@ -45,12 +46,9 @@ from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import SupplierResolutionContractError
 from app.application.workbench.one_off_vendor_retirement import (
-    ArchiveOneOffVendorCommand,
-    ArchiveOneOffVendorStatus,
     OneOffVendorRetirement,
     OneOffVendorRetirementStatus,
 )
-from app.application.workbench.one_off_vendor_use_cases import ArchiveOneOffVendorUseCase, OneOffVendorRetirementError
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import ReviewReclassificationResult
 from app.application.workbench.supplier_remediation import (
@@ -74,12 +72,14 @@ from app.application.workbench.write_authorization import (
     supplier_resolution_authorization_consumer_id,
 )
 from app.application.workbench.write_authorization_use_cases import (
+    CreateWriteAuthorizationUseCase,
     RevokeWriteAuthorizationUseCase,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.db.base import Base
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.erp.write.odoo_supplier_partner_writer import (
+    OdooPartnerClassificationFieldConfig,
     OdooSupplierPartnerRepository,
     OdooSupplierPartnerWritePolicy,
     OdooSupplierPartnerWriter,
@@ -104,6 +104,7 @@ ARCHIVED_VAT = "2650179910"
 SUPPLIER_REVIEW_ID = "review:supplier-new"
 ARCHIVE_REVIEW_ID = "review:archive-recover"
 ARCHIVED_PARTNER_ID = 448
+FIELD = "x_studio_musteri_tipi"
 ACTOR = "finance.operator"
 
 
@@ -124,7 +125,6 @@ class _FakeOdooJson2Client:
         self._created_payload: dict[str, Any] | None = None
         self.create_calls: list[dict[str, Any]] = []
         self.search_calls: list[dict[str, Any]] = []
-        self.archive_calls: list[int] = []
 
     async def create_res_partner(self, payload: dict[str, Any]) -> int:
         self.create_calls.append(payload)
@@ -136,7 +136,7 @@ class _FakeOdooJson2Client:
         if model != "res.partner":
             return []
         if self._search_results:
-            return self._search_results
+            return [{FIELD: "vendor", **record} for record in self._search_results]
         if self._created_payload is not None:
             return [
                 {
@@ -145,16 +145,16 @@ class _FakeOdooJson2Client:
                     "vat": self._created_payload["vat"],
                     "active": True,
                     "company_id": False,
+                    FIELD: self._created_payload[FIELD],
                 }
             ]
         return []
 
-    async def archive_res_partner(self, *, partner_id: int) -> bool:
-        self.archive_calls.append(partner_id)
-        for record in self._search_results:
-            if record.get("id") == partner_id:
-                record["active"] = False
-        return True
+    async def read_model_field_metadata(self, *, model: str, field_name: str):
+        return [{"name": field_name, "ttype": "selection"}]
+
+    async def read_field_selection_values(self, *, model: str, field_name: str):
+        return ("customer", "prospect", "vendor", "partner", "Karma", "expense_vendor")
 
 
 def _writer(client: _FakeOdooJson2Client, *, policy: OdooSupplierPartnerWritePolicy | None = None):
@@ -167,6 +167,7 @@ def _writer(client: _FakeOdooJson2Client, *, policy: OdooSupplierPartnerWritePol
             production_approval_ack="APPROVED_FOR_PRODUCTION",
             app_env="production",
         ),
+        classification_config=OdooPartnerClassificationFieldConfig(field_name=FIELD),
     )
 
 
@@ -240,11 +241,6 @@ class _FakeReclassifier:
             trigger=command.trigger,
             executable=False,
         )
-
-
-class _FakeVendorBillEvidenceReader:
-    def has_successful_vendor_bill(self, *, review_id: str, company_id: int) -> bool:
-        return True
 
 
 @pytest.fixture()
@@ -411,47 +407,6 @@ def _supplier_command(
     )
 
 
-def _active_archived_partner_client(**kwargs: Any) -> _FakeOdooJson2Client:
-    """The archive writer always reads the partner back FIRST (active=True here, so
-    it proceeds to actually attempt the archive write) before ever checking the
-    write gate -- every archive-scenario test needs this, not an empty client."""
-
-    return _FakeOdooJson2Client(
-        search_results=[{"id": ARCHIVED_PARTNER_ID, "name": "D-Market", "vat": ARCHIVED_VAT, "active": True}],
-        **kwargs,
-    )
-
-
-def _archive_use_case(
-    session: Session,
-    *,
-    client: _FakeOdooJson2Client,
-    authorization_id: str | None,
-    policy: OdooSupplierPartnerWritePolicy | None = None,
-) -> ArchiveOneOffVendorUseCase:
-    from app.erp.write.odoo_one_off_vendor_retirement_writer import OdooOneOffVendorRetirementWriter
-
-    return ArchiveOneOffVendorUseCase(
-        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
-        vendor_bill_evidence_reader=_FakeVendorBillEvidenceReader(),
-        retirement_port=OdooOneOffVendorRetirementWriter(
-            repository=OdooSupplierPartnerRepository(client=client),
-            client=client,
-            policy=policy
-            or OdooSupplierPartnerWritePolicy(
-                supplier_remediation_write_enabled=False,
-                production_operations_enabled=True,
-                production_approval_ack="APPROVED_FOR_PRODUCTION",
-                app_env="production",
-            ),
-        ),
-        unit_of_work=SqlAlchemyUnitOfWork(session),
-        approved_by=ACTOR,
-        write_authorization_repository=_auth_repo(session),
-        authorization_id=authorization_id,
-    )
-
-
 # =================================================================== A1: CREATE_PERMANENT_SUPPLIER
 
 
@@ -504,15 +459,15 @@ async def test_one_off_vendor_supplier_create_is_authorized_without_global_gate(
 
     assert result.status is SupplierRemediationStatus.RESOLVED
     assert result.one_off_vendor_hub_owned is True
-    assert result.one_off_vendor_retirement_status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+    assert result.one_off_vendor_retirement_status is None  # no archive lifecycle any more
     assert len(client.create_calls) == 1
+    assert client.create_calls[0][FIELD] == "expense_vendor"
 
 
-async def test_one_off_vendor_reuse_of_archived_hub_owned_partner_still_works_with_authorization(
-    session: Session,
-) -> None:
-    """#159 regression, now also authorized narrowly: reusing an archived Hub-owned
-    partner for a NEW review is unaffected by adding narrow authorization support."""
+async def test_archived_hub_owned_partner_fails_closed_even_with_authorization(session: Session) -> None:
+    """The #159/09C archived-reuse override is retired: even with a valid narrow
+    authorization, an archived Hub-owned partner is never silently reused (an operator
+    reactivates it explicitly). The authorization is rolled back, not burned."""
 
     SqlAlchemyReviewSupplierRemediationEffectRepository(session).create_remediation_effect(
         SupplierRemediationEffect(
@@ -537,13 +492,15 @@ async def test_one_off_vendor_reuse_of_archived_hub_owned_partner_still_works_wi
     )
     use_case = _resolve_use_case(session, writer=_writer(client), vat=ARCHIVED_VAT)
 
-    result = await use_case.execute(
-        _supplier_command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, authorization_id=authorization.authorization_id)
-    )
-
-    assert result.effective_partner_id == ARCHIVED_PARTNER_ID
-    assert result.partner_write_status is SupplierPartnerWriteEffectStatus.ALREADY_EXISTS
-    assert client.create_calls == []  # no duplicate partner
+    with pytest.raises(SupplierPartnerInactiveError):
+        await use_case.execute(
+            _supplier_command(
+                mode=SupplierResolutionMode.ONE_OFF_VENDOR, authorization_id=authorization.authorization_id
+            )
+        )
+    assert client.create_calls == []
+    stored = _auth_repo(session).get_by_id(authorization_id=authorization.authorization_id, company_id=COMPANY_ID)
+    assert stored.status is WriteAuthorizationStatus.PENDING
 
 
 async def test_inactive_non_hub_owned_partner_still_fails_closed_even_with_authorization(session: Session) -> None:
@@ -567,84 +524,31 @@ async def test_inactive_non_hub_owned_partner_still_fails_closed_even_with_autho
     assert client.create_calls == []
 
 
-# =================================================================== A3: ONE_OFF_VENDOR_ARCHIVE
+# =================================================================== A3: ONE_OFF_VENDOR_ARCHIVE (retired)
 
 
-async def test_archive_recovery_authorized_without_global_gate(session: Session) -> None:
-    authorization = _issue(
-        session,
-        operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
-        target_version=1,
-        review_id=ARCHIVE_REVIEW_ID,
+def test_issuing_a_one_off_vendor_archive_authorization_is_refused(session: Session) -> None:
+    use_case = CreateWriteAuthorizationUseCase(
+        review_reader=_FakeReviewReader(None),
+        accepted_decision_reader=None,
+        source_invoice_reader=None,
+        repository=_auth_repo(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
     )
-    client = _active_archived_partner_client()
-    use_case = _archive_use_case(session, client=client, authorization_id=authorization.authorization_id)
-
-    result = await use_case.execute(
-        ArchiveOneOffVendorCommand(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    )
-
-    assert result.status is ArchiveOneOffVendorStatus.ARCHIVED
-    assert client.archive_calls == [ARCHIVED_PARTNER_ID]
-    stored = _auth_repo(session).get_by_id(authorization_id=authorization.authorization_id, company_id=COMPANY_ID)
-    assert stored.status is WriteAuthorizationStatus.CONSUMED
-
-
-async def test_archive_recovery_target_version_is_retirement_version_not_review_current_version(
-    session: Session,
-) -> None:
-    """The review is at version 5; the retirement row (and the authorization) target
-    version 1 -- proving target_version validation is retirement-scoped, not
-    review-current-version-scoped, for this operation type specifically."""
-
-    authorization = _issue(
-        session,
-        operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
-        target_version=1,
-        review_id=ARCHIVE_REVIEW_ID,
-    )
-    use_case = _archive_use_case(
-        session, client=_active_archived_partner_client(), authorization_id=authorization.authorization_id
-    )
-
-    result = await use_case.execute(
-        ArchiveOneOffVendorCommand(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    )
-    assert result.status is ArchiveOneOffVendorStatus.ARCHIVED
-
-
-async def test_archive_recovery_without_authorization_still_needs_global_gate(session: Session) -> None:
-    client = _active_archived_partner_client()
-    use_case = _archive_use_case(session, client=client, authorization_id=None)
-
-    with pytest.raises(SupplierPartnerWriteSafetyGateError):
-        await use_case.execute(
-            ArchiveOneOffVendorCommand(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
+    with pytest.raises(WriteAuthorizationScopeMismatchError, match="retired"):
+        use_case.execute(
+            company_id=COMPANY_ID,
+            review_id=ARCHIVE_REVIEW_ID,
+            operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
+            decision_version=1,
+            authorized_by=ACTOR,
         )
-    assert client.archive_calls == []
+    assert session.query(WorkbenchReviewWriteAuthorization).count() == 0
 
 
-async def test_archive_recovery_already_archived_is_a_no_op_and_never_touches_authorization(
-    session: Session,
-) -> None:
-    """No write attempted -> no authorization claim attempted -- issuing one is
-    wasteful but harmless, and stays PENDING (never silently burned) since the
-    use case returns before ever reaching the claim."""
-
-    retirement_repo = SqlAlchemyReviewOneOffVendorRetirementRepository(session)
-    row = retirement_repo.find(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    retirement_repo.advance(
-        row,
-        expected_status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL,
-        new_status=OneOffVendorRetirementStatus.ARCHIVE_ATTEMPTED,
-    )
-    row = retirement_repo.find(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    retirement_repo.advance(
-        row,
-        expected_status=OneOffVendorRetirementStatus.ARCHIVE_ATTEMPTED,
-        new_status=OneOffVendorRetirementStatus.ARCHIVED,
-    )
-    session.commit()
+def test_historical_one_off_vendor_archive_authorization_can_never_be_consumed(session: Session) -> None:
+    """A pre-existing (historical) ONE_OFF_VENDOR_ARCHIVE row stays readable but can
+    never be claimed -- even with an exactly matching scope."""
 
     authorization = _issue(
         session,
@@ -652,16 +556,28 @@ async def test_archive_recovery_already_archived_is_a_no_op_and_never_touches_au
         target_version=1,
         review_id=ARCHIVE_REVIEW_ID,
     )
-    client = _FakeOdooJson2Client()
-    use_case = _archive_use_case(session, client=client, authorization_id=authorization.authorization_id)
-
-    result = await use_case.execute(
-        ArchiveOneOffVendorCommand(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    )
-    assert result.already_applied is True
-    assert client.archive_calls == []
+    with pytest.raises(WriteAuthorizationScopeMismatchError, match="retired"):
+        _auth_repo(session).claim_and_consume(
+            company_id=COMPANY_ID,
+            review_id=ARCHIVE_REVIEW_ID,
+            operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
+            target_version=1,
+            authorization_id=authorization.authorization_id,
+            execution_id=one_off_vendor_archive_authorization_consumer_id(
+                company_id=COMPANY_ID, review_id=ARCHIVE_REVIEW_ID, review_version=1
+            ),
+        )
     stored = _auth_repo(session).get_by_id(authorization_id=authorization.authorization_id, company_id=COMPANY_ID)
     assert stored.status is WriteAuthorizationStatus.PENDING
+    assert stored.operation_type is WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE
+
+
+def test_historical_retirement_row_is_untouched_and_readable(session: Session) -> None:
+    retirement = SqlAlchemyReviewOneOffVendorRetirementRepository(session).find(
+        review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1
+    )
+    assert retirement.resolved_partner_id == ARCHIVED_PARTNER_ID
+    assert retirement.status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
 
 
 # =================================================================== wrong company/review/version/operation
@@ -710,28 +626,6 @@ def test_claim_rejects_wrong_company_even_when_authorization_id_is_a_guess(sessi
             review_id=SUPPLIER_REVIEW_ID,
             operation_type=WriteAuthorizationOperationType.CREATE_PERMANENT_SUPPLIER,
             target_version=1,
-            authorization_id=authorization.authorization_id,
-            execution_id="consumer-x",
-        )
-
-
-def test_archive_claim_rejects_stale_retirement_version(session: Session) -> None:
-    """A target_version for which no retirement row exists at all fails closed --
-    the ONE_OFF_VENDOR_ARCHIVE-specific validity check, not the generic
-    current-review-version one."""
-
-    authorization = _issue(
-        session,
-        operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
-        target_version=1,
-        review_id=ARCHIVE_REVIEW_ID,
-    )
-    with pytest.raises(WriteAuthorizationScopeMismatchError):
-        _auth_repo(session).claim_and_consume(
-            company_id=COMPANY_ID,
-            review_id=ARCHIVE_REVIEW_ID,
-            operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
-            target_version=99,  # authorization itself targets 1; this simulates a forged/mismatched claim
             authorization_id=authorization.authorization_id,
             execution_id="consumer-x",
         )
@@ -900,38 +794,6 @@ async def test_master_kill_switch_blocks_supplier_write_even_with_valid_authoriz
     assert stored.status is WriteAuthorizationStatus.PENDING
 
 
-async def test_master_kill_switch_blocks_archive_write_even_with_valid_authorization(session: Session) -> None:
-    authorization = _issue(
-        session,
-        operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_ARCHIVE,
-        target_version=1,
-        review_id=ARCHIVE_REVIEW_ID,
-    )
-    client = _active_archived_partner_client()
-    policy = OdooSupplierPartnerWritePolicy(
-        supplier_remediation_write_enabled=False,
-        production_operations_enabled=False,
-        production_approval_ack="APPROVED_FOR_PRODUCTION",
-        app_env="production",
-    )
-    use_case = _archive_use_case(session, client=client, authorization_id=authorization.authorization_id, policy=policy)
-
-    with pytest.raises(SupplierPartnerWriteSafetyGateError):
-        await use_case.execute(
-            ArchiveOneOffVendorCommand(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-        )
-    assert client.archive_calls == []
-    stored = _auth_repo(session).get_by_id(authorization_id=authorization.authorization_id, company_id=COMPANY_ID)
-    assert stored.status is WriteAuthorizationStatus.PENDING
-    retirement = SqlAlchemyReviewOneOffVendorRetirementRepository(session).find(
-        review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1
-    )
-    # A certain-no-write failure (the existing, unmodified _CERTAIN_NO_WRITE_EXCEPTIONS
-    # handler) reverts ARCHIVE_ATTEMPTED back to PENDING_VENDOR_BILL -- never stuck,
-    # never silently treated as archived.
-    assert retirement.status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
-
-
 async def test_missing_approval_ack_blocks_write_even_with_valid_authorization(session: Session) -> None:
     authorization = _issue(
         session, operation_type=WriteAuthorizationOperationType.CREATE_PERMANENT_SUPPLIER, target_version=1
@@ -1040,34 +902,6 @@ async def test_no_write_authorization_repository_configured_fails_closed(session
         )
 
 
-async def test_archive_use_case_without_write_authorization_repository_fails_closed(session: Session) -> None:
-    from app.erp.write.odoo_one_off_vendor_retirement_writer import OdooOneOffVendorRetirementWriter
-
-    client = _FakeOdooJson2Client()
-    use_case = ArchiveOneOffVendorUseCase(
-        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
-        vendor_bill_evidence_reader=_FakeVendorBillEvidenceReader(),
-        retirement_port=OdooOneOffVendorRetirementWriter(
-            repository=OdooSupplierPartnerRepository(client=client),
-            client=client,
-            policy=OdooSupplierPartnerWritePolicy(
-                supplier_remediation_write_enabled=False,
-                production_operations_enabled=True,
-                production_approval_ack="APPROVED_FOR_PRODUCTION",
-                app_env="production",
-            ),
-        ),
-        unit_of_work=SqlAlchemyUnitOfWork(session),
-        approved_by=ACTOR,
-        write_authorization_repository=None,
-        authorization_id="fake-id",
-    )
-    with pytest.raises(OneOffVendorRetirementError):
-        await use_case.execute(
-            ArchiveOneOffVendorCommand(review_id=ARCHIVE_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-        )
-
-
 # =================================================================== C: HTTP-level wiring smoke test
 
 
@@ -1097,6 +931,8 @@ class SupplierRemediationEffectStub:
     safe_message = "ok"
     one_off_vendor_hub_owned = None
     one_off_vendor_retirement_status = None
+    partner_classification_outcome = None
+    partner_classification_value = None
 
 
 def test_supplier_resolution_authorization_id_reaches_the_command() -> None:

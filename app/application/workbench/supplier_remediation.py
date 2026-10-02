@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from app.application.dto import ApplicationDTO
+from app.application.partner_classification import PartnerClassificationOutcome
 from app.application.workbench.exceptions import SupplierResolutionContractError
 from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
@@ -133,10 +134,16 @@ class SupplierRemediationResult(ApplicationDTO):
     #: is enforced before the remediation effect is ever written). ``None`` for every other
     #: mode (P0-PROD-08I).
     one_off_vendor_hub_owned: bool | None = None
-    #: The archive-last lifecycle state for this review's ONE_OFF_VENDOR retirement, if one
-    #: exists. ``None`` for every other mode, and also ``None`` if the retirement row could
-    #: not be read (never fabricated).
+    #: The *historical* (pre-redesign) archive-lifecycle state for this review's
+    #: ONE_OFF_VENDOR retirement, if one exists. New ONE_OFF_VENDOR resolutions never
+    #: create one, so this is ``None`` for them and for every other mode.
     one_off_vendor_retirement_status: OneOffVendorRetirementStatus | None = None
+    #: How the partner's ICT business classification was handled by THIS call's Odoo
+    #: write (CREATE_PERMANENT_SUPPLIER / ONE_OFF_VENDOR only). ``None`` for
+    #: MATCH_EXISTING, USE_ONE_OFF_SUPPLIER and already-applied resumes (no Odoo write).
+    partner_classification_outcome: PartnerClassificationOutcome | None = None
+    #: The classification value observed on the partner by that write (``None`` if empty).
+    partner_classification_value: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "current_review_reasons", tuple(self.current_review_reasons))
@@ -144,6 +151,10 @@ class SupplierRemediationResult(ApplicationDTO):
             raise SupplierResolutionContractError("one_off_vendor_hub_owned is only valid for ONE_OFF_VENDOR.")
         if self.one_off_vendor_retirement_status is not None and self.mode is not SupplierResolutionMode.ONE_OFF_VENDOR:
             raise SupplierResolutionContractError("one_off_vendor_retirement_status is only valid for ONE_OFF_VENDOR.")
+        if self.partner_classification_outcome is not None and not isinstance(
+            self.partner_classification_outcome, PartnerClassificationOutcome
+        ):
+            raise SupplierResolutionContractError("partner_classification_outcome must be canonical when set.")
         if self.one_off_vendor_retirement_status is not None and not isinstance(
             self.one_off_vendor_retirement_status, OneOffVendorRetirementStatus
         ):

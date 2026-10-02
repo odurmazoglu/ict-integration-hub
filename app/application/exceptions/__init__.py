@@ -23,6 +23,7 @@ from app.application.exceptions.product_remediation import (
 )
 from app.application.exceptions.supplier_partner import (
     SupplierPartnerAmbiguityError,
+    SupplierPartnerClassificationUnavailableError,
     SupplierPartnerDataIntegrityError,
     SupplierPartnerDuplicateRaceError,
     SupplierPartnerInactiveError,
@@ -56,6 +57,7 @@ __all__ = [
     "SupplierInfoWriteUnexpectedErpError",
     "SupplierInfoWriteValidationError",
     "SupplierPartnerAmbiguityError",
+    "SupplierPartnerClassificationUnavailableError",
     "SupplierPartnerDataIntegrityError",
     "SupplierPartnerDuplicateRaceError",
     "SupplierPartnerInactiveError",

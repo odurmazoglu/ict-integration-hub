@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.application.commands.supplier_partner import CreateSupplierPartnerCommand
 from app.application.dto.supplier_partner import SupplierPartnerWriteResult, SupplierPartnerWriteStatus
 from app.application.exceptions.supplier_partner import SupplierPartnerWriteSafetyGateError
+from app.application.partner_classification import PartnerClassificationOutcome, SupplierPartnerClassification
 from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import (
@@ -67,6 +68,7 @@ from app.persistence import (
     SqlAlchemyUnitOfWork,
 )
 
+FIELD = "x_studio_musteri_tipi"
 COMPANY_ID = 7
 REVIEW_ID = "review:supplier-remediation-1"
 ETTN = "AKYASAM-ETTN-REMED-1"
@@ -822,6 +824,7 @@ async def test_concurrent_writer_interleave_is_detection_only_not_prevention() -
     # claimed. This test asserts the fail-closed detection, using the real #129 writer.
     from app.application.exceptions.supplier_partner import SupplierPartnerDuplicateRaceError
     from app.erp.write.odoo_supplier_partner_writer import (
+        OdooPartnerClassificationFieldConfig,
         OdooSupplierPartnerRepository,
         OdooSupplierPartnerWritePolicy,
         OdooSupplierPartnerWriter,
@@ -842,16 +845,23 @@ async def test_concurrent_writer_interleave_is_detection_only_not_prevention() -
                 return []
             if has_vat_eq and self.created >= 1:
                 return [
-                    {"id": 6001, "name": "AKYASAM", "vat": VKN, "active": True, "company_id": False},
-                    {"id": 6002, "name": "AKYASAM", "vat": VKN, "active": True, "company_id": False},
+                    {"id": 6001, "name": "AKYASAM", "vat": VKN, "active": True, "company_id": False, FIELD: "vendor"},
+                    {"id": 6002, "name": "AKYASAM", "vat": VKN, "active": True, "company_id": False, FIELD: "vendor"},
                 ]
             return []
+
+        async def read_model_field_metadata(self, *, model, field_name):
+            return [{"name": field_name, "ttype": "selection"}]
+
+        async def read_field_selection_values(self, *, model, field_name):
+            return ("vendor", "expense_vendor")
 
     writer = OdooSupplierPartnerWriter(
         repository=OdooSupplierPartnerRepository(client=_RacyJson2Client()),
         policy=OdooSupplierPartnerWritePolicy(
             supplier_remediation_write_enabled=True, app_env="staging", odoo_host="test-ictteknoloji.odoo.com"
         ),
+        classification_config=OdooPartnerClassificationFieldConfig(field_name=FIELD),
     )
     with pytest.raises(SupplierPartnerDuplicateRaceError):
         await writer.create_supplier(
@@ -860,6 +870,7 @@ async def test_concurrent_writer_interleave_is_detection_only_not_prevention() -
                 supplier_name="AKYASAM",
                 supplier_tax_number=VKN,
                 idempotency_key="supplier-remediation:7:X:1",
+                classification=SupplierPartnerClassification.VENDOR,
                 approved_by=ACTOR,
             )
         )
@@ -1189,10 +1200,11 @@ async def test_a_one_off_vendor_mode_resolves_creates_partner_and_reclassifies(s
     assert result.reclassified is True
     effect = h.effect_repo.find_remediation_effect(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1)
     assert effect.mode is SupplierResolutionMode.ONE_OFF_VENDOR
-    retirement = h.retirement_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    assert retirement is not None
-    assert retirement.resolved_partner_id == 6001
-    assert retirement.status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+    # The supplier's own partner is created as an expense vendor and is never put on an
+    # archive lifecycle: no retirement row exists for the new behavior.
+    assert h.writer.calls[0].classification is SupplierPartnerClassification.EXPENSE_VENDOR
+    assert h.retirement_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1) is None
+    assert session.query(WorkbenchReviewOneOffVendorRetirement).count() == 0
 
 
 async def test_d_one_off_vendor_identity_comes_only_from_source_never_the_request(session: Session) -> None:
@@ -1216,8 +1228,8 @@ async def test_d_one_off_vendor_identity_comes_only_from_source_never_the_reques
 
 
 async def test_e_one_off_vendor_exact_active_hub_owned_match_does_not_duplicate(session: Session) -> None:
-    """Replaying the identical decision reuses the same partner -- no second create,
-    no second retirement row."""
+    """Replaying the identical decision reuses the same partner -- no second create and
+    no retirement row at all."""
 
     h = _Harness(
         session,
@@ -1230,13 +1242,16 @@ async def test_e_one_off_vendor_exact_active_hub_owned_match_does_not_duplicate(
 
     assert first.effective_partner_id == second.effective_partner_id == 6001
     assert second.already_applied is True
-    assert session.query(WorkbenchReviewOneOffVendorRetirement).count() == 1
+    assert len(h.writer.calls) == 1
+    assert session.query(WorkbenchReviewOneOffVendorRetirement).count() == 0
     assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 1
 
 
-async def test_f_one_off_vendor_reuses_existing_hub_owned_archived_partner(session: Session) -> None:
-    """A partner already archived by a PRIOR ONE_OFF_VENDOR review for the same VAT
-    (case B/F) is reused, not duplicated and not un-archived."""
+async def test_f_one_off_vendor_reuses_existing_hub_owned_partner_without_retirement(session: Session) -> None:
+    """A partner already created by a PRIOR ONE_OFF_VENDOR review for the same VAT is
+    reused, not duplicated -- and no retirement row is started for it. (An *archived*
+    exact-VAT match now fails closed inside the real writer; see
+    test_expense_vendor_partner_classification.py.)"""
 
     prior_effect_repo = SqlAlchemyReviewSupplierRemediationEffectRepository(session)
     session.add(
@@ -1279,15 +1294,14 @@ async def test_f_one_off_vendor_reuses_existing_hub_owned_archived_partner(sessi
     h = _Harness(
         session,
         source=_source_evidence(supplier_vat=VKN),
-        partner=_partner(id=6001, vat=VKN, active=False),
+        partner=_partner(id=6001, vat=VKN),
         writer=_FakeSupplierPartnerWriter(existing_vat=VKN, existing_partner_id=6001),
     )
     result = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
 
     assert result.effective_partner_id == 6001
     assert result.partner_write_status is SupplierPartnerWriteEffectStatus.ALREADY_EXISTS
-    retirement = h.retirement_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    assert retirement.resolved_partner_id == 6001
+    assert h.retirement_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=1) is None
 
 
 async def test_g_ambiguous_exact_vat_match_fails_closed(session: Session) -> None:
@@ -1328,8 +1342,8 @@ async def test_h_existing_permanent_partner_is_never_adopted_as_one_off(session:
 
 
 async def test_result_surfaces_one_off_vendor_lifecycle_on_fresh_resolve(session: Session) -> None:
-    """The result DTO makes ONE_OFF_VENDOR ownership and lifecycle state explicit --
-    never fabricated, always read back from the retirement row just created."""
+    """The result DTO makes ONE_OFF_VENDOR ownership explicit; a new resolution has no
+    retirement lifecycle, so no retirement status is ever fabricated for it."""
 
     h = _Harness(
         session,
@@ -1340,12 +1354,12 @@ async def test_result_surfaces_one_off_vendor_lifecycle_on_fresh_resolve(session
     result = await h.use_case.execute(h.command(mode=SupplierResolutionMode.ONE_OFF_VENDOR, resolved_partner_id=None))
 
     assert result.one_off_vendor_hub_owned is True
-    assert result.one_off_vendor_retirement_status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+    assert result.one_off_vendor_retirement_status is None
 
 
 async def test_result_surfaces_one_off_vendor_lifecycle_on_replay(session: Session) -> None:
-    """An exact replay (already_applied=True) still reports the current retirement
-    state -- never stale, never fabricated."""
+    """An exact replay (already_applied=True) of a new-behavior resolution still has no
+    retirement state -- never fabricated."""
 
     h = _Harness(
         session,
@@ -1358,7 +1372,7 @@ async def test_result_surfaces_one_off_vendor_lifecycle_on_replay(session: Sessi
 
     assert replay.already_applied is True
     assert replay.one_off_vendor_hub_owned is True
-    assert replay.one_off_vendor_retirement_status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
+    assert replay.one_off_vendor_retirement_status is None
 
 
 @pytest.mark.parametrize(
@@ -1475,7 +1489,21 @@ class _FakeOdooJson2ClientForPayloadProof:
         self._search_call += 1
         if self._search_call == 1:
             return []  # pre-create exact-VAT lookup: no existing partner
-        return [{"id": self.create_result, "name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN, "active": True}]
+        return [
+            {
+                "id": self.create_result,
+                "name": NAME_FOR_REAL_WRITER_TEST,
+                "vat": VKN,
+                "active": True,
+                FIELD: self.create_calls[-1][FIELD],
+            }
+        ]
+
+    async def read_model_field_metadata(self, *, model: str, field_name: str):
+        return [{"name": field_name, "ttype": "selection"}]
+
+    async def read_field_selection_values(self, *, model: str, field_name: str):
+        return ("customer", "prospect", "vendor", "partner", "Karma", "expense_vendor")
 
 
 NAME_FOR_REAL_WRITER_TEST = "D-MARKET ELEKTRONIK"
@@ -1483,6 +1511,7 @@ NAME_FOR_REAL_WRITER_TEST = "D-MARKET ELEKTRONIK"
 
 def _real_writer(client: _FakeOdooJson2ClientForPayloadProof):
     from app.erp.write.odoo_supplier_partner_writer import (
+        OdooPartnerClassificationFieldConfig,
         OdooSupplierPartnerRepository,
         OdooSupplierPartnerWritePolicy,
         OdooSupplierPartnerWriter,
@@ -1493,12 +1522,17 @@ def _real_writer(client: _FakeOdooJson2ClientForPayloadProof):
         app_env="staging",
         odoo_host="test-ictteknoloji.odoo.com",
     )
-    return OdooSupplierPartnerWriter(repository=OdooSupplierPartnerRepository(client=client), policy=policy)
+    return OdooSupplierPartnerWriter(
+        repository=OdooSupplierPartnerRepository(client=client),
+        policy=policy,
+        classification_config=OdooPartnerClassificationFieldConfig(field_name=FIELD),
+    )
 
 
 async def test_one_off_vendor_through_real_writer_sends_exactly_name_and_vat(session: Session) -> None:
     """P0-PROD-08J / Step 7: ONE_OFF_VENDOR, exercised through the REAL Odoo writer
-    (not a fake that abstracts the payload away), sends exactly {name, vat}."""
+    (not a fake that abstracts the payload away), sends exactly {name, vat} plus the
+    explicit expense_vendor classification."""
 
     client = _FakeOdooJson2ClientForPayloadProof(create_result=9001)
     h = _Harness(
@@ -1511,12 +1545,15 @@ async def test_one_off_vendor_through_real_writer_sends_exactly_name_and_vat(ses
 
     assert result.effective_partner_id == 9001
     assert len(client.create_calls) == 1
-    assert client.create_calls[0] == {"name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN}
+    assert client.create_calls[0] == {"name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN, FIELD: "expense_vendor"}
+    assert result.partner_classification_outcome is PartnerClassificationOutcome.CLASSIFIED_ON_CREATE
+    assert result.partner_classification_value == "expense_vendor"
 
 
 async def test_create_permanent_supplier_through_real_writer_sends_exactly_name_and_vat(session: Session) -> None:
     """P0-PROD-08J / Step 6: CREATE_PERMANENT_SUPPLIER, exercised through the REAL
-    Odoo writer, sends exactly {name, vat} -- the same shared writer as ONE_OFF_VENDOR,
+    Odoo writer, sends exactly {name, vat} plus the explicit vendor classification --
+    the same shared writer as ONE_OFF_VENDOR,
     proving one fix covers both without a special D-Market-only writer."""
 
     client = _FakeOdooJson2ClientForPayloadProof(create_result=9002)
@@ -1536,4 +1573,6 @@ async def test_create_permanent_supplier_through_real_writer_sends_exactly_name_
 
     assert result.effective_partner_id == 9002
     assert len(client.create_calls) == 1
-    assert client.create_calls[0] == {"name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN}
+    assert client.create_calls[0] == {"name": NAME_FOR_REAL_WRITER_TEST, "vat": VKN, FIELD: "vendor"}
+    assert result.partner_classification_outcome is PartnerClassificationOutcome.CLASSIFIED_ON_CREATE
+    assert result.partner_classification_value == "vendor"

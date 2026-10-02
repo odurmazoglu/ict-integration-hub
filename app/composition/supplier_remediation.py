@@ -5,14 +5,10 @@ from sqlalchemy.orm import Session
 from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
 from app.application.workbench import (
-    ArchiveOneOffVendorUseCase,
     ResolveWorkbenchSupplierUseCase,
     ValidateSupplierResolutionUseCase,
 )
-from app.application.workbench.retirement_recovery import (
-    GetOneOffVendorRetirementUseCase,
-    RecoverOneOffVendorRetirementWorkflow,
-)
+from app.application.workbench.retirement_recovery import GetOneOffVendorRetirementUseCase
 from app.composition.imports import (
     build_deterministic_decision_engine,
     build_runtime_workbench_projection_synchronizer,
@@ -22,8 +18,8 @@ from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.supplier_resolution_partner_reader import OdooSupplierResolutionPartnerReader
-from app.erp.write.odoo_one_off_vendor_retirement_writer import OdooOneOffVendorRetirementWriter
 from app.erp.write.odoo_supplier_partner_writer import (
+    OdooPartnerClassificationFieldConfig,
     OdooSupplierPartnerRepository,
     OdooSupplierPartnerWritePolicy,
     OdooSupplierPartnerWriter,
@@ -37,7 +33,6 @@ from app.persistence import (
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyReviewSupplierResolutionRepository,
     SqlAlchemyUnitOfWork,
-    SqlAlchemyVendorBillExecutionEvidenceReader,
     SqlAlchemyWriteAuthorizationRepository,
 )
 
@@ -73,6 +68,7 @@ def build_resolve_workbench_supplier_use_case(
     supplier_partner_writer = OdooSupplierPartnerWriter(
         repository=OdooSupplierPartnerRepository(client=resolved_odoo_client),
         policy=OdooSupplierPartnerWritePolicy.from_settings(settings),
+        classification_config=OdooPartnerClassificationFieldConfig.from_settings(settings),
     )
 
     reclassifier = ReclassifyWorkbenchReviewUseCase(
@@ -83,9 +79,10 @@ def build_resolve_workbench_supplier_use_case(
         ),
         source_invoice_reader=source_invoice_reader,
         reclassification_writer=review_repository,
-        # P0-PROD-10D: lets reclassification reach a submittable decision for an
-        # archived Hub-owned ONE_OFF_VENDOR reuse -- see ReclassifyWorkbenchReviewUseCase's
-        # own docstring for the exact, narrowly-scoped substitution this enables.
+        # P0-PROD-10D: substitutes this exact review's accepted remediation effect partner
+        # into execution evidence when the raw match is not MATCHED. Kept for historical
+        # compatibility (pre-redesign archived ONE_OFF_VENDOR effects and MATCH_EXISTING
+        # ambiguity) -- new ONE_OFF_VENDOR partners stay active and match on their own.
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
         # P0-PROD-15P: same persistent mapping table the production DecisionEngine's own
         # rule engine queries (a fresh, session-scoped instance) -- lets a MATCH_EXISTING
@@ -115,45 +112,9 @@ def build_resolve_workbench_supplier_use_case(
         reclassifier=reclassifier,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         projection_synchronizer=projection_synchronizer,
+        # Read-only: reports historical retirement rows; new resolutions never create one.
         retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
-    )
-
-
-def build_archive_one_off_vendor_use_case(
-    *,
-    session: Session,
-    settings: Settings,
-    odoo_client: OdooJson2Client | None = None,
-    approved_by: str | None = None,
-    authorization_id: str | None = None,
-) -> ArchiveOneOffVendorUseCase:
-    """Compose the ONE_OFF_VENDOR archive-last orchestration (P0-PROD-08H).
-
-    Reuses the exact same gated, controlled ``OdooSupplierPartnerRepository``/
-    ``OdooSupplierPartnerWritePolicy`` as supplier-partner creation -- archiving a
-    Hub-owned one-off partner is protected by the same
-    ``SUPPLIER_REMEDIATION_WRITE_ENABLED`` authorization, not a new or broader one.
-    Used by the post-execution trigger and explicit operator recovery workflow.
-
-    ``authorization_id`` (P0-PROD-09F) is only ever set by the recovery workflow --
-    the automatic post-execution trigger never supplies it.
-    """
-
-    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
-    retirement_port = OdooOneOffVendorRetirementWriter(
-        repository=OdooSupplierPartnerRepository(client=resolved_odoo_client),
-        client=resolved_odoo_client,
-        policy=OdooSupplierPartnerWritePolicy.from_settings(settings),
-    )
-    return ArchiveOneOffVendorUseCase(
-        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
-        vendor_bill_evidence_reader=SqlAlchemyVendorBillExecutionEvidenceReader(session),
-        retirement_port=retirement_port,
-        unit_of_work=SqlAlchemyUnitOfWork(session),
-        approved_by=approved_by,
-        write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
-        authorization_id=authorization_id,
     )
 
 
@@ -161,19 +122,4 @@ def build_get_one_off_vendor_retirement_use_case(*, session: Session) -> GetOneO
     return GetOneOffVendorRetirementUseCase(
         review_reader=SqlAlchemyReviewRepository(session),
         retirement_reader=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
-    )
-
-
-def build_recover_one_off_vendor_retirement_workflow(
-    *, session: Session, settings: Settings, odoo_client: OdooJson2Client | None = None
-) -> RecoverOneOffVendorRetirementWorkflow:
-    return RecoverOneOffVendorRetirementWorkflow(
-        status_reader=build_get_one_off_vendor_retirement_use_case(session=session),
-        archive_use_case_factory=lambda *, approved_by, authorization_id=None: build_archive_one_off_vendor_use_case(
-            session=session,
-            settings=settings,
-            odoo_client=odoo_client,
-            approved_by=approved_by,
-            authorization_id=authorization_id,
-        ),
     )

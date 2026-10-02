@@ -448,79 +448,23 @@ def test_dry_run_heterogeneous_plan_still_uses_no_write_foundation(session: Sess
     assert result.status is AcceptedDecisionExecutionStatus.DRY_RUN_COMPLETED
 
 
-class _SpyOneOffVendorRetirementTrigger:
-    """Structural double for OneOffVendorRetirementTrigger (P0-PROD-08I) -- records
-    every call without touching any real persistence or Odoo port."""
+def test_accepted_decision_execution_has_no_one_off_vendor_retirement_hook() -> None:
+    """The P0-PROD-08I post-Vendor-Bill retirement hook is retired: a successful Vendor
+    Bill can never archive the supplier's partner, because the use case no longer
+    accepts (or calls) any retirement trigger at all."""
 
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, int]] = []
+    import inspect
 
-    def try_retire_after_execution(self, *, review_id: str, company_id: int):
-        self.calls.append((review_id, company_id))
-        return None
-
-
-def test_one_off_vendor_retirement_trigger_invoked_after_successful_execute(session: Session) -> None:
-    """P0-PROD-08I: the narrow post-Vendor-Bill retirement hook fires only after the
-    runtime coordinator has already durably persisted a successful EXECUTE-mode run."""
-
-    repository = SqlAlchemyExecutionRuntimeRepository(session)
-    writer = RecordingVendorBillWriter(
-        result=VendorBillWriteResult(status="created", idempotency_key="unused", external_id=9001)
-    )
-    trigger = _SpyOneOffVendorRetirementTrigger()
-    result = RunAcceptedDecisionExecutionUseCase(
-        unit_of_work=SqlAlchemyUnitOfWork(session),
-        accepted_decision_reader=StaticAcceptedDecisionReader(_accepted_decision()),
-        execution_planner=execution_exports.ExecutionPlanner(),
-        runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),
-        runtime_coordinator=ExecutionRuntimeCoordinator(
-            runtime_repository=repository,
-            event_repository=repository,
-            strategy_resolver=ExecutionStrategyResolver((_strategy(writer=writer),)),
-        ),
-        runtime_repository=repository,
-        retry_policy_resolver=StaticRetryPolicyResolver(ExecutionRetryPolicy.never()),
-        execution_preflight=ExecutionPreflightPolicy(production_execution_enabled=True),
-        one_off_vendor_retirement_trigger=trigger,
-    ).execute(_command(mode=ExecutionMode.EXECUTE, approved_by="finance.lead"))
-
-    assert result.status is AcceptedDecisionExecutionStatus.EXECUTED
-    assert trigger.calls == [("review-1", 7)]
+    parameters = inspect.signature(RunAcceptedDecisionExecutionUseCase.__init__).parameters
+    assert "one_off_vendor_retirement_trigger" not in parameters
+    source = Path("app/application/execution/accepted_decision_use_cases.py").read_text(encoding="utf-8")
+    assert "try_retire_after_execution" not in source
+    composition = Path("app/composition/execution.py").read_text(encoding="utf-8")
+    assert "archive" not in composition.lower()
 
 
-def test_one_off_vendor_retirement_trigger_never_invoked_for_dry_run(session: Session) -> None:
-    """A DRY_RUN never creates a real durable Vendor Bill -- the retirement hook must
-    never even be consulted for one."""
-
-    from app.application.execution import foundation_no_write_strategy_resolver
-
-    repository = SqlAlchemyExecutionRuntimeRepository(session)
-    trigger = _SpyOneOffVendorRetirementTrigger()
-    result = RunAcceptedDecisionExecutionUseCase(
-        unit_of_work=SqlAlchemyUnitOfWork(session),
-        accepted_decision_reader=StaticAcceptedDecisionReader(
-            _accepted_decision_for_steps((ExecutionStepType.VENDOR_BILL, ExecutionStepType.CUSTOMER_RECHARGE))
-        ),
-        execution_planner=execution_exports.ExecutionPlanner(),
-        runtime_service=ExecutionRuntimeService(runtime_repository=repository, event_repository=repository),
-        runtime_coordinator=ExecutionRuntimeCoordinator(
-            runtime_repository=repository,
-            event_repository=repository,
-            strategy_resolver=foundation_no_write_strategy_resolver(),
-        ),
-        runtime_repository=repository,
-        retry_policy_resolver=StaticRetryPolicyResolver(),
-        one_off_vendor_retirement_trigger=trigger,
-    ).execute(_command(mode=ExecutionMode.DRY_RUN))
-
-    assert result.status is AcceptedDecisionExecutionStatus.DRY_RUN_COMPLETED
-    assert trigger.calls == []
-
-
-def test_one_off_vendor_retirement_trigger_defaults_to_none_and_execute_is_unaffected(session: Session) -> None:
-    """When not wired (the default), EXECUTE behaves exactly as it did before this
-    hook existed -- no attribute error, no behavior change."""
+def test_successful_execute_without_any_retirement_hook(session: Session) -> None:
+    """EXECUTE behaves exactly as before the (now retired) retirement hook existed."""
 
     repository = SqlAlchemyExecutionRuntimeRepository(session)
     writer = RecordingVendorBillWriter(

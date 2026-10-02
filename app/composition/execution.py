@@ -25,7 +25,6 @@ from app.application.execution.contracts import ExecutionStepType
 from app.application.execution.resale_execution_accounting import ResaleExecutionAccountingValidator
 from app.application.execution.vendor_bill_preview import PreviewVendorBillExpectationReader, PreviewVendorBillUseCase
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
-from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
 from app.application.workbench.vendor_bill_readback import (
     GetVendorBillReadbackUseCase,
     VendorBillMonetaryReadbackVerifier,
@@ -34,7 +33,6 @@ from app.application.workbench.vendor_bill_readback import (
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.composition.imports import build_runtime_workbench_projection_synchronizer
 from app.composition.purchase_account_discovery import build_get_product_purchase_account_use_case
-from app.composition.supplier_remediation import build_archive_one_off_vendor_use_case
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.account_move_line_verification_reader import OdooAccountMoveLineVerificationReader
@@ -65,7 +63,6 @@ from app.persistence import (
     SqlAlchemyExecutionSourceInvoiceReader,
     SqlAlchemyQuotationScenarioEvidenceRepository,
     SqlAlchemyReviewExecutionEvidenceReader,
-    SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewPurchasePurposeResolutionRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyUnitOfWork,
@@ -127,18 +124,6 @@ def build_vendor_bill_execution_use_case(
             ),
         )
     )
-    # P0-PROD-08I: the narrow, best-effort post-Vendor-Bill ONE_OFF_VENDOR retirement
-    # hook. Reuses the exact same gated archive-last orchestration composed for the
-    # (currently unwired) manual archive path -- no separate authorization surface.
-    retirement_trigger = OneOffVendorRetirementTrigger(
-        retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
-        archive_use_case=build_archive_one_off_vendor_use_case(
-            session=session,
-            settings=settings,
-            odoo_client=odoo_client,
-            approved_by="system:vendor-bill-execution",
-        ),
-    )
     return RunAcceptedDecisionExecutionUseCase(
         unit_of_work=SqlAlchemyUnitOfWork(session),
         accepted_decision_reader=review_repository,
@@ -167,7 +152,6 @@ def build_vendor_bill_execution_use_case(
             staging_execution_step_types=((ExecutionStepType.VENDOR_BILL,) if staging_vendor_bill_execute else ()),
         ),
         accepted_billing_evidence_reader=accepted_billing_reader,
-        one_off_vendor_retirement_trigger=retirement_trigger,
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
     )
 
