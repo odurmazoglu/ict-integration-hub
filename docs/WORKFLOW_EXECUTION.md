@@ -299,10 +299,12 @@ makes the outcome durable across sessions and request closure.
 Unexpected exceptions or commit failures trigger application rollback and propagate;
 no pending partial Hub outcome may be reported as durably completed. Eligibility
 and preflight rejections create no runtime state. Completed replay reads existing
-committed artifacts and never executes the writer again. Optional ONE_OFF_VENDOR
-retirement has its own existing transaction sequence **after** execution commit;
-Workbench projection is also post-commit. Neither is part of the atomic execution
-outcome, and expected projection failures preserve the committed successful result.
+committed artifacts and never executes the writer again. Workbench projection is
+post-commit; it is not part of the atomic execution outcome, and expected projection
+failures preserve the committed successful result. (The former post-execution
+ONE_OFF_VENDOR retirement/archive follow-up is retired -- see
+`docs/PARTNER_CLASSIFICATION.md`; a successful Vendor Bill never touches the
+supplier's partner.)
 
 This is Hub atomicity only. Odoo draft creation and Hub commit cannot be one atomic
 transaction. If remote creation succeeds and Hub finalization/commit fails, stop

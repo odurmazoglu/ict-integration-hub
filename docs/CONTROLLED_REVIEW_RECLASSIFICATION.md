@@ -113,6 +113,13 @@ generic matcher. It is opt-in per composition root
 one review's own accepted effect -- never another review's, another
 company's, or an inactive partner with no recorded effect at all.
 
+**Expense-vendor redesign update:** new ONE_OFF_VENDOR partners are classified
+`expense_vendor` and stay active, so the raw matcher finds them and this
+substitution is no longer needed for them; an archived exact-VAT partner now fails
+closed in the writer instead of being reused. The substitution itself is kept
+unchanged for historical reviews and MATCH_EXISTING ambiguity -- see
+`docs/PARTNER_CLASSIFICATION.md`.
+
 For the intended pilot-equivalent state, Stage 1 contains a matched supplier,
 `PRODUCT_NOT_FOUND` for line 1 and a matched purchase VAT 20% tax. It contains no
 operator `account_only`, `selected_product_id`, or selected `expense_account_id`.
