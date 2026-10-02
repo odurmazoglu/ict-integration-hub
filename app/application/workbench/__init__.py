@@ -109,15 +109,8 @@ from app.application.workbench.odoo_submission_use_cases import (
     SubmitOdooWorkbenchCandidateUseCase,
 )
 from app.application.workbench.one_off_vendor_retirement import (
-    ArchiveOneOffVendorCommand,
-    ArchiveOneOffVendorResult,
-    ArchiveOneOffVendorStatus,
     OneOffVendorRetirement,
     OneOffVendorRetirementStatus,
-)
-from app.application.workbench.one_off_vendor_use_cases import (
-    ArchiveOneOffVendorUseCase,
-    OneOffVendorRetirementTrigger,
 )
 from app.application.workbench.operating_expense_mapping_command import (
     OperatingExpenseMappingSubmissionResult,
@@ -204,10 +197,6 @@ __all__ = [
     "AllocationCompleteness",
     "AnalyticAccountReference",
     "AnalyticAccountReferenceRepository",
-    "ArchiveOneOffVendorCommand",
-    "ArchiveOneOffVendorResult",
-    "ArchiveOneOffVendorStatus",
-    "ArchiveOneOffVendorUseCase",
     "BusinessContextDecision",
     "BusinessContextAllocation",
     "BusinessContextAllocationSet",
@@ -237,7 +226,6 @@ __all__ = [
     "OdooWorkbenchSubmissionStatus",
     "OneOffVendorRetirement",
     "OneOffVendorRetirementStatus",
-    "OneOffVendorRetirementTrigger",
     "OperatingExpenseMappingAccountInvalidError",
     "OperatingExpenseMappingEligibilityError",
     "OperatingExpenseMappingSubmissionResult",

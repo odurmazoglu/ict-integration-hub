@@ -545,7 +545,7 @@ class CreateNewProductUseCase:
             # (master kill switch, approval ack, named approver) failed despite a
             # valid authorization; none of those are fixed by retrying with the same
             # authorization, but the authorization itself must remain usable once the
-            # real misconfiguration is fixed (mirrors ArchiveOneOffVendorUseCase).
+            # real misconfiguration is fixed (the same discipline the retired ONE_OFF_VENDOR archive use case used).
             self._unit_of_work.rollback()
             self._reservation_writer.advance(
                 attempted,

@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from app.application.dto.base import ApplicationDTO
 from app.application.exceptions.supplier_partner import SupplierPartnerDataIntegrityError
+from app.application.partner_classification import PartnerClassificationOutcome
 
 
 class SupplierPartnerWriteStatus(StrEnum):
@@ -32,6 +33,11 @@ class SupplierPartnerWriteResult(ApplicationDTO):
     name_mismatch: bool = False
     safe_message: str | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    #: How the partner's ICT business classification was handled by this write: set on
+    #: create, or evaluated (never changed) for an existing exact-VAT partner.
+    classification_outcome: PartnerClassificationOutcome | None = None
+    #: The classification value observed on the partner after this write (``None`` if empty).
+    classification_value: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, SupplierPartnerWriteStatus):
@@ -40,4 +46,8 @@ class SupplierPartnerWriteResult(ApplicationDTO):
             raise SupplierPartnerDataIntegrityError("partner_id must be a positive Odoo id.")
         if type(self.company_id) is not int or self.company_id <= 0:
             raise SupplierPartnerDataIntegrityError("company_id must be positive.")
+        if self.classification_outcome is not None and not isinstance(
+            self.classification_outcome, PartnerClassificationOutcome
+        ):
+            raise SupplierPartnerDataIntegrityError("A canonical partner classification outcome is required.")
         object.__setattr__(self, "warnings", tuple(self.warnings))

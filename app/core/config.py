@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     odoo_purchase_journal_id: int | None = None
     odoo_purchase_journal_code: str | None = None
     odoo_workbench_projection_publish_enabled: bool = False
+    #: Pre-existing Odoo Studio selection field on ``res.partner`` holding ICT's business
+    #: relationship classification (production: ``x_studio_musteri_tipi``). Unset means
+    #: every Hub supplier-partner create fails closed -- the Hub never relies on an Odoo
+    #: ``ir.default`` and never creates Studio schema.
+    odoo_partner_classification_field: str | None = None
     #: Exact Odoo ``product.category`` ids approved for RESALE (P0-PROD-18E-1A). Empty means
     #: no category is approved. Never hierarchical: approving a parent approves no child.
     #: Holds category ids only -- the purchase account stays Odoo's category configuration.

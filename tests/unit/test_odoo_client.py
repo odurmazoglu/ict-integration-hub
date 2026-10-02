@@ -301,16 +301,12 @@ async def test_write_account_move_uses_vendor_bill_write_route() -> None:
     assert await client.write_account_move(record_id=901, values={"ref": "INV-1001"}) is True
 
 
-async def test_archive_res_partner_sends_only_active_false_with_vals() -> None:
-    async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/json/2/res.partner/write"
-        payload = json.loads(request.content)
-        assert payload == {"ids": [448], "vals": {"active": False}}
-        assert "values" not in payload
-        assert "unlink" not in request.url.path
-        return httpx.Response(200, json=True)
+def test_client_has_no_res_partner_archive_or_update_capability() -> None:
+    """The ONE_OFF_VENDOR archive-only write was retired: the client exposes no
+    res.partner update of any kind (only the gated supplier-partner create)."""
 
-    assert await _client(handler).archive_res_partner(partner_id=448) is True
+    assert not hasattr(OdooJson2Client, "archive_res_partner")
+    assert not any("res_partner" in name and "create" not in name for name in dir(OdooJson2Client))
 
 
 @pytest.mark.parametrize(

@@ -72,7 +72,6 @@ from app.application.workbench.purchase_purpose import (
 from app.application.workbench.purchase_purpose_use_cases import SubmitPurchasePurposeUseCase
 from app.application.workbench.retirement_recovery import (
     GetOneOffVendorRetirementUseCase,
-    RecoverOneOffVendorRetirementWorkflow,
 )
 from app.application.workbench.review_evidence import ReviewEvidenceReader
 from app.application.workbench.supplier_remediation import (
@@ -115,7 +114,6 @@ from app.composition.purchase_purpose_and_accounting_resolution import (
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.composition.supplier_remediation import (
     build_get_one_off_vendor_retirement_use_case,
-    build_recover_one_off_vendor_retirement_workflow,
 )
 from app.composition.write_authorization import (
     build_create_write_authorization_use_case,
@@ -769,15 +767,6 @@ def get_one_off_vendor_retirement_use_case(session: DbSessionDep) -> GetOneOffVe
     return build_get_one_off_vendor_retirement_use_case(session=session)
 
 
-def get_recover_one_off_vendor_retirement_workflow(
-    session: DbSessionDep, settings: SettingsDep
-) -> RecoverOneOffVendorRetirementWorkflow:
-    return build_recover_one_off_vendor_retirement_workflow(session=session, settings=settings)
-
-
 OneOffVendorRetirementUseCaseDep = Annotated[
     GetOneOffVendorRetirementUseCase, Depends(get_one_off_vendor_retirement_use_case)
-]
-RecoverOneOffVendorRetirementWorkflowDep = Annotated[
-    RecoverOneOffVendorRetirementWorkflow, Depends(get_recover_one_off_vendor_retirement_workflow)
 ]

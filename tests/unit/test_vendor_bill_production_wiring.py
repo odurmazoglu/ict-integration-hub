@@ -752,12 +752,32 @@ def test_normal_api_rolls_back_entire_hub_outcome_on_unexpected_failure(
         )
 
 
-def test_runtime_is_committed_before_retirement_and_projection(
+def test_runtime_is_committed_before_projection_and_never_retires_the_partner(
     transaction_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.application.workbench.exceptions import WorkbenchProjectionPublishError
-    from app.application.workbench.one_off_vendor_use_cases import OneOffVendorRetirementTrigger
+    from app.application.workbench.one_off_vendor_retirement import (
+        OneOffVendorRetirement,
+        OneOffVendorRetirementStatus,
+    )
+    from app.models.workbench_review_one_off_vendor_retirement import WorkbenchReviewOneOffVendorRetirement
+    from app.persistence import SqlAlchemyReviewOneOffVendorRetirementRepository
+
+    # A historical (pre-redesign) pending ONE_OFF_VENDOR retirement row for this very
+    # review: the successful Vendor Bill below must leave it -- and the supplier's own
+    # partner -- untouched. The archive-after-Vendor-Bill follow-up is retired.
+    with Session(transaction_engine) as seed:
+        SqlAlchemyReviewOneOffVendorRetirementRepository(seed).create_retirement(
+            OneOffVendorRetirement(
+                review_id="review-1",
+                company_id=7,
+                review_version=1,
+                resolved_partner_id=1001,
+                status=OneOffVendorRetirementStatus.PENDING_VENDOR_BILL,
+            )
+        )
+        seed.commit()
     from app.erp.odoo.workbench_projection_publisher import (
         OdooWorkbenchProjectionFieldMapping,
         OdooWorkbenchProjectionPublisher,
@@ -790,21 +810,25 @@ def test_runtime_is_committed_before_retirement_and_projection(
             assert snapshot.steps[0].last_result.produced_artifacts[0].artifact_id == "9001"
         observed.append(label)
 
-    def retirement(self, **kwargs):
-        assert_durable("retirement")
-
     def projection(self, projection, **kwargs):
         assert_durable("projection")
         raise WorkbenchProjectionPublishError("Injected projection failure")
 
-    monkeypatch.setattr(OneOffVendorRetirementTrigger, "try_retire_after_execution", retirement)
     monkeypatch.setattr(OdooWorkbenchProjectionPublisher, "sync_projection", projection)
     settings = _execute_settings().model_copy(update={"odoo_workbench_projection_publish_enabled": True})
-    with _normal_execution_api(monkeypatch, transaction_engine, FakeOdooVendorBillClient(), settings=settings) as api:
+    odoo = FakeOdooVendorBillClient()
+    with _normal_execution_api(monkeypatch, transaction_engine, odoo, settings=settings) as api:
         response = _api_execute(api)
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "executed"
-    assert observed == ["retirement", "projection"]
+    assert observed == ["projection"]
+    # The Vendor Bill is booked on the actual supplier-specific partner...
+    assert [call["partner_id"] for call in odoo.create_calls] == [1001]
+    # ...and no res.partner archive (or any partner write) capability was reached.
+    assert not hasattr(odoo, "archive_res_partner")
+    with Session(transaction_engine) as independent:
+        rows = independent.scalars(select(WorkbenchReviewOneOffVendorRetirement)).all()
+        assert [(row.resolved_partner_id, row.status) for row in rows] == [(1001, "pending_vendor_bill")]
 
 
 # P0-PROD-09D1: use the normal request/application transaction and writer identity.

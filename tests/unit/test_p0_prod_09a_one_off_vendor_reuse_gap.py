@@ -1,22 +1,16 @@
-"""P0-PROD-09A discovered a real gap: a later invoice from a VAT that already went
-through the ONE_OFF_VENDOR archive-last lifecycle once could not be resolved at all.
+"""Repeat-VAT reconstruction of the D-Market case (P0-PROD-09A/09C), updated for the
+expense-vendor redesign.
 
-P0-PROD-09C fixes it. This file, exercised through the REAL Odoo writer (not a fake
-that abstracts the active-flag check away), now proves the FIXED behavior: an
-archived exact-VAT partner IS reused when -- and only when -- Hub persistence proves
-it was previously created via ONE_OFF_VENDOR for this exact partner id.
+History: P0-PROD-09A proved a later invoice from a VAT whose Hub-owned ONE_OFF_VENDOR
+partner (448) had been archived could not be resolved; P0-PROD-09C then let the writer
+reuse such an *archived* Hub-owned partner and re-archive it after the next Vendor Bill.
 
-History: ``test_f_one_off_vendor_reuses_existing_hub_owned_archived_partner`` in
-``test_supplier_remediation_orchestration.py`` always asserted this reuse succeeds,
-but it was wired against ``_FakeSupplierPartnerWriter`` -- a fake that unconditionally
-returns ``ALREADY_EXISTS`` for any VAT match, regardless of the ``active`` flag. It
-never modeled ``OdooSupplierPartnerWriter._already_exists_result``'s real behaviour
-(``app/erp/write/odoo_supplier_partner_writer.py``), which -- before P0-PROD-09C --
-raised ``SupplierPartnerInactiveError`` for *any* inactive exact-VAT match, Hub-owned
-or not, before ``_create_or_reuse_one_off_vendor_partner``'s own ownership check ever
-ran. This test (originally added in P0-PROD-09A) proved that gap empirically; it is
-kept and updated here rather than deleted, since it is still the only real-writer-backed
-reconstruction of the exact D-Market shape.
+The expense-vendor redesign retires that archived-reuse path together with the archive
+lifecycle itself: a ONE_OFF_VENDOR supplier's own partner now stays active permanently
+(classified ``expense_vendor``), so the normal deterministic matcher finds it again and
+no reuse path is needed. A *historical* archived partner is no longer silently adopted
+-- it fails closed, and an operator reactivates it explicitly in Odoo (runbook:
+docs/PARTNER_CLASSIFICATION.md), after which the deterministic matcher resolves it.
 
 This module makes zero real Odoo writes and zero production calls -- it is a pure
 in-memory SQLite unit test using the real application/erp-write classes, with a fake
@@ -36,14 +30,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.application.exceptions.supplier_partner import SupplierPartnerInactiveError
 from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
-from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import ReviewReclassificationResult
 from app.application.workbench.supplier_remediation import (
     ResolveWorkbenchSupplierCommand,
     SupplierPartnerWriteEffectStatus,
     SupplierRemediationEffect,
-    SupplierRemediationStatus,
 )
 from app.application.workbench.supplier_remediation_use_cases import ResolveWorkbenchSupplierUseCase
 from app.application.workbench.supplier_resolution import ResolutionPartnerRecord, SupplierResolutionMode
@@ -52,6 +44,7 @@ from app.application.workflow import ManualReviewReason, ManualReviewReasonCode,
 from app.db.base import Base
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.erp.write.odoo_supplier_partner_writer import (
+    OdooPartnerClassificationFieldConfig,
     OdooSupplierPartnerRepository,
     OdooSupplierPartnerWritePolicy,
     OdooSupplierPartnerWriter,
@@ -72,6 +65,7 @@ PRIOR_REVIEW_ID = "review:prior-one-off-archived"
 NEW_REVIEW_ID = "review:new-invoice-same-vat"
 ARCHIVED_PARTNER_ID = 448
 ACTOR = "finance.operator"
+FIELD = "x_studio_musteri_tipi"
 
 
 class _FakeOdooJson2ClientReturningArchivedPartner:
@@ -95,8 +89,15 @@ class _FakeOdooJson2ClientReturningArchivedPartner:
                 "vat": VKN,
                 "active": False,
                 "company_id": [COMPANY_ID, "ICT Teknoloji"],
+                FIELD: "customer",
             }
         ]
+
+    async def read_model_field_metadata(self, *, model: str, field_name: str):
+        return [{"name": field_name, "ttype": "selection"}]
+
+    async def read_field_selection_values(self, *, model: str, field_name: str):
+        return ("customer", "prospect", "vendor", "partner", "Karma", "expense_vendor")
 
 
 def _real_writer() -> tuple[OdooSupplierPartnerWriter, _FakeOdooJson2ClientReturningArchivedPartner]:
@@ -106,7 +107,11 @@ def _real_writer() -> tuple[OdooSupplierPartnerWriter, _FakeOdooJson2ClientRetur
         app_env="staging",
         odoo_host="test-ictteknoloji.odoo.com",
     )
-    writer = OdooSupplierPartnerWriter(repository=OdooSupplierPartnerRepository(client=client), policy=policy)
+    writer = OdooSupplierPartnerWriter(
+        repository=OdooSupplierPartnerRepository(client=client),
+        policy=policy,
+        classification_config=OdooPartnerClassificationFieldConfig(field_name=FIELD),
+    )
     return writer, client
 
 
@@ -330,57 +335,31 @@ def _command() -> ResolveWorkbenchSupplierCommand:
     )
 
 
-async def test_next_invoice_same_vat_as_archived_hub_owned_partner_is_reused_not_blocked(
+async def test_next_invoice_same_vat_as_archived_hub_owned_partner_now_fails_closed(
     session: Session,
 ) -> None:
-    """P0-PROD-09C fix: the exact D-Market-shaped repeat-VAT scenario, through the REAL
-    writer. A brand-new review, same company, same VAT, resolved with
-    ``SupplierResolutionMode.ONE_OFF_VENDOR`` now reuses the archived, Hub-owned
-    partner 448 -- no duplicate partner, no reactivation write, a fresh
-    review-specific SupplierRemediationEffect and PENDING_VENDOR_BILL retirement row.
-    """
+    """The exact D-Market-shaped repeat-VAT scenario, through the REAL writer, after the
+    redesign: the archived Hub-owned partner 448 is NOT silently reused (the 09C
+    archived-reuse override is retired), no partner is created, and no effect or
+    retirement row is written for the new review. An operator reactivates 448
+    explicitly; the deterministic matcher then resolves later invoices on its own."""
 
     effect_repo = _seed_prior_one_off_vendor_effect(session)
     writer, client = _real_writer()
     use_case = _new_review_use_case(session, effect_repo=effect_repo, writer=writer)
 
-    result = await use_case.execute(_command())
+    with pytest.raises(SupplierPartnerInactiveError) as exc_info:
+        await use_case.execute(_command())
 
-    assert result.status is SupplierRemediationStatus.RESOLVED
-    assert result.effective_partner_id == ARCHIVED_PARTNER_ID
-    assert result.partner_write_status is SupplierPartnerWriteEffectStatus.ALREADY_EXISTS
-    assert result.one_off_vendor_hub_owned is True
-    assert result.one_off_vendor_retirement_status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
-
-    # No duplicate partner was ever attempted.
+    assert "reactivate" in exc_info.value.safe_message
     assert client.create_calls == []
-
-    # A fresh, review-specific effect and retirement row exist for the NEW review,
-    # both pointing at the SAME reused partner id -- the prior review's own rows are
-    # untouched.
-    new_effect = effect_repo.find_remediation_effect(review_id=NEW_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    assert new_effect is not None
-    assert new_effect.resolved_partner_id == ARCHIVED_PARTNER_ID
-    assert new_effect.mode is SupplierResolutionMode.ONE_OFF_VENDOR
-
-    retirement_repo = SqlAlchemyReviewOneOffVendorRetirementRepository(session)
-    new_retirement = retirement_repo.find(review_id=NEW_REVIEW_ID, company_id=COMPANY_ID, review_version=1)
-    assert new_retirement is not None
-    assert new_retirement.resolved_partner_id == ARCHIVED_PARTNER_ID
-    assert new_retirement.status is OneOffVendorRetirementStatus.PENDING_VENDOR_BILL
-
-    prior_retirement_count = (
-        session.query(WorkbenchReviewOneOffVendorRetirement).filter_by(review_id=PRIOR_REVIEW_ID).count()
-    )
-    assert prior_retirement_count == 0  # the prior review never had its own retirement row in this fixture
-
-    assert session.query(WorkbenchReviewSupplierRemediationEffect).filter_by(review_id=NEW_REVIEW_ID).count() == 1
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).filter_by(review_id=NEW_REVIEW_ID).count() == 0
+    assert session.query(WorkbenchReviewOneOffVendorRetirement).count() == 0
 
 
 async def test_inactive_non_hub_owned_exact_vat_still_fails_closed_after_the_fix(session: Session) -> None:
-    """Case B is unaffected by the P0-PROD-09C fix: an inactive exact-VAT match with NO
-    prior ONE_OFF_VENDOR effect still fails closed -- the fix only widens reuse to the
-    proven-owned case, never to an arbitrary archived partner."""
+    """An inactive exact-VAT match with NO prior ONE_OFF_VENDOR effect fails closed too --
+    exactly as it always has."""
 
     # No prior effect is seeded at all -- the Hub has never heard of partner 448.
     effect_repo = SqlAlchemyReviewSupplierRemediationEffectRepository(session)

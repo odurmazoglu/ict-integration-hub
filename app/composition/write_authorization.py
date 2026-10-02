@@ -7,7 +7,6 @@ from app.application.workbench.write_authorization_use_cases import (
 )
 from app.persistence import (
     SqlAlchemyExecutionSourceInvoiceReader,
-    SqlAlchemyReviewOneOffVendorRetirementRepository,
     SqlAlchemyReviewRepository,
     SqlAlchemyUnitOfWork,
     SqlAlchemyWriteAuthorizationRepository,
@@ -20,7 +19,6 @@ def build_create_write_authorization_use_case(*, session: Session) -> CreateWrit
         review_reader=reviews,
         accepted_decision_reader=reviews,
         source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
-        retirement_reader=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
         repository=SqlAlchemyWriteAuthorizationRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
     )

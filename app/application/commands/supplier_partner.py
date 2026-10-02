@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.application.commands.base import Command
 from app.application.exceptions.supplier_partner import SupplierPartnerWriteValidationError
+from app.application.partner_classification import SupplierPartnerClassification
 
 if TYPE_CHECKING:
     # Deferred: app.application.workbench's package __init__ eagerly imports use
@@ -28,15 +28,16 @@ class CreateSupplierPartnerCommand(Command):
     the immutable ``ReviewSourceInvoiceEvidence`` for the review, never from HTTP
     client input.
 
-    ``authorize_inactive_reuse`` (P0-PROD-09C) is an optional, caller-supplied
-    predicate consulted ONLY when the exact-VAT lookup finds exactly one existing
-    but *inactive* (archived) partner. The writer itself carries no notion of "Hub
-    ownership" -- that is application/domain knowledge -- so by default (``None``,
-    every caller except ONE_OFF_VENDOR reuse) an inactive exact-VAT match still
-    fails closed exactly as before. Only ``ResolveWorkbenchSupplierUseCase``'s
-    ONE_OFF_VENDOR path supplies a predicate, and only after checking its own
-    ``SupplierRemediationEffect`` ownership ledger -- the writer never infers
-    ownership itself, it only asks the question the caller hands it.
+    ``classification`` is the ICT business-relationship classification the new
+    partner is created with (``vendor`` for CREATE_PERMANENT_SUPPLIER,
+    ``expense_vendor`` for ONE_OFF_VENDOR). It is applied only when this command
+    creates the partner; an existing exact-VAT partner's classification is never
+    changed (see ``app.application.partner_classification``).
+
+    An archived (inactive) exact-VAT match always fails closed. The former
+    P0-PROD-09C caller-supplied archived-reuse predicate was retired together with
+    the ONE_OFF_VENDOR archive lifecycle: a Hub-written supplier now stays active, and
+    reactivating a historically archived partner is an explicit operator action.
 
     ``authorization`` (P0-PROD-09F) is an optional, already-claimed-and-consumed
     ``WriteAuthorizationRecord`` for this exact write. When present, it lets
@@ -51,8 +52,8 @@ class CreateSupplierPartnerCommand(Command):
     supplier_name: str
     supplier_tax_number: str
     idempotency_key: str
+    classification: SupplierPartnerClassification
     approved_by: str | None = None
-    authorize_inactive_reuse: Callable[[int], bool] | None = None
     authorization: WriteAuthorizationRecord | None = None
 
     def __post_init__(self) -> None:
@@ -64,5 +65,7 @@ class CreateSupplierPartnerCommand(Command):
             raise SupplierPartnerWriteValidationError("supplier_tax_number is required.")
         if not isinstance(self.idempotency_key, str) or not self.idempotency_key.strip():
             raise SupplierPartnerWriteValidationError("idempotency_key is required.")
+        if not isinstance(self.classification, SupplierPartnerClassification):
+            raise SupplierPartnerWriteValidationError("A canonical SupplierPartnerClassification is required.")
         if self.approved_by is not None and (not isinstance(self.approved_by, str) or not self.approved_by.strip()):
             raise SupplierPartnerWriteValidationError("approved_by must be a non-empty name when provided.")

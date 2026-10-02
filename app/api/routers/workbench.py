@@ -19,7 +19,6 @@ from app.api.dependencies import (
     ListWriteAuthorizationsUseCaseDep,
     OneOffVendorRetirementUseCaseDep,
     RebuildReviewExecutionEvidenceUseCaseDep,
-    RecoverOneOffVendorRetirementWorkflowDep,
     RequestContextDep,
     ResolveWorkbenchSupplierUseCaseDep,
     RevokeWriteAuthorizationUseCaseDep,
@@ -42,6 +41,7 @@ from app.application.exceptions.product_remediation import (
     SupplierInfoWriteError,
 )
 from app.application.exceptions.supplier_partner import (
+    SupplierPartnerClassificationUnavailableError,
     SupplierPartnerWriteError,
     SupplierPartnerWriteSafetyGateError,
 )
@@ -70,6 +70,7 @@ from app.application.expense_mapping import (
     OperatingExpenseMappingDataIntegrityError,
     OperatingExpenseMappingError,
 )
+from app.application.partner_classification import ATTENTION_OUTCOMES
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceResult
 from app.application.workbench import (
     BusinessContextAllocation,
@@ -102,6 +103,7 @@ from app.application.workbench.exceptions import (
     ExecutionEvidenceRecoveryError,
     ExecutionEvidenceRecoveryMismatchError,
     ExecutionEvidenceRecoverySourceMissingError,
+    OneOffVendorArchiveRetiredError,
     OperatingExpenseMappingAccountInvalidError,
     OperatingExpenseMappingEligibilityError,
     OperatingExpenseMappingSupplierUnresolvedError,
@@ -144,7 +146,7 @@ from app.application.workbench.exceptions import (
 from app.application.workbench.execution_evidence_recovery import RebuildExecutionEvidenceCommand
 from app.application.workbench.execution_status import WorkbenchExecutionStatus
 from app.application.workbench.expense_account_lookup import ListExpenseAccountCandidatesQuery
-from app.application.workbench.one_off_vendor_retirement import ArchiveOneOffVendorCommand, OneOffVendorRetirementStatus
+from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirementStatus
 from app.application.workbench.operating_expense_mapping_command import SubmitOperatingExpenseMappingCommand
 from app.application.workbench.product_remediation import CreateNewProductCommand, ProductRemediationStatus
 from app.application.workbench.purchase_account_discovery import (
@@ -198,9 +200,6 @@ from app.schemas.workbench import (
     LineResolutionRequest,
     ManualReviewReasonResponse,
     OneOffVendorRetirementEnvelope,
-    OneOffVendorRetirementRecoveryEnvelope,
-    OneOffVendorRetirementRecoveryRequest,
-    OneOffVendorRetirementRecoveryResponse,
     OneOffVendorRetirementResponse,
     OperatingExpenseMappingEnvelope,
     OperatingExpenseMappingRequest,
@@ -689,16 +688,17 @@ def submit_review_decision(
     description=(
         "Requires workbench_review_decide. For a review whose reasons include SUPPLIER_NOT_FOUND, records an "
         "explicit resolution -- MATCH_EXISTING (select an existing partner), CREATE_PERMANENT_SUPPLIER (create a "
-        "normal ongoing ICT supplier), ONE_OFF_VENDOR (create/reuse a Hub-owned partner for a single one-off "
-        "purchase, retired once a Vendor Bill durably succeeds -- see one_off_vendor_retirement_status in the "
-        "response), or USE_ONE_OFF_SUPPLIER (record intent only; deferred) -- and triggers the non-destructive "
+        "normal ongoing ICT supplier, classified 'vendor'), ONE_OFF_VENDOR (create/reuse the supplier's own "
+        "Hub-owned partner, classified 'expense_vendor' on create and kept active for reuse -- never archived), "
+        "or USE_ONE_OFF_SUPPLIER (record intent only; deferred) -- and triggers the non-destructive "
         "SUPPLIER_RESOLUTION reclassification. Legal supplier identity (name, VAT) always comes only from the "
         "review's immutable source evidence -- never the request body; the request only selects the mode. "
         "CREATE_PERMANENT_SUPPLIER and ONE_OFF_VENDOR are both gated by SUPPLIER_REMEDIATION_WRITE_ENABLED, or by "
         "an optional authorization_id from a pre-issued narrow write authorization scoped to exactly this "
         "review/version/operation (see the write-authorizations endpoint) -- either way the master production "
-        "kill switch and named-approver checks remain absolute. This endpoint never executes a Vendor Bill and "
-        "never archives a partner."
+        "kill switch and named-approver checks remain absolute. An existing partner's classification is never "
+        "changed: partner_classification_outcome reports it and a warning is returned when it is not the intended "
+        "one. This endpoint never executes a Vendor Bill and never archives a partner."
     ),
 )
 async def resolve_review_supplier(
@@ -726,7 +726,7 @@ async def resolve_review_supplier(
             response,
             context.trace_id,
             _supplier_remediation_response(result),
-            warnings=[],
+            warnings=_supplier_classification_warnings(result),
         )
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
@@ -986,6 +986,16 @@ def _product_remediation_response(result) -> ProductRemediationResponse:
     )
 
 
+def _supplier_classification_warnings(result) -> list[str]:
+    if result.partner_classification_outcome not in ATTENTION_OUTCOMES:
+        return []
+    return [
+        "The Odoo partner's ICT classification is "
+        f"{result.partner_classification_value or 'empty'!r} and was preserved, not changed "
+        f"({result.partner_classification_outcome}); an operator should review it in Odoo."
+    ]
+
+
 def _supplier_remediation_response(result) -> SupplierRemediationResponse:
     retirement_status = result.one_off_vendor_retirement_status
     return SupplierRemediationResponse(
@@ -1014,6 +1024,8 @@ def _supplier_remediation_response(result) -> SupplierRemediationResponse:
             if retirement_status is not None
             else None
         ),
+        partner_classification_outcome=result.partner_classification_outcome,
+        partner_classification=result.partner_classification_value,
         safe_message=result.safe_message,
     )
 
@@ -1742,6 +1754,10 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, SupplierPartnerWriteSafetyGateError):
         return HTTPStatus.FORBIDDEN
+    if isinstance(exc, OneOffVendorArchiveRetiredError):
+        return HTTPStatus.GONE
+    if isinstance(exc, SupplierPartnerClassificationUnavailableError):
+        return HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(exc, ProductWriteSafetyGateError):
         return HTTPStatus.FORBIDDEN
     if isinstance(exc, PermissionDeniedError):
@@ -1921,37 +1937,23 @@ def get_one_off_vendor_retirement(
 
 @router.post(
     "/reviews/{review_id}/one-off-vendor-retirement/recover",
-    response_model=OneOffVendorRetirementRecoveryEnvelope,
     responses=COMMON_ERROR_RESPONSES,
-    summary="Recover a ONE_OFF_VENDOR retirement using the existing archive-last state machine",
+    summary="Retired: ONE_OFF_VENDOR partners are no longer archived",
     description=(
-        "Requires workbench_execute. Body is only review_version (the retirement row's own persisted version) "
-        "and an optional authorization_id from a pre-issued narrow write authorization scoped to exactly "
-        "(company_id, review_id, ONE_OFF_VENDOR_ARCHIVE, review_version) -- see the write-authorizations "
-        "endpoint. Without it, the write still requires SUPPLIER_REMEDIATION_WRITE_ENABLED to be globally open; "
-        "the master production kill switch and named-approver checks are never bypassed by either path. "
-        "Invokes the existing, unmodified ArchiveOneOffVendorUseCase exactly once -- ARCHIVE_ATTEMPTED and "
-        "NEEDS_RECONCILIATION always read the partner back before ever writing again."
+        "Requires workbench_execute. Always returns 410 Gone without reading or writing anything: the "
+        "ONE_OFF_VENDOR archive-after-Vendor-Bill lifecycle is retired -- a one-off supplier's own partner stays "
+        "active and is classified expense_vendor. Historical retirement rows remain readable via GET "
+        "/reviews/{review_id}/one-off-vendor-retirement."
     ),
 )
-async def recover_one_off_vendor_retirement(
+def recover_one_off_vendor_retirement(
     review_id: str,
-    request_body: OneOffVendorRetirementRecoveryRequest,
-    response: Response,
     context: RequestContextDep,
-    workflow: RecoverOneOffVendorRetirementWorkflowDep,
-) -> OneOffVendorRetirementRecoveryEnvelope | JSONResponse:
+) -> JSONResponse:
     try:
         context = require_permission(Permission.WORKBENCH_EXECUTE)(context)
-        result = await workflow.execute(
-            ArchiveOneOffVendorCommand(
-                review_id=review_id, company_id=context.company_id, review_version=request_body.review_version
-            ),
-            approved_by=context.user_id,
-            authorization_id=request_body.authorization_id,
-        )
-        return _success(
-            response, context.trace_id, OneOffVendorRetirementRecoveryResponse.model_validate(result), warnings=[]
+        raise OneOffVendorArchiveRetiredError(
+            "ONE_OFF_VENDOR partner archiving is retired; one-off supplier partners stay active."
         )
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)

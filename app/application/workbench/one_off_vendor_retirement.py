@@ -1,4 +1,12 @@
-"""ONE_OFF_VENDOR archive-last lifecycle (P0-PROD-08H).
+"""ONE_OFF_VENDOR archive-last lifecycle (P0-PROD-08H) -- RETIRED, historical rows only.
+
+Superseded by the expense-vendor classification redesign: a ONE_OFF_VENDOR
+supplier's own partner is now classified ``expense_vendor`` and stays active
+permanently; no new retirement row is ever created and nothing advances an
+existing one (the archive use case, post-Vendor-Bill trigger, recovery workflow,
+Odoo archive writer and ONE_OFF_VENDOR_ARCHIVE authorization are removed from
+runtime). The table, this DTO and the status enum remain so historical rows --
+audit evidence -- stay readable. The original design notes follow.
 
 The *creation* side of ONE_OFF_VENDOR reuses existing, already-crash-safe
 machinery unchanged: ``SupplierResolution`` (the reservation/intent, committed
@@ -83,58 +91,6 @@ class OneOffVendorRetirement(ApplicationDTO):
             raise WorkbenchContractError("A canonical OneOffVendorRetirementStatus is required.")
 
 
-@dataclass(frozen=True, slots=True)
-class ArchiveOneOffVendorCommand(ApplicationDTO):
-    """An explicit request to attempt retirement of one review's ONE_OFF_VENDOR partner.
-
-    Carries no partner identity or Vendor Bill evidence itself -- both are derived
-    from persisted state (the retirement row and the durable workflow-execution
-    record), never trusted from the caller.
-    """
-
-    review_id: str
-    company_id: int
-    review_version: int
-
-    def __post_init__(self) -> None:
-        _require_text(self.review_id, "review_id is required.")
-        _require_positive_int(self.company_id, "company_id must be positive.")
-        _require_positive_int(self.review_version, "review_version must be positive.")
-
-
-class ArchiveOneOffVendorStatus(StrEnum):
-    """Outcome of one :class:`ArchiveOneOffVendorUseCase` request, returned to the caller."""
-
-    #: res.partner.active=False durably confirmed.
-    ARCHIVED = "archived"
-    #: No durable Vendor Bill evidence yet -- correctly not archived. Not an error.
-    AWAITING_VENDOR_BILL = "awaiting_vendor_bill"
-    #: The archive outcome is unprovable even via read-back; needs human reconciliation.
-    RECONCILIATION_REQUIRED = "reconciliation_required"
-
-
-@dataclass(frozen=True, slots=True)
-class ArchiveOneOffVendorResult(ApplicationDTO):
-    """Typed, stable result of :class:`ArchiveOneOffVendorUseCase`."""
-
-    review_id: str
-    company_id: int
-    review_version: int
-    status: ArchiveOneOffVendorStatus
-    resolved_partner_id: int | None = None
-    already_applied: bool = False
-    safe_message: str | None = None
-
-    def __post_init__(self) -> None:
-        _require_text(self.review_id, "review_id is required.")
-        _require_positive_int(self.company_id, "company_id must be positive.")
-        _require_positive_int(self.review_version, "review_version must be positive.")
-        if not isinstance(self.status, ArchiveOneOffVendorStatus):
-            raise WorkbenchContractError("A canonical ArchiveOneOffVendorStatus is required.")
-        if self.resolved_partner_id is not None:
-            _require_positive_int(self.resolved_partner_id, "resolved_partner_id must be positive when set.")
-
-
 def _require_text(value: str | None, message: str) -> None:
     if value is None or not isinstance(value, str) or not value.strip():
         raise WorkbenchContractError(message)
@@ -146,9 +102,6 @@ def _require_positive_int(value: int | None, message: str) -> None:
 
 
 __all__ = [
-    "ArchiveOneOffVendorCommand",
-    "ArchiveOneOffVendorResult",
-    "ArchiveOneOffVendorStatus",
     "OneOffVendorRetirement",
     "OneOffVendorRetirementStatus",
 ]
