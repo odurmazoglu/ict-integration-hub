@@ -463,8 +463,9 @@ class AccountingResolutionPurposeUnsupportedError(AccountingResolutionError):
 
 class FixedAssetAccountInvalidError(AccountingResolutionError):
     """Safe error raised when the selected fixed-asset account is unknown, inactive,
-    not company-compatible, not ``asset_fixed``, cannot create assets, or is not in the
-    configured ``ODOO_FIXED_ASSET_ACCOUNT_IDS`` allowlist."""
+    not company-compatible, not ``asset_fixed``, cannot create assets, lacks a usable
+    accumulated depreciation / depreciation expense account (saas~19.2+), or is not in
+    the configured ``ODOO_FIXED_ASSET_ACCOUNT_IDS`` allowlist."""
 
     error_category = "fixed_asset_account_invalid"
 

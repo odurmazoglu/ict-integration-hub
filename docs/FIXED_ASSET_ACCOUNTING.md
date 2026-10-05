@@ -56,6 +56,15 @@ invoice-specific.
   this Odoo version has that field. The allowlist is what keeps accounts such as
   *accumulated depreciation* (also `asset_fixed` in the Turkish chart) or unrelated
   `asset_fixed` accounts from ever being selected.
+* **Asset posting accounts (saas~19.2+).** Where Odoo exposes them, the selected
+  account's `asset_depreciation_account_id` (accumulated depreciation) and
+  `asset_expense_account_id` (depreciation expense) must both be set, must differ
+  from the asset account, and must be active and company-compatible. Otherwise the
+  posted bill would produce an asset Odoo cannot depreciate. The Turkish chart
+  template ships 253/255 without either, and 796000 inactive, so this check fails
+  closed until the accountant configures the account.
+* **Line label.** Every fixed-asset line needs a non-empty description: Odoo cannot
+  create an asset from a product-less journal item that has no label.
 * **Depreciation model.** The `account.depreciation.model` must exist, be active, and
   be global or belong to the review's company. No useful life or method is hard-coded.
 
@@ -90,32 +99,57 @@ is the only new `account.move.line` key, and it appears only on fixed-asset line
 * **Reason naming debt.** The cleared reason is still called
   `OPERATING_EXPENSE_MAPPING_REQUIRED`. It really means "this account-mode invoice
   needs an accounting decision". It is kept for historical and API compatibility.
-* **Odoo posting behavior is not verified here.** Production Odoo 19.3 metadata
-  (read-only) shows:
-  - `account.move.line.depreciation_model_id` is a stored, writable many2one to
-    `account.depreciation.model`;
-  - `account.account.depreciation_model_id` is documented as the "default depreciation
-    model to use on a vendor bill or a refund";
-  - `can_create_asset` is a computed account flag;
-  - `account.asset.original_move_line_ids` links assets to bill lines.
+* **Quantity > 1 on one line.** The Hub keeps source lines one-to-one and never
+  splits a line. Whether Odoo then creates one asset or one asset per unit is
+  unverified for saas~19.3. Separately identifiable items should arrive as separate
+  quantity=1 lines (the Apple invoice does).
 
-  Not proven without posting (deliberately not done in production): exactly when the
-  asset is created, whether it is draft or running, and whether a quantity=1 line
-  yields one asset and two lines yield two assets. Verify in a non-production Odoo, or
-  on the first real bill, before relying on it.
+## Native Odoo asset behavior (research for PR #204)
+
+Odoo Enterprise `account_asset` source is not public, and no test Odoo is available,
+so the conclusions below are graded:
+
+- **PROVEN:** directly stated in official Odoo docs, release notes or public source.
+- **STRONGLY SUPPORTED:** implied by official sources.
+- **UNVERIFIED:** cannot be established safely.
+
+| Topic | Conclusion | Evidence |
+|---|---|---|
+| Configuration location (saas~19.2+) | Asset models were replaced by `account.depreciation.model`, which holds only the calculation. The accumulated depreciation and depreciation expense accounts, plus the default model, now live on the fixed-asset account (`asset_depreciation_account_id`, `asset_expense_account_id`, `depreciation_model_id`). | **PROVEN.** Odoo 19.2 release notes. odoo/odoo commit `81a32e482b` "vendor bill assets improvements" (enterprise#102950): it deletes the old `account.asset` model CSVs, which carried `account_depreciation_id` / `account_depreciation_expense_id`, and sets the three fields on fixed-asset accounts, e.g. `addons/l10n_uk/models/template_uk.py` (saas-19.3). |
+| `account.account.depreciation_model_id` | Only the default model proposed on bill lines. | **PROVEN.** Production field help: "default depreciation model to use on a vendor bill or a refund". |
+| `account.move.line.depreciation_model_id` | A per-line choice shown under the account on bills; the created asset uses it. | **STRONGLY SUPPORTED.** Odoo 19.3 release notes ("options added on a bill such as depreciation models … stacked vertically under the account"). Commit `81a32e482b` adds the `m2o_cell_with_extra_m2o_fields` widget to the bill line `account_id`. The field is stored and writable in production. |
+| When assets are created | When a human posts the bill, not while it is draft. The Hub never needs to write `account.asset`. | **PROVEN for 19.0:** `vendor_bills/assets.rst` "Automate the Assets": "Whenever a transaction is posted on the account…". **STRONGLY SUPPORTED for saas~19.3:** 19.2 release notes say the "automated behaviors are located on asset accounts". |
+| Initial asset state | Draft or running, depending on the account's automation setting. | **PROVEN for 19.0:** "Create in draft" / "Create and validate". **UNVERIFIED** for the saas~19.3 field name and default. |
+| Two quantity=1 lines | Two separately identifiable assets, one per line, each linked via `original_move_line_ids` / `asset_ids`. | **STRONGLY SUPPORTED.** |
+| One quantity=2 line | One asset or two. | **UNVERIFIED.** |
+| `product_id` | Not required. An account-only line with a label suffices. | **STRONGLY SUPPORTED.** The 19.0 docs select the asset account directly on the draft bill line. |
+| `deductible_percentage` | Community field, default 1.0 (fully deductible), allowed only on purchase documents. The Hub omits it and the existing tax mapping is unchanged. | **PROVEN.** odoo saas-19.3 `addons/account/models/account_move_line.py` (`deductible_percentage`, `_constrains_deductible_percentage`). |
+
+Payload sufficiency: the draft line `name`, `quantity`, `price_unit`, `account_id`,
+`tax_ids` and `depreciation_model_id` is sufficient (**STRONGLY SUPPORTED**), provided
+the selected account is configured as below. The explicit model is not a duplicated
+Odoo default: the Turkish accounts have no default model, and an explicit model also
+freezes the operator's choice.
+
+Bill posting itself (asset account / VAT / payable) is ordinary Odoo accounting and
+is correct regardless of the asset machinery. The remaining uncertainties affect only
+the asset record created after posting, which the accountant can still fix in Odoo.
 
 ## Configuration after merge (production; separate approvals)
 
 1. The accountant decides the fixed-asset account(s). Set
    `ODOO_FIXED_ASSET_ACCOUNT_IDS` to exactly those ids, for example `[74]` for 255000
    or `[72,74]`. Never include accumulated-depreciation accounts.
-2. The accountant configures, on each approved account in Odoo:
+2. **Technically required** on each approved account in Odoo (the Hub fails closed
+   without the first two):
    - the accumulated depreciation account (`asset_depreciation_account_id`, e.g. 257000);
-   - the depreciation expense account (`asset_expense_account_id`; 796000 is inactive
-     today);
-   - optionally a default depreciation model.
+   - the depreciation expense account (`asset_expense_account_id`). It must be active;
+     796000 is inactive today;
+   - the account's asset automation setting, if the form shows one, must create assets
+     ("create in draft" lets the accountant review before depreciation starts).
 
-   The Hub always sends the model explicitly.
+   Optional: a default `depreciation_model_id`. The Hub always sends the model
+   explicitly.
 3. The accountant chooses which depreciation model to use (existing: 3/5/10/20 Year
    Linear, No depreciation) or creates one.
 4. VAT deductibility is an accountant decision; it is outside this feature.

@@ -7,7 +7,9 @@ Eligibility rules live in ``app.application.workbench.fixed_asset_lookup``.
 
 ``can_create_asset`` is verified via the sanctioned ``ir.model.fields`` metadata read
 before it is requested; when this Odoo version has no such field the record carries
-``None`` and the policy does not require it. The depreciation-model fields are also
+``None`` and the policy does not require it. The account-level asset posting accounts
+(``asset_depreciation_account_id`` / ``asset_expense_account_id``, saas~19.2+) are
+verified the same way and reported as unsupported when absent. The depreciation-model fields are also
 verified first: a missing model or field fails closed instead of guessing.
 """
 
@@ -23,6 +25,7 @@ from app.erp.odoo.adapter import OdooReadOnlyAdapter
 ACCOUNT_MODEL = "account.account"
 DEPRECIATION_MODEL = "account.depreciation.model"
 _ACCOUNT_FIELDS = ("id", "code", "name", "account_type", "active", "company_ids")
+_ASSET_POSTING_FIELDS = ("asset_depreciation_account_id", "asset_expense_account_id")
 _MODEL_FIELDS = ("id", "display_name", "active", "company_id", "method", "method_number", "method_period")
 SAFE_FIXED_ASSET_LOOKUP_ERROR = "Odoo fixed-asset accounting lookup returned an unsafe response."
 
@@ -31,6 +34,7 @@ class OdooFixedAssetAccountingReader:
     def __init__(self, *, adapter: OdooReadOnlyAdapter) -> None:
         self._adapter = adapter
         self._can_create_asset_available: bool | None = None
+        self._asset_posting_accounts_available: bool | None = None
         self._model_fields_validated = False
 
     def read_account(self, *, account_id: int) -> FixedAssetAccountRecord | None:
@@ -39,6 +43,9 @@ class OdooFixedAssetAccountingReader:
         can_create = self._can_create_asset_supported()
         if can_create:
             fields.append("can_create_asset")
+        posting = self._asset_posting_accounts_supported()
+        if posting:
+            fields.extend(_ASSET_POSTING_FIELDS)
         record = self._single(ACCOUNT_MODEL, account_id, fields)
         if record is None:
             return None
@@ -51,6 +58,13 @@ class OdooFixedAssetAccountingReader:
                 active=_bool(record.get("active")),
                 company_ids=tuple(_positive_int(value) for value in _list(record.get("company_ids"))),
                 can_create_asset=_bool(record.get("can_create_asset")) if can_create else None,
+                asset_posting_accounts_supported=posting,
+                asset_depreciation_account_id=_optional_many2one(record.get("asset_depreciation_account_id"))
+                if posting
+                else None,
+                asset_expense_account_id=_optional_many2one(record.get("asset_expense_account_id"))
+                if posting
+                else None,
             )
         except (TypeError, ValueError) as exc:
             raise FixedAssetAccountingUnavailableError(SAFE_FIXED_ASSET_LOOKUP_ERROR) from exc
@@ -96,6 +110,13 @@ class OdooFixedAssetAccountingReader:
             self._can_create_asset_available = self._field_exists(ACCOUNT_MODEL, "can_create_asset")
         return self._can_create_asset_available
 
+    def _asset_posting_accounts_supported(self) -> bool:
+        if self._asset_posting_accounts_available is None:
+            self._asset_posting_accounts_available = all(
+                self._field_exists(ACCOUNT_MODEL, name) for name in _ASSET_POSTING_FIELDS
+            )
+        return self._asset_posting_accounts_available
+
     def _ensure_model_fields(self) -> None:
         if self._model_fields_validated:
             return
@@ -123,6 +144,14 @@ def _positive_int(value: object) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError("expected a positive integer")
     return value
+
+
+def _optional_many2one(value: object) -> int | None:
+    if value is False or value is None:
+        return None
+    if isinstance(value, list | tuple) and value:
+        return _positive_int(value[0])
+    return _positive_int(value)
 
 
 def _text(value: object) -> str:

@@ -416,6 +416,9 @@ def _fixed_asset_mode_errors(
         if line.line_number is None or not line.line_number.strip():
             errors.append(f"{line_path}.line_number is required.")
             continue
+        if line.description is None or not line.description.strip():
+            # Odoo refuses to create an asset from a product-less journal item without a label.
+            errors.append(f"{line_path}.description is required for a fixed-asset line.")
         if line.quantity is None or line.quantity <= Decimal("0"):
             errors.append(f"{line_path}.quantity must be greater than zero.")
         if line.unit_price is None:

@@ -120,6 +120,7 @@ ASSET_ACCOUNT = 74  # e.g. 255000 Furniture And Fixtures (demirbaş) -- any appr
 OTHER_ASSET_ACCOUNT = 72
 ACCUMULATED_DEPRECIATION = 76  # asset_fixed in the TR chart, deliberately NOT allowlisted
 EXPENSE_ACCOUNT = 247
+DEPRECIATION_EXPENSE = 259  # e.g. 796000; configured on the asset account (saas~19.2+)
 MODEL_GLOBAL = 3
 MODEL_OTHER_COMPANY = 9
 MODEL_INACTIVE = 8
@@ -313,9 +314,19 @@ def _account(account_id: int, **overrides) -> FixedAssetAccountRecord:
         "active": True,
         "company_ids": (COMPANY_ID,),
         "can_create_asset": True,
+        "asset_posting_accounts_supported": True,
+        "asset_depreciation_account_id": ACCUMULATED_DEPRECIATION,
+        "asset_expense_account_id": DEPRECIATION_EXPENSE,
     }
     values.update(overrides)
     return FixedAssetAccountRecord(**values)
+
+
+#: Accounts an asset account points at (accumulated depreciation / depreciation expense).
+_POSTING_ACCOUNTS = {
+    ACCUMULATED_DEPRECIATION: _account(ACCUMULATED_DEPRECIATION, name="Accumulated Depreciation"),
+    DEPRECIATION_EXPENSE: _account(DEPRECIATION_EXPENSE, account_type="expense", can_create_asset=False),
+}
 
 
 class _FakeFixedAssetReader:
@@ -347,7 +358,9 @@ class _FakeFixedAssetReader:
 
     def read_account(self, *, account_id: int) -> FixedAssetAccountRecord | None:
         self.calls.append(("account", account_id))
-        return self.accounts.get(account_id)
+        if account_id in self.accounts:
+            return self.accounts[account_id]
+        return _POSTING_ACCOUNTS.get(account_id)
 
     def read_depreciation_model(self, *, model_id: int) -> DepreciationModelRecord | None:
         self.calls.append(("model", model_id))
@@ -698,6 +711,54 @@ async def test_expense_account_treatment_semantics_are_unchanged(session: Sessio
             frozenset({ASSET_ACCOUNT}),
             FixedAssetAccountInvalidError,
         ),
+        # saas~19.2+: no accumulated depreciation account on the asset account
+        (
+            ASSET_ACCOUNT,
+            {ASSET_ACCOUNT: _account(ASSET_ACCOUNT, asset_depreciation_account_id=None)},
+            frozenset({ASSET_ACCOUNT}),
+            FixedAssetAccountInvalidError,
+        ),
+        # saas~19.2+: no depreciation expense account on the asset account
+        (
+            ASSET_ACCOUNT,
+            {ASSET_ACCOUNT: _account(ASSET_ACCOUNT, asset_expense_account_id=None)},
+            frozenset({ASSET_ACCOUNT}),
+            FixedAssetAccountInvalidError,
+        ),
+        # depreciation expense account configured but inactive (e.g. 796000 as shipped)
+        (
+            ASSET_ACCOUNT,
+            {
+                ASSET_ACCOUNT: _account(ASSET_ACCOUNT),
+                DEPRECIATION_EXPENSE: _account(DEPRECIATION_EXPENSE, account_type="expense", active=False),
+            },
+            frozenset({ASSET_ACCOUNT}),
+            FixedAssetAccountInvalidError,
+        ),
+        # accumulated depreciation account of another company
+        (
+            ASSET_ACCOUNT,
+            {
+                ASSET_ACCOUNT: _account(ASSET_ACCOUNT),
+                ACCUMULATED_DEPRECIATION: _account(ACCUMULATED_DEPRECIATION, company_ids=(OTHER_COMPANY_ID,)),
+            },
+            frozenset({ASSET_ACCOUNT}),
+            FixedAssetAccountInvalidError,
+        ),
+        # configured posting account does not exist
+        (
+            ASSET_ACCOUNT,
+            {ASSET_ACCOUNT: _account(ASSET_ACCOUNT, asset_expense_account_id=999)},
+            frozenset({ASSET_ACCOUNT}),
+            FixedAssetAccountInvalidError,
+        ),
+        # asset account pointing at itself
+        (
+            ASSET_ACCOUNT,
+            {ASSET_ACCOUNT: _account(ASSET_ACCOUNT, asset_depreciation_account_id=ASSET_ACCOUNT)},
+            frozenset({ASSET_ACCOUNT}),
+            FixedAssetAccountInvalidError,
+        ),
     ],
 )
 async def test_asset_account_validation_fails_closed(
@@ -710,6 +771,27 @@ async def test_asset_account_validation_fails_closed(
             _capitalize(review_id, account=account_id)
         )
     assert session.query(WorkbenchReviewAccountingResolution).count() == 0
+
+
+async def test_asset_posting_accounts_unsupported_by_odoo_version_are_not_required(session: Session) -> None:
+    review_id, _invoice, facts = await _imported_with_purpose(session, ettn="FA-A-NOPOST")
+    account = _account(
+        ASSET_ACCOUNT,
+        asset_posting_accounts_supported=False,
+        asset_depreciation_account_id=None,
+        asset_expense_account_id=None,
+    )
+    reader = _FakeFixedAssetReader(accounts={ASSET_ACCOUNT: account})
+    result = await _accounting_use_case(session, facts, reader=reader).execute(_capitalize(review_id))
+    assert result.asset_account_id == ASSET_ACCOUNT
+    assert ("account", ACCUMULATED_DEPRECIATION) not in reader.calls
+
+
+async def test_asset_posting_accounts_are_checked_read_only(session: Session) -> None:
+    review_id, _invoice, facts = await _imported_with_purpose(session, ettn="FA-A-POST")
+    reader = _FakeFixedAssetReader()
+    await _accounting_use_case(session, facts, reader=reader).execute(_capitalize(review_id))
+    assert {("account", ACCUMULATED_DEPRECIATION), ("account", DEPRECIATION_EXPENSE)} <= set(reader.calls)
 
 
 async def test_can_create_asset_unsupported_by_odoo_version_is_not_required(session: Session) -> None:
@@ -949,6 +1031,11 @@ def test_builder_rejects_fixed_asset_combined_with_other_modes() -> None:
     assert not validate_vendor_bill_inputs(
         with_code, source.partner_match, source.product_match, source.tax_match, fixed_asset_accounting=fixed
     ).is_valid
+    unlabeled = replace(invoice, lines=(replace(invoice.lines[0], description="  "), invoice.lines[1]))
+    result = validate_vendor_bill_inputs(
+        unlabeled, source.partner_match, source.product_match, source.tax_match, fixed_asset_accounting=fixed
+    )
+    assert "lines[0].description is required for a fixed-asset line." in result.errors
 
 
 def test_depreciation_model_only_on_account_only_lines() -> None:
@@ -1074,7 +1161,18 @@ def test_execution_strategy_sends_the_frozen_asset_lines_and_retry_is_identical(
 
 
 class _FakeJson2:
-    def __init__(self, *, records, fields=("can_create_asset", "active", "company_id")) -> None:
+    def __init__(
+        self,
+        *,
+        records,
+        fields=(
+            "can_create_asset",
+            "active",
+            "company_id",
+            "asset_depreciation_account_id",
+            "asset_expense_account_id",
+        ),
+    ) -> None:
         self.records = records
         self.fields = set(fields)
         self.calls: list[tuple[str, str]] = []
@@ -1104,6 +1202,8 @@ ODOO_ACCOUNT = {
     "active": True,
     "company_ids": [1],
     "can_create_asset": True,
+    "asset_depreciation_account_id": [76, "257000 Accumulated Depreciation"],
+    "asset_expense_account_id": False,
 }
 ODOO_MODEL = {
     "id": 3,
@@ -1122,6 +1222,11 @@ def test_odoo_reader_reads_account_and_model_only_via_search_read() -> None:
     account = reader.read_account(account_id=74)
     model = reader.read_depreciation_model(model_id=3)
     assert (account.account_type, account.can_create_asset, account.company_ids) == ("asset_fixed", True, (1,))
+    assert (
+        account.asset_posting_accounts_supported,
+        account.asset_depreciation_account_id,
+        account.asset_expense_account_id,
+    ) == (True, 76, None)
     assert (model.company_id, model.method, model.method_number, model.active) == (None, "linear", 5.0, True)
     assert reader.read_account(account_id=999) is None
     assert {kind for kind, _ in client.calls} == {"search_read", "metadata"}
@@ -1131,6 +1236,15 @@ def test_odoo_reader_without_can_create_asset_field_reports_none() -> None:
     record = {k: v for k, v in ODOO_ACCOUNT.items() if k != "can_create_asset"}
     client = _FakeJson2(records={"account.account": [record]}, fields=("active", "company_id"))
     assert _reader(client).read_account(account_id=74).can_create_asset is None
+
+
+def test_odoo_reader_without_asset_posting_account_fields_reports_unsupported() -> None:
+    record = {
+        k: v for k, v in ODOO_ACCOUNT.items() if k not in ("asset_depreciation_account_id", "asset_expense_account_id")
+    }
+    client = _FakeJson2(records={"account.account": [record]}, fields=("can_create_asset", "active", "company_id"))
+    account = _reader(client).read_account(account_id=74)
+    assert (account.asset_posting_accounts_supported, account.asset_depreciation_account_id) == (False, None)
 
 
 def test_odoo_reader_without_depreciation_model_support_fails_closed() -> None:

@@ -9,6 +9,12 @@ every eligibility rule lives here, in the application layer:
   asset_fixed`` and ``can_create_asset`` true where this Odoo version exposes it. The
   allowlist is what keeps e.g. an *accumulated depreciation* account -- also
   ``asset_fixed`` in the Turkish chart -- from ever being selected.
+* asset posting accounts -- since Odoo saas~19.2 the accumulated depreciation
+  (``asset_depreciation_account_id``) and depreciation expense
+  (``asset_expense_account_id``) accounts live on the asset account, not on the
+  depreciation model. Where this Odoo version exposes them both must be configured,
+  distinct from the asset account, active and company-compatible; otherwise the posted
+  bill would yield an asset Odoo cannot depreciate.
 * depreciation model -- exists, active, and either global (no company) or the review's
   company. No useful life / method is hard-coded: the operator chooses the model.
 """
@@ -41,6 +47,11 @@ class FixedAssetAccountRecord(ApplicationDTO):
     company_ids: tuple[int, ...] = field(default_factory=tuple)
     #: ``None`` when this Odoo version has no ``can_create_asset`` field.
     can_create_asset: bool | None = None
+    #: ``False`` when this Odoo version has no account-level asset posting accounts
+    #: (pre-saas~19.2, where asset models carried them); the ids are then ignored.
+    asset_posting_accounts_supported: bool = False
+    asset_depreciation_account_id: int | None = None
+    asset_expense_account_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +111,45 @@ class FixedAssetAccountPolicy:
             raise FixedAssetAccountInvalidError("The selected asset account is not a fixed-asset account.")
         if account.can_create_asset is False:
             raise FixedAssetAccountInvalidError("The selected asset account cannot create assets in Odoo.")
+        if account.asset_posting_accounts_supported:
+            _require_asset_posting_account(
+                reader,
+                company_id=company_id,
+                asset_account_id=account_id,
+                posting_account_id=account.asset_depreciation_account_id,
+                label="accumulated depreciation",
+            )
+            _require_asset_posting_account(
+                reader,
+                company_id=company_id,
+                asset_account_id=account_id,
+                posting_account_id=account.asset_expense_account_id,
+                label="depreciation expense",
+            )
         return account
+
+
+def _require_asset_posting_account(
+    reader: FixedAssetAccountingReader,
+    *,
+    company_id: int,
+    asset_account_id: int,
+    posting_account_id: int | None,
+    label: str,
+) -> None:
+    if posting_account_id is None:
+        raise FixedAssetAccountInvalidError(f"The selected asset account has no {label} account configured in Odoo.")
+    if posting_account_id == asset_account_id:
+        raise FixedAssetAccountInvalidError(f"The selected asset account uses itself as its {label} account in Odoo.")
+    posting_account = reader.read_account(account_id=posting_account_id)
+    if posting_account is None or posting_account.id != posting_account_id:
+        raise FixedAssetAccountInvalidError(f"The {label} account of the selected asset account does not exist.")
+    if not posting_account.active:
+        raise FixedAssetAccountInvalidError(f"The {label} account of the selected asset account is not active.")
+    if company_id not in posting_account.company_ids:
+        raise FixedAssetAccountInvalidError(
+            f"The {label} account of the selected asset account is not scoped to this company."
+        )
 
 
 def require_eligible_depreciation_model(
