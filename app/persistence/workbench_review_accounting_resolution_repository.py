@@ -25,6 +25,8 @@ def _fingerprint(resolution: ReviewAccountingResolution) -> tuple[Any, ...]:
         resolution.treatment_type.value,
         resolution.expense_account_id,
         resolution.expense_category,
+        resolution.asset_account_id,
+        resolution.depreciation_model_id,
         (resolution.approved_by or None),
         (resolution.note or None),
     )
@@ -38,6 +40,8 @@ def _model_from_resolution(resolution: ReviewAccountingResolution) -> WorkbenchR
         treatment_type=resolution.treatment_type.value,
         expense_account_id=resolution.expense_account_id,
         expense_category=resolution.expense_category,
+        asset_account_id=resolution.asset_account_id,
+        depreciation_model_id=resolution.depreciation_model_id,
         approved_by=resolution.approved_by,
         note=resolution.note,
     )
@@ -54,11 +58,17 @@ def _resolution_from_model(record: WorkbenchReviewAccountingResolution) -> Revie
         company_id=int(record.company_id),
         review_version=int(record.review_version),
         treatment_type=treatment_type,
-        expense_account_id=int(record.expense_account_id),
-        expense_category=str(record.expense_category),
+        expense_account_id=_optional_int(record.expense_account_id),
+        expense_category=str(record.expense_category) if record.expense_category is not None else None,
+        asset_account_id=_optional_int(record.asset_account_id),
+        depreciation_model_id=_optional_int(record.depreciation_model_id),
         approved_by=record.approved_by,
         note=record.note,
     )
+
+
+def _optional_int(value: Any) -> int | None:
+    return int(value) if value is not None else None
 
 
 class SqlAlchemyReviewAccountingResolutionRepository:

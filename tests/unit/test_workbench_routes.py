@@ -1370,9 +1370,14 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "treatment_type",
         "expense_account_id",
         "expense_category",
+        "asset_account_id",
+        "depreciation_model_id",
         "note",
     }
-    assert accounting_resolution_schema["properties"]["treatment_type"]["const"] == "expense_account"
+    assert accounting_resolution_schema["properties"]["treatment_type"]["enum"] == [
+        "expense_account",
+        "capitalize_fixed_asset",
+    ]
     operating_expense_mapping_schema = response.json()["components"]["schemas"]["OperatingExpenseMappingRequest"]
     operating_expense_mapping_text = str(operating_expense_mapping_schema)
     for forbidden in ("company_id", "review_id", "approved_by", "vendor_partner_id"):

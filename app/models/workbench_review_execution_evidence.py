@@ -57,4 +57,9 @@ class WorkbenchReviewExecutionEvidence(Base):
     # Same shape as operating_expense_match, pinned separately so it survives even when
     # the invoice is not product-identifier-free (see ReviewExecutionEvidence).
     account_only_expense_match: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Frozen CAPITALIZE_FIXED_ASSET selection (asset account + depreciation model), see
+    # app.application.fixed_asset_accounting. NULL for every non-fixed-asset row; when
+    # NULL the key is absent from the serialized evidence, so historical fingerprints
+    # are byte-identical.
+    fixed_asset_accounting: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime(), server_default=func.now(), nullable=False)

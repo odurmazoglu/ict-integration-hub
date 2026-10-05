@@ -32,6 +32,8 @@ READ_ONLY_MODELS = frozenset(
         "res.currency",
         "account.journal",
         "account.account",
+        # Read-only: validating an operator-selected CAPITALIZE_FIXED_ASSET depreciation model.
+        "account.depreciation.model",
         # P0-PROD-18F-2: read-only fiscal-position evidence proving a pinned RESALE
         # account cannot be remapped before it is sent to Odoo.
         "account.fiscal.position",

@@ -16,6 +16,11 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceNotFoundError,
 )
 from app.application.expense_mapping import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
+from app.application.fixed_asset_accounting import (
+    FixedAssetAccountingContractError,
+    fixed_asset_accounting_from_data,
+    fixed_asset_accounting_to_data,
+)
 from app.application.workbench.dto import LineResolution
 from app.application.workbench.exceptions import WorkbenchContractError
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin, resale_accounting_pin_from_data
@@ -199,6 +204,13 @@ def serialize_execution_source_invoice_payload(source: ExecutionSourceInvoice) -
         "tax_match": _tax_match_to_data(source.tax_match),
         "operating_expense_match": _operating_expense_match_to_data(source.operating_expense_match),
         "account_only_expense_match": _operating_expense_match_to_data(source.account_only_expense_match),
+        # Present only for fixed-asset evidence: every other payload (and its fingerprint)
+        # stays byte-identical to the pre-fixed-asset shape.
+        **(
+            {"fixed_asset_accounting": fixed_asset_accounting_to_data(source.fixed_asset_accounting)}
+            if source.fixed_asset_accounting is not None
+            else {}
+        ),
     }
 
 
@@ -216,6 +228,7 @@ def deserialize_execution_source_invoice_payload(data: dict[str, Any]) -> Execut
         tax_match=_tax_match_from_data(_require_dict(data.get("tax_match"))),
         operating_expense_match=_operating_expense_match_from_data(data.get("operating_expense_match")),
         account_only_expense_match=_operating_expense_match_from_data(data.get("account_only_expense_match")),
+        fixed_asset_accounting=_fixed_asset_accounting_from_data(data.get("fixed_asset_accounting")),
     )
     invoice_identity = source.invoice.header.ettn or source.invoice.header.invoice_uuid
     if source.source_invoice_id != invoice_identity:
@@ -246,8 +259,22 @@ def _source_from_evidence(evidence: ExecutionSourceInvoiceEvidence) -> Execution
             "tax_match": evidence.tax_match,
             "operating_expense_match": evidence.operating_expense_match,
             "account_only_expense_match": evidence.account_only_expense_match,
+            **optional_fixed_asset_accounting(evidence.fixed_asset_accounting),
         }
     )
+
+
+def optional_fixed_asset_accounting(value: Any) -> dict[str, Any]:
+    """The persisted column as an optional payload key: absent when NULL (historical rows)."""
+
+    return {"fixed_asset_accounting": value} if value is not None else {}
+
+
+def _fixed_asset_accounting_from_data(data: Any):
+    try:
+        return fixed_asset_accounting_from_data(data)
+    except FixedAssetAccountingContractError as exc:
+        raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR) from exc
 
 
 def _validate_source_linkage(

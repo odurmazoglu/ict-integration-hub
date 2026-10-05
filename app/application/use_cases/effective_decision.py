@@ -24,6 +24,7 @@ from app.application.dto import DecisionResult
 from app.application.exceptions import ApplicationError
 from app.application.expense_mapping.matcher import OperatingExpenseMatcher
 from app.application.expense_mapping.matching import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
+from app.application.fixed_asset_accounting import FixedAssetAccounting
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import ReviewPersistenceError
 from app.application.workbench.ports import (
@@ -55,6 +56,9 @@ _MATCH_EXISTING_MODE = "match_existing"
 #: as ``_MATCH_EXISTING_MODE`` -- this module never imports
 #: ``app.application.workbench.accounting_resolution``.
 _EXPENSE_ACCOUNT_TREATMENT = "expense_account"
+#: The exact string value of ``AccountingTreatmentType.CAPITALIZE_FIXED_ASSET``, compared
+#: as a plain string for the same import-isolation reason.
+_CAPITALIZE_FIXED_ASSET_TREATMENT = "capitalize_fixed_asset"
 
 REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY = "review_accounting_resolution"
 
@@ -100,8 +104,10 @@ class AcceptedAccountingResolution(Protocol):
 
     id: int
     treatment_type: str
-    expense_account_id: int
-    expense_category: str
+    expense_account_id: int | None
+    expense_category: str | None
+    asset_account_id: int | None
+    depreciation_model_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,17 +202,39 @@ class EffectiveDecisionResolver:
         # recomputation -- see reclassify_review.py's module docstring. `or` is exact
         # here: both return a real dataclass instance or None, and a real instance is
         # always truthy.
-        recomputed_operating_expense_match = self._review_accounting_resolution_operating_expense_match(
+        # A review-scoped CAPITALIZE_FIXED_ASSET resolution is the operator's explicit,
+        # highest-precedence accounting decision for this review: when it applies, no
+        # operating-expense account (review-scoped or supplier-wide) is used at all.
+        fixed_asset_accounting = self._review_accounting_resolution_fixed_asset(
             decision_result, effect, review_id=review_id, company_id=company_id
-        ) or self._effective_operating_expense_match(
-            decision_result, effect, invoice=source.invoice, company_id=company_id
+        )
+        recomputed_operating_expense_match = (
+            None
+            if fixed_asset_accounting is not None
+            else (
+                self._review_accounting_resolution_operating_expense_match(
+                    decision_result, effect, review_id=review_id, company_id=company_id
+                )
+                or self._effective_operating_expense_match(
+                    decision_result, effect, invoice=source.invoice, company_id=company_id
+                )
+            )
         )
 
         execution_decision_result = self._execution_decision_result(
             decision_result, effect, recomputed_operating_expense_match
         )
+        if fixed_asset_accounting is not None:
+            execution_decision_result = replace(
+                execution_decision_result,
+                operating_expense_match=None,
+                fixed_asset_accounting=fixed_asset_accounting,
+            )
         effective_review_reasons = _effective_manual_review_reasons(
-            decision_result.review_reasons, effect, recomputed_operating_expense_match
+            decision_result.review_reasons,
+            effect,
+            recomputed_operating_expense_match,
+            fixed_asset_resolved=fixed_asset_accounting is not None,
         )
         effective_workflow = _effective_workflow(decision_result.workflow, effective_review_reasons)
 
@@ -307,6 +335,44 @@ class EffectiveDecisionResolver:
             partner_match=_synthesized_matched_partner(effect),
         )
 
+    def _review_accounting_resolution_fixed_asset(
+        self,
+        decision_result: DecisionResult,
+        effect: AcceptedRemediationEffect | None,
+        *,
+        review_id: str,
+        company_id: int,
+    ) -> FixedAssetAccounting | None:
+        """The frozen CAPITALIZE_FIXED_ASSET selection, or ``None``.
+
+        Same gates as the EXPENSE_ACCOUNT override below: a wired reader, a raw
+        operating-expense match that is not already MATCHED, an accepted resolution for
+        this exact ``(review_id, company_id)`` whose treatment is
+        CAPITALIZE_FIXED_ASSET, and a resolvable supplier partner. The asset account and
+        depreciation model are copied verbatim from the resolution -- never derived
+        from Odoo account defaults.
+        """
+
+        if self._review_accounting_resolution_reader is None:
+            return None
+        raw = decision_result.operating_expense_match
+        if raw is not None and raw.status is OperatingExpenseMatchStatus.MATCHED:
+            return None
+        resolution = self._review_accounting_resolution_reader.find_latest_accounting_resolution(
+            review_id=review_id,
+            company_id=company_id,
+        )
+        if resolution is None or resolution.treatment_type != _CAPITALIZE_FIXED_ASSET_TREATMENT:
+            return None
+        partner = decision_result.partner_match
+        if (partner is None or partner.status is not PartnerMatchStatus.MATCHED) and effect is None:
+            return None
+        return FixedAssetAccounting(
+            accounting_resolution_id=resolution.id,
+            asset_account_id=resolution.asset_account_id,
+            depreciation_model_id=resolution.depreciation_model_id,
+        )
+
     def _review_accounting_resolution_operating_expense_match(
         self,
         decision_result: DecisionResult,
@@ -379,6 +445,8 @@ def _effective_manual_review_reasons(
     raw_reasons: tuple[ManualReviewReason, ...],
     effect: AcceptedRemediationEffect | None,
     recomputed_operating_expense_match: OperatingExpenseMatchResult | None,
+    *,
+    fixed_asset_resolved: bool = False,
 ) -> tuple[ManualReviewReason, ...]:
     """P0-PROD-15N/15P/15T: fold accepted review-scoped remediation/resolution
     state into the review's own effective classification reasons.
@@ -406,6 +474,11 @@ def _effective_manual_review_reasons(
     if recomputed_operating_expense_match is not None and (
         recomputed_operating_expense_match.status is OperatingExpenseMatchStatus.MATCHED
     ):
+        strip_codes |= _OPERATING_EXPENSE_REASON_CODES
+    # An accepted CAPITALIZE_FIXED_ASSET resolution answers the same "how is this
+    # account-mode invoice posted?" question. (Naming debt: the reason codes still say
+    # OPERATING_EXPENSE_MAPPING_*; renaming them would break historical/API data.)
+    if fixed_asset_resolved:
         strip_codes |= _OPERATING_EXPENSE_REASON_CODES
     if not strip_codes or not any(reason.code in strip_codes for reason in raw_reasons):
         return raw_reasons

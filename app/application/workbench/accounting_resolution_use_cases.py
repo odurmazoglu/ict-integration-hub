@@ -6,11 +6,15 @@ Ties together the pieces P0-PROD-15T adds, mirroring
     eligibility check (pending, expected_version, operating-expense-shaped reason)
     -> accepted PurchasePurposeResolution must already exist for this exact
        (review_id, company_id, review_version) -- purpose before treatment
-    -> that purpose must currently support EXPENSE_ACCOUNT (RESALE/CUSTOMER_PROJECT
-       fail closed with a precise "not implemented yet" error, never silently
-       reinterpreted as a plain expense)
-    -> selected expense account re-validated read-only (exists, eligible type,
-       company-scoped) -- never trusted from a prior GET
+    -> that purpose must support the requested treatment: EXPENSE_ACCOUNT for
+       INTERNAL_USE/OTHER_OPERATING_EXPENSE, CAPITALIZE_FIXED_ASSET for INTERNAL_USE
+       only (RESALE/CUSTOMER_PROJECT fail closed with a precise "not supported" error,
+       never silently reinterpreted)
+    -> the treatment's own selection re-validated read-only -- never trusted from a
+       prior GET: EXPENSE_ACCOUNT's expense account (exists, eligible type, company-
+       scoped); CAPITALIZE_FIXED_ASSET's asset account (approved allowlist, active,
+       company-scoped, asset_fixed, can_create_asset) and depreciation model (active,
+       global or company-scoped)
     -> persist the immutable, review-scoped ReviewAccountingResolution (never the
        supplier-wide operating_expense_mappings table)
     -> trigger the existing MASTER_DATA_CHANGED-shaped reclassification, which now
@@ -28,6 +32,7 @@ from app.application.exceptions import ApplicationError
 from app.application.services import UnitOfWork
 from app.application.workbench.accounting_resolution import (
     AccountingResolutionStatus,
+    AccountingTreatmentType,
     ReviewAccountingResolution,
     ReviewAccountingResolutionSubmissionResult,
     SubmitReviewAccountingResolutionCommand,
@@ -45,6 +50,11 @@ from app.application.workbench.exceptions import (
     WorkbenchContractError,
 )
 from app.application.workbench.expense_account_lookup import ExpenseAccountCandidate
+from app.application.workbench.fixed_asset_lookup import (
+    FixedAssetAccountingReader,
+    FixedAssetAccountPolicy,
+    require_eligible_depreciation_model,
+)
 from app.application.workbench.ports import (
     ExpenseAccountCandidateReader,
     PurchasePurposeResolutionWriter,
@@ -65,6 +75,14 @@ SAFE_ACCOUNTING_RESOLUTION_ERROR = "Review-scoped accounting resolution failed."
 _PURPOSES_SUPPORTING_EXPENSE_ACCOUNT = frozenset(
     {PurchasePurpose.INTERNAL_USE, PurchasePurpose.OTHER_OPERATING_EXPENSE}
 )
+#: Capitalizing company-owned equipment only makes sense for goods kept for internal
+#: use. OTHER_OPERATING_EXPENSE is an expense by definition; RESALE/CUSTOMER_PROJECT
+#: goods are not ICT's own fixed assets.
+_PURPOSES_SUPPORTING_CAPITALIZE_FIXED_ASSET = frozenset({PurchasePurpose.INTERNAL_USE})
+_PURPOSES_BY_TREATMENT = {
+    AccountingTreatmentType.EXPENSE_ACCOUNT: _PURPOSES_SUPPORTING_EXPENSE_ACCOUNT,
+    AccountingTreatmentType.CAPITALIZE_FIXED_ASSET: _PURPOSES_SUPPORTING_CAPITALIZE_FIXED_ASSET,
+}
 
 
 class AccountingResolutionReclassifier(Protocol):
@@ -92,10 +110,15 @@ class SubmitReviewAccountingResolutionUseCase:
         reclassifier: AccountingResolutionReclassifier,
         unit_of_work: UnitOfWork,
         projection_synchronizer: ReviewProjectionSynchronizer | None = None,
+        fixed_asset_reader: FixedAssetAccountingReader | None = None,
+        fixed_asset_account_policy: FixedAssetAccountPolicy | None = None,
     ) -> None:
         self._review_reader = review_reader
         self._purpose_reader = purpose_reader
         self._expense_account_reader = expense_account_reader
+        # CAPITALIZE_FIXED_ASSET only. An unset reader or an empty allowlist fails closed.
+        self._fixed_asset_reader = fixed_asset_reader
+        self._fixed_asset_account_policy = fixed_asset_account_policy or FixedAssetAccountPolicy()
         self._accounting_resolution_writer = accounting_resolution_writer
         self._reclassifier = reclassifier
         self._unit_of_work = unit_of_work
@@ -146,13 +169,14 @@ class SubmitReviewAccountingResolutionUseCase:
             raise AccountingResolutionPurposeRequiredError(
                 "No purchase-purpose resolution exists for this review version; record the purpose first."
             )
-        if purpose.purchase_purpose not in _PURPOSES_SUPPORTING_EXPENSE_ACCOUNT:
+        if purpose.purchase_purpose not in _PURPOSES_BY_TREATMENT[command.treatment_type]:
             raise AccountingResolutionPurposeUnsupportedError(
-                f"Accounting treatment for purchase_purpose={purpose.purchase_purpose.value} is not implemented "
-                "yet; the review remains manual_review until a supported treatment exists."
+                f"Accounting treatment {command.treatment_type.value} for "
+                f"purchase_purpose={purpose.purchase_purpose.value} is not supported; the review remains "
+                "manual_review until a supported treatment is chosen."
             )
 
-        account = self._require_eligible_account(command)
+        selection = self._require_eligible_selection(command)
 
         existing = self._accounting_resolution_writer.find_accounting_resolution(
             review_id=command.review_id,
@@ -181,10 +205,9 @@ class SubmitReviewAccountingResolutionUseCase:
             company_id=command.company_id,
             review_version=command.expected_version,
             treatment_type=command.treatment_type,
-            expense_account_id=account.id,
-            expense_category=command.expense_category,
             approved_by=command.approved_by,
             note=command.note,
+            **selection,
         )
         try:
             created = self._accounting_resolution_writer.create_accounting_resolution(resolution)
@@ -207,6 +230,21 @@ class SubmitReviewAccountingResolutionUseCase:
             raise AccountingResolutionEligibilityError(
                 "The review does not currently carry an operating-expense-shaped reason; there is nothing to remediate."
             )
+
+    def _require_eligible_selection(self, command: SubmitReviewAccountingResolutionCommand) -> dict[str, object]:
+        """The treatment's own re-validated field set, exactly as it will be persisted."""
+
+        if command.treatment_type is AccountingTreatmentType.CAPITALIZE_FIXED_ASSET:
+            assert command.asset_account_id is not None and command.depreciation_model_id is not None
+            account = self._fixed_asset_account_policy.require_eligible_account(
+                self._fixed_asset_reader, company_id=command.company_id, account_id=command.asset_account_id
+            )
+            model = require_eligible_depreciation_model(
+                self._fixed_asset_reader, company_id=command.company_id, model_id=command.depreciation_model_id
+            )
+            return {"asset_account_id": account.id, "depreciation_model_id": model.id}
+        account = self._require_eligible_account(command)
+        return {"expense_account_id": account.id, "expense_category": command.expense_category}
 
     def _require_eligible_account(self, command: SubmitReviewAccountingResolutionCommand) -> ExpenseAccountCandidate:
         try:
@@ -265,6 +303,8 @@ class SubmitReviewAccountingResolutionUseCase:
             treatment_type=resolution.treatment_type,
             expense_account_id=resolution.expense_account_id,
             expense_category=resolution.expense_category,
+            asset_account_id=resolution.asset_account_id,
+            depreciation_model_id=resolution.depreciation_model_id,
             reclassified=bool(reclass.changed),
             already_applied=already_applied,
             safe_message=(
@@ -315,6 +355,8 @@ class SubmitReviewAccountingResolutionUseCase:
             treatment_type=existing.treatment_type,
             expense_account_id=existing.expense_account_id,
             expense_category=existing.expense_category,
+            asset_account_id=existing.asset_account_id,
+            depreciation_model_id=existing.depreciation_model_id,
             reclassified=True,
             already_applied=True,
             safe_message="This accounting resolution was already applied.",
@@ -326,6 +368,8 @@ def _matches(existing: ReviewAccountingResolution, command: SubmitReviewAccounti
         existing.treatment_type == command.treatment_type
         and existing.expense_account_id == command.expense_account_id
         and existing.expense_category == command.expense_category
+        and existing.asset_account_id == command.asset_account_id
+        and existing.depreciation_model_id == command.depreciation_model_id
     )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +23,7 @@ from app.tax_mapping import InvoiceTaxMappingResult, TaxMatchStatus
 
 if TYPE_CHECKING:
     from app.application.expense_mapping import OperatingExpenseMatchResult
+    from app.application.fixed_asset_accounting import FixedAssetAccounting
 
 # ``app.application.expense_mapping`` sits above ``app.billing`` in the import graph, so the
 # operating-expense classification symbols are imported lazily inside the functions that use them
@@ -44,6 +45,7 @@ class VendorBillBuilder:
         explicit_account_only_accounts: dict[str, int] | None = None,
         validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
         monetary_precision: MonetaryPrecision | None = None,
+        fixed_asset_accounting: FixedAssetAccounting | None = None,
     ) -> VendorBill:
         """Build a deterministic Vendor Bill.
 
@@ -76,6 +78,12 @@ class VendorBillBuilder:
         discounted-line checks compare at that precision. The built bill's own money is
         then gated by ``vendor_bill_monetary_errors`` -- execution fails closed on it
         before any Odoo write; preview reports the same findings without raising.
+
+        ``fixed_asset_accounting`` is the frozen CAPITALIZE_FIXED_ASSET selection. When
+        present every line -- kept one-to-one with the source lines, never merged -- is
+        posted to its ``asset_account_id`` with its ``depreciation_model_id``. It is
+        mutually exclusive with every other account/product mode. Omitting it reproduces
+        the existing behavior exactly.
         """
 
         validation = validate_vendor_bill_inputs(
@@ -90,12 +98,28 @@ class VendorBillBuilder:
             explicit_account_only_accounts=explicit_account_only_accounts,
             validated_resale_accounts=validated_resale_accounts,
             monetary_precision=monetary_precision,
+            fixed_asset_accounting=fixed_asset_accounting,
         )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
 
         assert partner_match.partner_id is not None
         tax_ids_by_line = _tax_ids_by_line(tax_match)
+        if fixed_asset_accounting is not None:
+            return VendorBill(
+                supplier_id=partner_match.partner_id,
+                invoice_number=invoice.header.invoice_number.strip(),
+                invoice_date=invoice.header.issue_date,
+                currency=invoice.header.currency_code.strip(),
+                external_uuid=invoice.header.invoice_uuid.strip() or invoice.header.ettn,
+                reference=invoice.header.invoice_number.strip(),
+                company_id=company_id,
+                invoice_lines=tuple(
+                    _fixed_asset_vendor_bill_line(line, fixed_asset_accounting, tax_ids_by_line, monetary_precision)
+                    for line in invoice.lines
+                ),
+                notes=tuple(note.strip() for note in invoice.header.notes if note and note.strip()),
+            )
         expense_account_id = (
             operating_expense_match.expense_account_id
             if _operating_expense_mode(invoice, operating_expense_match)
@@ -218,6 +242,7 @@ def validate_vendor_bill_inputs(
     explicit_account_only_accounts: dict[str, int] | None = None,
     validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
     monetary_precision: MonetaryPrecision | None = None,
+    fixed_asset_accounting: object | None = None,
 ) -> VendorBillValidationResult:
     """Validate deterministic Vendor Bill inputs.
 
@@ -250,6 +275,23 @@ def validate_vendor_bill_inputs(
         return validation_result(["InvoiceProductMatchResult DTO is required."])
     if not isinstance(tax_match, InvoiceTaxMappingResult):
         return validation_result(["InvoiceTaxMappingResult DTO is required."])
+
+    if fixed_asset_accounting is not None:
+        return validation_result(
+            _fixed_asset_mode_errors(
+                invoice,
+                partner_match,
+                product_match,
+                tax_match,
+                fixed_asset_accounting=fixed_asset_accounting,
+                company_id=company_id,
+                operating_expense_match=operating_expense_match,
+                account_only_line_numbers=account_only_line_numbers,
+                explicit_account_only_accounts=explicit_account_only_accounts,
+                validated_resale_accounts=validated_resale_accounts,
+                monetary_precision=monetary_precision,
+            )
+        )
 
     expense_mode = _operating_expense_mode(invoice, operating_expense_match)
     account_only_line_numbers = account_only_line_numbers if not expense_mode else frozenset()
@@ -316,6 +358,78 @@ def validate_vendor_bill_inputs(
         )
 
     return validation_result(errors)
+
+
+def _fixed_asset_mode_errors(
+    invoice: InternalInvoice,
+    partner_match: PartnerMatchResult,
+    product_match: InvoiceProductMatchResult,
+    tax_match: InvoiceTaxMappingResult,
+    *,
+    fixed_asset_accounting: object,
+    company_id: int | None,
+    operating_expense_match: object | None,
+    account_only_line_numbers: frozenset[str],
+    explicit_account_only_accounts: dict[str, int] | None,
+    validated_resale_accounts: object | None,
+    monetary_precision: MonetaryPrecision | None,
+) -> list[str]:
+    """CAPITALIZE_FIXED_ASSET: every line is an account-only asset line.
+
+    Same whole-invoice shape as operating-expense mode (identifier-free invoice, one
+    INVALID_INPUT product result per line, every tax matched), but exclusive: no
+    operating-expense account, no per-line account-only decision and no RESALE pin may
+    be combined with it.
+    """
+
+    from app.application.expense_mapping import invoice_is_product_identifier_free
+    from app.application.fixed_asset_accounting import FixedAssetAccounting
+
+    errors: list[str] = []
+    if not isinstance(fixed_asset_accounting, FixedAssetAccounting):
+        return ["fixed_asset_accounting must be a FixedAssetAccounting."]
+    if company_id is not None and (type(company_id) is not int or company_id <= 0):
+        errors.append("company_id must be a positive integer when provided.")
+    if operating_expense_match is not None:
+        errors.append("Fixed-asset mode cannot be combined with an operating-expense account.")
+    if account_only_line_numbers or explicit_account_only_accounts:
+        errors.append("Fixed-asset mode cannot be combined with per-line account-only decisions.")
+    if validated_resale_accounts is not None:
+        errors.append("Fixed-asset mode cannot be combined with RESALE accounting.")
+    if partner_match.status is not PartnerMatchStatus.MATCHED or partner_match.partner_id is None:
+        errors.append("Supplier partner must be matched before building a vendor bill.")
+    if not invoice.header.invoice_number.strip():
+        errors.append("Invoice number is required.")
+    if invoice.header.issue_date is None:
+        errors.append("Invoice date is required.")
+    if invoice.header.currency_code is None or not invoice.header.currency_code.strip():
+        errors.append("Invoice currency is required.")
+    if not invoice.lines:
+        errors.append("At least one invoice line is required.")
+    if not invoice_is_product_identifier_free(invoice):
+        errors.append("Fixed-asset mode requires an invoice free of deterministic product identifiers.")
+    errors.extend(_operating_expense_product_shape_errors(invoice, product_match))
+    tax_by_line, tax_errors = _validated_tax_results(tax_match)
+    errors.extend(tax_errors)
+    for index, line in enumerate(invoice.lines):
+        line_path = f"lines[{index}]"
+        if line.line_number is None or not line.line_number.strip():
+            errors.append(f"{line_path}.line_number is required.")
+            continue
+        if line.quantity is None or line.quantity <= Decimal("0"):
+            errors.append(f"{line_path}.quantity must be greater than zero.")
+        if line.unit_price is None:
+            errors.append(f"{line_path}.unit_price is required.")
+        elif line.unit_price < Decimal("0"):
+            errors.append(f"{line_path}.unit_price must not be negative.")
+        for tax_index, _tax in enumerate(line.taxes):
+            if (line.line_number, tax_index) not in tax_by_line:
+                errors.append(f"{line_path}.taxes[{tax_index}] must be matched.")
+        if line.unit_price is not None and line.quantity is not None:
+            errors.extend(_discount_errors(line, line_path, monetary_precision))
+    if not errors and any(economic_discounts(line) for line in invoice.lines):
+        errors.extend(_totals_invariant_errors(invoice, monetary_precision))
+    return errors
 
 
 def _resale_account_errors(
@@ -487,6 +601,8 @@ def to_odoo_customer_invoice_payload(
 def _line_payload(line: VendorBillLine, product_uom_ids: Mapping[int, int]) -> dict[str, Any]:
     if line.resale_account is not None:
         return _resale_product_line_payload(line, product_uom_ids)
+    if line.depreciation_model_id is not None:
+        return _fixed_asset_line_payload(line)
     if line.account_id is not None:
         return _operating_expense_line_payload(line)
     return _product_line_payload(line, product_uom_ids)
@@ -535,6 +651,16 @@ def _operating_expense_line_payload(line: VendorBillLine) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def _fixed_asset_line_payload(line: VendorBillLine) -> dict[str, Any]:
+    """The operating-expense line payload plus exactly one extra key: the frozen
+    ``depreciation_model_id``. Odoo's native asset behaviour (on human posting) reads
+    it; the Hub never creates ``account.asset`` and never posts."""
+
+    payload = _operating_expense_line_payload(line)
+    payload["depreciation_model_id"] = line.depreciation_model_id
+    return payload
+
+
 def _customer_line_payload(line: CustomerInvoiceLine) -> dict[str, Any]:
     return {
         key: value
@@ -578,6 +704,18 @@ def _vendor_bill_line(
         tax_ids=tax_ids,
         description=line.description,
     )
+
+
+def _fixed_asset_vendor_bill_line(
+    line: InvoiceLine,
+    fixed_asset_accounting: FixedAssetAccounting,
+    tax_ids_by_line: dict[tuple[str | None, int], int],
+    monetary_precision: MonetaryPrecision | None,
+) -> VendorBillLine:
+    expense_line = _expense_vendor_bill_line(
+        line, fixed_asset_accounting.asset_account_id, tax_ids_by_line, monetary_precision
+    )
+    return replace(expense_line, depreciation_model_id=fixed_asset_accounting.depreciation_model_id)
 
 
 def _expense_vendor_bill_line(

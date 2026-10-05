@@ -461,6 +461,29 @@ class AccountingResolutionPurposeUnsupportedError(AccountingResolutionError):
     error_category = "accounting_resolution_purpose_unsupported"
 
 
+class FixedAssetAccountInvalidError(AccountingResolutionError):
+    """Safe error raised when the selected fixed-asset account is unknown, inactive,
+    not company-compatible, not ``asset_fixed``, cannot create assets, or is not in the
+    configured ``ODOO_FIXED_ASSET_ACCOUNT_IDS`` allowlist."""
+
+    error_category = "fixed_asset_account_invalid"
+
+
+class DepreciationModelInvalidError(AccountingResolutionError):
+    """Safe error raised when the selected Odoo depreciation model is unknown, inactive
+    or scoped to a different company."""
+
+    error_category = "depreciation_model_invalid"
+
+
+class FixedAssetAccountingUnavailableError(AccountingResolutionError):
+    """Safe error raised when fixed-asset accounting cannot be validated at all: the
+    account allowlist is unset, the reader is not configured, or the Odoo metadata the
+    validation depends on is missing. Always fails closed before anything is persisted."""
+
+    error_category = "fixed_asset_accounting_unavailable"
+
+
 class AccountingResolutionConflictError(AccountingResolutionError):
     """Safe error raised when a different accounting resolution already exists for
     this exact review version."""

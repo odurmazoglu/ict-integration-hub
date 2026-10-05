@@ -97,12 +97,15 @@ from app.application.workbench.exceptions import (
     AccountingResolutionError,
     AccountingResolutionPurposeRequiredError,
     AccountingResolutionPurposeUnsupportedError,
+    DepreciationModelInvalidError,
     ExecutionEvidenceRecoveryBuildError,
     ExecutionEvidenceRecoveryConflictError,
     ExecutionEvidenceRecoveryEligibilityError,
     ExecutionEvidenceRecoveryError,
     ExecutionEvidenceRecoveryMismatchError,
     ExecutionEvidenceRecoverySourceMissingError,
+    FixedAssetAccountingUnavailableError,
+    FixedAssetAccountInvalidError,
     OneOffVendorArchiveRetiredError,
     OperatingExpenseMappingAccountInvalidError,
     OperatingExpenseMappingEligibilityError,
@@ -831,11 +834,13 @@ def submit_purchase_purpose(
         "the operating-expense-mapping endpoint, this never writes to the supplier-wide operating_expense_mappings "
         "table -- the resolution applies only to this exact review version. Requires an accepted purchase-purpose "
         "resolution to already exist for this exact review version; RESALE/CUSTOMER_PROJECT purposes are rejected "
-        "with a precise not-yet-implemented error rather than silently treated as a plain expense. Only "
-        "treatment_type=expense_account is supported today. The selected expense_account_id is re-validated "
-        "read-only against Odoo before anything is persisted, then the non-destructive reclassification that lets "
-        "the review reach a submittable decision is triggered. This endpoint never executes a Vendor Bill and "
-        "never writes to Odoo."
+        "with a precise not-supported error rather than silently treated as a plain expense. treatment_type is "
+        "expense_account (expense_account_id + expense_category) or capitalize_fixed_asset (asset_account_id + "
+        "depreciation_model_id; INTERNAL_USE purpose only; the asset account must be in the approved "
+        "ODOO_FIXED_ASSET_ACCOUNT_IDS allowlist). Fields of the other treatment are rejected. The selection is "
+        "re-validated read-only against Odoo before anything is persisted, then the non-destructive "
+        "reclassification that lets the review reach a submittable decision is triggered. This endpoint never "
+        "executes a Vendor Bill, never creates an Odoo asset and never writes to Odoo."
     ),
 )
 async def submit_review_accounting_resolution(
@@ -855,6 +860,8 @@ async def submit_review_accounting_resolution(
                 treatment_type=AccountingTreatmentType(request_body.treatment_type),
                 expense_account_id=request_body.expense_account_id,
                 expense_category=request_body.expense_category,
+                asset_account_id=request_body.asset_account_id,
+                depreciation_model_id=request_body.depreciation_model_id,
                 approved_by=context.user_name or context.user_id,
                 note=request_body.note,
             )
@@ -1139,6 +1146,8 @@ def _accounting_resolution_response(result) -> AccountingResolutionResponse:
         treatment_type=result.treatment_type,
         expense_account_id=result.expense_account_id,
         expense_category=result.expense_category,
+        asset_account_id=result.asset_account_id,
+        depreciation_model_id=result.depreciation_model_id,
         reclassified=result.reclassified,
         already_applied=result.already_applied,
         safe_message=result.safe_message,
@@ -1359,6 +1368,8 @@ def _effective_resolution_response(
         matched_by=resolution.matched_by,
         match_status=resolution.match_status,
         expense_account_id=resolution.expense_account_id,
+        asset_account_id=resolution.asset_account_id,
+        depreciation_model_id=resolution.depreciation_model_id,
     )
 
 
@@ -1752,6 +1763,10 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, (OperatingExpenseMappingContractError, OperatingExpenseMappingAccountInvalidError)):
         return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, (FixedAssetAccountInvalidError, DepreciationModelInvalidError)):
+        return HTTPStatus.BAD_REQUEST
+    if isinstance(exc, FixedAssetAccountingUnavailableError):
+        return HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(exc, SupplierPartnerWriteSafetyGateError):
         return HTTPStatus.FORBIDDEN
     if isinstance(exc, OneOffVendorArchiveRetiredError):

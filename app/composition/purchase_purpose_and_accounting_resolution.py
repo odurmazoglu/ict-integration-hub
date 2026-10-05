@@ -7,12 +7,14 @@ from app.application.use_cases.effective_decision import EffectiveDecisionResolv
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
 from app.application.workbench.accounting_resolution_use_cases import SubmitReviewAccountingResolutionUseCase
 from app.application.workbench.execution_evidence_recovery_use_cases import RebuildReviewExecutionEvidenceUseCase
+from app.application.workbench.fixed_asset_lookup import FixedAssetAccountPolicy
 from app.application.workbench.purchase_purpose_use_cases import SubmitPurchasePurposeUseCase
 from app.composition.imports import build_deterministic_decision_engine, build_runtime_workbench_projection_synchronizer
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.expense_account_candidate_reader import OdooExpenseAccountCandidateReader
+from app.erp.odoo.fixed_asset_accounting_reader import OdooFixedAssetAccountingReader
 from app.persistence import (
     SqlAlchemyOperatingExpenseMappingRepository,
     SqlAlchemyReviewAccountingResolutionRepository,
@@ -79,6 +81,8 @@ def build_submit_review_accounting_resolution_use_case(
         review_reader=review_repository,
         purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
         expense_account_reader=OdooExpenseAccountCandidateReader(adapter=read_adapter),
+        fixed_asset_reader=OdooFixedAssetAccountingReader(adapter=read_adapter),
+        fixed_asset_account_policy=FixedAssetAccountPolicy.from_ids(settings.odoo_fixed_asset_account_ids),
         accounting_resolution_writer=accounting_resolution_repository,
         reclassifier=reclassifier,
         unit_of_work=SqlAlchemyUnitOfWork(session),

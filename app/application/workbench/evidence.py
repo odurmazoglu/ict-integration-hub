@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from app.application.dto import ApplicationDTO
 from app.application.expense_mapping import OperatingExpenseMatchResult, operating_expense_evidence_errors
+from app.application.fixed_asset_accounting import FixedAssetAccounting, fixed_asset_evidence_errors
 from app.application.rules import (
     InvoiceClassificationResult,
     InvoiceClassificationRuleEvidence,
@@ -70,6 +71,10 @@ class ReviewExecutionEvidence(ApplicationDTO):
     # unmatched line ``account_only`` (see ``LineResolution.account_only``), at which
     # point ``VendorBillBuilder`` still requires it to be a clean ``MATCHED`` result.
     account_only_expense_match: OperatingExpenseMatchResult | None = None
+    #: Frozen CAPITALIZE_FIXED_ASSET selection (asset account + depreciation model) from
+    #: an accepted review-scoped accounting resolution; mutually exclusive with
+    #: ``operating_expense_match``. See ``app.application.fixed_asset_accounting``.
+    fixed_asset_accounting: FixedAssetAccounting | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -102,6 +107,15 @@ class ReviewExecutionEvidence(ApplicationDTO):
         )
         if expense_errors:
             raise WorkbenchContractError(expense_errors[0])
+        asset_errors = fixed_asset_evidence_errors(
+            fixed_asset_accounting=self.fixed_asset_accounting,
+            operating_expense_match=self.operating_expense_match,
+            invoice=self.invoice,
+            partner_match=self.partner_match,
+            product_match=self.product_match,
+        )
+        if asset_errors:
+            raise WorkbenchContractError(asset_errors[0])
 
 
 @dataclass(frozen=True, slots=True)

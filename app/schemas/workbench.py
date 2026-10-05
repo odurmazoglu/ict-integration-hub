@@ -157,6 +157,8 @@ class EffectiveLineResolutionResponse(BaseModel):
     matched_by: str | None
     match_status: str | None
     expense_account_id: int | None
+    asset_account_id: int | None = None
+    depreciation_model_id: int | None = None
 
 
 class AcceptedDecisionSummaryResponse(BaseModel):
@@ -556,12 +558,15 @@ class AccountingResolutionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     expected_version: int
-    #: Deliberately a fixed ``Literal``, not the broader policy enum: any other value
-    #: (e.g. a future "capitalize_fixed_asset") must be rejected by request validation
-    #: itself, never silently accepted and reinterpreted (P0-PROD-15T scope).
-    treatment_type: Literal["expense_account"]
-    expense_account_id: int
-    expense_category: str
+    #: Deliberately a fixed ``Literal`` of the implemented treatments: any other value
+    #: must be rejected by request validation itself, never silently reinterpreted.
+    treatment_type: Literal["expense_account", "capitalize_fixed_asset"]
+    #: expense_account only (both required there, rejected for capitalize_fixed_asset).
+    expense_account_id: int | None = None
+    expense_category: str | None = None
+    #: capitalize_fixed_asset only (both required there, rejected for expense_account).
+    asset_account_id: int | None = None
+    depreciation_model_id: int | None = None
     note: str | None = None
 
 
@@ -576,8 +581,10 @@ class AccountingResolutionResponse(BaseModel):
     current_workflow: WorkflowType
     current_review_reasons: list[ManualReviewReasonResponse]
     treatment_type: AccountingTreatmentType
-    expense_account_id: int
-    expense_category: str
+    expense_account_id: int | None = None
+    expense_category: str | None = None
+    asset_account_id: int | None = None
+    depreciation_model_id: int | None = None
     reclassified: bool
     already_applied: bool
     safe_message: str | None = None

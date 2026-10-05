@@ -68,6 +68,7 @@ def build_review_execution_evidence(
         operating_expense_match: object | None,
         *,
         account_only_expense_match: object | None = None,
+        fixed_asset_accounting: object | None = None,
     ) -> ReviewExecutionEvidence:
         return ReviewExecutionEvidence(
             review_id=review_id,
@@ -80,7 +81,24 @@ def build_review_execution_evidence(
             tax_match=tax_match,
             operating_expense_match=operating_expense_match,
             account_only_expense_match=account_only_expense_match,
+            fixed_asset_accounting=fixed_asset_accounting,
         )
+
+    # Fixed-asset mode: an accepted CAPITALIZE_FIXED_ASSET accounting resolution is an
+    # explicit, review-scoped operator decision and is pinned verbatim (asset account +
+    # depreciation model) when the whole-invoice fixed-asset validation accepts it.
+    fixed_asset_accounting = getattr(decision_result, "fixed_asset_accounting", None)
+    if fixed_asset_accounting is not None:
+        if validate_vendor_bill_inputs(
+            invoice,
+            partner_match,
+            product_match,
+            tax_match,
+            company_id=company_id,
+            fixed_asset_accounting=fixed_asset_accounting,
+        ).is_valid:
+            return _build(None, fixed_asset_accounting=fixed_asset_accounting)
+        return None
 
     # Product mode wins: a valid deterministic product Vendor Bill is pinned as product evidence.
     if validate_vendor_bill_inputs(

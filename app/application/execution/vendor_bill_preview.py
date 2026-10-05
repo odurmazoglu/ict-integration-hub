@@ -327,6 +327,11 @@ class PreviewVendorBillUseCase:
             account_only_expense_match=source.account_only_expense_match,
             explicit_account_only_accounts=explicit_account_only_accounts,
             monetary_precision=precision,
+            **(
+                {"fixed_asset_accounting": source.fixed_asset_accounting}
+                if source.fixed_asset_accounting is not None
+                else {}
+            ),
         )
         resale_accounting_by_line = self._pinned_resale_accounting(decision, source, vendor_bill)
 
