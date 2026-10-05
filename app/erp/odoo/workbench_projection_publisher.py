@@ -870,6 +870,11 @@ def _resolution_text(resolution: WorkbenchProjectionLineResolution) -> str:
     if resolution.kind == "product" and resolution.product_id is not None:
         source = (resolution.product_source or "").replace("_", " ")
         return f"{line} \u2192 product {resolution.product_id}" + (f" ({source})" if source else "")
+    if resolution.kind == "fixed_asset" and resolution.asset_account_id is not None:
+        return (
+            f"{line} \u2192 asset account {resolution.asset_account_id}, "
+            f"depreciation model {resolution.depreciation_model_id} (fixed asset)"
+        )
     account_label = _ACCOUNT_RESOLUTION_LABELS.get(resolution.kind)
     if account_label is not None and resolution.expense_account_id is not None:
         return f"{line} \u2192 account {resolution.expense_account_id} ({account_label})"

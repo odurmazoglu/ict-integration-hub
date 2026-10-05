@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     #: no category is approved. Never hierarchical: approving a parent approves no child.
     #: Holds category ids only -- the purchase account stays Odoo's category configuration.
     resale_product_category_ids: frozenset[OdooRecordId] = frozenset()
+    #: Exact Odoo ``account.account`` ids an operator may select as the fixed-asset account of
+    #: a CAPITALIZE_FIXED_ASSET accounting resolution. Empty means fixed-asset accounting is
+    #: unavailable (fails closed). Keeps e.g. accumulated-depreciation accounts unselectable.
+    odoo_fixed_asset_account_ids: frozenset[OdooRecordId] = frozenset()
 
     uyumsoft_environment: UyumsoftEnvironment = "test"
     uyumsoft_test_wsdl_url: AnyHttpUrl = Field(default="https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl")

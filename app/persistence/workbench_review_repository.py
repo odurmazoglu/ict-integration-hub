@@ -71,6 +71,7 @@ from app.models.workbench_review_reclassification import WorkbenchReviewReclassi
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence.execution_source_invoice_reader import (
     deserialize_execution_source_invoice_payload,
+    optional_fixed_asset_accounting,
     serialize_execution_source_invoice,
     serialize_execution_source_invoice_payload,
 )
@@ -1825,6 +1826,7 @@ def _evidence_model_from_review_evidence(evidence: ReviewExecutionEvidence) -> W
         tax_match=payload["tax_match"],
         operating_expense_match=payload["operating_expense_match"],
         account_only_expense_match=payload["account_only_expense_match"],
+        fixed_asset_accounting=payload.get("fixed_asset_accounting"),
     )
 
 
@@ -1843,6 +1845,7 @@ def _review_evidence_from_model(record: WorkbenchReviewExecutionEvidence) -> Rev
             "tax_match": record.tax_match,
             "operating_expense_match": record.operating_expense_match,
             "account_only_expense_match": record.account_only_expense_match,
+            **optional_fixed_asset_accounting(record.fixed_asset_accounting),
         }
     )
     return _review_evidence_from_execution_source(source)
@@ -1912,6 +1915,7 @@ def _execution_source_from_review_evidence(evidence: ReviewExecutionEvidence) ->
         tax_match=evidence.tax_match,
         operating_expense_match=evidence.operating_expense_match,
         account_only_expense_match=evidence.account_only_expense_match,
+        fixed_asset_accounting=evidence.fixed_asset_accounting,
     )
 
 
@@ -1927,6 +1931,7 @@ def _review_evidence_from_execution_source(source: ExecutionSourceInvoice) -> Re
         tax_match=source.tax_match,
         operating_expense_match=source.operating_expense_match,
         account_only_expense_match=source.account_only_expense_match,
+        fixed_asset_accounting=source.fixed_asset_accounting,
     )
 
 
@@ -2335,6 +2340,7 @@ def _review_evidence_fingerprint(evidence: ReviewExecutionEvidence) -> tuple[Any
         payload["tax_match"],
         payload["operating_expense_match"],
         payload["account_only_expense_match"],
+        payload.get("fixed_asset_accounting"),
     )
 
 
@@ -2546,6 +2552,7 @@ def _evidence_fingerprint_from_model(record: ExecutionSourceInvoiceEvidence) -> 
             "tax_match": record.tax_match,
             "operating_expense_match": record.operating_expense_match,
             "account_only_expense_match": record.account_only_expense_match,
+            **optional_fixed_asset_accounting(record.fixed_asset_accounting),
         }
     )
 

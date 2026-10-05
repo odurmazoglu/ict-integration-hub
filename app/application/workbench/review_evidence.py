@@ -75,6 +75,9 @@ class EffectiveLineResolutionKind(StrEnum):
     #: OPS-UI-01A-1: the whole invoice is booked to one account by a supplier-wide
     #: operating-expense mapping.
     OPERATING_EXPENSE_MAPPING = "operating_expense_mapping"
+    #: The whole invoice is capitalized by an accepted CAPITALIZE_FIXED_ASSET accounting
+    #: resolution: every line posts to ``asset_account_id`` with ``depreciation_model_id``.
+    FIXED_ASSET = "fixed_asset"
     UNRESOLVED = "unresolved"
 
 
@@ -95,6 +98,9 @@ class EffectiveLineResolution:
     matched_by: str | None
     match_status: str | None
     expense_account_id: int | None
+    #: FIXED_ASSET only -- never folded into ``expense_account_id``.
+    asset_account_id: int | None = None
+    depreciation_model_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +351,22 @@ def effective_resolutions(source: ExecutionSourceInvoice) -> dict[str | None, Ef
     2. Otherwise, per line: an explicit account-only decision, else a matched product
        (human-selected or automatic), else unresolved.
     """
+
+    fixed_asset = source.fixed_asset_accounting
+    if fixed_asset is not None:
+        return {
+            line.line_number: EffectiveLineResolution(
+                kind=EffectiveLineResolutionKind.FIXED_ASSET,
+                product_id=None,
+                product_source=None,
+                matched_by=REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY,
+                match_status=None,
+                expense_account_id=None,
+                asset_account_id=fixed_asset.asset_account_id,
+                depreciation_model_id=fixed_asset.depreciation_model_id,
+            )
+            for line in source.invoice.lines
+        }
 
     invoice_account = _invoice_level_expense_account(source)
     if invoice_account is not None:

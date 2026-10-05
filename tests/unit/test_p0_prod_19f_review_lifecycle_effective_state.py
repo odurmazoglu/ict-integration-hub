@@ -386,6 +386,8 @@ def test_vitel_shape_accepted_human_selection_is_the_effective_product(session: 
         "matched_by": HUMAN_SELECTED_MATCHED_BY,
         "match_status": ProductMatchStatus.MATCHED.value,
         "expense_account_id": None,
+        "asset_account_id": None,
+        "depreciation_model_id": None,
     }
     assert payload["evidence"]["accepted_decision"]["decision_type"] == "select_workflow"
 

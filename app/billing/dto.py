@@ -62,6 +62,10 @@ class VendorBillLine:
       allowed only together with a ``resale_account`` proving the account is the
       decision's immutable, execution-time-validated RESALE pin for this product.
 
+    An account-only line may additionally carry ``depreciation_model_id`` -- the frozen
+    CAPITALIZE_FIXED_ASSET selection (``app.application.fixed_asset_accounting``). It is
+    never allowed on a product or RESALE line.
+
     ``product_id`` and ``account_id`` without ``resale_account`` stays rejected, so no
     caller can attach an arbitrary account to a product-backed line.
 
@@ -81,8 +85,13 @@ class VendorBillLine:
     description: str | None = None
     account_id: int | None = None
     resale_account: ValidatedResaleLineAccount | None = None
+    depreciation_model_id: int | None = None
 
     def __post_init__(self) -> None:
+        if self.depreciation_model_id is not None:
+            _require_positive_int(self.depreciation_model_id, "depreciation_model_id must be a positive ERP id.")
+            if self.product_id is not None or self.resale_account is not None or self.account_id is None:
+                raise ValueError("depreciation_model_id is only valid on an account-only fixed-asset line.")
         if self.resale_account is not None:
             if not isinstance(self.resale_account, ValidatedResaleLineAccount) or not self.resale_account.sealed:
                 raise ValueError("resale_account must be issued by RESALE execution validation.")

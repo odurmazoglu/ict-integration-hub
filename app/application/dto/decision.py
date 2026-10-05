@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 from app.application.dto.base import ApplicationDTO
 from app.application.expense_mapping.matching import OperatingExpenseMatchResult
+from app.application.fixed_asset_accounting import FixedAssetAccounting
 from app.application.workflow import ManualReviewReason, WorkflowDecision, WorkflowType
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult
 from app.tax_mapping import InvoiceTaxMappingResult
@@ -56,3 +57,6 @@ class DecisionResult(ApplicationDTO):
     warnings: tuple[str, ...] = field(default_factory=tuple)
     errors: tuple[str, ...] = field(default_factory=tuple)
     duration: float = 0.0
+    #: Set only on an *effective* (execution) decision result whose review carries an
+    #: accepted CAPITALIZE_FIXED_ASSET accounting resolution -- never by the raw engine.
+    fixed_asset_accounting: FixedAssetAccounting | None = None

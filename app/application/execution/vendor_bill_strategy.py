@@ -110,6 +110,10 @@ class VendorBillExecutionStrategy:
                 if validated_resale_accounts is not None
                 else {}
             )
+            # Frozen CAPITALIZE_FIXED_ASSET selection, pinned in Stage-1/2 evidence and never
+            # recomputed; passed only when present so every other build call is unchanged.
+            if source.fixed_asset_accounting is not None:
+                resale_kwargs["fixed_asset_accounting"] = source.fixed_asset_accounting
             # P0-PROD-19E-2: read-only currency precision, so the bill's money is reconciled at
             # the currency's precision and a mismatch fails closed before the writer's first call.
             monetary_precision = self._monetary_precision(source)

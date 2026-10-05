@@ -277,6 +277,8 @@ def _line_resolutions(source: ExecutionSourceInvoice) -> tuple[WorkbenchProjecti
             product_id=resolution.product_id,
             product_source=resolution.product_source.value if resolution.product_source is not None else None,
             expense_account_id=resolution.expense_account_id,
+            asset_account_id=resolution.asset_account_id,
+            depreciation_model_id=resolution.depreciation_model_id,
         )
         for line_number, resolution in effective_resolutions(source).items()
     )

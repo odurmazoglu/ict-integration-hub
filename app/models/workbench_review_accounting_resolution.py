@@ -15,8 +15,10 @@ class WorkbenchReviewAccountingResolution(Base):
     supplier-wide), this row applies to exactly one review version and never
     contaminates a future invoice from the same supplier.
 
-    Only ``treatment_type = 'expense_account'`` is accepted today -- the check
-    constraint intentionally has one allowed value; adding more is a schema change.
+    ``treatment_type`` is ``'expense_account'`` (expense_account_id + expense_category)
+    or ``'capitalize_fixed_asset'`` (asset_account_id + depreciation_model_id); the
+    shape check constraint enforces exactly one field set per treatment, so historical
+    expense rows stay valid unchanged.
 
     Append-only: no UPDATE path, no DELETE in the normal workflow.
     """
@@ -37,8 +39,23 @@ class WorkbenchReviewAccountingResolution(Base):
             name="ck_workbench_review_accounting_resolutions_review_version_positive",
         ),
         CheckConstraint(
-            "treatment_type IN ('expense_account')",
+            "treatment_type IN ('expense_account', 'capitalize_fixed_asset')",
             name="ck_workbench_review_accounting_resolutions_treatment_type",
+        ),
+        CheckConstraint(
+            "(treatment_type = 'expense_account' AND expense_account_id IS NOT NULL "
+            "AND expense_category IS NOT NULL AND asset_account_id IS NULL AND depreciation_model_id IS NULL) "
+            "OR (treatment_type = 'capitalize_fixed_asset' AND asset_account_id IS NOT NULL "
+            "AND depreciation_model_id IS NOT NULL AND expense_account_id IS NULL AND expense_category IS NULL)",
+            name="ck_workbench_review_accounting_resolutions_treatment_shape",
+        ),
+        CheckConstraint(
+            "asset_account_id IS NULL OR asset_account_id > 0",
+            name="ck_workbench_review_accounting_resolutions_asset_account_id_positive",
+        ),
+        CheckConstraint(
+            "depreciation_model_id IS NULL OR depreciation_model_id > 0",
+            name="ck_workbench_review_accounting_resolutions_depreciation_model_id_positive",
         ),
         CheckConstraint(
             "expense_account_id > 0",
@@ -65,8 +82,10 @@ class WorkbenchReviewAccountingResolution(Base):
     company_id: Mapped[int] = mapped_column(nullable=False)
     review_version: Mapped[int] = mapped_column(nullable=False)
     treatment_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    expense_account_id: Mapped[int] = mapped_column(nullable=False)
-    expense_category: Mapped[str] = mapped_column(String(64), nullable=False)
+    expense_account_id: Mapped[int | None] = mapped_column(nullable=True)
+    expense_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    asset_account_id: Mapped[int | None] = mapped_column(nullable=True)
+    depreciation_model_id: Mapped[int | None] = mapped_column(nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     note: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(AwareDateTime(), server_default=func.now(), nullable=False)

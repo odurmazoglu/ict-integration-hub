@@ -7,6 +7,7 @@ from app.application.commands import Command
 from app.application.dto import ApplicationDTO
 from app.application.execution.exceptions import ExecutionPlanningError
 from app.application.expense_mapping import OperatingExpenseMatchResult, operating_expense_evidence_errors
+from app.application.fixed_asset_accounting import FixedAssetAccounting, fixed_asset_evidence_errors
 from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationSet
 from app.application.workbench.dto import LineResolution, ReviewDecisionType
 from app.application.workbench.write_authorization import WriteAuthorizationRecord
@@ -385,6 +386,9 @@ class ExecutionSourceInvoice(ApplicationDTO):
     # product. Read-only facts about what the human decided; never re-derives or
     # infers a resolution on its own.
     line_resolutions: tuple[LineResolution, ...] = field(default_factory=tuple)
+    #: Frozen CAPITALIZE_FIXED_ASSET selection pinned verbatim from Stage-1/2 evidence;
+    #: never recomputed at execution time. See ``app.application.fixed_asset_accounting``.
+    fixed_asset_accounting: FixedAssetAccounting | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -412,6 +416,17 @@ class ExecutionSourceInvoice(ApplicationDTO):
         )
         if expense_errors:
             raise ExecutionPlanningError(expense_errors[0])
+        asset_errors = fixed_asset_evidence_errors(
+            fixed_asset_accounting=self.fixed_asset_accounting,
+            operating_expense_match=self.operating_expense_match,
+            invoice=self.invoice,
+            partner_match=self.partner_match,
+            product_match=self.product_match,
+        )
+        if asset_errors:
+            raise ExecutionPlanningError(asset_errors[0])
+        if self.fixed_asset_accounting is not None and tuple(self.line_resolutions):
+            raise ExecutionPlanningError("Fixed-asset evidence cannot carry per-line resolutions.")
         line_resolutions = tuple(self.line_resolutions)
         for resolution in line_resolutions:
             if not isinstance(resolution, LineResolution):

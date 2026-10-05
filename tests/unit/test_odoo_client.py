@@ -38,6 +38,7 @@ def test_read_only_models_allowlist_is_exact() -> None:
             "res.currency",
             "account.journal",
             "account.account",
+            "account.depreciation.model",
             "account.fiscal.position",
             "account.fiscal.position.account",
         }

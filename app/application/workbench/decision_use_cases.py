@@ -330,6 +330,11 @@ def _validate_resolved_execution_inputs(
         operating_expense_match=evidence.operating_expense_match,
         account_only_line_numbers=account_only_lines,
         explicit_account_only_accounts=explicit_accounts,
+        **(
+            {"fixed_asset_accounting": evidence.fixed_asset_accounting}
+            if evidence.fixed_asset_accounting is not None
+            else {}
+        ),
     )
     if not validation.is_valid:
         raise ReviewDecisionError("Vendor Bill decision requires complete resolved execution inputs.")

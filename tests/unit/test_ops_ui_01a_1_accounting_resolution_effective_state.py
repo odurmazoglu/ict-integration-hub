@@ -304,6 +304,8 @@ def test_review_detail_api_exposes_the_accounting_resolution_effective_state(ses
         "matched_by": REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY,
         "match_status": "MATCHED",
         "expense_account_id": ACCOUNT_ID,
+        "asset_account_id": None,
+        "depreciation_model_id": None,
     }
 
 

@@ -76,6 +76,8 @@ class WorkbenchProjectionLineResolution(ApplicationDTO):
     product_id: int | None = None
     product_source: str | None = None
     expense_account_id: int | None = None
+    asset_account_id: int | None = None
+    depreciation_model_id: int | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.kind, "kind is required.")

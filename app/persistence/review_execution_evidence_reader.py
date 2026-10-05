@@ -22,6 +22,7 @@ from app.persistence.execution_source_invoice_reader import (
     SAFE_SOURCE_INTEGRITY_ERROR,
     SAFE_SOURCE_NOT_FOUND,
     deserialize_execution_source_invoice_payload,
+    optional_fixed_asset_accounting,
 )
 
 
@@ -113,6 +114,7 @@ def _source_from_review_evidence(
             "tax_match": _require_dict(record.tax_match),
             "operating_expense_match": record.operating_expense_match,
             "account_only_expense_match": record.account_only_expense_match,
+            **optional_fixed_asset_accounting(record.fixed_asset_accounting),
         }
     )
 
@@ -142,6 +144,7 @@ def _validate_stage_one_linkage(
         tax_match=source.tax_match,
         operating_expense_match=source.operating_expense_match,
         account_only_expense_match=source.account_only_expense_match,
+        fixed_asset_accounting=source.fixed_asset_accounting,
     )
 
 
