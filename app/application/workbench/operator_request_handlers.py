@@ -21,6 +21,12 @@ from app.application.execution import (
     WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
 )
+from app.application.execution.accepted_decision_use_cases import (
+    RunAcceptedDecisionExecutionCommand,
+    accepted_decision_execution_id,
+)
+from app.application.execution.contracts import AcceptedReviewDecision
+from app.application.execution.runtime import ExecutionSnapshot, ExecutionState
 from app.application.workbench.accounting_resolution import (
     AccountingTreatmentType,
     SubmitReviewAccountingResolutionCommand,
@@ -28,7 +34,11 @@ from app.application.workbench.accounting_resolution import (
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.decision_ingestion import decision_idempotency_key, review_decision_command
 from app.application.workbench.dto import ReviewDecisionAcknowledgement
-from app.application.workbench.exceptions import ReviewVersionConflictError, WorkbenchContractError
+from app.application.workbench.exceptions import (
+    ReviewNotFoundError,
+    ReviewVersionConflictError,
+    WorkbenchContractError,
+)
 from app.application.workbench.operator_request_ingestion import (
     ALREADY_COMPLETED_MESSAGE,
     STALE_REQUEST_MESSAGE,
@@ -237,6 +247,54 @@ class _ExecutionDispatcher(Protocol):
     ) -> WorkbenchVendorBillExecutionResult: ...
 
 
+class _AcceptedDecisionReader(Protocol):
+    def get_accepted_decision(
+        self, *, review_id: str, company_id: int, decision_version: int
+    ) -> AcceptedReviewDecision: ...
+
+
+class _ExecutionSnapshotReader(Protocol):
+    def get_snapshot(self, *, execution_id: str) -> ExecutionSnapshot | None: ...
+
+
+class CompletedVendorBillExecutionProbe:
+    """Read-only: has this exact accepted decision already completed its EXECUTE-mode run?
+
+    Uses the runtime's own replay identity (``accepted_decision_execution_id``) and stored
+    snapshot -- the same facts the Vendor Bill workflow checks before it replays
+    ``ALREADY_EXECUTED`` -- so the adapter adds no parallel rule.
+    """
+
+    def __init__(
+        self, *, accepted_decision_reader: _AcceptedDecisionReader, snapshot_reader: _ExecutionSnapshotReader
+    ) -> None:
+        self._decisions = accepted_decision_reader
+        self._snapshots = snapshot_reader
+
+    def is_completed(self, *, review_id: str, company_id: int, decision_version: int) -> bool:
+        try:
+            decision = self._decisions.get_accepted_decision(
+                review_id=review_id, company_id=company_id, decision_version=decision_version
+            )
+        except ReviewNotFoundError:
+            return False
+        execution_id = accepted_decision_execution_id(
+            RunAcceptedDecisionExecutionCommand(
+                review_id=review_id,
+                company_id=company_id,
+                decision_version=decision_version,
+                mode=ExecutionMode.EXECUTE,
+            ),
+            decision=decision,
+        )
+        snapshot = self._snapshots.get_snapshot(execution_id=execution_id)
+        return snapshot is not None and snapshot.state is ExecutionState.COMPLETED
+
+
+class _CompletionProbe(Protocol):
+    def is_completed(self, *, review_id: str, company_id: int, decision_version: int) -> bool: ...
+
+
 class ExecuteVendorBillRequestHandler:
     """-> existing write authorization + ``WorkbenchAcceptedDecisionExecutionDispatcher``.
 
@@ -244,19 +302,38 @@ class ExecuteVendorBillRequestHandler:
     authorization for exactly this review/version, then execute in EXECUTE mode with the
     actor as named approver. The bill is created as a draft; posting stays a human Odoo
     action.
+
+    When the exact accepted decision already completed its execution, no authorization
+    is issued: the dispatcher is called without one and returns its stored
+    ``ALREADY_EXECUTED`` replay, which never consumes an authorization or writes Odoo.
     """
 
-    def __init__(self, *, dispatcher: _ExecutionDispatcher) -> None:
+    def __init__(self, *, dispatcher: _ExecutionDispatcher, completion_probe: _CompletionProbe) -> None:
         self._dispatcher = dispatcher
+        self._probe = completion_probe
 
     def handle(self, request: OperatorRequest, context: OperatorActionContext) -> OperatorActionOutcome:
+        approval = ExecutionApproval(approved_by=context.actor.actor)
+        if self._probe.is_completed(
+            review_id=request.review_id, company_id=request.company_id, decision_version=request.expected_version
+        ):
+            replay = self._dispatcher.execute(
+                review_id=request.review_id,
+                company_id=request.company_id,
+                decision_version=request.expected_version,
+                mode=ExecutionMode.EXECUTE,
+                approval=approval,
+                trace_id=context.trace_id,
+                authorization_id=None,
+            )
+            return _execution_outcome(replay)
         authorization_id = context.ensure_authorization(EXECUTE_VENDOR_BILL_OPERATION)
         result = self._dispatcher.execute(
             review_id=request.review_id,
             company_id=request.company_id,
             decision_version=request.expected_version,
             mode=ExecutionMode.EXECUTE,
-            approval=ExecutionApproval(approved_by=context.actor.actor),
+            approval=approval,
             trace_id=context.trace_id,
             authorization_id=authorization_id,
         )
@@ -302,6 +379,7 @@ __all__ = [
     "EXECUTE_VENDOR_BILL_OPERATION",
     "SUPPLIER_AUTHORIZATION_OPERATION",
     "AccountingResolutionRequestHandler",
+    "CompletedVendorBillExecutionProbe",
     "DecisionRequestHandler",
     "ExecuteVendorBillRequestHandler",
     "PurchasePurposeRequestHandler",

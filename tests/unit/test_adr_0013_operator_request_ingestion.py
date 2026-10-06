@@ -694,13 +694,20 @@ class FakeDispatcher:
         return SimpleNamespace(status=self.status, artifacts=artifacts, message=self.message)
 
 
+class NeverCompleted:
+    def is_completed(self, **kwargs: Any) -> bool:
+        return False
+
+
 def _execute_request() -> OperatorRequest:
     return _request(action=OperatorRequestAction.EXECUTE_VENDOR_BILL, purchase_purpose=None)
 
 
 def test_execution_issues_narrow_authorization_and_runs_existing_dispatcher_in_execute_mode() -> None:
     dispatcher, issued = FakeDispatcher(WorkbenchVendorBillExecutionStatus.EXECUTED), []
-    outcome = ExecuteVendorBillRequestHandler(dispatcher=dispatcher).handle(_execute_request(), _context(issued=issued))
+    outcome = ExecuteVendorBillRequestHandler(dispatcher=dispatcher, completion_probe=NeverCompleted()).handle(
+        _execute_request(), _context(issued=issued)
+    )
 
     call = dispatcher.calls[0]
     assert issued == ["EXECUTE_VENDOR_BILL"]
@@ -718,9 +725,9 @@ def test_execution_issues_narrow_authorization_and_runs_existing_dispatcher_in_e
     ],
 )
 def test_execution_statuses_map_to_operator_outcomes(status, expected) -> None:
-    outcome = ExecuteVendorBillRequestHandler(dispatcher=FakeDispatcher(status, message="gate closed")).handle(
-        _execute_request(), _context()
-    )
+    outcome = ExecuteVendorBillRequestHandler(
+        dispatcher=FakeDispatcher(status, message="gate closed"), completion_probe=NeverCompleted()
+    ).handle(_execute_request(), _context())
     assert outcome.outcome is expected
 
 
@@ -1028,3 +1035,147 @@ def test_decision_reader_reads_odoo_server_datetimes_as_utc_but_rejects_other_na
     assert _required_aware_datetime("2026-10-06T09:00:00+00:00") == REQUESTED_AT
     with pytest.raises(WorkbenchCandidateDataError):
         _required_aware_datetime("2026-10-06T09:00:00")
+
+
+# ---------------------------------------------------------------------- execute replay never issues authorization
+
+
+class Runtime:
+    """Stand-in for the stored execution runtime + dispatcher, with the real replay order:
+    a completed execution replays ALREADY_EXECUTED before any authorization is looked at;
+    a new execution with the gate closed needs an authorization."""
+
+    def __init__(self) -> None:
+        self.completed: set[tuple[str, int]] = set()
+        self.executions: list[tuple[str, int, str | None]] = []
+        self.calls: list[dict[str, Any]] = []
+
+    # probe
+    def is_completed(self, *, review_id: str, company_id: int, decision_version: int) -> bool:
+        return (review_id, decision_version) in self.completed
+
+    # dispatcher
+    def execute(self, **kwargs: Any):
+        self.calls.append(kwargs)
+        key = (kwargs["review_id"], kwargs["decision_version"])
+        artifact = (
+            ExecutionArtifact(
+                artifact_type=ExecutionArtifactType.VENDOR_BILL,
+                artifact_id="69",
+                external_identity="vendor-bill-write:test",
+                created=True,
+            ),
+        )
+        if key in self.completed:
+            return SimpleNamespace(
+                status=WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED, artifacts=artifact, message=None
+            )
+        if kwargs["authorization_id"] is None:
+            return SimpleNamespace(
+                status=WorkbenchVendorBillExecutionStatus.EXECUTION_DISABLED, artifacts=(), message="gate closed"
+            )
+        self.executions.append((*key, kwargs["authorization_id"]))
+        self.completed.add(key)
+        return SimpleNamespace(status=WorkbenchVendorBillExecutionStatus.EXECUTED, artifacts=artifact, message=None)
+
+
+def _execute_workflow(runtime: Runtime, reader: FakeReader, issuer: FakeIssuer, ledger: FakeLedger):
+    return OperatorRequestIngestionWorkflow(
+        reader=reader,
+        acknowledger=FakeAcknowledger(),
+        ledger=ledger,
+        actors=OperatorActorDirectory({2: OPERATOR}),
+        handlers={
+            OperatorRequestAction.EXECUTE_VENDOR_BILL: ExecuteVendorBillRequestHandler(
+                dispatcher=runtime, completion_probe=runtime
+            )
+        },
+        authorization_issuer=issuer,
+    )
+
+
+def test_execute_replay_never_issues_an_unused_authorization() -> None:
+    runtime, issuer, ledger = Runtime(), FakeIssuer(), FakeLedger()
+    first_request = _execute_request()
+    reader = FakeReader([first_request])
+    workflow = _execute_workflow(runtime, reader, issuer, ledger)
+
+    # First execution: exactly one authorization, exactly one execution.
+    first = workflow.run(company_id=COMPANY).results[0]
+    assert first.outcome is OperatorRequestOutcome.COMPLETED
+    assert len(issuer.calls) == 1 and runtime.executions == [(REVIEW, 4, "auth-1")]
+
+    # The same Odoo request observed again: no second authorization, no second execution.
+    again = workflow.run(company_id=COMPANY).results[0]
+    assert again.outcome is OperatorRequestOutcome.COMPLETED
+    assert len(issuer.calls) == 1 and len(runtime.executions) == 1 and len(runtime.calls) == 1
+
+    # A NEW Odoo request for the same, already executed decision/version.
+    reader.items = [
+        _request(
+            action=OperatorRequestAction.EXECUTE_VENDOR_BILL,
+            purchase_purpose=None,
+            requested_at=datetime(2026, 10, 6, 10, 0, tzinfo=UTC),
+        )
+    ]
+    replay = workflow.run(company_id=COMPANY).results[0]
+    assert replay.outcome is OperatorRequestOutcome.ALREADY_COMPLETED
+    assert "daha önce oluşturulmuştu" in replay.message and "69" in replay.message
+    assert len(issuer.calls) == 1  # no new authorization
+    assert len(runtime.executions) == 1  # no new Vendor Bill
+    assert runtime.calls[-1]["authorization_id"] is None and runtime.calls[-1]["mode"] is ExecutionMode.EXECUTE
+
+
+def test_a_genuinely_new_decision_version_still_requires_normal_authorization() -> None:
+    runtime, issuer = Runtime(), FakeIssuer()
+    runtime.completed.add((REVIEW, 4))  # an earlier decision version executed
+    request = _request(action=OperatorRequestAction.EXECUTE_VENDOR_BILL, purchase_purpose=None, expected_version=6)
+    result = _execute_workflow(runtime, FakeReader([request]), issuer, FakeLedger()).run(company_id=COMPANY)
+
+    assert result.results[0].outcome is OperatorRequestOutcome.COMPLETED
+    assert len(issuer.calls) == 1 and issuer.calls[0]["target_version"] == 6
+    assert runtime.executions == [(REVIEW, 6, "auth-1")]
+
+
+def test_completion_probe_uses_the_runtime_replay_identity_for_the_exact_decision() -> None:
+    from app.application.execution.accepted_decision_use_cases import (
+        RunAcceptedDecisionExecutionCommand,
+        accepted_decision_execution_id,
+    )
+    from app.application.execution.runtime import ExecutionState
+    from app.application.workbench.exceptions import ReviewNotFoundError
+    from app.application.workbench.operator_request_handlers import CompletedVendorBillExecutionProbe
+
+    decision = SimpleNamespace(decision_id="decision-11", decision_version=5)
+    expected_id = accepted_decision_execution_id(
+        RunAcceptedDecisionExecutionCommand(
+            review_id=REVIEW, company_id=COMPANY, decision_version=5, mode=ExecutionMode.EXECUTE
+        ),
+        decision=decision,
+    )
+
+    class Decisions:
+        def get_accepted_decision(self, *, review_id, company_id, decision_version):
+            if decision_version != 5:
+                raise ReviewNotFoundError("no decision")
+            return decision
+
+    class Snapshots:
+        def __init__(self, state):
+            self.state = state
+            self.asked: list[str] = []
+
+        def get_snapshot(self, *, execution_id):
+            self.asked.append(execution_id)
+            return SimpleNamespace(state=self.state) if execution_id == expected_id else None
+
+    completed = Snapshots(ExecutionState.COMPLETED)
+    probe = CompletedVendorBillExecutionProbe(accepted_decision_reader=Decisions(), snapshot_reader=completed)
+    assert probe.is_completed(review_id=REVIEW, company_id=COMPANY, decision_version=5) is True
+    assert completed.asked == [expected_id]
+    assert probe.is_completed(review_id=REVIEW, company_id=COMPANY, decision_version=6) is False
+
+    waiting = CompletedVendorBillExecutionProbe(
+        accepted_decision_reader=Decisions(), snapshot_reader=Snapshots(ExecutionState.WAITING_RETRY)
+    )
+    assert waiting.is_completed(review_id=REVIEW, company_id=COMPANY, decision_version=5) is False

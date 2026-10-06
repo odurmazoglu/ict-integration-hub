@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.application.workbench.exceptions import ReviewVersionConflictError
 from app.application.workbench.operator_request_handlers import (
     AccountingResolutionRequestHandler,
+    CompletedVendorBillExecutionProbe,
     DecisionRequestHandler,
     ExecuteVendorBillRequestHandler,
     PurchasePurposeRequestHandler,
@@ -56,6 +57,7 @@ from app.erp.odoo.workbench_operator_request_reader import (
 )
 from app.erp.odoo.workbench_projection_publisher import OdooWorkbenchJson2ProjectionAdapter
 from app.persistence import SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
+from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRuntimeRepository
 from app.persistence.workbench_operator_request_ledger import SqlAlchemyOperatorRequestLedger
 from app.services.uyumsoft_inbound_poll import InProcessPollLock, PollLock, PostgresAdvisoryPollLock
 
@@ -154,7 +156,11 @@ def build_operator_request_workflow(
         OperatorRequestAction.EXECUTE_VENDOR_BILL: ExecuteVendorBillRequestHandler(
             dispatcher=build_workbench_accepted_decision_execution_dispatcher(
                 session=business_session, settings=settings, odoo_client=client
-            )
+            ),
+            completion_probe=CompletedVendorBillExecutionProbe(
+                accepted_decision_reader=review_repository,
+                snapshot_reader=SqlAlchemyExecutionRuntimeRepository(business_session),
+            ),
         ),
     }
     return OperatorRequestIngestionWorkflow(
