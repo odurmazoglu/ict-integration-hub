@@ -1,6 +1,6 @@
 # ADR-0013: Odoo Online Workbench Operator Requests (extends ADR-0011)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-06
 - Amends: [ADR-0011](ADR-0011-odoo-online-import-workbench-projection.md) (extends, does not supersede)
 
