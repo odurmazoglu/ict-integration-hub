@@ -198,7 +198,7 @@ class WorkbenchDecisionIngestionWorkflow:
                     ),
                 )
             self._erp_reference_validator.validate(candidate, requested_company_id=company_id)
-            command = _review_decision_command(candidate, idempotency_key=self._idempotency_key_factory(candidate))
+            command = review_decision_command(candidate, idempotency_key=self._idempotency_key_factory(candidate))
             already_processed = self._is_matching_decision_already_persisted(command)
             acknowledgement = self._decision_submitter.execute(command)
             self._unit_of_work.commit()
@@ -249,11 +249,13 @@ class WorkbenchDecisionIngestionWorkflow:
         return bool(checker(command))
 
 
-def _review_decision_command(
+def review_decision_command(
     candidate: OdooWorkbenchDecisionCandidate,
     *,
     idempotency_key: str,
 ) -> ReviewDecisionCommand:
+    """The canonical command for one parsed Odoo decision candidate (also used by ADR-0013 ingestion)."""
+
     return ReviewDecisionCommand(
         review_id=candidate.review_id,
         company_id=candidate.company_id,

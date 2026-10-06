@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import partial
 
 from sqlalchemy import Connection, Engine
 from sqlalchemy.orm import Session
@@ -24,6 +25,8 @@ from app.application.workbench import (
     WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
+from app.application.workbench.dto import ReviewItem
+from app.application.workbench.operator_guidance import OperatorGuidanceFacts
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.connectors.odoo.client import OdooJson2Client
@@ -69,6 +72,12 @@ from app.persistence import (
     SqlAlchemyReviewExecutionEvidenceReader,
     SqlAlchemyReviewRepository,
     SqlAlchemyUnitOfWork,
+)
+from app.persistence.workbench_review_accounting_resolution_repository import (
+    SqlAlchemyReviewAccountingResolutionRepository,
+)
+from app.persistence.workbench_review_purchase_purpose_resolution_repository import (
+    SqlAlchemyReviewPurchasePurposeResolutionRepository,
 )
 from app.services.document_service import InvoiceDocumentService
 from app.services.document_storage import DocumentStorage
@@ -124,11 +133,34 @@ def build_workbench_projection_synchronizer(
         client=odoo_client or OdooJson2Client.from_settings(settings)
     )
 
+    eligible_asset_account_ids = tuple(sorted(settings.odoo_fixed_asset_account_ids))
+    # ADR-0013 guidance is read only when at least one guidance field is mapped, so an
+    # unconfigured deployment performs exactly the pre-ADR-0013 reads and writes.
+    guidance_mapped = any(
+        name is not None
+        for name in (
+            resolved_mapping.next_action,
+            resolved_mapping.todo,
+            resolved_mapping.completed,
+            resolved_mapping.eligible_asset_accounts,
+        )
+    )
+
     @contextmanager
     def read_scope() -> Iterator[WorkbenchProjectionSources]:
         with open_read_only_session(bound_engine) as read_session:
             review_repository = SqlAlchemyReviewRepository(read_session)
             yield WorkbenchProjectionSources(
+                guidance_facts_reader=(
+                    partial(
+                        _operator_guidance_facts,
+                        purpose_repository=SqlAlchemyReviewPurchasePurposeResolutionRepository(read_session),
+                        accounting_repository=SqlAlchemyReviewAccountingResolutionRepository(read_session),
+                        eligible_asset_account_ids=eligible_asset_account_ids,
+                    )
+                    if guidance_mapped
+                    else None
+                ),
                 review_reader=review_repository,
                 accepted_decision_reader=review_repository,
                 accepted_source_reader=SqlAlchemyExecutionSourceInvoiceReader(read_session),
@@ -143,6 +175,28 @@ def build_workbench_projection_synchronizer(
             )
 
     return WorkbenchProjectionSynchronizer(read_scope=read_scope)
+
+
+def _operator_guidance_facts(
+    review: ReviewItem,
+    company_id: int,
+    *,
+    purpose_repository: SqlAlchemyReviewPurchasePurposeResolutionRepository,
+    accounting_repository: SqlAlchemyReviewAccountingResolutionRepository,
+    eligible_asset_account_ids: tuple[int, ...],
+) -> OperatorGuidanceFacts:
+    """ADR-0013 guidance facts, read from the same private read-only session."""
+
+    purposes = purpose_repository.list_purchase_purpose_resolutions(review_id=review.review_id, company_id=company_id)
+    current = next((item for item in purposes if item.review_version == review.version), None)
+    return OperatorGuidanceFacts(
+        current_purchase_purpose=current.purchase_purpose if current is not None else None,
+        latest_purchase_purpose=purposes[-1].purchase_purpose if purposes else None,
+        latest_accounting_resolution=accounting_repository.find_latest_accounting_resolution(
+            review_id=review.review_id, company_id=company_id
+        ),
+        eligible_asset_account_ids=eligible_asset_account_ids,
+    )
 
 
 @contextmanager
@@ -223,33 +277,9 @@ def build_odoo_workbench_decision_ingestion_workflow(
             adapter=read_adapter,
             mapping=OdooWorkbenchFieldMapping.from_environment(),
         ),
-        erp_reference_validator=WorkbenchErpReferenceValidator(
-            partner_repository=OdooPartnerReferenceRepository(adapter=read_adapter),
-            company_repository=OdooCompanyReferenceRepository(adapter=read_adapter),
-            sales_order_repository=OdooSalesOrderReferenceRepository(adapter=read_adapter),
-            sales_order_line_repository=OdooSalesOrderLineReferenceRepository(adapter=read_adapter),
-            purchase_order_repository=OdooPurchaseOrderReferenceRepository(adapter=read_adapter),
-            customer_invoice_repository=OdooCustomerInvoiceReferenceRepository(adapter=read_adapter),
-            opportunity_repository=OdooOpportunityReferenceRepository(adapter=read_adapter),
-            analytic_account_repository=OdooAnalyticAccountReferenceRepository(adapter=read_adapter),
-        ),
-        decision_submitter=SubmitReviewDecisionUseCase(
-            review_decision_writer=SqlAlchemyReviewRepository(session),
-            unit_of_work=SqlAlchemyUnitOfWork(session),
-            execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
-            billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
-            selected_product_reader=OdooSelectedProductReader(
-                product_repository=OdooProductRepository(adapter=read_adapter),
-            ),
-            selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
-            resale_decision_gate=build_resale_decision_gate(
-                session=session,
-                settings=settings,
-                odoo_client=resolved_odoo_client,
-            ),
-            projection_synchronizer=build_runtime_workbench_projection_synchronizer(
-                session=session, settings=settings, odoo_client=resolved_odoo_client
-            ),
+        erp_reference_validator=build_workbench_erp_reference_validator(read_adapter),
+        decision_submitter=build_odoo_decision_submitter(
+            session=session, settings=settings, odoo_client=resolved_odoo_client, read_adapter=read_adapter
         ),
         acknowledgement_publisher=OdooWorkbenchProjectionPublisher(
             adapter=projection_adapter,
@@ -259,6 +289,46 @@ def build_odoo_workbench_decision_ingestion_workflow(
             ),
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
+    )
+
+
+def build_workbench_erp_reference_validator(read_adapter: OdooReadOnlyAdapter) -> WorkbenchErpReferenceValidator:
+    """Exact-id ERP reference validation for Odoo-sourced decision candidates."""
+
+    return WorkbenchErpReferenceValidator(
+        partner_repository=OdooPartnerReferenceRepository(adapter=read_adapter),
+        company_repository=OdooCompanyReferenceRepository(adapter=read_adapter),
+        sales_order_repository=OdooSalesOrderReferenceRepository(adapter=read_adapter),
+        sales_order_line_repository=OdooSalesOrderLineReferenceRepository(adapter=read_adapter),
+        purchase_order_repository=OdooPurchaseOrderReferenceRepository(adapter=read_adapter),
+        customer_invoice_repository=OdooCustomerInvoiceReferenceRepository(adapter=read_adapter),
+        opportunity_repository=OdooOpportunityReferenceRepository(adapter=read_adapter),
+        analytic_account_repository=OdooAnalyticAccountReferenceRepository(adapter=read_adapter),
+    )
+
+
+def build_odoo_decision_submitter(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client,
+    read_adapter: OdooReadOnlyAdapter,
+) -> SubmitReviewDecisionUseCase:
+    """The canonical decision use case as composed for Odoo-sourced decisions."""
+
+    return SubmitReviewDecisionUseCase(
+        review_decision_writer=SqlAlchemyReviewRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
+        execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
+        billing_evidence_reader=SqlAlchemyReviewBillingEvidenceReader(session),
+        selected_product_reader=OdooSelectedProductReader(
+            product_repository=OdooProductRepository(adapter=read_adapter),
+        ),
+        selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
+        resale_decision_gate=build_resale_decision_gate(session=session, settings=settings, odoo_client=odoo_client),
+        projection_synchronizer=build_runtime_workbench_projection_synchronizer(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
     )
 
 

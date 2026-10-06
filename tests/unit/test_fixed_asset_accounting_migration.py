@@ -61,7 +61,7 @@ def test_fixed_asset_migration_upgrade_downgrade_upgrade(tmp_path: Path, monkeyp
             )
             historical = _historical_row(connection)
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "202607170035")  # this migration; later heads are tested separately
         inspector = inspect(engine)
         assert {c["name"] for c in inspector.get_columns(TABLE)} == set(
             WorkbenchReviewAccountingResolution.__table__.columns.keys()
@@ -87,7 +87,7 @@ def test_fixed_asset_migration_upgrade_downgrade_upgrade(tmp_path: Path, monkeyp
         for table in EVIDENCE_TABLES:
             assert "fixed_asset_accounting" not in {c["name"] for c in inspect(engine).get_columns(table)}
 
-        command.upgrade(config, "head")
+        command.upgrade(config, "202607170035")  # this migration; later heads are tested separately
         with engine.begin() as connection:
             assert _historical_row(connection) == historical
             connection.execute(

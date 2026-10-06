@@ -9,6 +9,10 @@ advisory lock in :class:`UyumsoftInboundPollCycle` makes any overlap end as
 With ``UYUMSOFT_INBOUND_POLL_ENABLED=false`` (the default) the process only logs
 that it is disabled and idles until stopped: no Uyumsoft, Odoo or Hub-data call.
 
+ADR-0013: the same process also owns the Odoo Workbench operator request tick
+(``ODOO_WORKBENCH_OPERATOR_REQUESTS_ENABLED``, default ``false``), with its own interval
+and advisory lock. When only Uyumsoft polling is enabled the behavior is unchanged.
+
 ``--preview`` is the first-run safety check: a read-only dry run, allowed while
 polling is disabled, that prints every Inbox invoice in the next cycle's window as
 ALREADY_KNOWN / NEW / WOULD_IMPORT and then exits. Nothing is persisted,
@@ -24,6 +28,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, TextIO
 
 from app.core.config import Settings, get_settings
@@ -80,6 +85,59 @@ class InboundPollScheduler:
         return cycles
 
 
+@dataclass(frozen=True, slots=True)
+class PeriodicTask:
+    name: str
+    run: Callable[[], Any]
+    interval_seconds: float
+
+
+class PeriodicTaskScheduler:
+    """Run several independent periodic tasks in one process, strictly one at a time.
+
+    Each task keeps its own cadence (next run = previous start + its interval, or right
+    after it finished when it ran longer); a crashing task is logged and never stops the
+    loop or the other tasks.
+    """
+
+    def __init__(
+        self,
+        *,
+        tasks: Sequence[PeriodicTask],
+        stop_event: threading.Event,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if not tasks:
+            raise ValueError("at least one periodic task is required.")
+        for task in tasks:
+            if task.interval_seconds <= 0:
+                raise ValueError("interval_seconds must be positive.")
+        self._tasks = tuple(tasks)
+        self._stop_event = stop_event
+        self._monotonic = monotonic
+
+    def run(self, *, max_rounds: int | None = None) -> int:
+        next_run = {task.name: self._monotonic() for task in self._tasks}
+        runs = 0
+        rounds = 0
+        while not self._stop_event.is_set():
+            for task in self._tasks:
+                if self._stop_event.is_set() or self._monotonic() < next_run[task.name]:
+                    continue
+                started = self._monotonic()
+                try:
+                    task.run()
+                except Exception as exc:  # one task must never stop the loop
+                    logger.error("periodic_task_crashed task=%s error_type=%s", task.name, exc.__class__.__name__)
+                runs += 1
+                next_run[task.name] = started + task.interval_seconds
+            rounds += 1
+            if max_rounds is not None and rounds >= max_rounds:
+                break
+            self._stop_event.wait(max(0.0, min(next_run.values()) - self._monotonic()))
+        return runs
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -87,6 +145,7 @@ def main(
     stop_event: threading.Event | None = None,
     cycle_builder: Callable[[Settings], Callable[[], Any]] | None = None,
     preview_builder: Callable[[Settings], Callable[[], InboundPollPreview]] | None = None,
+    operator_request_tick_builder: Callable[[Settings], Callable[[], Any]] | None = None,
     out: TextIO | None = None,
 ) -> int:
     args = _parse_args(argv)
@@ -97,6 +156,15 @@ def main(
         return _run_preview((preview_builder or _default_preview_builder)(resolved_settings), out or sys.stdout)
     stop = stop_event or threading.Event()
     _install_signal_handlers(stop)
+
+    if resolved_settings.odoo_workbench_operator_requests_enabled:
+        return _run_with_operator_requests(
+            resolved_settings,
+            stop=stop,
+            once=args.once,
+            cycle_builder=cycle_builder or _default_cycle_builder,
+            operator_request_tick_builder=operator_request_tick_builder or _default_operator_request_tick_builder,
+        )
 
     if not resolved_settings.uyumsoft_inbound_poll_enabled:
         logger.info("uyumsoft_inbound_poller_disabled: UYUMSOFT_INBOUND_POLL_ENABLED is false; idling")
@@ -116,6 +184,41 @@ def main(
         resolved_settings.uyumsoft_inbound_poll_lookback_days,
     )
     scheduler.run(max_cycles=1 if args.once else None)
+    logger.info("uyumsoft_inbound_poller_stopped")
+    return 0
+
+
+def _run_with_operator_requests(
+    settings: Settings,
+    *,
+    stop: threading.Event,
+    once: bool,
+    cycle_builder: Callable[[Settings], Callable[[], Any]],
+    operator_request_tick_builder: Callable[[Settings], Callable[[], Any]],
+) -> int:
+    tasks = [
+        PeriodicTask(
+            name="workbench_operator_requests",
+            run=operator_request_tick_builder(settings),
+            interval_seconds=settings.odoo_workbench_operator_requests_interval_seconds,
+        )
+    ]
+    if settings.uyumsoft_inbound_poll_enabled:
+        tasks.insert(
+            0,
+            PeriodicTask(
+                name="uyumsoft_inbound_poll",
+                run=cycle_builder(settings),
+                interval_seconds=settings.uyumsoft_inbound_poll_interval_seconds,
+            ),
+        )
+    else:
+        logger.info("uyumsoft_inbound_poller_disabled: UYUMSOFT_INBOUND_POLL_ENABLED is false")
+    logger.info(
+        "hub_worker_started tasks=%s",
+        ",".join(f"{task.name}:{task.interval_seconds}s" for task in tasks),
+    )
+    PeriodicTaskScheduler(tasks=tasks, stop_event=stop).run(max_rounds=1 if once else None)
     logger.info("uyumsoft_inbound_poller_stopped")
     return 0
 
@@ -178,6 +281,13 @@ def _default_cycle_builder(settings: Settings) -> Callable[[], Any]:
     from app.db.session import engine
 
     return build_uyumsoft_inbound_poll_cycle(settings=settings, engine=engine).run
+
+
+def _default_operator_request_tick_builder(settings: Settings) -> Callable[[], Any]:
+    from app.composition.operator_requests import build_operator_request_tick
+    from app.db.session import engine
+
+    return build_operator_request_tick(settings=settings, engine=engine).run
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

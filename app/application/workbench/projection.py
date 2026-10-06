@@ -17,6 +17,7 @@ from app.application.workbench.dto import (
     TaxResolution,
 )
 from app.application.workbench.exceptions import WorkbenchCandidateReadError, WorkbenchContractError
+from app.application.workbench.operator_guidance import WorkbenchOperatorGuidance
 from app.application.workflow import ManualReviewReason, WorkflowType
 
 CLASSIFICATION_STATUS_BADGES: dict[str, str] = {
@@ -140,6 +141,9 @@ class WorkbenchProjection(ApplicationDTO):
     #: Review version whose classification evidence is shown; for a decided review this
     #: is the version the decision was accepted against (``decision_version - 1``).
     classification_review_version: int | None = None
+    #: ADR-0013 operator guidance (next action, to-do, completed summary). ``None`` when
+    #: the synchronizer was composed without guidance facts; unmapped fields ignore it.
+    operator_guidance: WorkbenchOperatorGuidance | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")

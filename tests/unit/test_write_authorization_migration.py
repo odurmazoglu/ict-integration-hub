@@ -35,9 +35,10 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
         }
         with engine.connect() as connection:
             # P0-PROD-15T, P0-PROD-18E-2, P0-PROD-18F-1 and the source-identity correction
-            # each added one more, unrelated migration on top -- "head" now lands four
-            # revisions further than when this test was written.
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170035"
+            # each added one more, unrelated migration on top, and so did the fixed-asset
+            # accounting and ADR-0013 operator request ledger migrations -- "head" now
+            # lands six revisions further than when this test was written.
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170036"
         _assert_operation_type_check_constraint(engine, name)
         # Rows using an operation type must be cleared before downgrading past the
         # migration that introduced it -- SQLite's batch-recreate (and PostgreSQL's
