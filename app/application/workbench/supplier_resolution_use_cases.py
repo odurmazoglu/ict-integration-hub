@@ -4,8 +4,9 @@ This is deliberately read-only and side-effect free. It exists so a future
 remediation flow (P0-3D2D) can prove a chosen resolution is safe *before*
 persisting it and triggering a ``SUPPLIER_RESOLUTION`` reclassification.
 
-- ``MATCH_EXISTING``: the selected Odoo partner must exist, be active, be
-  company-compatible, and its VAT must exactly equal the immutable source
+- ``MATCH_EXISTING``: the selected Odoo partner must exist, be its own
+  commercial partner (a child contact is rejected, never rewritten), be active,
+  be company-compatible, and its VAT must exactly equal the immutable source
   invoice supplier VAT (same normalization as ``PartnerMatchingEngine``).
 - ``CREATE_PERMANENT_SUPPLIER``: returns ``PENDING_PERMANENT_SUPPLIER`` -- the
   controlled supplier-partner writer is a separate capability and is NOT called
@@ -23,6 +24,7 @@ from app.application.workbench.exceptions import (
     SupplierResolutionError,
     SupplierResolutionPartnerInactiveError,
     SupplierResolutionPartnerMismatchError,
+    SupplierResolutionPartnerNotCommercialError,
     SupplierResolutionPartnerNotFoundError,
 )
 from app.application.workbench.ports import (
@@ -119,6 +121,13 @@ class ValidateSupplierResolutionUseCase:
             raise SupplierResolutionPartnerNotFoundError("The selected partner does not exist.")
         if type(partner.id) is not int or partner.id <= 0 or partner.id != partner_id:
             raise SupplierResolutionContractError("The selected partner id is invalid.")
+        if partner.commercial_partner_id not in (None, partner.id):
+            # Rejected, never silently rewritten: the persisted operator intent must name
+            # the same partner that becomes effective (the commercial counterparty).
+            raise SupplierResolutionPartnerNotCommercialError(
+                "The selected partner is a contact of commercial partner "
+                f"{partner.commercial_partner_id}; select the commercial partner instead."
+            )
         if not partner.active:
             raise SupplierResolutionPartnerInactiveError("The selected partner is archived/inactive.")
         if partner.company_id not in (None, resolution.company_id):
