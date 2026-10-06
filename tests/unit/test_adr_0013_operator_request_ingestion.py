@@ -1017,3 +1017,14 @@ def test_tick_is_single_flight_and_closes_its_sessions() -> None:
     )
     assert tick.run() == "ran:1"
     assert closed == ["business", "ledger"]
+
+
+def test_decision_reader_reads_odoo_server_datetimes_as_utc_but_rejects_other_naive_text() -> None:
+    from app.application.workbench.exceptions import WorkbenchCandidateDataError
+    from app.erp.odoo.workbench_candidate_reader import _required_aware_datetime
+
+    # Odoo JSON-2 serializes Datetime fields as naive UTC text -- the request snapshot time.
+    assert _required_aware_datetime("2026-10-06 09:00:00") == REQUESTED_AT
+    assert _required_aware_datetime("2026-10-06T09:00:00+00:00") == REQUESTED_AT
+    with pytest.raises(WorkbenchCandidateDataError):
+        _required_aware_datetime("2026-10-06T09:00:00")

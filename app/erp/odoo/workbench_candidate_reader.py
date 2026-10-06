@@ -4,7 +4,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -33,6 +33,7 @@ from app.erp.odoo.adapter import OdooReadOnlyAdapter
 
 SAFE_CANDIDATE_READ_ERROR = "Odoo Workbench decision candidate read failed."
 SAFE_CANDIDATE_DATA_ERROR = "Odoo Workbench decision candidate data is invalid."
+ODOO_SERVER_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 SAFE_CANDIDATE_AMBIGUITY_ERROR = "Odoo Workbench decision candidate lookup returned multiple records."
 SAFE_CANDIDATE_NOT_FOUND = "Odoo Workbench decision candidate was not found."
 
@@ -691,6 +692,9 @@ def _optional_decimal(value: Any) -> Decimal | None:
 
 def _required_aware_datetime(value: Any) -> datetime:
     if isinstance(value, str):
+        odoo_utc = _odoo_server_datetime(value)
+        if odoo_utc is not None:
+            return odoo_utc
         try:
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as exc:
@@ -698,6 +702,19 @@ def _required_aware_datetime(value: Any) -> datetime:
     if not isinstance(value, datetime) or value.utcoffset() is None:
         raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
     return value
+
+
+def _odoo_server_datetime(value: str) -> datetime | None:
+    """Odoo's JSON-2 Datetime serialization (``YYYY-MM-DD HH:MM:SS``) is always UTC.
+
+    Only that exact server format is read as UTC; any other naive text is still rejected.
+    """
+
+    try:
+        parsed = datetime.strptime(value, ODOO_SERVER_DATETIME_FORMAT)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC)
 
 
 def _is_empty_optional(value: Any) -> bool:
