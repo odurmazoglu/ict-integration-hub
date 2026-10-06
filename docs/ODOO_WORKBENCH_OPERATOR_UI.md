@@ -59,6 +59,10 @@ executed); keep it out of the operator selection unless the business asks for it
 Purposes: `Şirket İçi Kullanım`, `Yeniden Satış`, `Müşteri Projesi`, `Diğer İşletme Gideri`.
 Treatments: `Gider Hesabı`, `Sabit Kıymet / Demirbaş`.
 
+Re-submitting *Fatura Oluştur* for a decision whose Vendor Bill already exists issues no
+authorization: the handler checks the runtime's replay identity
+(`CompletedVendorBillExecutionProbe`) and returns the stored `ALREADY_EXECUTED` result.
+
 Authorizations (G) are not a separate operator click: a write that needs one (creating a
 supplier partner, executing a Vendor Bill) issues the existing narrow, single-use, 15-minute
 authorization for exactly that review/version/operation, with the mapped Hub actor as
@@ -114,6 +118,14 @@ Guidance (written by the projection publisher, full-snapshot, idempotent):
 | Yapılması Gerekenler | `x_studio_ipp_todo` | Html (readonly) | `TODO_FIELD` |
 | Tamamlananlar | `x_studio_ipp_completed` | Html (readonly) | `COMPLETED_FIELD` |
 | Uygun Demirbaş Hesapları | `x_studio_ipp_eligible_asset_account_ids` | Many2many `account.account`, invisible | `ELIGIBLE_ASSET_ACCOUNTS_FIELD` |
+
+*Tamamlananlar* shows accounting in operator language, e.g. `Muhasebe: Sabit Kıymet /
+Demirbaş — <hesap kodu> — <hesap adı> — <amortisman modeli>` or `Muhasebe: Gider — <hesap
+kodu> — <hesap adı> — <kategori>`. Names are read through the existing read-only
+`FixedAssetAccountingReader` port (no cache, no new source of truth). If Odoo cannot answer,
+the summary shows "hesap bilgisi şu an okunamadı" / "amortisman modeli bilgisi şu an
+okunamadı"; raw ids remain only in the *Teknik / Denetim* decision-basis lines. A
+temporarily unreadable label can make one reconcile run report the summary as changed.
 
 The eligible asset accounts are exactly `ODOO_FIXED_ASSET_ACCOUNT_IDS`; no account or
 depreciation model is hard-coded in Odoo views or Hub code. Unmapped guidance fields are
@@ -293,6 +305,13 @@ Each step needs its own explicit approval; none is part of this PR.
 4. Studio: form/list views, server action, ACLs.
 5. Env: request mapping, actors, company id; enable the tick; recreate the poller.
 6. Acceptance on one non-critical review; watch `workbench.operator_request.processed` logs.
+
+## Rollout risks
+
+- Production reconcile dry-runs on 2026-10-06 showed intermittent "Odoo request timed out"
+  errors on different reviews per run. They predate this change. Timeouts make a request
+  wait for a later tick (retry, then *Hata* after 5 attempts) and can delay guidance
+  refreshes. Odoo timeout/retry hardening is a separate operational item.
 
 ## Rollback
 

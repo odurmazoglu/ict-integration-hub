@@ -123,6 +123,11 @@ and refreshes the projection.
   (`already_applied`), the ledger is finished, Odoo is acknowledged.
 - Crash after the ledger finish but before the Odoo acknowledgement: the next tick finds
   a terminal ledger row and only re-acknowledges.
+- Vendor Bill execution checks the runtime's own replay identity first
+  (`accepted_decision_execution_id` + stored snapshot): when the exact accepted decision
+  already completed, no authorization is issued and the dispatcher's stored
+  `ALREADY_EXECUTED` replay is returned. A genuinely new execution still requires the
+  narrow authorization.
 - Write authorizations are not idempotent by themselves; the adapter stores the issued
   authorization id on the ledger row and reuses it on resume, so a successfully consumed
   request never issues a second authorization. The only residual window (crash between
@@ -163,6 +168,9 @@ Trade-offs:
 
 - Eventual consistency: a request completes on the next tick (default 60 s). The UI shows
   "İşlem gönderildi" while pending and never pretends to be synchronous.
+- The completed summary shows account and depreciation-model names read through the
+  existing read-only account/model reference port; when Odoo cannot answer it shows a
+  neutral "okunamadı" text, never a raw id (ids stay in the technical view).
 - Studio fields, views and the submit button need controlled manual setup
   (provisioning plan in `docs/ODOO_WORKBENCH_OPERATOR_UI.md`).
 - `requested by` is set by a Studio button; a user with raw JSON-2 write access to the

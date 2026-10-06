@@ -17,10 +17,14 @@ from app.application.workbench.accounting_resolution import AccountingTreatmentT
 from app.application.workbench.dto import ReviewDecisionType, ReviewItem, ReviewStatus
 from app.application.workbench.exceptions import ReviewNotFoundError
 from app.application.workbench.operator_guidance import (
+    ACCOUNT_LABEL_UNAVAILABLE,
+    MODEL_LABEL_UNAVAILABLE,
+    AccountingLabels,
     GuidanceInput,
     OperatorGuidanceFacts,
     OperatorNextAction,
     build_operator_guidance,
+    resolve_accounting_labels,
 )
 from app.application.workbench.projection import WorkbenchProjection
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
@@ -127,6 +131,7 @@ def test_apple_completed_fixed_asset_history_is_done_and_summarised() -> None:
         OperatorGuidanceFacts(
             latest_purchase_purpose=PurchasePurpose.INTERNAL_USE,
             latest_accounting_resolution=_fixed_asset_resolution(),
+            accounting_labels=AccountingLabels(account="2550 — Test Demirbaş", depreciation_model="Test Model 3Y"),
             eligible_asset_account_ids=(91,),
         ),
     )
@@ -135,7 +140,7 @@ def test_apple_completed_fixed_asset_history_is_done_and_summarised() -> None:
     for expected in (
         "✓ Tedarikçi: APPLE",
         "Şirket İçi Kullanım",
-        "Sabit kıymet — hesap #91, amortisman modeli #12",
+        "Muhasebe: Sabit Kıymet / Demirbaş — 2550 — Test Demirbaş — Test Model 3Y",
         "Tedarikçi Faturası (v5)",
         "Taslak fatura: Odoo kayıt #69",
     ):
@@ -434,3 +439,114 @@ def test_provisioning_doc_lists_every_env_key_and_studio_label_the_code_depends_
             assert label in doc, label
     for label in set(ODOO_RESULT_BY_OUTCOME.values()) | {action.value for action in OperatorNextAction}:
         assert label in doc, label
+
+
+# ---------------------------------------------------------------------- human-readable accounting summary
+
+
+class LabelReader:
+    """The existing read-only FixedAssetAccountingReader port, with test data only."""
+
+    def __init__(self, *, accounts=None, models=None, error: Exception | None = None) -> None:
+        self.accounts = accounts or {}
+        self.models = models or {}
+        self.error = error
+
+    def read_account(self, *, account_id: int):
+        if self.error is not None:
+            raise self.error
+        return self.accounts.get(account_id)
+
+    def read_depreciation_model(self, *, model_id: int):
+        if self.error is not None:
+            raise self.error
+        return self.models.get(model_id)
+
+
+def _account(record_id: int, code: str, name: str):
+    from app.application.workbench.fixed_asset_lookup import FixedAssetAccountRecord
+
+    return FixedAssetAccountRecord(id=record_id, code=code, name=name, account_type="asset_fixed", active=True)
+
+
+def _model(record_id: int, name: str):
+    from app.application.workbench.fixed_asset_lookup import DepreciationModelRecord
+
+    return DepreciationModelRecord(id=record_id, name=name, active=True)
+
+
+def _expense_resolution() -> ReviewAccountingResolution:
+    return ReviewAccountingResolution(
+        review_id="review:cloudspark",
+        company_id=1,
+        review_version=4,
+        treatment_type=AccountingTreatmentType.EXPENSE_ACCOUNT,
+        expense_account_id=501,
+        expense_category="SOFTWARE",
+    )
+
+
+def _completed_with(resolution, labels) -> str:
+    return build_operator_guidance(
+        _input(codes=()),
+        OperatorGuidanceFacts(latest_accounting_resolution=resolution, accounting_labels=labels),
+    ).completed_html
+
+
+def test_expense_accounting_summary_is_human_readable() -> None:
+    labels = resolve_accounting_labels(
+        _expense_resolution(), LabelReader(accounts={501: _account(501, "7700X", "Genel Yönetim Giderleri (test)")})
+    )
+    html = _completed_with(_expense_resolution(), labels)
+    assert "Muhasebe: Gider — 7700X — Genel Yönetim Giderleri (test) — SOFTWARE" in html
+    assert "#501" not in html and "501" not in html
+
+
+def test_fixed_asset_account_and_depreciation_model_are_human_readable() -> None:
+    resolution = _fixed_asset_resolution()
+    labels = resolve_accounting_labels(
+        resolution,
+        LabelReader(accounts={91: _account(91, "2550X", "Demirbaşlar (test)")}, models={12: _model(12, "5Y Test")}),
+    )
+    assert labels == AccountingLabels(account="2550X — Demirbaşlar (test)", depreciation_model="5Y Test")
+    html = _completed_with(resolution, labels)
+    assert "Sabit Kıymet / Demirbaş — 2550X — Demirbaşlar (test) — 5Y Test" in html
+    assert "#91" not in html and "#12" not in html
+
+
+def test_unresolvable_labels_degrade_safely_without_raw_ids() -> None:
+    from app.application.workbench.exceptions import FixedAssetAccountingUnavailableError
+
+    resolution = _fixed_asset_resolution()
+    for reader in (
+        LabelReader(error=FixedAssetAccountingUnavailableError("Odoo unavailable")),
+        LabelReader(),  # records no longer exist
+        LabelReader(accounts={91: _account(92, "X", "wrong record")}),  # never trust a mismatched id
+    ):
+        labels = resolve_accounting_labels(resolution, reader)
+        assert labels == AccountingLabels()
+        html = _completed_with(resolution, labels)
+        assert ACCOUNT_LABEL_UNAVAILABLE in html and MODEL_LABEL_UNAVAILABLE in html
+        assert "#" not in html
+    # No label source at all (e.g. guidance read without Odoo): same safe text.
+    assert ACCOUNT_LABEL_UNAVAILABLE in _completed_with(_expense_resolution(), None)
+
+
+def test_guidance_and_handler_code_hard_codes_no_production_ids_or_names() -> None:
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "app"
+    sources = "\n".join(
+        (root / path).read_text(encoding="utf-8")
+        for path in (
+            "application/workbench/operator_guidance.py",
+            "application/workbench/operator_request_handlers.py",
+            "application/workbench/operator_request_ingestion.py",
+            "erp/odoo/workbench_operator_request_reader.py",
+            "composition/operator_requests.py",
+        )
+    )
+    for token in ("255000", "257000", "770000", "Apple", "APPLE", "I102026000015045", "Linear No Prorata"):
+        assert token not in sources, token
+    assert not re.search(r"(account|model)[_ ]?(id)?\s*[=:#]\s*(74|76|247|6)\b", sources)

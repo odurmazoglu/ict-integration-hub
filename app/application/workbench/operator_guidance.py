@@ -12,17 +12,30 @@ and never changes backend reason codes (they stay visible under "Teknik / Deneti
 from __future__ import annotations
 
 import html
+import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from app.application.dto import ApplicationDTO
+from app.application.exceptions.base import ApplicationError
 from app.application.workbench.accounting_resolution import AccountingTreatmentType, ReviewAccountingResolution
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
+from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
 from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
 
+logger = logging.getLogger(__name__)
+
 #: Canonical ``ExecutionState.COMPLETED`` value, as stored on the projection.
 _EXECUTION_COMPLETED = "completed"
+#: Shown instead of a label Odoo could not provide right now; raw ids stay in the
+#: technical view (the decision-basis line resolutions), never in the operator summary.
+ACCOUNT_LABEL_UNAVAILABLE = "hesap bilgisi şu an okunamadı"
+MODEL_LABEL_UNAVAILABLE = "amortisman modeli bilgisi şu an okunamadı"
+TREATMENT_LABELS: dict[AccountingTreatmentType, str] = {
+    AccountingTreatmentType.EXPENSE_ACCOUNT: "Gider",
+    AccountingTreatmentType.CAPITALIZE_FIXED_ASSET: "Sabit Kıymet / Demirbaş",
+}
 
 
 class OperatorNextAction(StrEnum):
@@ -84,6 +97,49 @@ _ACCOUNTING_PURPOSES = frozenset({PurchasePurpose.INTERNAL_USE, PurchasePurpose.
 
 
 @dataclass(frozen=True, slots=True)
+class AccountingLabels(ApplicationDTO):
+    """Human-readable names of the accounting resolution's Odoo records (``None`` = unavailable)."""
+
+    account: str | None = None
+    depreciation_model: str | None = None
+
+
+def resolve_accounting_labels(
+    resolution: ReviewAccountingResolution, reader: FixedAssetAccountingReader
+) -> AccountingLabels:
+    """Read the selected account / depreciation model names through the existing read-only port.
+
+    Presentation only: an unavailable or missing record degrades to ``None`` (shown as
+    "okunamadı"), never to a raw id, and never fails the projection.
+    """
+
+    account_id = (
+        resolution.asset_account_id
+        if resolution.treatment_type is AccountingTreatmentType.CAPITALIZE_FIXED_ASSET
+        else resolution.expense_account_id
+    )
+    account_label: str | None = None
+    model_label: str | None = None
+    try:
+        account = reader.read_account(account_id=account_id) if account_id else None
+        if account is not None and account.id == account_id:
+            account_label = f"{account.code} — {account.name}" if account.code else account.name
+        if (
+            resolution.treatment_type is AccountingTreatmentType.CAPITALIZE_FIXED_ASSET
+            and resolution.depreciation_model_id
+        ):
+            model = reader.read_depreciation_model(model_id=resolution.depreciation_model_id)
+            if model is not None and model.id == resolution.depreciation_model_id:
+                model_label = model.name
+    except ApplicationError as exc:
+        logger.warning(
+            "workbench.operator_guidance.label_unavailable",
+            extra={"review_id": resolution.review_id, "error": getattr(exc, "safe_message", None) or str(exc)},
+        )
+    return AccountingLabels(account=account_label or None, depreciation_model=model_label or None)
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorGuidanceFacts(ApplicationDTO):
     """Committed Hub facts the projection snapshot does not already carry."""
 
@@ -92,6 +148,8 @@ class OperatorGuidanceFacts(ApplicationDTO):
     #: Most recent purpose recorded for the review (for the completed summary).
     latest_purchase_purpose: PurchasePurpose | None = None
     latest_accounting_resolution: ReviewAccountingResolution | None = None
+    #: Odoo display names for ``latest_accounting_resolution`` (see ``resolve_accounting_labels``).
+    accounting_labels: AccountingLabels | None = None
     #: Configured ``ODOO_FIXED_ASSET_ACCOUNT_IDS`` -- the existing eligibility allowlist.
     eligible_asset_account_ids: tuple[int, ...] = field(default_factory=tuple)
 
@@ -189,13 +247,13 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
         done.append(f"Satın alma amacı: {PURPOSE_LABELS[facts.latest_purchase_purpose]}")
     resolution = facts.latest_accounting_resolution
     if resolution is not None:
+        labels = facts.accounting_labels or AccountingLabels()
+        parts = [TREATMENT_LABELS[resolution.treatment_type], labels.account or ACCOUNT_LABEL_UNAVAILABLE]
         if resolution.treatment_type is AccountingTreatmentType.CAPITALIZE_FIXED_ASSET:
-            done.append(
-                f"Muhasebe: Sabit kıymet — hesap #{resolution.asset_account_id}, "
-                f"amortisman modeli #{resolution.depreciation_model_id}"
-            )
-        else:
-            done.append(f"Muhasebe: Gider hesabı #{resolution.expense_account_id} ({resolution.expense_category})")
+            parts.append(labels.depreciation_model or MODEL_LABEL_UNAVAILABLE)
+        elif resolution.expense_category:
+            parts.append(resolution.expense_category)
+        done.append("Muhasebe: " + " — ".join(parts))
     if source.decision_type is ReviewDecisionType.DISMISS:
         done.append(f"Karar: Reddedildi (v{source.decision_version})")
     elif source.decision_workflow is not None:
@@ -217,7 +275,11 @@ def _todo(instruction: str, findings: list[str] | None = None) -> str:
 
 
 __all__ = [
+    "ACCOUNT_LABEL_UNAVAILABLE",
+    "MODEL_LABEL_UNAVAILABLE",
     "PURPOSE_LABELS",
+    "TREATMENT_LABELS",
+    "AccountingLabels",
     "REASON_TITLES",
     "WORKFLOW_LABELS",
     "GuidanceInput",
@@ -225,4 +287,5 @@ __all__ = [
     "OperatorNextAction",
     "WorkbenchOperatorGuidance",
     "build_operator_guidance",
+    "resolve_accounting_labels",
 ]

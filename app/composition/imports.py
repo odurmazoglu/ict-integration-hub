@@ -26,7 +26,8 @@ from app.application.workbench import (
     WorkbenchProjectionPublisher,
 )
 from app.application.workbench.dto import ReviewItem
-from app.application.workbench.operator_guidance import OperatorGuidanceFacts
+from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
+from app.application.workbench.operator_guidance import OperatorGuidanceFacts, resolve_accounting_labels
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.connectors.odoo.client import OdooJson2Client
@@ -43,6 +44,7 @@ from app.erp.odoo import (
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.company_repository import OdooCompanyRepository
 from app.erp.odoo.currency_repository import OdooCurrencyRepository
+from app.erp.odoo.fixed_asset_accounting_reader import OdooFixedAssetAccountingReader
 from app.erp.odoo.partner_repository import OdooPartnerRepository
 from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountReader
@@ -114,6 +116,7 @@ def build_workbench_projection_synchronizer(
     odoo_client: OdooJson2Client | None = None,
     projection_adapter: OdooWorkbenchProjectionAdapter | None = None,
     mapping: OdooWorkbenchProjectionFieldMapping | None = None,
+    accounting_label_reader: FixedAssetAccountingReader | None = None,
 ) -> WorkbenchProjectionSynchronizer:
     """The canonical OPS-UI-01A synchronizer, independent of the runtime publish flag.
 
@@ -146,6 +149,13 @@ def build_workbench_projection_synchronizer(
         )
     )
 
+    # Accounting labels come from the existing read-only fixed-asset/account reference port.
+    label_reader = accounting_label_reader
+    if guidance_mapped and label_reader is None:
+        label_reader = OdooFixedAssetAccountingReader(
+            adapter=OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
+        )
+
     @contextmanager
     def read_scope() -> Iterator[WorkbenchProjectionSources]:
         with open_read_only_session(bound_engine) as read_session:
@@ -157,6 +167,7 @@ def build_workbench_projection_synchronizer(
                         purpose_repository=SqlAlchemyReviewPurchasePurposeResolutionRepository(read_session),
                         accounting_repository=SqlAlchemyReviewAccountingResolutionRepository(read_session),
                         eligible_asset_account_ids=eligible_asset_account_ids,
+                        label_reader=label_reader,
                     )
                     if guidance_mapped
                     else None
@@ -184,16 +195,23 @@ def _operator_guidance_facts(
     purpose_repository: SqlAlchemyReviewPurchasePurposeResolutionRepository,
     accounting_repository: SqlAlchemyReviewAccountingResolutionRepository,
     eligible_asset_account_ids: tuple[int, ...],
+    label_reader: FixedAssetAccountingReader | None = None,
 ) -> OperatorGuidanceFacts:
     """ADR-0013 guidance facts, read from the same private read-only session."""
 
     purposes = purpose_repository.list_purchase_purpose_resolutions(review_id=review.review_id, company_id=company_id)
     current = next((item for item in purposes if item.review_version == review.version), None)
+    resolution = accounting_repository.find_latest_accounting_resolution(
+        review_id=review.review_id, company_id=company_id
+    )
     return OperatorGuidanceFacts(
         current_purchase_purpose=current.purchase_purpose if current is not None else None,
         latest_purchase_purpose=purposes[-1].purchase_purpose if purposes else None,
-        latest_accounting_resolution=accounting_repository.find_latest_accounting_resolution(
-            review_id=review.review_id, company_id=company_id
+        latest_accounting_resolution=resolution,
+        accounting_labels=(
+            resolve_accounting_labels(resolution, label_reader)
+            if resolution is not None and label_reader is not None
+            else None
         ),
         eligible_asset_account_ids=eligible_asset_account_ids,
     )
