@@ -26,5 +26,6 @@ class OdooSupplierResolutionPartnerReader:
                     vat=partner.tax_number,
                     active=partner.active,
                     company_id=partner.company_id,
+                    commercial_partner_id=partner.commercial_partner_id,
                 )
         return None

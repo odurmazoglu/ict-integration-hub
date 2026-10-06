@@ -97,6 +97,8 @@ class ResolutionPartnerRecord(ApplicationDTO):
     vat: str | None
     active: bool
     company_id: int | None
+    #: Odoo ``commercial_partner_id``; ``None`` when unknown (treated as the partner itself).
+    commercial_partner_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

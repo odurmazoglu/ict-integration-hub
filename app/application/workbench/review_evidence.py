@@ -38,7 +38,7 @@ from app.application.workbench.selected_product_resolution import HUMAN_SELECTED
 from app.application.workflow import WorkflowType
 from app.domain.invoice import InvoiceLine
 from app.erp.models import Partner
-from app.matching import ProductMatchResult, ProductMatchStatus
+from app.matching import ProductMatchResult, ProductMatchStatus, group_by_commercial_partner
 
 logger = logging.getLogger(__name__)
 
@@ -271,21 +271,29 @@ class ReviewEvidenceReader:
             for line in source.invoice.lines
         )
         tax_number = source.invoice.supplier.tax_number
-        candidates = (
-            ()
-            if not tax_number
-            else tuple(
-                SupplierCandidate.from_partner(partner)
-                for partner in self._partner_repository.find_by_tax_number(tax_number, company_id=company_id)
-                if partner.active
-            )
-        )
+        candidates = () if not tax_number else self._supplier_candidates(tax_number, company_id=company_id)
         return ReviewEvidence(
             supplier_candidates=candidates,
             source_lines=source_lines,
             product_match_review_version=stage_one_version if execution is not None else None,
             accepted_decision=_decision_summary(decision) if decision is not None else None,
             effective_state_error=effective_state_error,
+        )
+
+    def _supplier_candidates(self, tax_number: str, *, company_id: int) -> tuple[SupplierCandidate, ...]:
+        # One candidate per commercial counterparty -- the same grouping the
+        # deterministic matcher decides ambiguity on. A company's child contacts
+        # sharing its VAT are shown as the company itself; only when the canonical
+        # record cannot be read are the group's raw rows shown instead.
+        active = tuple(
+            partner
+            for partner in self._partner_repository.find_by_tax_number(tax_number, company_id=company_id)
+            if partner.active
+        )
+        return tuple(
+            SupplierCandidate.from_partner(partner)
+            for group in group_by_commercial_partner(active, self._partner_repository)
+            for partner in ((group.partner,) if group.partner is not None else group.contacts)
         )
 
     def _accepted_decision(self, *, review_id: str, company_id: int, version: int) -> AcceptedReviewDecision | None:

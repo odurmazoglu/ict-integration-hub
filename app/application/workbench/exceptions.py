@@ -116,6 +116,12 @@ class SupplierResolutionPartnerMismatchError(SupplierResolutionError):
     error_category = "supplier_resolution_partner_mismatch"
 
 
+class SupplierResolutionPartnerNotCommercialError(SupplierResolutionPartnerMismatchError):
+    """Safe error raised when MATCH_EXISTING selects a child contact instead of its commercial partner."""
+
+    error_category = "supplier_resolution_partner_not_commercial"
+
+
 class SupplierResolutionDataIntegrityError(SupplierResolutionError):
     """Safe error raised when persisted supplier-resolution evidence cannot hydrate."""
 

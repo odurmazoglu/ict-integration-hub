@@ -52,6 +52,9 @@ class FakePartnerRepository:
         self.calls.append((tax_number, company_id))
         return self.records
 
+    def find_by_ids(self, ids):
+        return tuple(record for record in self.records if record.id in ids and record.active)
+
 
 def test_review_evidence_exposes_authoritative_candidates_and_source_lines_without_rematching() -> None:
     invoice = _invoice()
