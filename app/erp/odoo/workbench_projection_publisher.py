@@ -160,6 +160,12 @@ class OdooWorkbenchProjectionFieldMapping:
     execution_message: str | None = None
     #: OPS-UI-01A: Many2one ``res.currency`` field, resolved read-only from the ISO code.
     currency_id: str | None = None
+    #: ADR-0013 operator guidance (all optional, Hub-owned): next-action selection, to-do
+    #: HTML, completed-summary HTML, and the Many2many of eligible fixed-asset accounts.
+    next_action: str | None = None
+    todo: str | None = None
+    completed: str | None = None
+    eligible_asset_accounts: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -214,6 +220,10 @@ class OdooWorkbenchProjectionFieldMapping:
             vendor_bill_external_identity=_env_optional(prefix, "VENDOR_BILL_EXTERNAL_IDENTITY_FIELD"),
             execution_message=_env_optional(prefix, "EXECUTION_MESSAGE_FIELD"),
             currency_id=_env_optional(prefix, "CURRENCY_ID_FIELD"),
+            next_action=_env_optional(prefix, "NEXT_ACTION_FIELD"),
+            todo=_env_optional(prefix, "TODO_FIELD"),
+            completed=_env_optional(prefix, "COMPLETED_FIELD"),
+            eligible_asset_accounts=_env_optional(prefix, "ELIGIBLE_ASSET_ACCOUNTS_FIELD"),
         )
 
 
@@ -452,7 +462,7 @@ class OdooWorkbenchProjectionPublisher:
         )
         desired = self._desired_values(projection)
         if not records:
-            changes = _field_changes({}, desired, html_fields=self._html_fields())
+            changes = _field_changes({}, desired, html_fields=self._html_fields(), m2m_fields=self._m2m_fields())
             if not apply:
                 return _sync_result(projection, ProjectionSyncOutcome.CREATED, applied=False, changes=changes)
             values = {
@@ -460,6 +470,7 @@ class OdooWorkbenchProjectionPublisher:
                 self._mapping.company_id: projection.company_id,
             } | desired
             values[self._mapping.last_sync_at] = _datetime_text(datetime.now(UTC))
+            values = self._m2m_write_values(values)
             try:
                 record_id = self._adapter.create(model=self._mapping.model, values=values)
             except ErpRepositoryError as exc:
@@ -479,7 +490,7 @@ class OdooWorkbenchProjectionPublisher:
                 odoo_record_id=record_id,
                 error=stale_reason,
             )
-        changes = _field_changes(existing, desired, html_fields=self._html_fields())
+        changes = _field_changes(existing, desired, html_fields=self._html_fields(), m2m_fields=self._m2m_fields())
         if not changes:
             return _sync_result(projection, ProjectionSyncOutcome.NO_CHANGE, applied=False, odoo_record_id=record_id)
         if not apply:
@@ -488,6 +499,7 @@ class OdooWorkbenchProjectionPublisher:
             )
         values = {change.field: desired[change.field] for change in changes}
         values[self._mapping.last_sync_at] = _datetime_text(datetime.now(UTC))
+        values = self._m2m_write_values(values)
         try:
             self._adapter.write(model=self._mapping.model, record_id=record_id, values=values)
         except ErpRepositoryError as exc:
@@ -520,7 +532,20 @@ class OdooWorkbenchProjectionPublisher:
         if classification is not None:
             values.update(self._classification_values(classification))
         values.update(self._execution_values(projection.execution))
+        values.update(self._guidance_values(projection))
         self._require_representable_selections(values)
+        return values
+
+    def _guidance_values(self, projection: WorkbenchProjection) -> dict[str, Any]:
+        guidance = projection.operator_guidance
+        values: dict[str, Any] = {}
+        if guidance is None:
+            return values
+        _put_optional(values, self._mapping.next_action, guidance.next_action.value)
+        _put_optional(values, self._mapping.todo, guidance.todo_html)
+        _put_optional(values, self._mapping.completed, guidance.completed_html)
+        if self._mapping.eligible_asset_accounts is not None:
+            values[self._mapping.eligible_asset_accounts] = list(guidance.eligible_asset_account_ids)
         return values
 
     def _execution_values(self, execution: WorkbenchProjectionExecution | None) -> dict[str, Any]:
@@ -599,6 +624,7 @@ class OdooWorkbenchProjectionPublisher:
             self._mapping.execution_status,
             self._mapping.review_required,
             self._mapping.business_context_required,
+            self._mapping.next_action,
         ):
             if field_name is None or values.get(field_name) is None:
                 continue
@@ -648,11 +674,34 @@ class OdooWorkbenchProjectionPublisher:
             mapping.vendor_bill,
             mapping.vendor_bill_external_identity,
             mapping.execution_message,
+            mapping.next_action,
+            mapping.todo,
+            mapping.completed,
+            mapping.eligible_asset_accounts,
         ]
         return ["id", *dict.fromkeys(name for name in names if name is not None)]
 
     def _html_fields(self) -> frozenset[str]:
-        return frozenset(name for name in (self._mapping.review_reasons, self._mapping.warnings) if name is not None)
+        return frozenset(
+            name
+            for name in (
+                self._mapping.review_reasons,
+                self._mapping.warnings,
+                self._mapping.todo,
+                self._mapping.completed,
+            )
+            if name is not None
+        )
+
+    def _m2m_fields(self) -> frozenset[str]:
+        return frozenset({self._mapping.eligible_asset_accounts} - {None})
+
+    def _m2m_write_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Many2many values are compared as id sets but written as one replace command."""
+
+        return {
+            name: ([[6, 0, sorted(value)]] if name in self._m2m_fields() else value) for name, value in values.items()
+        }
 
     def _lookup(
         self, *, review_id: str, company_id: int, fields: list[str] | None = None
@@ -965,11 +1014,20 @@ def _html_text(value: Any) -> str | None:
 
 
 def _field_changes(
-    existing: dict[str, Any], desired: dict[str, Any], *, html_fields: frozenset[str]
+    existing: dict[str, Any],
+    desired: dict[str, Any],
+    *,
+    html_fields: frozenset[str],
+    m2m_fields: frozenset[str] = frozenset(),
 ) -> tuple[ProjectionFieldChange, ...]:
     changes: list[ProjectionFieldChange] = []
     for field_name, after in desired.items():
         before = existing.get(field_name)
+        if field_name in m2m_fields:
+            before_ids, after_ids = _id_set(before), _id_set(after)
+            if before_ids != after_ids:
+                changes.append(ProjectionFieldChange(field=field_name, before=before_ids, after=after_ids))
+            continue
         if field_name in html_fields:
             if _html_tokens(before) != _html_tokens(after):
                 changes.append(
@@ -981,6 +1039,12 @@ def _field_changes(
                 ProjectionFieldChange(field=field_name, before=_normalized(before), after=_normalized(after))
             )
     return tuple(changes)
+
+
+def _id_set(value: Any) -> tuple[int, ...]:
+    if not isinstance(value, list | tuple):
+        return ()
+    return tuple(sorted({item for item in value if type(item) is int}))
 
 
 def _sync_result(

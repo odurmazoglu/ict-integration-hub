@@ -30,6 +30,7 @@ private read scope, never the business transaction.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -50,6 +51,12 @@ from app.application.workbench.dto import ReviewItem, ReviewStatus, review_reaso
 from app.application.workbench.exceptions import (
     ReviewNotFoundError,
     WorkbenchContractError,
+)
+from app.application.workbench.operator_guidance import (
+    GuidanceInput,
+    OperatorGuidanceFacts,
+    WorkbenchOperatorGuidance,
+    build_operator_guidance,
 )
 from app.application.workbench.projection import (
     WorkbenchProjection,
@@ -110,6 +117,9 @@ class WorkbenchProjectionSources:
     accepted_source_reader: _AcceptedSourceReader
     execution_snapshot_reader: _ExecutionSnapshotReader
     publisher: WorkbenchProjectionSyncPublisher
+    #: ADR-0013: committed facts for operator guidance (purpose, accounting resolution,
+    #: eligible asset accounts). ``None`` keeps the pre-ADR-0013 projection unchanged.
+    guidance_facts_reader: Callable[[ReviewItem, int], OperatorGuidanceFacts] | None = None
 
 
 #: Opens one private, read-only scope over *committed* Hub state and closes it on exit.
@@ -184,7 +194,7 @@ def _build_projection(sources: WorkbenchProjectionSources, *, review_id: str, co
 
     review = sources.review_reader.get_review_item(ReviewDetailQuery(review_id=review_id, company_id=company_id))
     decision, source, effective_state_error = _accepted_state(sources, review, company_id=company_id)
-    return WorkbenchProjection(
+    projection = WorkbenchProjection(
         review_id=review.review_id,
         company_id=company_id,
         invoice_id=review.invoice_id,
@@ -214,6 +224,28 @@ def _build_projection(sources: WorkbenchProjectionSources, *, review_id: str, co
         classification_review_version=(
             decision.decision_version - 1 if decision is not None and decision.decision_version > 1 else review.version
         ),
+    )
+    if sources.guidance_facts_reader is None:
+        return projection
+    facts = sources.guidance_facts_reader(review, company_id)
+    return dataclasses.replace(projection, operator_guidance=_guidance(projection, facts))
+
+
+def _guidance(projection: WorkbenchProjection, facts: OperatorGuidanceFacts) -> WorkbenchOperatorGuidance:
+    decision = projection.accepted_decision
+    execution = projection.execution
+    return build_operator_guidance(
+        GuidanceInput(
+            status=projection.status,
+            reason_codes=tuple(reason.code for reason in projection.review_reasons),
+            supplier_name=projection.supplier_name,
+            decision_type=decision.decision_type if decision is not None else None,
+            decision_workflow=decision.selected_workflow if decision is not None else None,
+            decision_version=decision.decision_version if decision is not None else None,
+            execution_state=execution.state if execution is not None else None,
+            vendor_bill_id=execution.vendor_bill_id if execution is not None else None,
+        ),
+        facts,
     )
 
 

@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     uyumsoft_inbound_poll_lookback_days: int = Field(default=10, ge=1, le=30)
     uyumsoft_inbound_poll_page_size: int = Field(default=100, ge=1, le=100)
     uyumsoft_inbound_poll_max_pages: int = Field(default=10, ge=1, le=10)
+    #: ADR-0013 Odoo Workbench operator requests: a second, independent tick in the same
+    #: poller process. Off by default; enabling it in production is a separate step.
+    odoo_workbench_operator_requests_enabled: bool = False
+    odoo_workbench_operator_requests_interval_seconds: int = Field(default=60, ge=30, le=3600)
+    #: Hub company whose Workbench requests the tick consumes. Required when enabled --
+    #: the company scope is Hub configuration, never taken from the Odoo row.
+    odoo_workbench_operator_requests_company_id: int | None = Field(default=None, ge=1)
+    #: JSON ``{"<odoo_user_id>": {"actor": "<name>", "permissions": [...]}}`` mapping Odoo
+    #: users to Hub actors with existing permission names. Empty: every request is refused.
+    odoo_operator_request_actors: str | None = None
 
     @property
     def uyumsoft_wsdl_url(self) -> str:

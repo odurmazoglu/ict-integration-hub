@@ -4,6 +4,16 @@ This document defines the architecture and contract for presenting Hub-owned Imp
 
 This slice includes the Odoo JSON-2 projection publisher for Hub-owned Workbench fields, the read-only candidate reader that reads decision-ready projection records and Business Context Allocation child rows into immutable application DTOs, and an explicit Hub API trigger that ingests ready Odoo decisions through the canonical Workbench decision use case before acknowledging Odoo. It also wires projection publishing into the `ImportInvoiceUseCase` production composition path after Hub review/evidence persistence. The live Uyumsoft inbound import attachment reaches this publisher only through canonical import composition, not through direct Uyumsoft-to-Odoo calls; non-review `dry_run` acceptance is tracked by Hub technical import receipts and does not reach the Odoo Workbench publisher. Odoo standard Sales/Invoicing remains the preferred surface for customer billing; Hub Workbench does not recreate standard Odoo billing workflows. The Studio models, Studio views, ACLs, scheduler, automatic retry worker, and workflow execution are not implemented in this slice.
 
+## Operator Requests (ADR-0013)
+
+[ADR-0013](adr/ADR-0013-odoo-online-workbench-operator-requests.md) extends this projection
+with typed operator requests (supplier resolution, purchase purpose, accounting
+resolution, decision, Vendor Bill execution) consumed by the Hub poller tick through the
+existing use cases, plus Hub-owned operator guidance fields. See
+[Odoo Workbench Operator UI](ODOO_WORKBENCH_OPERATOR_UI.md). The statements below about
+"no scheduler" describe the decision-only slice; the ADR-0013 tick is the Hub-owned
+scheduler for operator requests and is disabled by default.
+
 ## Architecture
 
 Odoo Online cannot install custom Python modules. The selected architecture uses an Odoo Studio model as a projection store and keeps all decision authority in ICT IPP.

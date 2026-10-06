@@ -660,9 +660,19 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
-    # The fixed-asset accounting migration (202607170035) is the newest step: its own
+    # ADR-0013 (202607170036) added the operator request ledger on top: one new table,
+    # no change to any existing one. One "-1" step consumes it first.
+    assert "workbench_operator_requests" in inspector.get_table_names()
+    assert {constraint["name"] for constraint in inspector.get_unique_constraints("workbench_operator_requests")} == {
+        "uq_workbench_operator_requests_request_key"
+    }
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert "workbench_operator_requests" not in inspector.get_table_names()
+
+    # The fixed-asset accounting migration (202607170035) is the next step: its own
     # upgrade/downgrade/upgrade contract is proven in test_fixed_asset_accounting_migration.py;
-    # one "-1" step consumes it here first.
+    # one "-1" step consumes it here.
     command.downgrade(config, "-1")
     inspector = inspect(create_engine(database_url))
 

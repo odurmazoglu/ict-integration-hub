@@ -115,7 +115,24 @@ def _validate_common_settings(settings: Settings, errors: list[str]) -> None:
         errors.append("UYUMSOFT_USERNAME must be configured.")
     if not settings.uyumsoft_password.get_secret_value().strip():
         errors.append("UYUMSOFT_PASSWORD must be configured.")
+    _validate_operator_request_settings(settings, errors)
     _validate_authentication_settings(settings, errors)
+
+
+def _validate_operator_request_settings(settings: Settings, errors: list[str]) -> None:
+    """ADR-0013: the request tick needs an explicit company and a live projection to refresh."""
+
+    if not settings.odoo_workbench_operator_requests_enabled:
+        return
+    if settings.odoo_workbench_operator_requests_company_id is None:
+        errors.append(
+            "ODOO_WORKBENCH_OPERATOR_REQUESTS_COMPANY_ID is required when "
+            "ODOO_WORKBENCH_OPERATOR_REQUESTS_ENABLED=true."
+        )
+    if not settings.odoo_workbench_projection_publish_enabled:
+        errors.append(
+            "ODOO_WORKBENCH_OPERATOR_REQUESTS_ENABLED=true requires ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=true."
+        )
 
 
 def _validate_production_settings(settings: Settings, errors: list[str]) -> None:
