@@ -138,14 +138,16 @@ lines below). It only copies values; it contains no business rule.
 
 ```python
 for record in records:
-    record.write({
-        "x_studio_ipp_req_version": record.x_studio_review_version,
-        "x_studio_ipp_req_requested_by": env.user.id,
-        "x_studio_ipp_req_requested_at": datetime.datetime.now(),
-        "x_studio_ipp_req_result": False,
-        "x_studio_ipp_req_message": False,
-        "x_studio_ipp_req_ready": True,
-    })
+    record.write(
+        {
+            "x_studio_ipp_req_version": record.x_studio_review_version,
+            "x_studio_ipp_req_requested_by": env.user.id,
+            "x_studio_ipp_req_requested_at": datetime.datetime.now(),
+            "x_studio_ipp_req_result": False,
+            "x_studio_ipp_req_message": False,
+            "x_studio_ipp_req_ready": True,
+        }
+    )
 ```
 
 ## Screen structure
