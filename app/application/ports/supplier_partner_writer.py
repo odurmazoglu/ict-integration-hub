@@ -15,3 +15,16 @@ class SupplierPartnerWriter(Protocol):
 
     async def create_supplier(self, command: CreateSupplierPartnerCommand) -> SupplierPartnerWriteResult:
         pass
+
+
+class SupplierCreateDuplicateGuard(Protocol):
+    """Read-only port: refuse a supplier create that may duplicate an existing Odoo company.
+
+    Raises ``SupplierPartnerProbableDuplicateError`` when a commercial company with the same
+    canonical legal name exists whose VAT is missing or invalid. Never matches or links.
+    """
+
+    async def ensure_no_probable_existing_company(
+        self, *, company_id: int, supplier_name: str, supplier_tax_number: str
+    ) -> None:
+        pass

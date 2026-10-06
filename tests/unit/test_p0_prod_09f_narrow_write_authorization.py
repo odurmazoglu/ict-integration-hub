@@ -132,6 +132,8 @@ class _FakeOdooJson2Client:
         return self._create_result
 
     async def search_read(self, *, model: str, domain, fields, limit: int = 20, offset: int = 0):
+        if ["is_company", "=", True] in domain:  # create duplicate-guard read: no legacy-VAT companies here
+            return []
         self.search_calls.append({"model": model, "domain": domain})
         if model != "res.partner":
             return []

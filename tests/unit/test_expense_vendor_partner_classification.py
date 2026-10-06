@@ -129,6 +129,8 @@ class StatefulOdoo:
         return record["id"]
 
     async def search_read(self, *, model: str, domain, fields, limit: int = 20, offset: int = 0):
+        if ["is_company", "=", True] in domain:  # create duplicate-guard read: no legacy-VAT companies here
+            return []
         assert model == "res.partner"
         vat = next(clause[2] for clause in domain if clause[:2] == ["vat", "="])
         include_archived = ["active", "in", [True, False]] in domain
@@ -707,6 +709,8 @@ async def test_12_crash_after_partner_create_resume_never_creates_a_second_partn
     calls = {"n": 0}
 
     async def flaky_search(**kwargs):
+        if ["is_company", "=", True] in kwargs["domain"]:  # create duplicate-guard read: not a VAT lookup
+            return await real_search(**kwargs)
         calls["n"] += 1
         if calls["n"] == 2:  # the writer's post-create read-back on the first attempt
             from app.connectors.exceptions import ConnectorTimeoutError

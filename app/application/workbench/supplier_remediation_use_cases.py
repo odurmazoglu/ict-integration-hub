@@ -36,7 +36,7 @@ from app.application.commands.supplier_partner import CreateSupplierPartnerComma
 from app.application.dto.supplier_partner import SupplierPartnerWriteStatus
 from app.application.exceptions import ApplicationError
 from app.application.partner_classification import SupplierPartnerClassification
-from app.application.ports.supplier_partner_writer import SupplierPartnerWriter
+from app.application.ports.supplier_partner_writer import SupplierCreateDuplicateGuard, SupplierPartnerWriter
 from app.application.services import UnitOfWork
 from app.application.workbench.exceptions import (
     ReviewPersistenceError,
@@ -161,6 +161,7 @@ class ResolveWorkbenchSupplierUseCase:
         retirement_writer: OneOffVendorRetirementWriter | None = None,
         write_authorization_repository: WriteAuthorizationRepository | None = None,
         projection_synchronizer: ReviewProjectionSynchronizer | None = None,
+        create_duplicate_guard: SupplierCreateDuplicateGuard | None = None,
         _after_precheck_hook: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._review_reader = review_reader
@@ -186,6 +187,11 @@ class ResolveWorkbenchSupplierUseCase:
         # authorization_id on the command fails closed with a clear error, exactly
         # mirroring the Vendor Bill execution runtime's own optionality for this.
         self._write_authorization_repository = write_authorization_repository
+        # Read-only create guard, run BEFORE the intent reservation for the partner-writing
+        # modes so a probable duplicate is refused with no reservation, no authorization
+        # consumption and no Odoo write. The writer enforces the same guard again right
+        # before its create (mandatory there; also covers resumed attempts).
+        self._create_duplicate_guard = create_duplicate_guard
         # Test-only seam: invoked on the fresh path just before the reservation INSERT,
         # so a test can commit a competing reservation in another transaction in between.
         self._after_precheck_hook = _after_precheck_hook
@@ -211,6 +217,8 @@ class ResolveWorkbenchSupplierUseCase:
 
         if command.mode is SupplierResolutionMode.USE_ONE_OFF_SUPPLIER:
             return self._resolve_one_off(command, review, source)
+
+        await self._ensure_no_probable_existing_company(command, source)
 
         try:
             # The reservation is the cross-process single-winner barrier: it is committed
@@ -255,6 +263,18 @@ class ResolveWorkbenchSupplierUseCase:
             return
         raise SupplierResolutionContractError(
             "The review no longer carries SUPPLIER_NOT_FOUND; there is nothing to remediate."
+        )
+
+    # ------------------------------------------------------------------ create guard
+
+    async def _ensure_no_probable_existing_company(self, command: ResolveWorkbenchSupplierCommand, source) -> None:
+        if self._create_duplicate_guard is None or command.mode not in _PARTNER_CREATING_MODES:
+            return
+        supplier = source.invoice.supplier
+        await self._create_duplicate_guard.ensure_no_probable_existing_company(
+            company_id=command.company_id,
+            supplier_name=(supplier.name or "").strip(),
+            supplier_tax_number=(supplier.tax_number or "").strip(),
         )
 
     # ------------------------------------------------------------------ one-off
@@ -781,6 +801,11 @@ class ResolveWorkbenchSupplierUseCase:
 
 def _has_supplier_not_found(reasons: tuple[ManualReviewReason, ...]) -> bool:
     return any(reason.code is ManualReviewReasonCode.SUPPLIER_NOT_FOUND for reason in reasons)
+
+
+_PARTNER_CREATING_MODES = frozenset(
+    {SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, SupplierResolutionMode.ONE_OFF_VENDOR}
+)
 
 
 def _has_supplier_ambiguous(reasons: tuple[ManualReviewReason, ...]) -> bool:

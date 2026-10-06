@@ -840,6 +840,8 @@ async def test_concurrent_writer_interleave_is_detection_only_not_prevention() -
             return 6000 + self.created
 
         async def search_read(self, *, model, domain, fields, limit=20, offset=0):
+            if ["is_company", "=", True] in domain:  # create duplicate-guard read: no legacy-VAT companies here
+                return []
             has_vat_eq = any(clause[:2] == ["vat", "="] for clause in domain if isinstance(clause, list))
             if has_vat_eq and self.created == 0:
                 return []
@@ -1486,6 +1488,8 @@ class _FakeOdooJson2ClientForPayloadProof:
         return self.create_result
 
     async def search_read(self, *, model: str, domain, fields, limit: int = 20, offset: int = 0):
+        if ["is_company", "=", True] in domain:  # create duplicate-guard read: no legacy-VAT companies here
+            return []
         self._search_call += 1
         if self._search_call == 1:
             return []  # pre-create exact-VAT lookup: no existing partner

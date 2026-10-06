@@ -55,7 +55,10 @@ class FakeJson2Client:
         search_sequence: list[Any] | None = None,
         field_metadata: list[dict[str, Any]] | None = None,
         selection_values: tuple[str, ...] = PRODUCTION_KEYS,
+        company_results: list[dict[str, Any]] | None = None,
     ) -> None:
+        self.company_results = company_results if company_results is not None else []
+        self.company_calls: list[dict[str, Any]] = []
         self.field_metadata = field_metadata if field_metadata is not None else [{"name": FIELD, "ttype": "selection"}]
         self.selection_values = selection_values
         self.metadata_calls: list[dict[str, Any]] = []
@@ -80,6 +83,9 @@ class FakeJson2Client:
         limit: int = 20,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        if ["is_company", "=", True] in domain:  # create duplicate-guard read (routed apart from VAT lookups)
+            self.company_calls.append({"domain": domain, "offset": offset})
+            return list(self.company_results)
         self.search_calls.append({"model": model, "domain": domain, "fields": fields, "limit": limit})
         if self.search_sequence is not None:
             result = self.search_sequence.pop(0)
@@ -550,6 +556,8 @@ class _DefaultApplyingOdoo(FakeJson2Client):
         return record["id"]
 
     async def search_read(self, *, model, domain, fields, limit=20, offset=0):
+        if ["is_company", "=", True] in domain:  # create duplicate-guard read: no legacy-VAT companies here
+            return []
         self.search_calls.append({"model": model, "domain": domain, "fields": fields, "limit": limit})
         vat = domain[0][2]
         return [{key: record.get(key, False) for key in fields} for record in self.records if record["vat"] == vat]
