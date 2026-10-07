@@ -42,6 +42,7 @@ from app.application.exceptions.product_remediation import (
 )
 from app.application.exceptions.supplier_partner import (
     SupplierPartnerClassificationUnavailableError,
+    SupplierPartnerProbableDuplicateError,
     SupplierPartnerWriteError,
     SupplierPartnerWriteSafetyGateError,
 )
@@ -1769,6 +1770,8 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(exc, SupplierPartnerWriteSafetyGateError):
         return HTTPStatus.FORBIDDEN
+    if isinstance(exc, SupplierPartnerProbableDuplicateError):
+        return HTTPStatus.CONFLICT
     if isinstance(exc, OneOffVendorArchiveRetiredError):
         return HTTPStatus.GONE
     if isinstance(exc, SupplierPartnerClassificationUnavailableError):

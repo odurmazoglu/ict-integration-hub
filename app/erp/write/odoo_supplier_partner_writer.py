@@ -13,6 +13,7 @@ from app.application.exceptions.supplier_partner import (
     SupplierPartnerDataIntegrityError,
     SupplierPartnerDuplicateRaceError,
     SupplierPartnerInactiveError,
+    SupplierPartnerProbableDuplicateError,
     SupplierPartnerWriteAuthenticationError,
     SupplierPartnerWriteAuthorizationError,
     SupplierPartnerWriteSafetyGateError,
@@ -37,6 +38,7 @@ from app.connectors.exceptions import (
 )
 from app.core.config import Settings
 from app.core.runtime_checks import APPROVED_STAGING_ODOO_HOSTS, PRODUCTION_APPROVAL_ACK
+from app.domain.company_identity import ExistingCompanyRecord, probable_existing_companies
 
 RES_PARTNER_MODEL = "res.partner"
 PARTNER_FIELDS = ["id", "name", "vat", "active", "company_id"]
@@ -49,6 +51,14 @@ FORBIDDEN_RES_PARTNER_TOKENS = frozenset(
     {"active", "unlink", "action_", "message_", "__", "parent_id", "company_type", "is_company"}
 )
 _EXACT_VAT_LOOKUP_LIMIT = 5
+#: Create-guard read of active commercial companies: paged, hard-bounded, fail closed beyond.
+COMPANY_CANDIDATE_FIELDS = ["id", "name", "vat", "active", "is_company", "parent_id"]
+_COMPANY_CANDIDATE_PAGE_SIZE = 500
+_COMPANY_CANDIDATE_MAX_RECORDS = 20000
+_PROBABLE_DUPLICATE_MESSAGE = (
+    "Odoo'da aynı şirket olabilecek bir kayıt bulundu ancak VKN bilgisi eksik veya geçersiz: {companies}. "
+    "Yeni tedarikçi oluşturmadan önce Odoo şirket kartındaki VKN'yi kontrol edin."
+)
 #: Only a manually created (Studio/custom) field may carry the classification -- never a
 #: core res.partner field such as ``active``, ``vat`` or ``supplier_rank``.
 _CUSTOM_FIELD_NAME = re.compile(r"^x_[a-z0-9_]{1,62}$")
@@ -209,6 +219,38 @@ class OdooSupplierPartnerRepository:
         )
         return tuple(_record(record, classification_field=classification_field) for record in records)
 
+    async def find_active_commercial_companies(self, *, company_id: int) -> tuple[ExistingCompanyRecord, ...]:
+        """Every active commercial company (``is_company``, no parent) visible to ``company_id``.
+
+        Read-only input for the create duplicate guard. Paged and hard-bounded: if the
+        bound is reached the guard cannot prove absence, so it fails closed.
+        """
+
+        company_id = _require_company_id(company_id)
+        records: list[dict[str, Any]] = []
+        while True:
+            page = await _translate_connector_errors(
+                self._client.search_read(
+                    model=RES_PARTNER_MODEL,
+                    domain=[
+                        ["is_company", "=", True],
+                        ["parent_id", "=", False],
+                        ["active", "=", True],
+                        ["company_id", "in", [company_id, False]],
+                    ],
+                    fields=COMPANY_CANDIDATE_FIELDS,
+                    limit=_COMPANY_CANDIDATE_PAGE_SIZE,
+                    offset=len(records),
+                )
+            )
+            records.extend(page)
+            if len(records) > _COMPANY_CANDIDATE_MAX_RECORDS:
+                raise SupplierPartnerDataIntegrityError(
+                    "The existing-company duplicate check exceeded its safe read bound; supplier creation is blocked."
+                )
+            if len(page) < _COMPANY_CANDIDATE_PAGE_SIZE:
+                return tuple(_company_record(record) for record in records)
+
     async def ensure_classification_value_available(self, *, field_name: str, value: str) -> None:
         """Read-only proof that ``field_name`` is a ``res.partner`` selection offering ``value``.
 
@@ -321,6 +363,12 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
         if len(existing) == 1:
             return self._already_exists_result(existing[0], command=command, normalized_vat=normalized_vat)
 
+        # No exact-VAT partner: never create while a same-name company with a missing or
+        # invalid VAT may already be this supplier (mandatory; also covers resumed attempts).
+        await self.ensure_no_probable_existing_company(
+            company_id=command.company_id, supplier_name=supplier_name, supplier_tax_number=normalized_vat
+        )
+
         created_id = await self._repository.create_supplier_partner(
             name=supplier_name,
             normalized_vat=normalized_vat,
@@ -355,6 +403,25 @@ class OdooSupplierPartnerWriter(SupplierPartnerWriter):
             classification_outcome=PartnerClassificationOutcome.CLASSIFIED_ON_CREATE,
             classification_value=command.classification.value,
         )
+
+    async def ensure_no_probable_existing_company(
+        self, *, company_id: int, supplier_name: str, supplier_tax_number: str
+    ) -> None:
+        """Read-only create guard (``SupplierCreateDuplicateGuard``); see ``app.domain.company_identity``."""
+
+        candidates = await self._repository.find_active_commercial_companies(company_id=company_id)
+        blocking = probable_existing_companies(
+            supplier_name=supplier_name, supplier_tax_number=supplier_tax_number, candidates=candidates
+        )
+        if blocking:
+            companies = "; ".join(
+                f"{candidate.name or '-'} (#{candidate.partner_id}, VKN: {(candidate.vat or '').strip() or 'yok'})"
+                for candidate in blocking
+            )
+            raise SupplierPartnerProbableDuplicateError(
+                _PROBABLE_DUPLICATE_MESSAGE.format(companies=companies),
+                candidate_partner_ids=tuple(candidate.partner_id for candidate in blocking),
+            )
 
     def _already_exists_result(
         self,
@@ -459,6 +526,23 @@ def _names_differ(existing_name: str | None, requested_name: str) -> bool:
 
 def _folded(value: str | None) -> str:
     return " ".join((value or "").split()).casefold()
+
+
+def _company_record(record: dict[str, Any]) -> ExistingCompanyRecord:
+    raw_id = record.get("id")
+    if type(raw_id) is not int or isinstance(raw_id, bool) or raw_id <= 0:
+        raise SupplierPartnerDataIntegrityError("Odoo returned an invalid company partner id.")
+    parent = record.get("parent_id")
+    vat = record.get("vat")
+    name = record.get("name")
+    return ExistingCompanyRecord(
+        partner_id=raw_id,
+        name=name if isinstance(name, str) else None,
+        vat=vat if isinstance(vat, str) else None,
+        active=record.get("active") is True,
+        is_company=record.get("is_company") is True,
+        parent_id=parent[0] if isinstance(parent, list) and parent and type(parent[0]) is int else None,
+    )
 
 
 def _record(record: dict[str, Any], *, classification_field: str | None = None) -> SupplierPartnerRecord:

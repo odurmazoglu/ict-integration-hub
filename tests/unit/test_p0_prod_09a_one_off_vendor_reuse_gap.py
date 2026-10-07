@@ -81,6 +81,8 @@ class _FakeOdooJson2ClientReturningArchivedPartner:
         raise AssertionError("create_res_partner must never be called: an exact-VAT match already exists.")
 
     async def search_read(self, *, model: str, domain, fields, limit: int = 20, offset: int = 0):
+        if ["is_company", "=", True] in domain:  # create duplicate-guard read: no legacy-VAT companies here
+            return []
         self.search_calls.append({"model": model, "domain": domain, "fields": fields, "limit": limit})
         return [
             {

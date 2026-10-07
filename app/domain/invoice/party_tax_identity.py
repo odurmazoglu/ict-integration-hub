@@ -59,6 +59,38 @@ def is_party_tax_identifier(value: str | None) -> bool:
     return value is not None and value.isdigit() and len(value) in _TAX_REGISTRATION_LENGTHS
 
 
+def is_valid_party_tax_identifier(value: str | None) -> bool:
+    """Whether ``value`` is a well-formed VKN or TCKN *including* its check digits.
+
+    Master-data quality check only (e.g. "is this stored partner VAT a real tax
+    identifier or a legacy code?"). Never used to reject an incoming invoice.
+    """
+
+    if value is None or not value.isascii() or not is_party_tax_identifier(value):
+        return False
+    digits = [int(char) for char in value]
+    return _vkn_check_digit_ok(digits) if len(digits) == 10 else _tckn_check_digits_ok(digits)
+
+
+def _vkn_check_digit_ok(digits: list[int]) -> bool:
+    total = 0
+    for index, digit in enumerate(digits[:9]):
+        shifted = (digit + 9 - index) % 10
+        weighted = (shifted * 2 ** (9 - index)) % 9
+        if shifted != 0 and weighted == 0:
+            weighted = 9
+        total += weighted
+    return (10 - total % 10) % 10 == digits[9]
+
+
+def _tckn_check_digits_ok(digits: list[int]) -> bool:
+    if digits[0] == 0:
+        return False
+    odd = digits[0] + digits[2] + digits[4] + digits[6] + digits[8]
+    even = digits[1] + digits[3] + digits[5] + digits[7]
+    return (odd * 7 - even) % 10 == digits[9] and sum(digits[:10]) % 10 == digits[10]
+
+
 def legacy_first_party_identifier(party: ElementTree.Element | None) -> str | None:
     """The identifier the pre-PR #201 parsers stored as a party's tax number.
 

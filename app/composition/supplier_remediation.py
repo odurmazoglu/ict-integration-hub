@@ -115,6 +115,8 @@ def build_resolve_workbench_supplier_use_case(
         # Read-only: reports historical retirement rows; new resolutions never create one.
         retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
+        # The writer itself is the read-only create guard (same Odoo client, same rule).
+        create_duplicate_guard=supplier_partner_writer,
     )
 
 

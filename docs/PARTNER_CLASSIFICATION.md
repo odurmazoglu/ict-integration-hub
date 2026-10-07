@@ -69,6 +69,29 @@ partner the writer only evaluates the current value
 `partner_classification_outcome` and `partner_classification`, plus a warning in
 `warnings[]` for the two "preserved" outcomes. Operators correct the value in Odoo.
 
+### Create guard: an existing company under a missing/invalid VAT
+
+Many Odoo companies were loaded with legacy customer codes in `vat` (e.g. ICT Bulut
+partner 24 held `983551` while its e-invoices carry VKN `4650459971`). The exact-VAT
+matcher cannot find such a company, and MATCH_EXISTING cannot select it, so without
+a guard CREATE_PERMANENT_SUPPLIER / ONE_OFF_VENDOR would create a duplicate company.
+
+Before either mode creates a partner, the Hub reads the active commercial companies
+(`is_company`, no parent) and refuses the create when one has the **same canonical
+legal name** and a VAT that is **missing or not a valid VKN/TCKN** (check digits
+included). Canonicalization and the exact rule live in `app/domain/company_identity.py`.
+It is an exact comparison after documented normalization -- never fuzzy, never a match:
+VAT remains the only supplier identity. A company with a different *valid* VKN is a
+possibly different legal entity and never blocks.
+
+The check runs before the supplier-resolution intent is reserved (no reservation, no
+authorization consumed, no Odoo write) and again inside the writer right before the
+create. HTTP returns `409` with `supplier_partner_probable_duplicate`; an Odoo
+Workbench request shows *"İşlem reddedildi: Odoo'da aynı şirket olabilecek bir kayıt
+bulundu ancak VKN bilgisi eksik veya geçersiz: … Yeni tedarikçi oluşturmadan önce Odoo
+şirket kartındaki VKN'yi kontrol edin."* Fix: correct that company's VAT in Odoo
+(separately approved), then select it with MATCH_EXISTING or reclassify the review.
+
 ## ONE_OFF_VENDOR lifecycle: before vs after
 
 | | Before (P0-PROD-08H..09F) | After |
