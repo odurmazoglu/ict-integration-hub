@@ -38,8 +38,9 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
             # each added one more, unrelated migration on top, and so did the fixed-asset
             # accounting and ADR-0013 operator request ledger migrations -- "head" now
             # lands six revisions further than when this test was written; the
-            # MAP_EXISTING_PRODUCT operation type (202607170037) is one more on top.
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170037"
+            # MAP_EXISTING_PRODUCT operation type (202607170037) is one more on top, and the
+            # operator request ledger product_mapping action (202607170038) another.
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170038"
         _assert_operation_type_check_constraint(engine, name)
         _delete_rows_with_operation_type(engine, name, "MAP_EXISTING_PRODUCT")
         command.downgrade(config, "202607170036")
