@@ -7,12 +7,16 @@ from app.db.base import Base
 from app.db.types import AwareDateTime
 
 OPERATOR_REQUEST_STATUSES = ("in_progress", "completed", "stale", "rejected", "unauthorized", "failed")
+#: Must equal ``OperatorRequestAction`` values (guarded by a regression test); the CHECK
+#: constraint below is generated from this tuple, and migration 202607170038 added
+#: ``product_mapping``.
 OPERATOR_REQUEST_ACTIONS = (
     "supplier_resolution",
     "purchase_purpose",
     "accounting_resolution",
     "decision",
     "execute_vendor_bill",
+    "product_mapping",
 )
 
 
@@ -40,8 +44,7 @@ class WorkbenchOperatorRequest(Base):
             name="ck_workbench_operator_requests_status",
         ),
         CheckConstraint(
-            "action IN ('supplier_resolution', 'purchase_purpose', 'accounting_resolution', 'decision', "
-            "'execute_vendor_bill')",
+            "action IN (" + ", ".join(f"'{action}'" for action in OPERATOR_REQUEST_ACTIONS) + ")",
             name="ck_workbench_operator_requests_action",
         ),
         Index("ix_workbench_operator_requests_review", "company_id", "review_id"),
