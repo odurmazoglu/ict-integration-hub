@@ -46,7 +46,7 @@ class WorkbenchReviewWriteAuthorization(Base):
         CheckConstraint("target_version > 0", name="ck_wr_write_auth_version_pos"),
         CheckConstraint(
             "operation_type IN ('EXECUTE_VENDOR_BILL', 'CREATE_PERMANENT_SUPPLIER', "
-            "'ONE_OFF_VENDOR_SUPPLIER', 'ONE_OFF_VENDOR_ARCHIVE', 'CREATE_NEW_PRODUCT')",
+            "'ONE_OFF_VENDOR_SUPPLIER', 'ONE_OFF_VENDOR_ARCHIVE', 'CREATE_NEW_PRODUCT', 'MAP_EXISTING_PRODUCT')",
             name="ck_wr_write_auth_op_type",
         ),
         CheckConstraint("use_count >= 0", name="ck_wr_write_auth_use_count"),

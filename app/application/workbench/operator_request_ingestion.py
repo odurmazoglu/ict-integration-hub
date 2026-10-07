@@ -69,6 +69,7 @@ class OperatorRequestAction(StrEnum):
     ACCOUNTING_RESOLUTION = "accounting_resolution"
     DECISION = "decision"
     EXECUTE_VENDOR_BILL = "execute_vendor_bill"
+    PRODUCT_MAPPING = "product_mapping"
 
 
 #: Existing permission each action requires -- identical to its REST endpoint.
@@ -78,6 +79,9 @@ ACTION_PERMISSIONS: dict[OperatorRequestAction, frozenset[str]] = {
     OperatorRequestAction.ACCOUNTING_RESOLUTION: frozenset({PERMISSION_REVIEW_DECIDE}),
     OperatorRequestAction.DECISION: frozenset({PERMISSION_REVIEW_DECIDE}),
     OperatorRequestAction.EXECUTE_VENDOR_BILL: frozenset({PERMISSION_EXECUTE}),
+    # Like the writing supplier modes: deciding needs workbench_review_decide; the
+    # supplierinfo write additionally needs the narrow authorization (workbench_execute).
+    OperatorRequestAction.PRODUCT_MAPPING: frozenset({PERMISSION_REVIEW_DECIDE}),
 }
 
 #: Supplier modes that write an Odoo partner: they additionally need the narrow write
@@ -142,6 +146,10 @@ class OperatorRequest(ApplicationDTO):
     asset_account_id: int | None = None
     depreciation_model_id: int | None = None
     note: str | None = None
+    #: PRODUCT_MAPPING: the immutable source invoice line the operator resolves.
+    line_number: str | None = None
+    #: PRODUCT_MAPPING: the existing Odoo product.product selected for that line.
+    product_id: int | None = None
 
     def __post_init__(self) -> None:
         _require_positive(self.odoo_record_id, "odoo_record_id must be positive.")
@@ -154,7 +162,7 @@ class OperatorRequest(ApplicationDTO):
         _require_positive(self.requested_by_odoo_user_id, "requested_by must be a positive Odoo user id.")
         if not isinstance(self.requested_at, datetime) or self.requested_at.utcoffset() is None:
             raise WorkbenchContractError("requested_at must be a timezone-aware datetime.")
-        for name in ("partner_id", "expense_account_id", "asset_account_id", "depreciation_model_id"):
+        for name in ("partner_id", "expense_account_id", "asset_account_id", "depreciation_model_id", "product_id"):
             value = getattr(self, name)
             if value is not None:
                 _require_positive(value, f"{name} must be a positive ERP id when supplied.")
@@ -168,6 +176,11 @@ class OperatorRequest(ApplicationDTO):
             raise WorkbenchContractError("Satın alma amacı seçilmelidir.")
         if self.action is OperatorRequestAction.ACCOUNTING_RESOLUTION and self.treatment_type is None:
             raise WorkbenchContractError("Muhasebe işlemi seçilmelidir.")
+        if self.action is OperatorRequestAction.PRODUCT_MAPPING:
+            if self.line_number is None or not self.line_number.strip():
+                raise WorkbenchContractError("Eşleştirilecek fatura satırı seçilmelidir.")
+            if self.product_id is None:
+                raise WorkbenchContractError("Eşleştirilecek Odoo ürünü seçilmelidir.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,6 +613,11 @@ def operator_request_key(request: OperatorRequest) -> str:
         "depreciation_model_id": request.depreciation_model_id,
         "note": request.note,
     }
+    # Added for PRODUCT_MAPPING only when present, so every existing request key is unchanged.
+    if request.line_number is not None:
+        payload["line_number"] = request.line_number
+    if request.product_id is not None:
+        payload["product_id"] = request.product_id
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return f"odoo-operator-request:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 

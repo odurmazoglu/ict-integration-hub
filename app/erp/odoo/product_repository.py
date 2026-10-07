@@ -6,7 +6,7 @@ from typing import Any
 from app.erp.models import Product
 from app.erp.odoo.adapter import OdooReadOnlyAdapter, many2one_id
 
-PRODUCT_FIELDS = ["id", "name", "default_code", "barcode", "active", "company_id"]
+PRODUCT_FIELDS = ["id", "name", "default_code", "barcode", "active", "company_id", "product_tmpl_id"]
 
 
 class OdooProductRepository:
@@ -46,6 +46,7 @@ def _product(record: dict[str, Any]) -> Product:
         barcode=_optional_str(record.get("barcode")),
         active=bool(record.get("active", True)),
         company_id=many2one_id(record.get("company_id")),
+        product_tmpl_id=many2one_id(record.get("product_tmpl_id")),
     )
 
 

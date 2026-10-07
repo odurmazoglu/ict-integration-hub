@@ -31,6 +31,7 @@ class OdooSelectedProductReader:
                 barcode=product.barcode,
                 active=product.active,
                 company_id=product.company_id,
+                product_tmpl_id=product.product_tmpl_id,
             )
             for product in products
         )

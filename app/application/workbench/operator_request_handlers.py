@@ -48,6 +48,7 @@ from app.application.workbench.operator_request_ingestion import (
     OperatorRequest,
     OperatorRequestOutcome,
 )
+from app.application.workbench.product_mapping import MapExistingProductCommand, MapExistingProductResult
 from app.application.workbench.projection import OdooWorkbenchDecisionCandidate
 from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
@@ -59,6 +60,7 @@ SUPPLIER_AUTHORIZATION_OPERATION = {
     SupplierResolutionMode.ONE_OFF_VENDOR: "ONE_OFF_VENDOR_SUPPLIER",
 }
 EXECUTE_VENDOR_BILL_OPERATION = "EXECUTE_VENDOR_BILL"
+MAP_EXISTING_PRODUCT_OPERATION = "MAP_EXISTING_PRODUCT"
 
 
 def run_coroutine[T](awaitable: Awaitable[T]) -> T:
@@ -112,6 +114,51 @@ class SupplierResolutionRequestHandler:
             )
         )
         return _applied(result, "Tedarikçi çözümü kaydedildi.")
+
+
+class ProductMappingRequestHandler:
+    """-> ``MapExistingProductUseCase``: one review line -> one existing Odoo product."""
+
+    def __init__(self, *, use_case: _AsyncUseCase, runner: Runner = run_coroutine) -> None:
+        self._use_case = use_case
+        self._runner = runner
+
+    def handle(self, request: OperatorRequest, context: OperatorActionContext) -> OperatorActionOutcome:
+        if request.line_number is None or request.product_id is None:
+            raise WorkbenchContractError("Fatura satırı ve Odoo ürünü seçilmelidir.")
+        # The supplierinfo write needs the same narrow single-use authorization an API
+        # caller would issue; the use case still enforces the kill switch and eligibility.
+        authorization_id = context.ensure_authorization(MAP_EXISTING_PRODUCT_OPERATION)
+        result = self._runner(
+            self._use_case.execute(
+                MapExistingProductCommand(
+                    review_id=request.review_id,
+                    company_id=request.company_id,
+                    expected_version=request.expected_version,
+                    line_number=request.line_number,
+                    product_id=request.product_id,
+                    approved_by=context.actor.actor,
+                    authorization_id=authorization_id,
+                )
+            )
+        )
+        return OperatorActionOutcome(outcome=OperatorRequestOutcome.COMPLETED, message=product_mapping_message(result))
+
+
+def product_mapping_message(result: MapExistingProductResult) -> str:
+    product = result.product_name or f"#{result.product_id}"
+    mapping = f"Satır {result.line_number} (satıcı kodu {result.seller_item_code}) → {product}"
+    if not result.line_resolved:
+        return (
+            f"{mapping} eşleştirmesi kaydedildi ancak satır hâlâ eşleşmedi (ürünün birden fazla varyantı "
+            "olabilir); teknik destek alın."
+        )
+    tail = (
+        f" Kalan eşleştirilecek satırlar: {', '.join(result.remaining_product_lines)}."
+        if result.remaining_product_lines
+        else ""
+    )
+    return f"Ürün eşleştirildi: {mapping}. Bu tedarikçinin sonraki faturalarında otomatik eşleşecek.{tail}"
 
 
 class PurchasePurposeRequestHandler:

@@ -37,9 +37,13 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
             # P0-PROD-15T, P0-PROD-18E-2, P0-PROD-18F-1 and the source-identity correction
             # each added one more, unrelated migration on top, and so did the fixed-asset
             # accounting and ADR-0013 operator request ledger migrations -- "head" now
-            # lands six revisions further than when this test was written.
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170036"
+            # lands six revisions further than when this test was written; the
+            # MAP_EXISTING_PRODUCT operation type (202607170037) is one more on top.
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170037"
         _assert_operation_type_check_constraint(engine, name)
+        _delete_rows_with_operation_type(engine, name, "MAP_EXISTING_PRODUCT")
+        command.downgrade(config, "202607170036")
+        _assert_pre_product_mapping_check_constraint_rejects_map_existing_product(engine, name)
         # Rows using an operation type must be cleared before downgrading past the
         # migration that introduced it -- SQLite's batch-recreate (and PostgreSQL's
         # default ADD CONSTRAINT validation) both re-validate existing rows against
@@ -114,10 +118,25 @@ def _assert_operation_type_check_constraint(engine, table_name: str) -> None:
         "ONE_OFF_VENDOR_SUPPLIER",
         "ONE_OFF_VENDOR_ARCHIVE",
         "CREATE_NEW_PRODUCT",
+        "MAP_EXISTING_PRODUCT",
     ):
         _insert_authorization(engine, table_name, review_id="review-ck-check", operation_type=operation_type)
     with pytest.raises(IntegrityError):
         _insert_authorization(engine, table_name, review_id="review-ck-check", operation_type="SOMETHING_ELSE")
+
+
+def _assert_pre_product_mapping_check_constraint_rejects_map_existing_product(engine, table_name: str) -> None:
+    """After downgrading to 202607170036 the previous constraint is restored exactly:
+    MAP_EXISTING_PRODUCT is rejected again while CREATE_NEW_PRODUCT is still accepted."""
+
+    _seed_review(engine, "review-ck-downgrade-mapping")
+    _insert_authorization(
+        engine, table_name, review_id="review-ck-downgrade-mapping", operation_type="CREATE_NEW_PRODUCT"
+    )
+    with pytest.raises(IntegrityError):
+        _insert_authorization(
+            engine, table_name, review_id="review-ck-downgrade-mapping", operation_type="MAP_EXISTING_PRODUCT"
+        )
 
 
 def _assert_pre_09g_check_constraint_rejects_create_new_product(engine, table_name: str) -> None:
