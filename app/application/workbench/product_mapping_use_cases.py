@@ -176,10 +176,17 @@ class MapExistingProductUseCase:
 
     def _source_line(self, command: MapExistingProductCommand, line_number: str):
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
-        line = next((item for item in source.invoice.lines if (item.line_number or "").strip() == line_number), None)
-        if line is None:
+        lines = [item for item in source.invoice.lines if (item.line_number or "").strip() == line_number]
+        if not lines:
             raise ProductRemediationEligibilityError(f"Fatura satırı bulunamadı: {line_number}.")
-        return line
+        if len(lines) > 1:
+            # A line number is the operator-visible identity; if the source invoice repeats it,
+            # "which line" cannot be proven, so nothing is mapped.
+            raise ProductRemediationEligibilityError(
+                f"Faturada {line_number} numaralı birden fazla satır var; satır kesin belirlenemediği için eşleştirme "
+                "yapılmadı. Teknik destek alın."
+            )
+        return lines[0]
 
     def _matched_supplier(self, command: MapExistingProductCommand) -> int:
         try:
@@ -264,6 +271,13 @@ class MapExistingProductUseCase:
                 authorization=self._claim_authorization(command, line_number),
             )
         )
+        if result.product_id not in (None, product.id):
+            # The writer's own reuse check compares templates only; a concurrently created row
+            # pinning another variant of the same template must not be reported as this mapping.
+            raise ProductMappingConflictError(
+                f"Bu tedarikçinin '{code}' ürün kodu Odoo'da aynı ürünün başka bir varyantına eşlenmiş (tedarikçi "
+                f"ürün kaydı #{result.supplierinfo_id}). Mevcut eşleştirme değiştirilmedi."
+            )
         return result.supplierinfo_id, result.status is SupplierInfoWriteStatus.CREATED
 
     def _claim_authorization(self, command: MapExistingProductCommand, line_number: str):

@@ -99,6 +99,9 @@ class InMemoryOdoo:
             503: {"tmpl": 303, "name": "GPU as a Service", "active": True, "company_id": 1},
             504: {"tmpl": 304, "name": "Archived product", "active": False, "company_id": None},
             505: {"tmpl": 305, "name": "Other company product", "active": True, "company_id": 2},
+            # One template, two active variants (e.g. RAM sizes).
+            506: {"tmpl": 306, "name": "Laptop (16 GB)", "active": True, "company_id": None},
+            507: {"tmpl": 306, "name": "Laptop (32 GB)", "active": True, "company_id": None},
         }
         self.supplierinfo: list[dict[str, Any]] = [
             # Production: GPU as a Service on ICT Bulut with an EMPTY vendor product code.
@@ -113,10 +116,16 @@ class InMemoryOdoo:
         ]
         self.create_calls: list[dict[str, Any]] = []
         self.fail_next_create = False
+        self.search_calls = 0
+        #: {search call number: row} -- a row that appears in Odoo right before that read.
+        self.rows_appearing: dict[int, dict[str, Any]] = {}
 
     # JSON-2 client shape (OdooSupplierInfoRepository)
     async def search_read(self, *, model, domain, fields, limit=20, offset=0):
         assert model == "product.supplierinfo"
+        self.search_calls += 1
+        if self.search_calls in self.rows_appearing:
+            self.supplierinfo.append(self.rows_appearing.pop(self.search_calls))
         rows = self.supplierinfo
         for name, op, value in domain:
             if op == "=":
@@ -186,18 +195,26 @@ class InMemoryOdoo:
 
 
 class _NoGlobalProducts:
-    """No ICT product identity (default_code/barcode) matches -- only supplier mappings can."""
+    """ICT product identities (default_code); empty by default -- only supplier mappings match."""
+
+    def __init__(self, default_codes: dict[str, int] | None = None) -> None:
+        self.default_codes = default_codes or {}
 
     def find_by_default_code(self, value, *, company_id=None):
-        return ()
+        from app.erp.models import Product
+
+        product_id = self.default_codes.get(value)
+        if product_id is None:
+            return ()
+        return (Product(id=product_id, name="x", default_code=value, barcode=None, active=True),)
 
     def find_by_barcode(self, value, *, company_id=None):
         return ()
 
 
-def _matcher(odoo: InMemoryOdoo) -> ProductMatchingEngine:
+def _matcher(odoo: InMemoryOdoo, default_codes: dict[str, int] | None = None) -> ProductMatchingEngine:
     return ProductMatchingEngine(
-        SimpleNamespace(product_repository=_NoGlobalProducts()), supplier_product_repository=odoo
+        SimpleNamespace(product_repository=_NoGlobalProducts(default_codes)), supplier_product_repository=odoo
     )
 
 
@@ -257,9 +274,14 @@ class Harness:
     """Review state + a matcher-backed reclassifier over the same in-memory Odoo."""
 
     def __init__(
-        self, invoice: InternalInvoice, *, partner_match: PartnerMatchResult | None = None, claim: Any = None
+        self,
+        invoice: InternalInvoice,
+        *,
+        partner_match: PartnerMatchResult | None = None,
+        claim: Any = None,
+        odoo: InMemoryOdoo | None = None,
     ) -> None:
-        self.odoo = InMemoryOdoo()
+        self.odoo = odoo or InMemoryOdoo()
         self.invoice = invoice
         self.partner_match = partner_match or _matched(ICT_BULUT)
         self.review = ReviewItem(
@@ -273,7 +295,7 @@ class Harness:
             total_amount=Decimal("100"),
             workflow=WorkflowType.MANUAL_REVIEW,
             status=ReviewStatus.PENDING_REVIEW,
-            review_reasons=_product_reasons(invoice, self.odoo, ICT_BULUT),
+            review_reasons=_product_reasons(invoice, self.odoo, self.partner_match.partner_id),
             version=2,
         )
         self.claim = claim
@@ -334,7 +356,9 @@ class Harness:
             raise error
         previous = self.review
         self.review = replace(
-            previous, version=previous.version + 1, review_reasons=_product_reasons(self.invoice, self.odoo, ICT_BULUT)
+            previous,
+            version=previous.version + 1,
+            review_reasons=_product_reasons(self.invoice, self.odoo, self.supplier_id),
         )
         return ReviewReclassificationResult(
             review_id=REVIEW,
@@ -349,6 +373,10 @@ class Harness:
             trigger=command.trigger,
             executable=False,
         )
+
+    @property
+    def supplier_id(self) -> int:
+        return self.partner_match.partner_id if self.partner_match is not None else ICT_BULUT
 
     def commit(self):
         self.commits += 1
@@ -973,3 +1001,150 @@ def test_product_mapping_guidance_switch_follows_the_operator_request_configurat
     monkeypatch.setenv("ODOO_WORKBENCH_REQUEST_PRODUCT_FIELD", "x_studio_ipp_req_product")
     assert _product_mapping_requests_enabled(enabled) is True
     assert _product_mapping_requests_enabled(Settings(odoo_workbench_operator_requests_enabled=False)) is False
+
+
+# --------------------------------------------------------------------------- final-review proofs (PR #208)
+
+
+async def test_multi_variant_template_maps_and_future_invoices_resolve_the_exact_selected_variant() -> None:
+    h = Harness(_invoice(_line("1", "LAP-32", "Dizüstü bilgisayar 32 GB")))
+
+    result = await h.use_case.execute(h.command("1", 507))
+
+    assert h.odoo.create_calls[0]["product_tmpl_id"] == 306 and h.odoo.create_calls[0]["product_id"] == 507
+    assert result.line_resolved is True
+    future = _invoice(_line("1", "LAP-32", "Dizüstü"), number="ICF2026000010000")
+    resolved = _matcher(h.odoo).match_invoice(future, company_id=COMPANY, partner_match=_matched(ICT_BULUT))
+    assert resolved.line_results[0].result.product_id == 507  # never the sibling variant 506
+
+
+async def test_existing_template_level_row_on_a_multi_variant_template_is_reused_never_repointed() -> None:
+    h = Harness(_invoice(_line("1", "LAP-32", "Dizüstü bilgisayar 32 GB")))
+    h.odoo.supplierinfo.append(
+        {
+            "id": 90,
+            "partner_id": ICT_BULUT,
+            "product_tmpl_id": 306,
+            "product_id": None,
+            "product_code": "LAP-32",
+            "company_id": 1,
+        }
+    )
+
+    result = await h.use_case.execute(h.command("1", 507))
+
+    assert h.odoo.create_calls == []  # no second row next to the template-level one
+    assert result.supplierinfo_id == 90 and result.line_resolved is False  # two variants: not provable
+    assert "hâlâ eşleşmedi" in product_mapping_message(result)
+
+
+async def test_existing_row_pinning_a_sibling_variant_is_a_conflict() -> None:
+    h = Harness(_invoice(_line("1", "LAP-32", "Dizüstü bilgisayar 32 GB")))
+    h.odoo.supplierinfo.append(
+        {
+            "id": 91,
+            "partner_id": ICT_BULUT,
+            "product_tmpl_id": 306,
+            "product_id": 506,
+            "product_code": "LAP-32",
+            "company_id": 1,
+        }
+    )
+
+    with pytest.raises(ProductMappingConflictError):
+        await h.use_case.execute(h.command("1", 507))
+    assert h.odoo.create_calls == []
+
+
+async def test_sibling_variant_mapping_created_concurrently_is_not_reported_as_this_mapping() -> None:
+    h = Harness(_invoice(_line("1", "LAP-32", "Dizüstü bilgisayar 32 GB")))
+    # Pre-check (read 1) sees nothing; the row appears before the writer's own read (read 2).
+    h.odoo.rows_appearing[2] = {
+        "id": 92,
+        "partner_id": ICT_BULUT,
+        "product_tmpl_id": 306,
+        "product_id": 506,
+        "product_code": "LAP-32",
+        "company_id": 1,
+    }
+
+    with pytest.raises(ProductMappingConflictError) as caught:
+        await h.use_case.execute(h.command("1", 507))
+
+    assert h.odoo.create_calls == [] and h.reclassify_calls == [] and h.rollbacks == 1
+    assert "başka bir varyantına" in caught.value.safe_message
+
+
+async def test_repeated_line_number_on_the_source_invoice_is_refused() -> None:
+    h = Harness(_invoice(_line("1", "TFZP", TFZP_DESCRIPTION), _line("1", "TGDR", "SQL")))
+
+    with pytest.raises(ProductRemediationEligibilityError) as caught:
+        await h.use_case.execute(h.command("1", 501))
+    assert "birden fazla satır" in caught.value.safe_message and h.odoo.create_calls == []
+
+
+async def test_seller_code_is_whitespace_trimmed_and_case_sensitive_on_both_write_and_read() -> None:
+    h = Harness(_invoice(_line("1", "  TFZP  ", TFZP_DESCRIPTION)))
+    await h.use_case.execute(h.command("1", 501))
+
+    assert h.odoo.create_calls[0]["product_code"] == "TFZP"
+    matcher = _matcher(h.odoo)
+
+    def first(code: str):
+        invoice = _invoice(_line("1", code, "x"), number="ICF2026000010001")
+        return matcher.match_invoice(invoice, company_id=COMPANY, partner_match=_matched(ICT_BULUT)).line_results[0]
+
+    assert first(" TFZP").result.product_id == 501
+    assert first("tfzp").result.status is ProductMatchStatus.NOT_FOUND
+
+
+async def test_two_suppliers_keep_independent_mappings_for_the_same_seller_code() -> None:
+    odoo = InMemoryOdoo()
+    ict = Harness(_invoice(_line("1", "TFZP", "ICT Bulut ürünü")), odoo=odoo)
+    other = Harness(
+        _invoice(_line("1", "TFZP", "Dalgakıran ürünü"), number="D012026000006193"),
+        partner_match=_matched(DALGAKIRAN),
+        odoo=odoo,
+    )
+
+    await ict.use_case.execute(ict.command("1", 501))
+    await other.use_case.execute(other.command("1", 502))
+
+    def resolved(partner: int) -> int | None:
+        invoice = _invoice(_line("1", "TFZP", "x"), number="ICF2026000010003")
+        lines = _matcher(odoo).match_invoice(invoice, company_id=COMPANY, partner_match=_matched(partner))
+        return lines.line_results[0].result.product_id
+
+    assert (resolved(ICT_BULUT), resolved(DALGAKIRAN)) == (501, 502)
+
+
+def test_global_seller_code_to_default_code_path_is_preexisting_and_supplier_blind() -> None:
+    """Documents finding 7: an UNMAPPED seller code equal to an ICT default_code matches globally."""
+
+    invoice = _invoice(_line("1", "CFQ7TTC0LH18:0001", "Microsoft 365 Business Basic"))
+    lines = _matcher(InMemoryOdoo(), {"CFQ7TTC0LH18:0001": 393}).match_invoice(
+        invoice, company_id=COMPANY, partner_match=_matched(ICT_BULUT)
+    )
+    result = lines.line_results[0].result
+
+    assert (result.status, result.product_id, result.matched_by) == (
+        ProductMatchStatus.MATCHED,
+        393,
+        "seller_item_code",
+    )
+
+
+async def test_a_mapping_is_never_overridden_by_a_conflicting_global_default_code() -> None:
+    h = Harness(_ict_8699())
+    await h.use_case.execute(h.command("1", 501))
+    future = _invoice(_line("1", "TFZP", "x"), number="ICF2026000010004")
+
+    def matched(default_codes: dict[str, int]):
+        lines = _matcher(h.odoo, default_codes).match_invoice(
+            future, company_id=COMPANY, partner_match=_matched(ICT_BULUT)
+        )
+        return lines.line_results[0].result
+
+    conflicting, agreeing = matched({"TFZP": 999}), matched({"TFZP": 501})
+    assert conflicting.status is ProductMatchStatus.MULTIPLE_MATCHES and conflicting.product_id is None
+    assert agreeing.status is ProductMatchStatus.MATCHED and agreeing.product_id == 501
