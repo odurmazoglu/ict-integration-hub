@@ -126,6 +126,21 @@ def test_rule_ignores_valid_different_vat_children_archived_persons_and_other_na
     assert blocking == ()
 
 
+def test_rule_counts_a_legacy_company_and_its_synced_child_contact_once() -> None:
+    # Odoo copies the company VAT onto child contacts; the child must never be a second candidate.
+    blocking = probable_existing_companies(
+        supplier_name="DALGAKIRAN MAK.SAN.VE TİC.AŞ.",
+        supplier_tax_number="2680149578",
+        candidates=[
+            _record(75, "Dalgakıran Makina Sanayi ve Ticaret Anonim Şirketi", "272183"),
+            _record(
+                398, "Dalgakıran Makina Sanayi ve Ticaret Anonim Şirketi", "272183", is_company=False, parent_id=75
+            ),
+        ],
+    )
+    assert [c.partner_id for c in blocking] == [75]
+
+
 # --------------------------------------------------------------------------- writer (real repository, fake Odoo)
 
 
@@ -162,6 +177,31 @@ async def test_same_name_company_with_missing_vat_blocks_create() -> None:
 
     assert client.create_calls == []
     assert "VKN: yok" in caught.value.safe_message
+
+
+async def test_dalgakiran_shape_company_with_synced_child_is_one_blocking_candidate() -> None:
+    # Even if Odoo returned the synced child row, it is excluded: exactly one candidate (the company).
+    client = FakeJson2Client(
+        search_results=[],
+        company_results=[
+            _company(75, "Dalgakıran Makina Sanayi ve Ticaret Anonim Şirketi", "272183"),
+            _company(
+                398,
+                "Dalgakıran Makina Sanayi ve Ticaret Anonim Şirketi",
+                "272183",
+                is_company=False,
+                parent_id=[75, "Dalgakıran Makina Sanayi ve Ticaret Anonim Şirketi"],
+            ),
+        ],
+    )
+
+    with pytest.raises(SupplierPartnerProbableDuplicateError) as caught:
+        await _writer(client).create_supplier(
+            _command(supplier_name="DALGAKIRAN MAK.SAN.VE TİC.AŞ.", supplier_tax_number="2680149578")
+        )
+
+    assert caught.value.candidate_partner_ids == (75,)
+    assert client.create_calls == []
 
 
 async def test_several_legacy_candidates_fail_closed_and_are_all_exposed() -> None:

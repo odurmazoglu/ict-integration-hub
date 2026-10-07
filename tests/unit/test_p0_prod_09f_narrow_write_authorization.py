@@ -40,7 +40,9 @@ from app.api.routers.workbench import router
 from app.api.security import AuthenticationMethod, Permission, RequestContext
 from app.application.exceptions.supplier_partner import (
     SupplierPartnerInactiveError,
+    SupplierPartnerProbableDuplicateError,
     SupplierPartnerWriteSafetyGateError,
+    SupplierPartnerWriteTransportError,
 )
 from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
@@ -76,6 +78,7 @@ from app.application.workbench.write_authorization_use_cases import (
     RevokeWriteAuthorizationUseCase,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
+from app.connectors.exceptions import ConnectorTimeoutError
 from app.db.base import Base
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
 from app.erp.write.odoo_supplier_partner_writer import (
@@ -348,6 +351,7 @@ def _resolve_use_case(
     review: ReviewItem | None = None,
     source: InternalInvoice | None = None,
     vat: str = NEW_VAT,
+    create_duplicate_guard: Any = None,
 ) -> ResolveWorkbenchSupplierUseCase:
     review = review or ReviewItem(
         review_id=SUPPLIER_REVIEW_ID,
@@ -392,6 +396,7 @@ def _resolve_use_case(
         workbench_republisher=None,
         retirement_writer=SqlAlchemyReviewOneOffVendorRetirementRepository(session),
         write_authorization_repository=_auth_repo(session),
+        create_duplicate_guard=create_duplicate_guard,
     )
 
 
@@ -962,3 +967,119 @@ def test_supplier_resolution_authorization_id_reaches_the_command() -> None:
     assert response.status_code == 200, response.text
     assert len(fake_use_case.calls) == 1
     assert fake_use_case.calls[0].authorization_id == "11111111-1111-1111-1111-111111111111"
+
+
+# =================================================================== create duplicate guard (legacy-VAT company)
+
+#: Same canonical name as the source supplier "Some Vendor A.S.", legacy (non-VKN) VAT.
+LEGACY_COMPANY = {
+    "id": 77,
+    "name": "Some Vendor Anonim Şirketi",
+    "vat": "123456",
+    "active": True,
+    "is_company": True,
+    "parent_id": False,
+}
+
+
+class _LegacyCompanyClient(_FakeOdooJson2Client):
+    def __init__(self, *, legacy_visible: bool, fail_first_create: bool = False) -> None:
+        super().__init__(search_results=[])
+        self.legacy_visible = legacy_visible
+        self._fail_next_create = fail_first_create
+
+    async def search_read(self, *, model: str, domain, fields, limit: int = 20, offset: int = 0):
+        if ["is_company", "=", True] in domain:
+            return [dict(LEGACY_COMPANY)] if self.legacy_visible and offset == 0 else []
+        return await super().search_read(model=model, domain=domain, fields=fields, limit=limit, offset=offset)
+
+    async def create_res_partner(self, payload: dict[str, Any]) -> int:
+        if self._fail_next_create:
+            self._fail_next_create = False
+            self.create_calls.append(payload)
+            raise ConnectorTimeoutError("Odoo request timed out.")
+        return await super().create_res_partner(payload)
+
+
+def _authorization_status(session: Session, authorization_id: str) -> WriteAuthorizationStatus:
+    return _auth_repo(session).get_by_id(authorization_id=authorization_id, company_id=COMPANY_ID).status
+
+
+async def test_pre_reservation_guard_blocks_with_no_reservation_and_authorization_left_pending(
+    session: Session,
+) -> None:
+    authorization = _issue(
+        session, operation_type=WriteAuthorizationOperationType.CREATE_PERMANENT_SUPPLIER, target_version=1
+    )
+    client = _LegacyCompanyClient(legacy_visible=True)
+    writer = _writer(client)
+    use_case = _resolve_use_case(session, writer=writer, create_duplicate_guard=writer)
+
+    with pytest.raises(SupplierPartnerProbableDuplicateError) as caught:
+        await use_case.execute(
+            _supplier_command(
+                mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, authorization_id=authorization.authorization_id
+            )
+        )
+
+    assert caught.value.candidate_partner_ids == (77,)
+    assert client.create_calls == []
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 0
+    assert _authorization_status(session, authorization.authorization_id) is WriteAuthorizationStatus.PENDING
+
+
+async def test_company_appearing_after_the_precheck_is_still_blocked_by_the_writer(session: Session) -> None:
+    """TOCTOU: the application pre-check sees no candidate; the legacy company appears
+    before the Odoo create; the writer's own fresh read must still refuse to create."""
+
+    authorization = _issue(
+        session, operation_type=WriteAuthorizationOperationType.ONE_OFF_VENDOR_SUPPLIER, target_version=1
+    )
+    client = _LegacyCompanyClient(legacy_visible=False)
+    writer = _writer(client)
+
+    class _CompanyAppearsAfterCheck:
+        async def ensure_no_probable_existing_company(self, **kwargs: Any) -> None:
+            await writer.ensure_no_probable_existing_company(**kwargs)  # passes: nothing visible yet
+            client.legacy_visible = True  # concurrently created / imported in Odoo
+
+    use_case = _resolve_use_case(session, writer=writer, create_duplicate_guard=_CompanyAppearsAfterCheck())
+
+    with pytest.raises(SupplierPartnerProbableDuplicateError):
+        await use_case.execute(
+            _supplier_command(
+                mode=SupplierResolutionMode.ONE_OFF_VENDOR, authorization_id=authorization.authorization_id
+            )
+        )
+
+    assert client.create_calls == []
+    assert _authorization_status(session, authorization.authorization_id) is WriteAuthorizationStatus.PENDING
+    # The pre-check had passed, so the intent was reserved (existing durable-reservation design).
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1
+
+
+async def test_resumed_create_intent_is_still_blocked_by_the_writer_guard(session: Session) -> None:
+    """An already-recorded CREATE intent (e.g. reserved before this guard existed, then
+    interrupted before the partner was created) resumes through the writer guard."""
+
+    authorization = _issue(
+        session, operation_type=WriteAuthorizationOperationType.CREATE_PERMANENT_SUPPLIER, target_version=1
+    )
+    client = _LegacyCompanyClient(legacy_visible=False, fail_first_create=True)
+    writer = _writer(client)
+    use_case = _resolve_use_case(session, writer=writer, create_duplicate_guard=writer)
+    command = _supplier_command(
+        mode=SupplierResolutionMode.CREATE_PERMANENT_SUPPLIER, authorization_id=authorization.authorization_id
+    )
+
+    with pytest.raises(SupplierPartnerWriteTransportError):
+        await use_case.execute(command)
+    assert session.query(WorkbenchReviewSupplierResolution).count() == 1  # interrupted, intent recorded
+
+    client.legacy_visible = True
+    with pytest.raises(SupplierPartnerProbableDuplicateError):
+        await use_case.execute(command)  # resume path
+
+    assert len(client.create_calls) == 1  # only the interrupted attempt; no partner was created
+    assert session.query(WorkbenchReviewSupplierRemediationEffect).count() == 0
+    assert _authorization_status(session, authorization.authorization_id) is WriteAuthorizationStatus.PENDING
