@@ -17,25 +17,30 @@ Current implementation: `app/matching/product.py`.
 
 Product matching consumes `InternalInvoice` and a `RepositoryProvider`. It does not call Odoo directly and does not import SOAP, FastAPI, SQLAlchemy, or persistence layers.
 
-Legacy priority chain (unchanged; the first identifier with any active candidate stops it):
+Deterministic identities, in precedence order for the reported `matched_by`:
 
-1. buyer item code -> ERP `default_code`
-2. barcode (UBL `StandardItemIdentification` only) -> ERP barcode
-3. seller item code -> ERP `default_code`
+1. supplier-scoped seller code (P0-PROD-19A-3): `(supplier partner, seller_item_code)` -> `product.supplierinfo` -> one variant (`matched_by="supplier_product_code"`)
+2. legacy chain (the first identifier with any active candidate stops it): buyer item code -> ERP `default_code`, then barcode (UBL `StandardItemIdentification` only) -> ERP barcode
+3. authoritative manufacturer SKUs (below)
+
+A seller item code is **not** a global ICT product identity (product matching safety, after PR #208). `seller_item_code -> ERP default_code` is an advisory probe only:
+
+- it is looked up in the old chain position, only when the buyer code and barcode found no candidate, so the Odoo call budget is unchanged;
+- it never produces `MATCHED`: a line whose only hit is this probe is `NOT_FOUND` (surfaces as `PRODUCT_NOT_FOUND`), with a reason saying a supplier-specific mapping is required;
+- it never conflicts with or makes ambiguous a deterministic match: a supplierinfo mapping wins over an unrelated, or even an ambiguous, global `default_code` collision;
+- when it uniquely agrees with the deterministic product it is listed in `reason` as `seller_item_code (advisory)` corroboration.
+
+The buyer item code keeps its deterministic `default_code` semantics: it is ICT's own code for the product.
 
 Authoritative manufacturer SKUs (P0-PROD-19A-2), each always looked up when present:
 
 - `manufacturer_item_code` (UBL `ManufacturersItemIdentification`) -> ERP `default_code`, for every supplier (`matched_by="manufacturer_item_code"`)
 - a supplier source-profile SKU -> ERP `default_code` (`matched_by="supplier_profile_sku"`); see below
 
-Supplier-scoped seller code (P0-PROD-19A-3), looked up when present:
-
-- `(supplier partner, seller_item_code)` -> `product.supplierinfo.product_code` -> one `product.product` (`matched_by="supplier_product_code"`); see below
-
 Behavior:
 
-- the legacy chain outcome, every SKU outcome and the supplierinfo outcome are combined; no identifier silently wins
-- all resolving identities agree on one active product: `MATCHED` (`matched_by` is the first agreeing identity, the others are named in `reason` as corroborating)
+- the supplierinfo outcome, the legacy chain outcome and every SKU outcome are combined; no deterministic identifier silently wins
+- all resolving identities agree on one active product: `MATCHED` (`matched_by` is the first agreeing identity in the precedence above, the others are listed in `reason` as corroborating)
 - any identity with more than one active candidate: `MULTIPLE_MATCHES`
 - identities resolving to different products: `MULTIPLE_MATCHES` with reason `Conflicting product identities resolve to different products: ...` (fail closed; surfaces as `PRODUCT_AMBIGUOUS`)
 - zero active candidates for every identity: `NOT_FOUND`
@@ -57,7 +62,7 @@ Lookups (bounded to 2 records, which is enough to prove ambiguity):
 
 Variant precision: a row with `product_id` identifies exactly that variant, which must still be active, in company scope and on the row's template; an archived named variant is not replaced by another variant. A template-level row (`product_id` empty, applying to all variants in Odoo) identifies a variant only when the template has exactly one active in-scope variant; a multi-variant template (e.g. ManageEngine families) is ambiguous. Any returned record outside the requested identity fails closed as a malformed response.
 
-The legacy `seller_item_code -> default_code` probe is unchanged and simply joins the same combination, so a supplier whose seller code equals an Internal Reference keeps matching exactly as before, and disagreement with supplierinfo fails closed.
+Since the product matching safety change the `seller_item_code -> default_code` probe is advisory only (see above). A supplier whose seller code happens to equal an Internal Reference therefore needs an explicit supplierinfo row (e.g. via the #208 "Ürün Eşleştir" action) to keep matching; see `docs/PRODUCT_MATCHING_SAFETY_TRANSITION.md`.
 
 Late supplier resolution: supplierinfo uses only the deterministic raw partner match of the evaluation run. Reclassification re-runs this engine, so a supplier that later becomes deterministically matchable (e.g. a P0-PROD-10D remediation that creates/reactivates the partner) gets supplierinfo matching on reclassification. A P0-PROD-15N `MATCH_EXISTING` supplier stays raw-ambiguous by design, and the effective-decision overlay deliberately does not re-run product matching, so supplierinfo does not participate there; such lines keep the existing Workbench product selection path.
 
