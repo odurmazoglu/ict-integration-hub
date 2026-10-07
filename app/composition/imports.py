@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
@@ -13,6 +14,7 @@ from app.application.decision import (
     VendorBillReviewRecommendationStrategy,
     WorkflowStrategyResolver,
 )
+from app.application.exceptions.base import ApplicationError
 from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.ports import InvoiceImportHistory
 from app.application.rules import DeterministicRuleEngine, InvoiceDecisionRuleEngine, OdooDecisionRuleFieldMapping
@@ -26,9 +28,16 @@ from app.application.workbench import (
     WorkbenchProjectionPublisher,
 )
 from app.application.workbench.dto import ReviewItem
+from app.application.workbench.exceptions import WorkbenchContractError
 from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
-from app.application.workbench.operator_guidance import OperatorGuidanceFacts, resolve_accounting_labels
+from app.application.workbench.operator_guidance import (
+    OperatorGuidanceFacts,
+    UnmatchedProductLine,
+    resolve_accounting_labels,
+)
+from app.application.workbench.product_remediation import normalize_seller_item_code
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
+from app.application.workflow import ManualReviewReasonCode
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
@@ -51,6 +60,7 @@ from app.erp.odoo.selected_expense_account_reader import OdooSelectedAccountRead
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.erp.odoo.supplier_product_repository import OdooSupplierProductRepository
 from app.erp.odoo.tax_repository import OdooTaxRepository
+from app.erp.odoo.workbench_operator_request_reader import OdooOperatorRequestFieldMapping
 from app.erp.odoo.workbench_projection_publisher import OdooWorkbenchProjectionAdapter
 from app.erp.odoo.workbench_reference_repositories import (
     OdooAnalyticAccountReferenceRepository,
@@ -73,6 +83,7 @@ from app.persistence import (
     SqlAlchemyReviewClassificationEvidenceReader,
     SqlAlchemyReviewExecutionEvidenceReader,
     SqlAlchemyReviewRepository,
+    SqlAlchemyReviewSourceInvoiceEvidenceReader,
     SqlAlchemyUnitOfWork,
 )
 from app.persistence.workbench_review_accounting_resolution_repository import (
@@ -117,6 +128,7 @@ def build_workbench_projection_synchronizer(
     projection_adapter: OdooWorkbenchProjectionAdapter | None = None,
     mapping: OdooWorkbenchProjectionFieldMapping | None = None,
     accounting_label_reader: FixedAssetAccountingReader | None = None,
+    product_mapping_enabled: bool | None = None,
 ) -> WorkbenchProjectionSynchronizer:
     """The canonical OPS-UI-01A synchronizer, independent of the runtime publish flag.
 
@@ -149,6 +161,12 @@ def build_workbench_projection_synchronizer(
         )
     )
 
+    # The "Ürün Eşleştir" guidance appears only together with its request fields (same switch
+    # as the request handler), so the Studio selection value always exists before it is written.
+    product_mapping = (
+        _product_mapping_requests_enabled(settings) if product_mapping_enabled is None else product_mapping_enabled
+    )
+
     # Accounting labels come from the existing read-only fixed-asset/account reference port.
     label_reader = accounting_label_reader
     if guidance_mapped and label_reader is None:
@@ -168,6 +186,8 @@ def build_workbench_projection_synchronizer(
                         accounting_repository=SqlAlchemyReviewAccountingResolutionRepository(read_session),
                         eligible_asset_account_ids=eligible_asset_account_ids,
                         label_reader=label_reader,
+                        source_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(read_session),
+                        product_mapping_enabled=product_mapping,
                     )
                     if guidance_mapped
                     else None
@@ -196,6 +216,8 @@ def _operator_guidance_facts(
     accounting_repository: SqlAlchemyReviewAccountingResolutionRepository,
     eligible_asset_account_ids: tuple[int, ...],
     label_reader: FixedAssetAccountingReader | None = None,
+    source_reader: SqlAlchemyReviewSourceInvoiceEvidenceReader | None = None,
+    product_mapping_enabled: bool = False,
 ) -> OperatorGuidanceFacts:
     """ADR-0013 guidance facts, read from the same private read-only session."""
 
@@ -214,7 +236,54 @@ def _operator_guidance_facts(
             else None
         ),
         eligible_asset_account_ids=eligible_asset_account_ids,
+        product_mapping_enabled=product_mapping_enabled,
+        unmatched_product_lines=(
+            _unmatched_product_lines(review, company_id, source_reader)
+            if product_mapping_enabled and source_reader is not None
+            else ()
+        ),
     )
+
+
+def _unmatched_product_lines(
+    review: ReviewItem, company_id: int, source_reader: SqlAlchemyReviewSourceInvoiceEvidenceReader
+) -> tuple[UnmatchedProductLine, ...]:
+    wanted = {
+        (reason.line_number or "").strip()
+        for reason in review.review_reasons
+        if reason.code is ManualReviewReasonCode.PRODUCT_NOT_FOUND and (reason.line_number or "").strip()
+    }
+    if not wanted:
+        return ()
+    try:
+        source = source_reader.get(review_id=review.review_id, company_id=company_id)
+    except ApplicationError as exc:
+        # Presentation only: without the line list the guidance stays at "Teknik Destek Gerekli".
+        logging.getLogger(__name__).warning(
+            "workbench.operator_guidance.product_lines_unavailable",
+            extra={"review_id": review.review_id, "error": getattr(exc, "safe_message", None) or str(exc)},
+        )
+        return ()
+    return tuple(
+        UnmatchedProductLine(
+            line_number=(line.line_number or "").strip(),
+            seller_item_code=normalize_seller_item_code(line.seller_item_code),
+            description=(line.description or "").strip() or None,
+            quantity=format(line.quantity.normalize(), "f") if line.quantity is not None else None,
+            unit_code=(line.unit_code or "").strip() or None,
+        )
+        for line in source.invoice.lines
+        if (line.line_number or "").strip() in wanted
+    )
+
+
+def _product_mapping_requests_enabled(settings: Settings) -> bool:
+    if not settings.odoo_workbench_operator_requests_enabled:
+        return False
+    try:
+        return OdooOperatorRequestFieldMapping.from_environment().product_mapping_enabled
+    except WorkbenchContractError:
+        return False
 
 
 @contextmanager

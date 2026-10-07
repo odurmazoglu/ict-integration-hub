@@ -42,6 +42,7 @@ class OperatorNextAction(StrEnum):
     """The single step the operator should take now. Values are the Studio selection labels."""
 
     SUPPLIER = "Tedarikçi Doğrulanmalı"
+    PRODUCT = "Ürün Eşleştirmesi Yapılmalı"
     PURPOSE = "Satın Alma Amacı Seçilmeli"
     ACCOUNTING = "Muhasebe İşlemi Seçilmeli"
     DECISION = "Karar Verilmeli"
@@ -140,6 +141,17 @@ def resolve_accounting_labels(
 
 
 @dataclass(frozen=True, slots=True)
+class UnmatchedProductLine(ApplicationDTO):
+    """One PRODUCT_NOT_FOUND line, from the immutable source invoice (presentation only)."""
+
+    line_number: str
+    seller_item_code: str | None
+    description: str | None = None
+    quantity: str | None = None
+    unit_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorGuidanceFacts(ApplicationDTO):
     """Committed Hub facts the projection snapshot does not already carry."""
 
@@ -152,6 +164,10 @@ class OperatorGuidanceFacts(ApplicationDTO):
     accounting_labels: AccountingLabels | None = None
     #: Configured ``ODOO_FIXED_ASSET_ACCOUNT_IDS`` -- the existing eligibility allowlist.
     eligible_asset_account_ids: tuple[int, ...] = field(default_factory=tuple)
+    #: The "Ürün Eşleştir" request fields are provisioned; without them guidance is unchanged.
+    product_mapping_enabled: bool = False
+    #: PRODUCT_NOT_FOUND lines of the current version, in source order.
+    unmatched_product_lines: tuple[UnmatchedProductLine, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +218,12 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
         return OperatorNextAction.SUPPLIER, _todo(
             "Birden fazla eşleşen tedarikçi var: doğru mevcut tedarikçiyi seçin.", findings
         )
+    if (
+        facts.product_mapping_enabled
+        and ManualReviewReasonCode.PRODUCT_NOT_FOUND in codes
+        and any(line.seller_item_code for line in facts.unmatched_product_lines)
+    ):
+        return OperatorNextAction.PRODUCT, _product_todo(facts.unmatched_product_lines, findings)
     if codes & _OPERATING_EXPENSE_CODES:
         purpose = facts.current_purchase_purpose
         if purpose is None:
@@ -266,6 +288,29 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
     return f'<ul class="o_ipp_completed">{items}</ul>'
 
 
+def _product_todo(lines: tuple[UnmatchedProductLine, ...], findings: list[str]) -> str:
+    instruction = (
+        "Eşleşmeyen satır için mevcut bir Odoo ürünü seçin: İşlem = 'Ürün Eşleştir', Fatura Satırı = satır "
+        "numarası, Odoo Ürünü = doğru ürün; ardından 'İşleme Gönder'. Eşleştirme bu tedarikçinin sonraki "
+        "faturalarında otomatik kullanılır."
+    )
+    items = "".join(f"<li>{html.escape(_product_line_text(line), quote=False)}</li>" for line in lines)
+    return _todo(instruction, findings) + f'<ul class="o_ipp_product_lines">{items}</ul>'
+
+
+def _product_line_text(line: UnmatchedProductLine) -> str:
+    parts = [f"Satır {line.line_number}"]
+    if line.seller_item_code:
+        parts.append(f"Satıcı Ürün Kodu: {line.seller_item_code}")
+    else:
+        parts.append("satıcı ürün kodu yok — tedarikçiye özel eşleştirme yapılamaz, teknik destek gerekli")
+    if line.description:
+        parts.append(line.description)
+    if line.quantity:
+        parts.append(f"Miktar: {line.quantity}{' ' + line.unit_code if line.unit_code else ''}")
+    return " — ".join(parts)
+
+
 def _todo(instruction: str, findings: list[str] | None = None) -> str:
     body = f"<p><strong>{html.escape(instruction, quote=False)}</strong></p>"
     if findings:
@@ -285,6 +330,7 @@ __all__ = [
     "GuidanceInput",
     "OperatorGuidanceFacts",
     "OperatorNextAction",
+    "UnmatchedProductLine",
     "WorkbenchOperatorGuidance",
     "build_operator_guidance",
     "resolve_accounting_labels",

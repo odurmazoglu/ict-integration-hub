@@ -38,6 +38,7 @@ class Product:
     barcode: str | None
     active: bool
     company_id: int | None = None
+    product_tmpl_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

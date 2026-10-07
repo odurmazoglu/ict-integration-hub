@@ -29,6 +29,10 @@ class WriteAuthorizationOperationType(StrEnum):
     #: that follows it for the same review line (CreateNewProductUseCase claims it
     #: again, idempotently, immediately before each of the two Odoo calls).
     CREATE_NEW_PRODUCT = "CREATE_NEW_PRODUCT"
+    #: Authorizes one existing-product mapping write for one review line: the single
+    #: product.supplierinfo create linking (supplier, seller product code) to an
+    #: operator-selected existing Odoo product (MapExistingProductUseCase).
+    MAP_EXISTING_PRODUCT = "MAP_EXISTING_PRODUCT"
 
 
 class WriteAuthorizationStatus(StrEnum):
@@ -265,3 +269,16 @@ def product_remediation_authorization_consumer_id(
     if categ_id is not None:
         identity = f"{identity}:categ:{categ_id}"
     return f"product-remediation-write:{uuid5(NAMESPACE_URL, identity)}"
+
+
+def product_mapping_authorization_consumer_id(
+    *, company_id: int, review_id: str, expected_version: int, line_number: str
+) -> str:
+    """Deterministic consumer identity for a MAP_EXISTING_PRODUCT write attempt.
+
+    Keyed by the review line, like ``product_remediation_authorization_consumer_id``, so
+    a crash-then-retry of the same mapping resumes against its own consumed authorization.
+    """
+
+    identity = f"product-mapping-write:{company_id}:{review_id}:{expected_version}:{line_number}"
+    return f"product-mapping-write:{uuid5(NAMESPACE_URL, identity)}"

@@ -44,6 +44,8 @@ class ResolutionProductRecord(ApplicationDTO):
     barcode: str | None
     active: bool
     company_id: int | None
+    #: The variant's ``product.template`` (needed to link a supplierinfo); ``None`` if unread.
+    product_tmpl_id: int | None = None
 
 
 def selected_product_ids(line_resolutions: tuple[LineResolution, ...]) -> tuple[int, ...]:

@@ -660,6 +660,13 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # The MAP_EXISTING_PRODUCT operation type (202607170037) only widened the write
+    # authorization CHECK constraint: one "-1" step consumes it and changes no table.
+    tables_before_product_mapping_downgrade = set(inspector.get_table_names())
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert set(inspector.get_table_names()) == tables_before_product_mapping_downgrade
+
     # ADR-0013 (202607170036) added the operator request ledger on top: one new table,
     # no change to any existing one. One "-1" step consumes it first.
     assert "workbench_operator_requests" in inspector.get_table_names()

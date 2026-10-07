@@ -43,6 +43,7 @@ ACTION_BY_ODOO_VALUE: dict[str, OperatorRequestAction] = {
     "Muhasebe İşlemi": OperatorRequestAction.ACCOUNTING_RESOLUTION,
     "Karar": OperatorRequestAction.DECISION,
     "Fatura Oluştur": OperatorRequestAction.EXECUTE_VENDOR_BILL,
+    "Ürün Eşleştir": OperatorRequestAction.PRODUCT_MAPPING,
 }
 SUPPLIER_MODE_BY_ODOO_VALUE: dict[str, SupplierResolutionMode] = {
     **{mode.value: mode for mode in SupplierResolutionMode},
@@ -104,6 +105,8 @@ class OdooOperatorRequestFieldMapping:
     asset_account: str | None = None
     depreciation_model: str | None = None
     note: str | None = None
+    line: str | None = None
+    product: str | None = None
 
     def __post_init__(self) -> None:
         for item in fields(self):
@@ -146,7 +149,15 @@ class OdooOperatorRequestFieldMapping:
             asset_account=optional("ASSET_ACCOUNT_FIELD"),
             depreciation_model=optional("DEPRECIATION_MODEL_FIELD"),
             note=optional("NOTE_FIELD"),
+            line=optional("LINE_FIELD"),
+            product=optional("PRODUCT_FIELD"),
         )
+
+    @property
+    def product_mapping_enabled(self) -> bool:
+        """Both PRODUCT_MAPPING request fields are provisioned (Studio) and mapped (env)."""
+
+        return self.line is not None and self.product is not None
 
     def read_fields(self) -> list[str]:
         names = [
@@ -211,6 +222,8 @@ class OdooOperatorRequestReader:
                     _get(record, mapping.depreciation_model), "Amortisman modeli"
                 ),
                 note=_optional_text(_get(record, mapping.note)),
+                line_number=_optional_line_number(_get(record, mapping.line)),
+                product_id=_optional_many2one_id(_get(record, mapping.product), "Odoo ürünü"),
             )
         except WorkbenchContractError as exc:
             return OperatorRequestReadFailure(
@@ -277,6 +290,14 @@ def _optional_text(value: Any) -> str | None:
         raise WorkbenchContractError("Metin alanı geçersiz.")
     text = value.strip()
     return text or None
+
+
+def _optional_line_number(value: Any) -> str | None:
+    """Invoice line numbers are text on the source invoice; an integer entry is accepted as-is."""
+
+    if type(value) is int and value > 0:
+        return str(value)
+    return _optional_text(value)
 
 
 def _mapped[T](value: Any, table: dict[str, T], label: str) -> T:

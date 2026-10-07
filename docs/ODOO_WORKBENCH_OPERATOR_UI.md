@@ -50,6 +50,7 @@ REST endpoint. No new domain choice exists.
 | Muhasebe İşlemi | `SubmitReviewAccountingResolutionUseCase` / `POST …/accounting-resolution` | treatment; expense account + category, or asset account + depreciation model | `workbench_review_decide` |
 | Karar | `SubmitReviewDecisionUseCase` via the existing decision candidate reader / `POST …/decision` | existing decision fields + allocation child rows | `workbench_review_decide` |
 | Fatura Oluştur | `CreateWriteAuthorizationUseCase` (`EXECUTE_VENDOR_BILL`) + `WorkbenchAcceptedDecisionExecutionDispatcher` (EXECUTE) / `POST …/write-authorizations` + `POST …/execute` | none (the accepted decision is the input) | `workbench_execute` |
+| Ürün Eşleştir | `MapExistingProductUseCase` (no REST endpoint; Odoo request only) — see [Ürün eşleştirme](#ürün-eşleştirme-product_not_found) | invoice line number, existing Odoo product | `workbench_review_decide` + `workbench_execute` (narrow `MAP_EXISTING_PRODUCT` authorization) |
 
 Supplier modes: `Mevcut Tedarikçiyi Seç` (match_existing), `Kalıcı Tedarikçi Oluştur`
 (create_permanent_supplier), `Tek Seferlik Tedarikçi` (one_off_vendor). The code also
@@ -68,9 +69,45 @@ supplier partner, executing a Vendor Bill) issues the existing narrow, single-us
 authorization for exactly that review/version/operation, with the mapped Hub actor as
 `authorized_by`, records it on the request ledger, and consumes it in the same request.
 
-Not covered in this slice (guidance shows **Teknik Destek Gerekli**): product remediation
-(`CREATE_NEW_PRODUCT`, per-line inputs), tax/line resolutions, RESALE/CUSTOMER_PROJECT
-accounting (the accounting endpoint itself rejects them), customer quotation execution.
+Not covered in this slice (guidance shows **Teknik Destek Gerekli**): creating a *new*
+product (`CREATE_NEW_PRODUCT`), lines without a seller product code, tax/line resolutions,
+RESALE/CUSTOMER_PROJECT accounting (the accounting endpoint itself rejects them), customer
+quotation execution.
+
+## Ürün eşleştirme (PRODUCT_NOT_FOUND)
+
+When a line carries PRODUCT_NOT_FOUND and has a seller product code, the guidance shows
+**Ürün Eşleştirmesi Yapılmalı** and lists each unmatched line from the immutable source
+invoice (line number, seller product code, description, quantity/UoM). The operator picks
+*İşlem = Ürün Eşleştir*, the *Fatura Satırı* (line number) and the *Odoo Ürünü*, then
+*İşleme Gönder*. One request resolves exactly one line; a review with several unmatched
+lines needs one request per line (each refreshes the guidance and the review version).
+
+What the Hub does (`app/application/workbench/product_mapping_use_cases.py`):
+
+1. requires the review pending at the snapshotted version and the line to carry
+   PRODUCT_NOT_FOUND (otherwise *Güncel Değil* / *Reddedildi*);
+2. takes the seller product code from the immutable source line -- a line without one is
+   refused ("satıcı ürün kodu yok"); no code is ever invented;
+3. takes the supplier from the version's deterministic supplier match (the same partner
+   the product matcher uses) -- an unresolved supplier is refused;
+4. validates the product read-only (exists, active, same or shared company, has a template);
+5. fails closed, changing nothing, when Odoo already maps this supplier + seller code to a
+   *different* product, has several such rows, or a CREATE_NEW_PRODUCT is recorded for it;
+   an identical existing mapping is reused (no write);
+6. writes one `product.supplierinfo` (`partner_id` = supplier, `product_code` = seller code,
+   `product_tmpl_id`/`product_id` = selected product, `product_name` = invoice line
+   description) through the existing guarded `OdooSupplierInfoWriter`, consuming a narrow
+   single-use `MAP_EXISTING_PRODUCT` authorization;
+7. reclassifies the review (`MASTER_DATA_CHANGED`); the note records actor, line, supplier,
+   seller code, product and supplierinfo id.
+
+The mapping is supplier-specific: the deterministic key is *(supplier partner, seller
+product code)*, so the same code from another supplier never reuses it. Future invoices
+from the same supplier with the same seller code match automatically. A double-click or
+retry never creates a second mapping (step 5 finds the first one; a moved version is
+*Güncel Değil*). Creating a new product from Odoo is deliberately deferred: the to-do then
+needs technical support.
 
 ## Request schema (Odoo-owned)
 
@@ -79,7 +116,7 @@ them only through the form; the Hub only reads them.
 
 | Label | Technical name (suggested) | Type | Env key `ODOO_WORKBENCH_REQUEST_…` |
 | --- | --- | --- | --- |
-| İşlem | `x_studio_ipp_req_action` | Selection (labels above) | `ACTION_FIELD` |
+| İşlem | `x_studio_ipp_req_action` | Selection (labels above, incl. `Ürün Eşleştir`) | `ACTION_FIELD` |
 | İnceleme Sürümü (istek) | `x_studio_ipp_req_version` | Integer, readonly in view | `EXPECTED_VERSION_FIELD` |
 | İsteyen | `x_studio_ipp_req_requested_by` | Many2one `res.users`, readonly in view | `REQUESTED_BY_FIELD` |
 | İstek Zamanı | `x_studio_ipp_req_requested_at` | Datetime, readonly in view | `REQUESTED_AT_FIELD` |
@@ -93,6 +130,8 @@ them only through the form; the Hub only reads them.
 | Demirbaş Hesabı | `x_studio_ipp_req_asset_account` | Many2one `account.account`, domain `[('id','in',x_studio_ipp_eligible_asset_account_ids)]` | `ASSET_ACCOUNT_FIELD` |
 | Amortisman Modeli | `x_studio_ipp_req_depreciation_model` | Many2one `account.depreciation.model`, domain `[('active','=',True)]` | `DEPRECIATION_MODEL_FIELD` |
 | Not | `x_studio_ipp_req_note` | Text | `NOTE_FIELD` |
+| Fatura Satırı | `x_studio_ipp_req_line` | Char (line number from the to-do list) | `LINE_FIELD` |
+| Odoo Ürünü | `x_studio_ipp_req_product` | Many2one `product.product`, domain `[('purchase_ok','=',True)]` | `PRODUCT_FIELD` |
 
 Also required: `PARENT_MODEL`, `REVIEW_ID_FIELD` (`x_studio_review_id`),
 `COMPANY_ID_FIELD` (`x_studio_company`).
@@ -114,7 +153,7 @@ Guidance (written by the projection publisher, full-snapshot, idempotent):
 
 | Label | Technical name (suggested) | Type | Env key `ODOO_WORKBENCH_PUBLISHER_…` |
 | --- | --- | --- | --- |
-| Yapılması Gereken | `x_studio_ipp_next_action` | Selection: `Tedarikçi Doğrulanmalı`, `Satın Alma Amacı Seçilmeli`, `Muhasebe İşlemi Seçilmeli`, `Karar Verilmeli`, `Fatura Oluşturulmalı`, `Teknik Destek Gerekli`, `Tamamlandı` | `NEXT_ACTION_FIELD` |
+| Yapılması Gereken | `x_studio_ipp_next_action` | Selection: `Tedarikçi Doğrulanmalı`, `Ürün Eşleştirmesi Yapılmalı`, `Satın Alma Amacı Seçilmeli`, `Muhasebe İşlemi Seçilmeli`, `Karar Verilmeli`, `Fatura Oluşturulmalı`, `Teknik Destek Gerekli`, `Tamamlandı` | `NEXT_ACTION_FIELD` |
 | Yapılması Gerekenler | `x_studio_ipp_todo` | Html (readonly) | `TODO_FIELD` |
 | Tamamlananlar | `x_studio_ipp_completed` | Html (readonly) | `COMPLETED_FIELD` |
 | Uygun Demirbaş Hesapları | `x_studio_ipp_eligible_asset_account_ids` | Many2many `account.account`, invisible | `ELIGIBLE_ASSET_ACCOUNTS_FIELD` |
@@ -187,6 +226,11 @@ Three tabs only: **İnceleme**, **İş Bağlamı** (only when business context i
         <group invisible="x_studio_ipp_next_action != 'Tedarikçi Doğrulanmalı'">
           <field name="x_studio_ipp_req_supplier_mode"/>
           <field name="x_studio_ipp_req_partner" invisible="x_studio_ipp_req_supplier_mode != 'Mevcut Tedarikçiyi Seç'"/>
+        </group>
+        <!-- product mapping step -->
+        <group invisible="x_studio_ipp_next_action != 'Ürün Eşleştirmesi Yapılmalı'">
+          <field name="x_studio_ipp_req_line"/>
+          <field name="x_studio_ipp_req_product" domain="[('purchase_ok', '=', True)]"/>
         </group>
         <!-- purpose step -->
         <group invisible="x_studio_ipp_next_action != 'Satın Alma Amacı Seçilmeli'">
@@ -275,6 +319,7 @@ ODOO_WORKBENCH_OPERATOR_REQUESTS_INTERVAL_SECONDS=60
 ODOO_WORKBENCH_OPERATOR_REQUESTS_COMPANY_ID=1
 ODOO_OPERATOR_REQUEST_ACTORS={"<odoo user id>": {"actor": "<name>", "permissions": ["workbench_review_decide", "workbench_execute"]}}
 ODOO_WORKBENCH_REQUEST_*                                  # request field mapping above
+ODOO_WORKBENCH_REQUEST_LINE_FIELD / _PRODUCT_FIELD        # both set = "Ürün Eşleştir" enabled
 ODOO_WORKBENCH_PUBLISHER_NEXT_ACTION_FIELD / _TODO_FIELD / _COMPLETED_FIELD / _ELIGIBLE_ASSET_ACCOUNTS_FIELD
 ```
 
@@ -308,6 +353,20 @@ Each step needs its own explicit approval; none is part of this PR.
 5. Env: request mapping, actors, company id; enable the tick; recreate the poller.
 6. Acceptance on one non-critical review; watch `workbench.operator_request.processed` logs.
 
+### Ürün eşleştirme rollout (each step separately approved)
+
+1. Deploy the Hub (migration `202607170037` widens the authorization operation types).
+   With `LINE_FIELD`/`PRODUCT_FIELD` unset nothing changes: no handler, guidance unchanged.
+2. Studio: add selection value `Ürün Eşleştir` to *İşlem* and `Ürün Eşleştirmesi Yapılmalı`
+   to *Yapılması Gereken*; add `x_studio_ipp_req_line` (Char) and `x_studio_ipp_req_product`
+   (Many2one `product.product`); add the product-mapping group to the form.
+3. Grant `workbench_execute` to the operator actor(s) that may map products (the
+   supplierinfo write needs the narrow authorization).
+4. Env: `ODOO_WORKBENCH_REQUEST_LINE_FIELD=x_studio_ipp_req_line`,
+   `ODOO_WORKBENCH_REQUEST_PRODUCT_FIELD=x_studio_ipp_req_product`; recreate api and
+   poller; reconcile dry-run (PRODUCT_NOT_FOUND rows show UPDATE for guidance only); apply.
+5. Acceptance on one line of one review.
+
 ## Rollout risks
 
 - Production reconcile dry-runs on 2026-10-06 showed intermittent "Odoo request timed out"
@@ -323,3 +382,7 @@ Each step needs its own explicit approval; none is part of this PR.
 - Schema: `alembic downgrade 202607170035` drops only the request ledger (audit history);
   no business table is touched.
 - Studio: deactivate the added views/action; fields can stay (inert).
+- Ürün eşleştirme: unset `ODOO_WORKBENCH_REQUEST_LINE_FIELD`/`_PRODUCT_FIELD` (handler and
+  guidance off). Created `product.supplierinfo` rows are ordinary Odoo master data; remove
+  one in Odoo only after deciding the mapping was wrong. `alembic downgrade 202607170036`
+  requires no `MAP_EXISTING_PRODUCT` authorization rows.

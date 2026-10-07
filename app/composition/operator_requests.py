@@ -19,6 +19,7 @@ from app.application.workbench.operator_request_handlers import (
     CompletedVendorBillExecutionProbe,
     DecisionRequestHandler,
     ExecuteVendorBillRequestHandler,
+    ProductMappingRequestHandler,
     PurchasePurposeRequestHandler,
     SupplierResolutionRequestHandler,
 )
@@ -38,6 +39,7 @@ from app.composition.imports import (
     build_runtime_workbench_projection_synchronizer,
     build_workbench_erp_reference_validator,
 )
+from app.composition.product_remediation import build_map_existing_product_use_case
 from app.composition.purchase_purpose_and_accounting_resolution import (
     build_submit_purchase_purpose_use_case,
     build_submit_review_accounting_resolution_use_case,
@@ -163,6 +165,12 @@ def build_operator_request_workflow(
             ),
         ),
     }
+    if mapping.product_mapping_enabled:
+        handlers[OperatorRequestAction.PRODUCT_MAPPING] = ProductMappingRequestHandler(
+            use_case=build_map_existing_product_use_case(
+                session=business_session, settings=settings, odoo_client=client
+            )
+        )
     return OperatorRequestIngestionWorkflow(
         reader=OdooOperatorRequestReader(adapter=projection_adapter, mapping=mapping),
         acknowledger=OdooOperatorRequestAcknowledger(adapter=projection_adapter, mapping=mapping),
