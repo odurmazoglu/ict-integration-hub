@@ -1118,8 +1118,8 @@ async def test_two_suppliers_keep_independent_mappings_for_the_same_seller_code(
     assert (resolved(ICT_BULUT), resolved(DALGAKIRAN)) == (501, 502)
 
 
-def test_global_seller_code_to_default_code_path_is_preexisting_and_supplier_blind() -> None:
-    """Documents finding 7: an UNMAPPED seller code equal to an ICT default_code matches globally."""
+def test_unmapped_seller_code_equal_to_a_default_code_is_not_a_global_match() -> None:
+    """Finding 7, resolved: an UNMAPPED seller code equal to an ICT default_code is advisory only."""
 
     invoice = _invoice(_line("1", "CFQ7TTC0LH18:0001", "Microsoft 365 Business Basic"))
     lines = _matcher(InMemoryOdoo(), {"CFQ7TTC0LH18:0001": 393}).match_invoice(
@@ -1127,11 +1127,7 @@ def test_global_seller_code_to_default_code_path_is_preexisting_and_supplier_bli
     )
     result = lines.line_results[0].result
 
-    assert (result.status, result.product_id, result.matched_by) == (
-        ProductMatchStatus.MATCHED,
-        393,
-        "seller_item_code",
-    )
+    assert (result.status, result.product_id, result.matched_by) == (ProductMatchStatus.NOT_FOUND, None, None)
 
 
 async def test_a_mapping_is_never_overridden_by_a_conflicting_global_default_code() -> None:
@@ -1146,5 +1142,5 @@ async def test_a_mapping_is_never_overridden_by_a_conflicting_global_default_cod
         return lines.line_results[0].result
 
     conflicting, agreeing = matched({"TFZP": 999}), matched({"TFZP": 501})
-    assert conflicting.status is ProductMatchStatus.MULTIPLE_MATCHES and conflicting.product_id is None
+    assert conflicting.status is ProductMatchStatus.MATCHED and conflicting.product_id == 501
     assert agreeing.status is ProductMatchStatus.MATCHED and agreeing.product_id == 501

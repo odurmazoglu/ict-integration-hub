@@ -73,7 +73,7 @@ def test_exact_barcode_match_after_default_code_not_found() -> None:
     assert repository.calls == [("default_code", "SKU-404", 7), ("barcode", "869", 7)]
 
 
-def test_exact_seller_item_code_match_after_higher_priority_not_found() -> None:
+def test_seller_item_code_equal_to_a_default_code_is_advisory_only() -> None:
     repository = FakeProductRepository(default_code_records={"SUP-1": [_product(30, default_code="SUP-1")]})
 
     result = _match(
@@ -81,9 +81,10 @@ def test_exact_seller_item_code_match_after_higher_priority_not_found() -> None:
     )
 
     line_result = result.line_results[0].result
-    assert line_result.status is ProductMatchStatus.MATCHED
-    assert line_result.product_id == 30
-    assert line_result.matched_by == "seller_item_code"
+    assert line_result.status is ProductMatchStatus.NOT_FOUND
+    assert line_result.product_id is None
+    assert line_result.matched_by is None
+    assert "supplier-specific mapping is required" in line_result.reason
     assert repository.calls == [
         ("default_code", "SKU-404", None),
         ("barcode", "404", None),

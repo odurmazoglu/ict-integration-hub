@@ -23,6 +23,11 @@ EXACT_MATCH_CONFIDENCE = Decimal("1.00")
 MATCHED_BY_MANUFACTURER_ITEM_CODE = "manufacturer_item_code"
 MATCHED_BY_SUPPLIER_PROFILE_SKU = "supplier_profile_sku"
 MATCHED_BY_SUPPLIER_PRODUCT_CODE = "supplier_product_code"
+# The supplier's own article code looked up against the *global* ICT ``default_code``.
+# A seller code is only meaningful within its own supplier's scope, so this hit is
+# advisory: it may corroborate a deterministic match but never produces one, never
+# conflicts with one and never makes a line ambiguous.
+ADVISORY_SELLER_CODE_DEFAULT_CODE = "seller_item_code"
 # Two rows/variants are enough to prove ambiguity; reads never need to be larger.
 SUPPLIER_PRODUCT_LOOKUP_LIMIT = 2
 
@@ -31,6 +36,11 @@ _Lookup = tuple[str, str | None, Callable[..., Sequence[Product]]]
 
 class ProductMatchingEngine:
     """Deterministic product matcher.
+
+    Deterministic identities: supplier-scoped ``product.supplierinfo`` (highest
+    precedence), authoritative manufacturer/profile SKUs and the buyer's own
+    code against ``default_code``, and barcode. ``seller_item_code -> default_code``
+    is advisory only (see ``ADVISORY_SELLER_CODE_DEFAULT_CODE``).
 
     ``supplier_product_repository`` enables P0-PROD-19A-3 supplier-scoped matching through
     ``product.supplierinfo``; without it (or without a uniquely MATCHED ``partner_match``)
@@ -85,13 +95,13 @@ class ProductMatchingEngine:
             )
 
         repository = self._provider.product_repository
+        seller_item_code = _clean(line.seller_item_code)
         lookup_plan = (
             ("default_code", _clean(line.buyer_item_code), repository.find_by_default_code),
             ("barcode", _clean(line.barcode), repository.find_by_barcode),
-            ("seller_item_code", _clean(line.seller_item_code), repository.find_by_default_code),
         )
         sku_plan = authoritative_sku_identities(invoice, line)
-        if all(identifier is None for _, identifier, _ in lookup_plan) and not sku_plan:
+        if all(identifier is None for _, identifier, _ in lookup_plan) and seller_item_code is None and not sku_plan:
             return _result(
                 status=ProductMatchStatus.INVALID_INPUT,
                 line=line,
@@ -102,19 +112,28 @@ class ProductMatchingEngine:
                 confidence=None,
             )
 
-        outcomes = [_legacy_chain_outcome(lookup_plan, company_id=company_id)]
-        outcomes.extend(
+        legacy_outcome = _legacy_chain_outcome(lookup_plan, company_id=company_id)
+        # The advisory probe keeps the old chain's position and call budget: it runs
+        # only when neither the buyer code nor the barcode found a candidate.
+        advisory = None
+        if seller_item_code is not None and legacy_outcome.candidate_count == 0:
+            advisory = _lookup_outcome(
+                ADVISORY_SELLER_CODE_DEFAULT_CODE,
+                seller_item_code,
+                repository.find_by_default_code,
+                company_id=company_id,
+            )
+        sku_outcomes = [
             _lookup_outcome(matched_by, identifier, repository.find_by_default_code, company_id=company_id)
             for matched_by, identifier in sku_plan
-        )
+        ]
         supplier_outcome = self._supplier_product_outcome(
-            _clean(line.seller_item_code),
+            seller_item_code,
             supplier_partner_id=supplier_partner_id,
             company_id=company_id,
         )
-        if supplier_outcome is not None:
-            outcomes.append(supplier_outcome)
-        return _combined_result(line, tuple(outcomes))
+        outcomes = ([supplier_outcome] if supplier_outcome is not None else []) + [legacy_outcome, *sku_outcomes]
+        return _combined_result(line, tuple(outcomes), advisory=advisory)
 
     def _supplier_product_outcome(
         self,
@@ -200,7 +219,7 @@ def authoritative_sku_identities(invoice: InternalInvoice, line: InvoiceLine) ->
 
 
 def _legacy_chain_outcome(lookup_plan: tuple[_Lookup, ...], *, company_id: int | None) -> _IdentityOutcome:
-    """The pre-19A-2 priority chain, unchanged: the first unique or ambiguous hit stops it."""
+    """The pre-19A-2 priority chain (buyer code, barcode): the first unique or ambiguous hit stops it."""
 
     for matched_by, identifier, lookup in lookup_plan:
         if identifier is None:
@@ -230,11 +249,19 @@ def _lookup_outcome(
     )
 
 
-def _combined_result(line: InvoiceLine, outcomes: tuple[_IdentityOutcome, ...]) -> ProductMatchResult:
-    """Fail closed on any ambiguity or any disagreement between identities.
+def _combined_result(
+    line: InvoiceLine,
+    outcomes: tuple[_IdentityOutcome, ...],
+    *,
+    advisory: _IdentityOutcome | None,
+) -> ProductMatchResult:
+    """Fail closed on any ambiguity or any disagreement between deterministic identities.
 
     Ambiguity or a conflict is reported as ``MULTIPLE_MATCHES``, the existing persisted
-    status, so evidence stays readable by earlier code (no new enum value).
+    status, so evidence stays readable by earlier code (no new enum value). The first
+    matching outcome (supplierinfo when it matched) is the primary ``matched_by``.
+    ``advisory`` never changes the status: it is listed as corroboration only when it
+    uniquely agrees with the deterministic product, and is otherwise only reported.
     """
 
     ambiguous = next((outcome for outcome in outcomes if outcome.candidate_count > 1), None)
@@ -264,7 +291,9 @@ def _combined_result(line: InvoiceLine, outcomes: tuple[_IdentityOutcome, ...]) 
         )
     if product_ids:
         primary = matched[0].matched_by
-        corroborating = tuple(outcome.matched_by for outcome in matched[1:])
+        corroborating = [outcome.matched_by for outcome in matched[1:]]
+        if advisory is not None and advisory.candidate_count == 1 and advisory.product_id == product_ids[0]:
+            corroborating.append(f"{advisory.matched_by} (advisory)")
         reason = f"Unique product match by {primary}."
         if corroborating:
             reason = f"Unique product match by {primary}; corroborated by {', '.join(map(str, corroborating))}."
@@ -278,12 +307,18 @@ def _combined_result(line: InvoiceLine, outcomes: tuple[_IdentityOutcome, ...]) 
             confidence=EXACT_MATCH_CONFIDENCE,
         )
 
+    reason = "No active deterministic product candidate found."
+    if advisory is not None and advisory.candidate_count > 0:
+        reason = (
+            f"{reason} Seller item code equals the default_code of {advisory.candidate_count} active product(s); "
+            "a seller code is not a global product identity, so a supplier-specific mapping is required."
+        )
     return _result(
         status=ProductMatchStatus.NOT_FOUND,
         line=line,
         product_id=None,
         matched_by=None,
-        reason="No active deterministic product candidate found.",
+        reason=reason,
         candidate_count=0,
         confidence=None,
     )

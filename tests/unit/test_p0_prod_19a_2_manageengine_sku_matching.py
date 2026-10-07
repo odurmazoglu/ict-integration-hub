@@ -294,9 +294,8 @@ def test_manufacturer_sku_and_description_sku_disagreeing_fail_closed() -> None:
     [
         ({"buyer_item_code": "BUY-1"}, {"default_code_records": {"BUY-1": [_product(10)]}}),
         ({"barcode": "869"}, {"barcode_records": {"869": [_product(10)]}}),
-        ({"seller_item_code": "SUP-1"}, {"default_code_records": {"SUP-1": [_product(10)]}}),
     ],
-    ids=["buyer", "barcode", "seller"],
+    ids=["buyer", "barcode"],
 )
 def test_legacy_identity_disagreeing_with_the_sku_fails_closed(
     line_kwargs: dict[str, str],

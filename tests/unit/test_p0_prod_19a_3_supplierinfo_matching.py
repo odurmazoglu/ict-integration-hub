@@ -4,7 +4,8 @@
   -> exactly one active variant`` is one more deterministic identity.
 - It joins the 19A-2 convergence/conflict combination: agreement matches, disagreement or
   ambiguity fails closed as ``MULTIPLE_MATCHES``.
-- The legacy ``seller_item_code -> default_code`` probe is unchanged.
+- Since the product-matching-safety change the ``seller_item_code -> default_code`` probe
+  is advisory only and supplierinfo is the primary identity when it matches.
 - The Odoo reader is structurally read-only, exact, company-scoped, bounded and strict.
 """
 
@@ -331,8 +332,8 @@ def test_supplierinfo_and_manageengine_sku_agreeing_match() -> None:
 
     assert result.status is ProductMatchStatus.MATCHED
     assert result.product_id == 392
-    assert result.matched_by == "supplier_profile_sku"
-    assert "corroborated by supplier_product_code" in result.reason
+    assert result.matched_by == "supplier_product_code"
+    assert "corroborated by supplier_profile_sku" in result.reason
 
 
 def test_supplierinfo_and_manageengine_sku_disagreeing_fail_closed() -> None:
@@ -365,9 +366,8 @@ def test_supplierinfo_and_manufacturer_item_code_disagreeing_fail_closed() -> No
     [
         ({"buyer_item_code": "BUY-1"}, RecordingProductRepository({"BUY-1": [_product(10)]})),
         ({"barcode": "869"}, RecordingProductRepository(barcode_records={"869": [_product(10)]})),
-        ({}, RecordingProductRepository({VITEL_SELLER_CODE: [_product(10)]})),
     ],
-    ids=["buyer", "barcode", "legacy-seller-default-code"],
+    ids=["buyer", "barcode"],
 )
 def test_supplierinfo_and_legacy_identity_disagreeing_fail_closed(
     line_kwargs: dict[str, str], products: RecordingProductRepository
@@ -454,26 +454,36 @@ def test_supplier_repository_failure_is_not_swallowed() -> None:
 # --- 12, 13: legacy and non-VİTEL compatibility -------------------------------------
 
 
-def test_legacy_seller_code_default_code_match_is_unchanged_without_supplierinfo() -> None:
+def test_seller_code_default_code_hit_without_supplierinfo_is_not_a_match() -> None:
     products = RecordingProductRepository({"SUP-1": [_product(30, "SUP-1")]})
     supplier = FakeSupplierProductRepository()
 
     result = _match(_invoice([_line(seller_item_code="SUP-1")], vkn="1111111111"), products=products, supplier=supplier)
 
-    assert result.status is ProductMatchStatus.MATCHED
-    assert result.product_id == 30
-    assert result.matched_by == "seller_item_code"
-    assert result.reason == "Unique product match by seller_item_code."
+    assert result.status is ProductMatchStatus.NOT_FOUND
+    assert result.product_id is None
+    assert result.matched_by is None
 
 
-def test_legacy_seller_code_and_supplierinfo_converge() -> None:
+def test_seller_code_default_code_hit_only_corroborates_supplierinfo() -> None:
     products = RecordingProductRepository({VITEL_SELLER_CODE: [_product(392)]})
 
     result = _match(_invoice([_line()]), products=products, supplier=_vitel_supplierinfo())
 
     assert result.status is ProductMatchStatus.MATCHED
-    assert result.matched_by == "seller_item_code"
-    assert "corroborated by supplier_product_code" in result.reason
+    assert result.matched_by == "supplier_product_code"
+    assert "corroborated by seller_item_code (advisory)" in result.reason
+
+
+def test_supplierinfo_wins_over_a_conflicting_seller_code_default_code_hit() -> None:
+    products = RecordingProductRepository({VITEL_SELLER_CODE: [_product(10)]})
+
+    result = _match(_invoice([_line()]), products=products, supplier=_vitel_supplierinfo())
+
+    assert result.status is ProductMatchStatus.MATCHED
+    assert result.product_id == 392
+    assert result.matched_by == "supplier_product_code"
+    assert "seller_item_code" not in result.reason
 
 
 @pytest.mark.parametrize("wired", [True, False])
