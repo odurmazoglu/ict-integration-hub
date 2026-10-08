@@ -38,6 +38,7 @@ from app.application.workbench.operator_guidance import (
     resolve_accounting_labels,
 )
 from app.application.workbench.ports import SelectedProductReader
+from app.application.workbench.product_line_projection import ProductLineReadFacts
 from app.application.workbench.product_remediation import normalize_seller_item_code
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.application.workflow import ManualReviewReasonCode
@@ -64,6 +65,10 @@ from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.erp.odoo.supplier_product_repository import OdooSupplierProductRepository
 from app.erp.odoo.tax_repository import OdooTaxRepository
 from app.erp.odoo.workbench_operator_request_reader import OdooOperatorRequestFieldMapping
+from app.erp.odoo.workbench_product_line_publisher import (
+    OdooWorkbenchProductLineFieldMapping,
+    OdooWorkbenchProductLinePublisher,
+)
 from app.erp.odoo.workbench_projection_publisher import OdooWorkbenchProjectionAdapter
 from app.erp.odoo.workbench_reference_repositories import (
     OdooAnalyticAccountReferenceRepository,
@@ -133,6 +138,8 @@ def build_workbench_projection_synchronizer(
     mapping: OdooWorkbenchProjectionFieldMapping | None = None,
     accounting_label_reader: FixedAssetAccountingReader | None = None,
     product_mapping_enabled: bool | None = None,
+    product_line_mapping: OdooWorkbenchProductLineFieldMapping | None = None,
+    product_lines_enabled: bool | None = None,
 ) -> WorkbenchProjectionSynchronizer:
     """The canonical OPS-UI-01A synchronizer, independent of the runtime publish flag.
 
@@ -189,11 +196,37 @@ def build_workbench_projection_synchronizer(
         else None
     )
 
+    # PR B: child rows only when explicitly enabled. Disabled means no child mapping is
+    # read, no product line facts are read and no child model is ever called. Enabled
+    # with an invalid contract fails here, exactly like an incomplete parent mapping.
+    lines_enabled = (
+        settings.odoo_workbench_product_line_projection_enabled
+        if product_lines_enabled is None
+        else product_lines_enabled
+    )
+    product_line_publisher = (
+        OdooWorkbenchProductLinePublisher(
+            adapter=adapter,
+            mapping=product_line_mapping or OdooWorkbenchProductLineFieldMapping.from_environment(),
+        )
+        if lines_enabled
+        else None
+    )
+
     @contextmanager
     def read_scope() -> Iterator[WorkbenchProjectionSources]:
         with open_read_only_session(bound_engine) as read_session:
             review_repository = SqlAlchemyReviewRepository(read_session)
             yield WorkbenchProjectionSources(
+                product_line_reader=(
+                    partial(
+                        _product_line_read_facts,
+                        source_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(read_session),
+                        evidence_reader=review_repository,
+                    )
+                    if product_line_publisher is not None
+                    else None
+                ),
                 guidance_facts_reader=(
                     partial(
                         _operator_guidance_facts,
@@ -219,10 +252,55 @@ def build_workbench_projection_synchronizer(
                     classification_service=WorkbenchClassificationProjectionService(
                         SqlAlchemyReviewClassificationEvidenceReader(read_session)
                     ),
+                    product_line_publisher=product_line_publisher,
                 ),
             )
 
     return WorkbenchProjectionSynchronizer(read_scope=read_scope)
+
+
+def _product_line_read_facts(
+    review: ReviewItem,
+    company_id: int,
+    evidence_version: int | None,
+    *,
+    source_reader: SqlAlchemyReviewSourceInvoiceEvidenceReader,
+    evidence_reader: SqlAlchemyReviewRepository,
+) -> ProductLineReadFacts:
+    """PR B committed facts for one review, from the same private read-only session.
+
+    The source lines are the immutable source invoice (the evidence's own pinned
+    invoice when a pre-feature review has no source row). The Stage-1 execution
+    evidence of ``evidence_version`` is the product matching that ran under the
+    review's effective supplier (PR #211); ``None`` when that version has none.
+    """
+
+    evidence = None
+    if evidence_version is not None:
+        try:
+            evidence = evidence_reader.get_review_execution_evidence(
+                review_id=review.review_id, company_id=company_id, review_version=evidence_version
+            )
+        except ReviewNotFoundError:
+            evidence = None
+    try:
+        source_lines = source_reader.get(review_id=review.review_id, company_id=company_id).invoice.lines
+    except ReviewNotFoundError:
+        source_lines = evidence.invoice.lines if evidence is not None else ()
+    if evidence is None:
+        return ProductLineReadFacts(source_lines=source_lines)
+    evidence_lines = {}
+    for item in evidence.product_match.line_results:
+        number = (item.line_number or "").strip()
+        if not number or number in evidence_lines:
+            raise WorkbenchContractError("Execution evidence product lines are blank or repeated.")
+        evidence_lines[number] = item.result
+    return ProductLineReadFacts(
+        source_lines=source_lines,
+        supplier_match=evidence.partner_match,
+        evidence_lines=evidence_lines,
+        evidence_product_mode=evidence.operating_expense_match is None and evidence.fixed_asset_accounting is None,
+    )
 
 
 def _operator_guidance_facts(

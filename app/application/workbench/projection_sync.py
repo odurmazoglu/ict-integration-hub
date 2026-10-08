@@ -47,7 +47,7 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceNotFoundError,
 )
 from app.application.execution.runtime import ExecutionSnapshot
-from app.application.workbench.dto import ReviewItem, ReviewStatus, review_reasons_role
+from app.application.workbench.dto import ReviewItem, ReviewReasonsRole, ReviewStatus, review_reasons_role
 from app.application.workbench.exceptions import (
     ReviewNotFoundError,
     WorkbenchContractError,
@@ -57,6 +57,11 @@ from app.application.workbench.operator_guidance import (
     OperatorGuidanceFacts,
     WorkbenchOperatorGuidance,
     build_operator_guidance,
+)
+from app.application.workbench.product_line_projection import (
+    ProductLineFacts,
+    ProductLineReadFacts,
+    build_product_line_projections,
 )
 from app.application.workbench.projection import (
     WorkbenchProjection,
@@ -84,6 +89,7 @@ from app.application.workbench.review_evidence import (
 logger = logging.getLogger(__name__)
 
 SAFE_PROJECTION_SYNC_ERROR = "Odoo Workbench projection sync failed."
+SAFE_PRODUCT_LINE_ERROR = "Workbench product lines could not be derived from committed Hub evidence."
 
 
 class _ReviewReader(Protocol):
@@ -120,6 +126,10 @@ class WorkbenchProjectionSources:
     #: ADR-0013: committed facts for operator guidance (purpose, accounting resolution,
     #: eligible asset accounts). ``None`` keeps the pre-ADR-0013 projection unchanged.
     guidance_facts_reader: Callable[[ReviewItem, int], OperatorGuidanceFacts] | None = None
+    #: PR B: committed per-line facts ``(review, company_id, evidence_version)``; the
+    #: evidence version is ``None`` for a decided review. ``None`` (the default) keeps
+    #: product line projection disabled: no child row is read or written.
+    product_line_reader: Callable[[ReviewItem, int, int | None], ProductLineReadFacts] | None = None
 
 
 #: Opens one private, read-only scope over *committed* Hub state and closes it on exit.
@@ -165,6 +175,11 @@ class WorkbenchProjectionSynchronizer:
             )
             return ProjectionSyncResult(
                 review_id=review_id, outcome=ProjectionSyncOutcome.ERROR, applied=False, error=error
+            )
+        if result.line_failed:
+            logger.error(
+                "workbench.projection.product_lines_sync_failed",
+                extra={"review_id": review_id, "company_id": company_id, "apply": apply, "error": result.line_error},
             )
         if result.failed:
             logger.error(
@@ -225,10 +240,64 @@ def _build_projection(sources: WorkbenchProjectionSources, *, review_id: str, co
             decision.decision_version - 1 if decision is not None and decision.decision_version > 1 else review.version
         ),
     )
+    if sources.product_line_reader is not None:
+        projection = dataclasses.replace(
+            projection, **_product_lines(sources.product_line_reader, review, source, company_id=company_id)
+        )
     if sources.guidance_facts_reader is None:
         return projection
     facts = sources.guidance_facts_reader(review, company_id)
     return dataclasses.replace(projection, operator_guidance=_guidance(projection, facts))
+
+
+def _product_lines(
+    reader: Callable[[ReviewItem, int, int | None], ProductLineReadFacts],
+    review: ReviewItem,
+    source: ExecutionSourceInvoice | None,
+    *,
+    company_id: int,
+) -> dict[str, object]:
+    """PR B line rows from committed facts only; a failure affects the lines, never the parent.
+
+    A pending review uses its current version's Stage-1 evidence (the product matching
+    that ran under the effective supplier). A decided review uses the accepted
+    decision's pinned evidence: its partner and its effective line resolution.
+    """
+
+    role = review_reasons_role(review.status)
+    decided = role is ReviewReasonsRole.DECISION_BASIS
+    try:
+        read = reader(review, company_id, None if decided else review.version)
+        facts = ProductLineFacts(
+            review_id=review.review_id,
+            company_id=company_id,
+            review_version=review.version,
+            invoice_number=review.invoice_number,
+            reasons=review.review_reasons,
+            reasons_role=role,
+            # Pre-feature reviews have no source row: fall back to the accepted pinned invoice.
+            source_lines=read.source_lines or (source.invoice.lines if decided and source is not None else ()),
+            supplier_match=(source.partner_match if source is not None else None) if decided else read.supplier_match,
+            evidence_lines=None if decided else read.evidence_lines,
+            evidence_product_mode=False if decided else read.evidence_product_mode,
+            decision_resolutions=(
+                {
+                    (line_number or "").strip(): resolution
+                    for line_number, resolution in effective_resolutions(source).items()
+                }
+                if decided and source is not None
+                else None
+            ),
+        )
+        return {"product_lines": build_product_line_projections(facts)}
+    except Exception as exc:  # noqa: BLE001 - line facts never fail the parent projection
+        error = _safe_error(exc) if isinstance(exc, WorkbenchContractError) else SAFE_PRODUCT_LINE_ERROR
+        logger.warning(
+            "workbench.projection.product_lines_unavailable",
+            extra={"review_id": review.review_id, "company_id": company_id, "error": error},
+            exc_info=not _is_classified(exc),
+        )
+        return {"product_lines": None, "product_line_error": error}
 
 
 def _guidance(projection: WorkbenchProjection, facts: OperatorGuidanceFacts) -> WorkbenchOperatorGuidance:
@@ -311,6 +380,7 @@ def _line_resolutions(source: ExecutionSourceInvoice) -> tuple[WorkbenchProjecti
             expense_account_id=resolution.expense_account_id,
             asset_account_id=resolution.asset_account_id,
             depreciation_model_id=resolution.depreciation_model_id,
+            matched_by=resolution.matched_by,
         )
         for line_number, resolution in effective_resolutions(source).items()
     )

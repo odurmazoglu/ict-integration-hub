@@ -8,6 +8,12 @@ every Hub review of the company, diffs its full projection snapshot against the
 Odoo Workbench row and reports CREATE / UPDATE / NO_CHANGE / SKIPPED_STALE / ERROR
 with field-level differences.
 
+PR B: when ``ODOO_WORKBENCH_PRODUCT_LINE_PROJECTION_ENABLED`` is true, each review's
+product line child rows (``x_ipp_wb_product_line``) are diffed too and reported as
+``line CREATE / UPDATE / DEACTIVATE`` (``NO_CHANGE`` lines are counted, not listed),
+with separate ``Lines:`` totals. A product line error never hides the parent result
+and makes the exit code 1. Disabled, the output is exactly the parent-only report.
+
 ``--apply`` creates/updates Workbench projection rows only, through the same
 canonical :class:`WorkbenchProjectionSynchronizer` every runtime transition uses.
 It never modifies Hub state (the Hub session is opened read-only), never executes
@@ -30,7 +36,11 @@ from typing import Protocol, TextIO
 
 from app.application.workbench.dto import ReviewQueueResult, ReviewStatus
 from app.application.workbench.exceptions import WorkbenchContractError
-from app.application.workbench.projection_sync_contracts import ProjectionSyncOutcome, ProjectionSyncResult
+from app.application.workbench.projection_sync_contracts import (
+    ProductLineSyncOutcome,
+    ProjectionSyncOutcome,
+    ProjectionSyncResult,
+)
 from app.application.workbench.queries import MAX_REVIEW_QUEUE_LIMIT, ReviewQueueQuery
 
 _LABELS = {
@@ -39,6 +49,12 @@ _LABELS = {
     ProjectionSyncOutcome.NO_CHANGE: "NO_CHANGE",
     ProjectionSyncOutcome.SKIPPED_STALE: "SKIPPED_STALE",
     ProjectionSyncOutcome.ERROR: "ERROR",
+}
+_LINE_LABELS = {
+    ProductLineSyncOutcome.CREATED: "CREATE",
+    ProductLineSyncOutcome.UPDATED: "UPDATE",
+    ProductLineSyncOutcome.NO_CHANGE: "NO_CHANGE",
+    ProductLineSyncOutcome.DEACTIVATED: "DEACTIVATE",
 }
 _VALUE_PREVIEW = 160
 EXIT_REVIEW_ERRORS = 1
@@ -68,8 +84,18 @@ class ReconcileReport:
         return Counter(_LABELS[result.outcome] for result in self.results)
 
     @property
+    def line_totals(self) -> Counter[str]:
+        totals = Counter(_LINE_LABELS[line.outcome] for result in self.results for line in result.line_results)
+        totals["ERROR"] = sum(1 for result in self.results if result.line_failed)
+        return totals
+
+    @property
+    def has_line_projection(self) -> bool:
+        return any(result.line_results or result.line_failed for result in self.results)
+
+    @property
     def has_errors(self) -> bool:
-        return any(result.failed for result in self.results)
+        return any(result.failed or result.line_failed for result in self.results)
 
 
 def list_review_ids(lister: _ReviewLister, *, company_id: int) -> tuple[str, ...]:
@@ -108,6 +134,10 @@ def run_reconcile(
     totals = report.totals
     summary = " ".join(f"{label}={totals.get(label, 0)}" for label in _LABELS.values())
     out.write(f"Totals: {summary} | reviews={len(report.results)} | applied={apply}\n")
+    if report.has_line_projection:
+        line_totals = report.line_totals
+        line_summary = " ".join(f"{label}={line_totals.get(label, 0)}" for label in (*_LINE_LABELS.values(), "ERROR"))
+        out.write(f"Lines: {line_summary} | applied={apply}\n")
     return report
 
 
@@ -120,6 +150,15 @@ def _write_result(out: TextIO, result: ProjectionSyncResult) -> None:
         out.write(f"    reason: {result.error}\n")
     for change in result.changes:
         out.write(f"    {change.field}: {_preview(change.before)} -> {_preview(change.after)}\n")
+    if result.line_error:
+        out.write(f"    line ERROR: {result.line_error}\n")
+    for line in result.line_results:
+        if line.outcome is ProductLineSyncOutcome.NO_CHANGE:
+            continue
+        line_record = f" odoo_id={line.odoo_record_id}" if line.odoo_record_id is not None else ""
+        out.write(f"    line {_LINE_LABELS[line.outcome]:<10} {line.line_number or '?'} {line.line_key}{line_record}\n")
+        for change in line.changes:
+            out.write(f"        {change.field}: {_preview(change.before)} -> {_preview(change.after)}\n")
 
 
 def _preview(value: object) -> str:
