@@ -6,7 +6,11 @@ from app.application.expense_mapping import OnboardOperatingExpenseMappingUseCas
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
 from app.application.workbench.expense_account_use_cases import ListExpenseAccountCandidatesUseCase
 from app.application.workbench.operating_expense_mapping_use_cases import SubmitOperatingExpenseMappingUseCase
-from app.composition.imports import build_deterministic_decision_engine, build_runtime_workbench_projection_synchronizer
+from app.composition.imports import (
+    build_deterministic_decision_engine,
+    build_runtime_workbench_projection_synchronizer,
+    build_supplier_partner_reader,
+)
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -62,6 +66,7 @@ def build_submit_operating_expense_mapping_use_case(
         source_invoice_reader=source_invoice_reader,
         reclassification_writer=review_repository,
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
         # P0-PROD-15P: the whole point of reclassifying after this endpoint's write --
         # without it, a MATCH_EXISTING-remediated review's raw-ambiguous-forever partner
         # match would keep operating-expense matching stuck at NOT_FOUND even once the

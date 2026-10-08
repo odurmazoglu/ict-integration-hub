@@ -69,6 +69,13 @@ from app.persistence import (
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyUnitOfWork,
 )
+from tests.unit.effective_supplier_support import (
+    CanonicalPartners,
+    contact,
+    effect_based_supplier_resolver,
+    raw_ambiguous,
+    raw_matched,
+)
 
 COMPANY_ID = 7
 REVIEW_ID = "review:product-remediation-1"
@@ -322,6 +329,8 @@ class _Harness:
         supplier_info_writer: _FakeSupplierInfoWriter | None = None,
         existing_reader: _FakeExistingSupplierInfoReader | None = None,
         after_precheck_hook=None,
+        raw_partner_match=None,
+        partner_reader=None,
     ) -> None:
         self.session = session
         self.reader = _FakeReviewReader(review or _review_item())
@@ -338,7 +347,9 @@ class _Harness:
         self.use_case = CreateNewProductUseCase(
             review_reader=self.reader,
             source_invoice_reader=self.source_reader,
-            remediation_effect_reader=self.effect_repo,
+            effective_supplier_resolver=effect_based_supplier_resolver(
+                self.effect_repo, raw=raw_partner_match, partner_reader=partner_reader
+            ),
             reservation_writer=self.reservation_repo,
             identity_claim_writer=self.claim_repo,
             existing_supplier_info_reader=self.existing_reader,
@@ -586,6 +597,31 @@ async def test_i_existing_supplierinfo_with_no_linked_product_fails_closed(sessi
 
 
 # --------------------------------------------------------------------------- J, K, L, M
+
+
+async def test_j_deterministic_supplier_without_any_accepted_resolution_is_the_effective_supplier(
+    session: Session,
+) -> None:
+    """PR A: before, only an accepted resolution counted, so a VAT-matched supplier was refused."""
+
+    h = _Harness(session, effect=False, raw_partner_match=raw_matched(PARTNER_ID))
+    result = await h.use_case.execute(h.command())
+
+    assert result.status is ProductRemediationStatus.COMPLETED
+    assert h.supplier_info_writer.calls[0].partner_id == PARTNER_ID
+    persisted = h.reservation_repo.find(review_id=REVIEW_ID, company_id=COMPANY_ID, review_version=2, line_number="1")
+    assert persisted.resolved_supplier_partner_id == PARTNER_ID
+
+
+async def test_j_accepted_supplier_that_is_a_contact_fails_closed_before_any_write(session: Session) -> None:
+    h = _Harness(
+        session,
+        raw_partner_match=raw_ambiguous(),
+        partner_reader=CanonicalPartners({PARTNER_ID: contact(PARTNER_ID, parent_id=1)}),
+    )
+    with pytest.raises(ProductRemediationSupplierUnresolvedError):
+        await h.use_case.execute(h.command())
+    assert h.product_writer.calls == [] and h.supplier_info_writer.calls == []
 
 
 async def test_j_unresolved_supplier_fails_closed_before_any_write(session: Session) -> None:

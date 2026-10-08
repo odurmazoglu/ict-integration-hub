@@ -113,6 +113,7 @@ from app.persistence.workbench_review_source_invoice_correction_repository impor
 )
 from app.services.document_storage import LocalDocumentStorage
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.effective_supplier_support import CanonicalPartners
 
 COMPANY_ID = 1
 BUYER_VKN = "1111111111"
@@ -319,6 +320,7 @@ def _resolver(session: Session, partners: _Partners, reader) -> EffectiveDecisio
         decision_engine=_decision_engine(session, partners),
         source_invoice_reader=reader,
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        supplier_partner_reader=CanonicalPartners(),
         operating_expense_matcher=OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session)),
         review_accounting_resolution_reader=SqlAlchemyReviewAccountingResolutionRepository(session),
     )
@@ -746,6 +748,7 @@ def _supplier_remediation(env: Env, *, partner: ResolutionPartnerRecord, writer)
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=SqlAlchemyReviewRepository(session),
             supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+            supplier_partner_reader=CanonicalPartners(),
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
     )

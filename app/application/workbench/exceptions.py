@@ -162,6 +162,17 @@ class WorkbenchCandidateReadError(ApplicationError):
     error_category = "workbench_candidate_read_error"
 
 
+class EffectiveSupplierReadError(WorkbenchCandidateReadError):
+    """Safe, transient error: the effective supplier could not be read from Odoo right now.
+
+    Raised by :mod:`app.application.effective_supplier` when the deterministic supplier
+    match or the read-only proof of an accepted supplier's partner fails -- never
+    swallowed into "no supplier", which would silently change the outcome.
+    """
+
+    error_category = "effective_supplier_read_error"
+
+
 class WorkbenchCandidateNotFoundError(WorkbenchCandidateReadError):
     """Safe error raised when a ready Workbench decision candidate cannot be found."""
 

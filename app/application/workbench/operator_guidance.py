@@ -32,6 +32,7 @@ _EXECUTION_COMPLETED = "completed"
 #: technical view (the decision-basis line resolutions), never in the operator summary.
 ACCOUNT_LABEL_UNAVAILABLE = "hesap bilgisi şu an okunamadı"
 MODEL_LABEL_UNAVAILABLE = "amortisman modeli bilgisi şu an okunamadı"
+PRODUCT_LABEL_UNAVAILABLE = "ürün bilgisi şu an okunamadı"
 TREATMENT_LABELS: dict[AccountingTreatmentType, str] = {
     AccountingTreatmentType.EXPENSE_ACCOUNT: "Gider",
     AccountingTreatmentType.CAPITALIZE_FIXED_ASSET: "Sabit Kıymet / Demirbaş",
@@ -152,6 +153,21 @@ class UnmatchedProductLine(ApplicationDTO):
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedProductLine(ApplicationDTO):
+    """One line the current version's product matching resolves (presentation only).
+
+    Says *that* the line is matched now -- never who or what matched it; the evidence
+    does not prove an operator mapping, so none is claimed.
+    """
+
+    line_number: str
+    seller_item_code: str | None
+    description: str | None
+    #: Odoo display name of the matched product; ``None`` = could not be read now.
+    product_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorGuidanceFacts(ApplicationDTO):
     """Committed Hub facts the projection snapshot does not already carry."""
 
@@ -168,6 +184,8 @@ class OperatorGuidanceFacts(ApplicationDTO):
     product_mapping_enabled: bool = False
     #: PRODUCT_NOT_FOUND lines of the current version, in source order.
     unmatched_product_lines: tuple[UnmatchedProductLine, ...] = field(default_factory=tuple)
+    #: Lines the current version's execution evidence matches to a product, in source order.
+    resolved_product_lines: tuple[ResolvedProductLine, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +283,7 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
     )
     if supplier_done and source.supplier_name:
         done.append(f"Tedarikçi: {source.supplier_name}")
+    done.extend(_resolved_product_line_text(line) for line in facts.resolved_product_lines)
     if facts.latest_purchase_purpose is not None:
         done.append(f"Satın alma amacı: {PURPOSE_LABELS[facts.latest_purchase_purpose]}")
     resolution = facts.latest_accounting_resolution
@@ -311,6 +330,12 @@ def _product_line_text(line: UnmatchedProductLine) -> str:
     return " — ".join(parts)
 
 
+def _resolved_product_line_text(line: ResolvedProductLine) -> str:
+    parts = [f"Satır {line.line_number}"]
+    parts.extend(part for part in (line.seller_item_code, line.description) if part)
+    return " — ".join(parts) + f" → {line.product_name or PRODUCT_LABEL_UNAVAILABLE}"
+
+
 def _todo(instruction: str, findings: list[str] | None = None) -> str:
     body = f"<p><strong>{html.escape(instruction, quote=False)}</strong></p>"
     if findings:
@@ -322,6 +347,7 @@ def _todo(instruction: str, findings: list[str] | None = None) -> str:
 __all__ = [
     "ACCOUNT_LABEL_UNAVAILABLE",
     "MODEL_LABEL_UNAVAILABLE",
+    "PRODUCT_LABEL_UNAVAILABLE",
     "PURPOSE_LABELS",
     "TREATMENT_LABELS",
     "AccountingLabels",
@@ -330,6 +356,7 @@ __all__ = [
     "GuidanceInput",
     "OperatorGuidanceFacts",
     "OperatorNextAction",
+    "ResolvedProductLine",
     "UnmatchedProductLine",
     "WorkbenchOperatorGuidance",
     "build_operator_guidance",

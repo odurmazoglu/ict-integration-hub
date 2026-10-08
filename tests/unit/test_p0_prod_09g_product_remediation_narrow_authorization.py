@@ -91,6 +91,7 @@ from app.persistence import (
     SqlAlchemyUnitOfWork,
     SqlAlchemyWriteAuthorizationRepository,
 )
+from tests.unit.effective_supplier_support import effect_based_supplier_resolver
 
 COMPANY_ID = 3
 OTHER_COMPANY_ID = 4
@@ -318,7 +319,7 @@ class _Harness:
         self.use_case = CreateNewProductUseCase(
             review_reader=self.reader,
             source_invoice_reader=self.source_reader,
-            remediation_effect_reader=self.effect_repo,
+            effective_supplier_resolver=effect_based_supplier_resolver(self.effect_repo),
             reservation_writer=self.reservation_repo,
             identity_claim_writer=self.claim_repo,
             existing_supplier_info_reader=_FakeExistingSupplierInfoReader(),

@@ -15,25 +15,36 @@ and rationale of each override this resolves.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from decimal import Decimal
 from typing import Protocol
 
 from app.application.commands import ImportInvoiceCommand
 from app.application.decision import DecisionEngine
 from app.application.dto import DecisionResult
+from app.application.effective_supplier import (
+    ACCEPTED_SUPPLIER_MATCH_CONFIDENCE,
+    ACCEPTED_SUPPLIER_MATCHED_BY,
+    AcceptedRemediationEffect,
+    AcceptedSupplier,
+    AcceptedSupplierReader,
+    AcceptedSupplierStatus,
+    EffectiveSupplier,
+    EffectiveSupplierOrigin,
+    SupplierPartnerReader,
+    resolve_effective_supplier,
+)
 from app.application.exceptions import ApplicationError
 from app.application.expense_mapping.matcher import OperatingExpenseMatcher
 from app.application.expense_mapping.matching import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
 from app.application.fixed_asset_accounting import FixedAssetAccounting
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
-from app.application.workbench.exceptions import ReviewPersistenceError
+from app.application.workbench.exceptions import ReviewPersistenceError, WorkbenchContractError
 from app.application.workbench.ports import (
     ReviewAccountingResolutionReader,
     ReviewSourceInvoiceEvidenceReader,
     SupplierRemediationEffectWriter,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
-from app.matching import PartnerMatchResult, PartnerMatchStatus
+from app.matching import PartnerMatchStatus
 
 SAFE_EFFECTIVE_DECISION_ERROR = "Deterministic review classification failed."
 
@@ -41,19 +52,13 @@ SAFE_EFFECTIVE_DECISION_ERROR = "Deterministic review classification failed."
 #: SupplierRemediationEffect is treated as an exact match for evidence purposes --
 #: it was itself only ever recorded through the gated, narrow-authorization-
 #: protected remediation write path (see PR #159/#163), never guessed.
-REMEDIATION_EFFECT_MATCH_CONFIDENCE = Decimal("1.00")
-REMEDIATION_EFFECT_MATCHED_BY = "supplier_remediation_effect"
-
-#: P0-PROD-15N. The exact string value of ``SupplierResolutionMode.MATCH_EXISTING``
-#: (a ``StrEnum``, so an instance compares equal to its own value). Compared against
-#: as a plain string, never the enum itself, so this module never imports
-#: ``app.application.workbench.supplier_resolution`` (see
-#: ``test_vendor_bill_and_classification_paths_do_not_import_supplier_resolution``).
-_MATCH_EXISTING_MODE = "match_existing"
+#: Defined once in ``app.application.effective_supplier`` (PR A); re-exported unchanged.
+REMEDIATION_EFFECT_MATCH_CONFIDENCE = ACCEPTED_SUPPLIER_MATCH_CONFIDENCE
+REMEDIATION_EFFECT_MATCHED_BY = ACCEPTED_SUPPLIER_MATCHED_BY
 
 #: P0-PROD-15T. The exact string value of ``AccountingTreatmentType.EXPENSE_ACCOUNT``
-#: (a ``StrEnum``). Compared as a plain string for the same import-isolation reason
-#: as ``_MATCH_EXISTING_MODE`` -- this module never imports
+#: (a ``StrEnum``). Compared as a plain string for import isolation -- this module
+#: never imports
 #: ``app.application.workbench.accounting_resolution``.
 _EXPENSE_ACCOUNT_TREATMENT = "expense_account"
 #: The exact string value of ``AccountingTreatmentType.CAPITALIZE_FIXED_ASSET``, compared
@@ -73,22 +78,6 @@ _OPERATING_EXPENSE_REASON_CODES = frozenset(
         ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_AMBIGUOUS,
     }
 )
-
-
-class AcceptedRemediationEffect(Protocol):
-    """Structural type for ``SupplierRemediationEffect``.
-
-    Kept structural, exactly like the analogous Protocols below, so this module --
-    which must never gain the ability to reach the supplier partner writer -- never
-    imports ``app.application.workbench.supplier_remediation`` (see
-    ``test_import_and_reclassification_never_reach_the_supplier_writer``). Only the
-    two fields this module actually reads are declared, and ``mode`` is typed as the
-    plain ``str`` a ``SupplierResolutionMode`` (a ``StrEnum``) compares equal to, for
-    the same import-isolation reason as ``_MATCH_EXISTING_MODE`` above.
-    """
-
-    mode: str
-    resolved_partner_id: int
 
 
 class AcceptedAccountingResolution(Protocol):
@@ -143,15 +132,26 @@ class EffectiveDecisionResolver:
         decision_engine: DecisionEngine,
         source_invoice_reader: ReviewSourceInvoiceEvidenceReader,
         supplier_remediation_effect_reader: SupplierRemediationEffectWriter | None = None,
+        supplier_partner_reader: SupplierPartnerReader | None = None,
         operating_expense_matcher: OperatingExpenseMatcher | None = None,
         review_accounting_resolution_reader: ReviewAccountingResolutionReader | None = None,
     ) -> None:
         self._decision_engine = decision_engine
         self._source_invoice_reader = source_invoice_reader
-        # Optional (P0-PROD-10D): only set by composition roots that want archived
-        # Hub-owned ONE_OFF_VENDOR reuse to be able to reach a submittable decision.
-        # None preserves byte-identical pre-10D behavior for any existing caller.
-        self._supplier_remediation_effect_reader = supplier_remediation_effect_reader
+        # Optional (P0-PROD-10D): only set by composition roots that want an accepted
+        # supplier resolution to count at all. None preserves byte-identical pre-10D
+        # behavior. PR A: an accepted resolution is used only once its partner is proven
+        # canonical, so the effect reader cannot be wired without the partner reader.
+        if supplier_remediation_effect_reader is not None and supplier_partner_reader is None:
+            raise WorkbenchContractError("An accepted supplier resolution cannot be proven without a partner reader.")
+        self._accepted_supplier_reader = (
+            AcceptedSupplierReader(
+                effect_reader=supplier_remediation_effect_reader,
+                partner_reader=supplier_partner_reader,
+            )
+            if supplier_remediation_effect_reader is not None and supplier_partner_reader is not None
+            else None
+        )
         # Optional (P0-PROD-15P): only set by composition roots that want a
         # MATCH_EXISTING-remediated (raw-ambiguous-forever) review to be able to
         # reach OPERATING_EXPENSE_MAPPING_REQUIRED resolution once a real mapping
@@ -175,27 +175,30 @@ class EffectiveDecisionResolver:
         # Source of truth: the immutable snapshot only. Never Uyumsoft, never the caller.
         source = self._source_invoice_reader.get(review_id=review_id, company_id=company_id)
 
-        decision_result = await self._decide(
-            ImportInvoiceCommand(
-                invoice=source.invoice,
-                idempotency_key=idempotency_key,
-                company_id=company_id,
-            )
+        command = ImportInvoiceCommand(
+            invoice=source.invoice,
+            idempotency_key=idempotency_key,
+            company_id=company_id,
         )
+        decision_result = await self._decide(command)
 
-        # Looked up at most once and reused by both the Stage-1 execution-evidence
-        # override (P0-PROD-10D) and the effective-classification override
-        # (P0-PROD-15N) below, so both consult the exact same (review_id,
-        # company_id)-scoped effect. Skipped entirely (same laziness as before
-        # P0-PROD-15N) once the raw partner match already succeeded on its own --
-        # SUPPLIER_AMBIGUOUS cannot co-occur with a MATCHED partner, so there is
-        # nothing either override could ever substitute in that case.
-        raw_partner_match = decision_result.partner_match
-        effect = (
-            None
-            if raw_partner_match is not None and raw_partner_match.status is PartnerMatchStatus.MATCHED
-            else self._find_latest_remediation_effect(review_id=review_id, company_id=company_id)
-        )
+        # PR A: the accepted supplier resolution is consulted only when the raw partner
+        # match is not MATCHED (same laziness as P0-PROD-10D/15N: a raw match always wins,
+        # so a normal review never reads the effect or Odoo again). When a *proven*
+        # accepted supplier exists, the same DecisionEngine is run once more with it
+        # pinned, so product matching uses the identical effective supplier as every
+        # override below -- one decision_result, one supplier, never mixed.
+        accepted: AcceptedSupplier | None = None
+        if not _raw_partner_matched(decision_result):
+            accepted = self._accepted_supplier(review_id=review_id, company_id=company_id)
+            if accepted is not None:
+                decision_result = await self._decide(replace(command, accepted_supplier=accepted))
+
+        # The single effective supplier for this review now. ``effect`` is it only when it
+        # came from an accepted resolution (the raw match was not MATCHED) -- exactly the
+        # pre-PR-A gate of every override below, which therefore behave unchanged.
+        effective_supplier = resolve_effective_supplier(decision_result.partner_match, accepted)
+        effect = effective_supplier if effective_supplier is not None and effective_supplier.accepted else None
 
         # P0-PROD-15T precedence: a review-scoped ReviewAccountingResolution (this
         # exact review only) always wins over the P0-PROD-15P supplier-wide-effect
@@ -254,18 +257,17 @@ class EffectiveDecisionResolver:
         except Exception as exc:  # noqa: BLE001 - translated to a safe application error
             raise ReviewPersistenceError(SAFE_EFFECTIVE_DECISION_ERROR) from exc
 
-    def _find_latest_remediation_effect(self, *, review_id: str, company_id: int) -> AcceptedRemediationEffect | None:
-        if self._supplier_remediation_effect_reader is None:
+    def _accepted_supplier(self, *, review_id: str, company_id: int) -> AcceptedSupplier | None:
+        if self._accepted_supplier_reader is None:
             return None
-        return self._supplier_remediation_effect_reader.find_latest_remediation_effect(
-            review_id=review_id,
-            company_id=company_id,
-        )
+        lookup = self._accepted_supplier_reader.lookup(review_id=review_id, company_id=company_id)
+        # UNPROVEN fails closed: treated exactly like "no accepted resolution" (logged by the reader).
+        return lookup.supplier if lookup.status is AcceptedSupplierStatus.PROVEN else None
 
     def _execution_decision_result(
         self,
         decision_result: DecisionResult,
-        effect: AcceptedRemediationEffect | None,
+        effect: EffectiveSupplier | None,
         recomputed_operating_expense_match: OperatingExpenseMatchResult | None,
     ) -> DecisionResult:
         """Substitute effective, already-authoritative facts for *execution evidence
@@ -292,17 +294,16 @@ class EffectiveDecisionResolver:
           ``ReviewAccountingResolution`` or a P0-PROD-15P supplier-wide-effect
           recomputation matching -- never fabricated here).
 
-        Product matching is untouched entirely: an unresolved product line is
-        already correctly handled by the existing decision-time
-        ``LineResolution.selected_product_id`` / ``apply_selected_product_resolutions``
-        override, which needs no involvement here.
+        Product matching needs no substitution here (PR A): it already ran inside the
+        DecisionEngine against the same effective supplier (``accepted_supplier`` on the
+        command), so ``product_match`` is passed through as decided.
         """
 
         result = decision_result
         if effect is not None:
             partner_match = result.partner_match
             if partner_match is None or partner_match.status is not PartnerMatchStatus.MATCHED:
-                result = replace(result, partner_match=_synthesized_matched_partner(effect))
+                result = replace(result, partner_match=effect.partner_match)
         if recomputed_operating_expense_match is not None:
             result = replace(result, operating_expense_match=recomputed_operating_expense_match)
         return result
@@ -310,7 +311,7 @@ class EffectiveDecisionResolver:
     def _effective_operating_expense_match(
         self,
         decision_result: DecisionResult,
-        effect: AcceptedRemediationEffect | None,
+        effect: EffectiveSupplier | None,
         *,
         invoice: object,
         company_id: int,
@@ -324,7 +325,11 @@ class EffectiveDecisionResolver:
         fires for a normal active-partner review either.
         """
 
-        if self._operating_expense_matcher is None or effect is None or effect.mode != _MATCH_EXISTING_MODE:
+        if (
+            self._operating_expense_matcher is None
+            or effect is None
+            or effect.origin is not EffectiveSupplierOrigin.MATCH_EXISTING
+        ):
             return None
         partner_match = decision_result.partner_match
         if partner_match is not None and partner_match.status is PartnerMatchStatus.MATCHED:
@@ -332,13 +337,13 @@ class EffectiveDecisionResolver:
         return self._operating_expense_matcher.match_invoice(
             invoice,
             company_id=company_id,
-            partner_match=_synthesized_matched_partner(effect),
+            partner_match=effect.partner_match,
         )
 
     def _review_accounting_resolution_fixed_asset(
         self,
         decision_result: DecisionResult,
-        effect: AcceptedRemediationEffect | None,
+        effect: EffectiveSupplier | None,
         *,
         review_id: str,
         company_id: int,
@@ -376,7 +381,7 @@ class EffectiveDecisionResolver:
     def _review_accounting_resolution_operating_expense_match(
         self,
         decision_result: DecisionResult,
-        effect: AcceptedRemediationEffect | None,
+        effect: EffectiveSupplier | None,
         *,
         review_id: str,
         company_id: int,
@@ -413,7 +418,7 @@ class EffectiveDecisionResolver:
         if raw_partner_match is not None and raw_partner_match.status is PartnerMatchStatus.MATCHED:
             vendor_partner_id = raw_partner_match.partner_id
         elif effect is not None:
-            vendor_partner_id = effect.resolved_partner_id
+            vendor_partner_id = effect.partner_id
         else:
             return None
         return OperatingExpenseMatchResult(
@@ -430,20 +435,14 @@ class EffectiveDecisionResolver:
         )
 
 
-def _synthesized_matched_partner(effect: AcceptedRemediationEffect) -> PartnerMatchResult:
-    return PartnerMatchResult(
-        status=PartnerMatchStatus.MATCHED,
-        partner_id=effect.resolved_partner_id,
-        matched_by=REMEDIATION_EFFECT_MATCHED_BY,
-        reason="Resolved via an accepted supplier remediation effect for this review.",
-        candidate_count=1,
-        confidence=REMEDIATION_EFFECT_MATCH_CONFIDENCE,
-    )
+def _raw_partner_matched(decision_result: DecisionResult) -> bool:
+    partner_match = decision_result.partner_match
+    return partner_match is not None and partner_match.status is PartnerMatchStatus.MATCHED
 
 
 def _effective_manual_review_reasons(
     raw_reasons: tuple[ManualReviewReason, ...],
-    effect: AcceptedRemediationEffect | None,
+    effect: EffectiveSupplier | None,
     recomputed_operating_expense_match: OperatingExpenseMatchResult | None,
     *,
     fixed_asset_resolved: bool = False,
@@ -469,7 +468,7 @@ def _effective_manual_review_reasons(
     """
 
     strip_codes: set[ManualReviewReasonCode] = set()
-    if effect is not None and effect.mode == _MATCH_EXISTING_MODE:
+    if effect is not None and effect.origin is EffectiveSupplierOrigin.MATCH_EXISTING:
         strip_codes.add(ManualReviewReasonCode.SUPPLIER_AMBIGUOUS)
     if recomputed_operating_expense_match is not None and (
         recomputed_operating_expense_match.status is OperatingExpenseMatchStatus.MATCHED
