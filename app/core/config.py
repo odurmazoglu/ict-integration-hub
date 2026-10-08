@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     odoo_purchase_journal_id: int | None = None
     odoo_purchase_journal_code: str | None = None
     odoo_workbench_projection_publish_enabled: bool = False
+    #: PR B: project per-invoice-line product rows to the Studio child model
+    #: ``x_ipp_wb_product_line`` (``ODOO_WORKBENCH_PRODUCT_LINE_*`` contract). Off by
+    #: default: Hub code deploys before the model exists, with zero child reads/writes.
+    odoo_workbench_product_line_projection_enabled: bool = False
     #: Pre-existing Odoo Studio selection field on ``res.partner`` holding ICT's business
     #: relationship classification (production: ``x_studio_musteri_tipi``). Unset means
     #: every Hub supplier-partner create fails closed -- the Hub never relies on an Odoo

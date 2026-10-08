@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import html
 import os
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from app.application.workbench.projection import (
     WorkbenchProjectionLineResolution,
 )
 from app.application.workbench.projection_sync_contracts import (
+    ProductLineSyncResult,
     ProjectionFieldChange,
     ProjectionSyncOutcome,
     ProjectionSyncResult,
@@ -124,6 +126,15 @@ class OdooWorkbenchProjectionAdapter(Protocol):
         pass
 
     def read_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
+        pass
+
+
+class WorkbenchProductLineSyncPublisher(Protocol):
+    """PR B child-row publisher (``OdooWorkbenchProductLinePublisher``)."""
+
+    def sync_lines(
+        self, projection: WorkbenchProjection, *, parent_record_id: int | None, apply: bool
+    ) -> tuple[ProductLineSyncResult, ...]:
         pass
 
 
@@ -299,10 +310,12 @@ class OdooWorkbenchProjectionPublisher:
         adapter: OdooWorkbenchProjectionAdapter,
         mapping: OdooWorkbenchProjectionFieldMapping,
         classification_service: WorkbenchProjectionClassificationService | None = None,
+        product_line_publisher: WorkbenchProductLineSyncPublisher | None = None,
     ) -> None:
         self._adapter = adapter
         self._mapping = mapping
         self._classification_service = classification_service
+        self._product_line_publisher = product_line_publisher
         self._selection_cache: dict[str, frozenset[str]] = {}
         self._currency_cache: dict[str, int] = {}
 
@@ -440,6 +453,31 @@ class OdooWorkbenchProjectionPublisher:
     # ------------------------------------------------------------------ OPS-UI-01A full-snapshot sync
 
     def sync_projection(self, projection: WorkbenchProjection, *, apply: bool) -> ProjectionSyncResult:
+        """Parent row first (unchanged OPS-UI-01A semantics), then the PR B product lines.
+
+        Product lines are synchronized only when the projection carries them (child
+        projection composed/enabled) and a line publisher is configured. They follow a
+        parent that exists or would be created; a stale (skipped) parent skips its lines
+        too. A product line failure is reported on the result and never changes the
+        parent outcome.
+        """
+
+        result = self._sync_parent(projection, apply=apply)
+        if self._product_line_publisher is None or result.outcome is ProjectionSyncOutcome.SKIPPED_STALE:
+            return result
+        if projection.product_line_error is not None:
+            return dataclasses.replace(result, line_error=projection.product_line_error)
+        if projection.product_lines is None:
+            return result
+        try:
+            lines = self._product_line_publisher.sync_lines(
+                projection, parent_record_id=result.odoo_record_id, apply=apply
+            )
+        except Exception as exc:  # noqa: BLE001 - a line failure must never turn a written parent into ERROR
+            return dataclasses.replace(result, line_error=_line_error_message(exc))
+        return dataclasses.replace(result, line_results=lines)
+
+    def _sync_parent(self, projection: WorkbenchProjection, *, apply: bool) -> ProjectionSyncResult:
         """Diff one complete Hub snapshot against its Odoo row; write only a real change.
 
         * ``apply=False`` is a dry-run: lookups and read-only metadata/currency reads
@@ -796,6 +834,18 @@ class OdooWorkbenchProjectionPublisher:
         _put_optional(values, self._mapping.vendor_bill_external_identity, artifact.external_identity)
         _put_optional(values, self._mapping.execution_message, result.message)
         return values
+
+
+SAFE_PRODUCT_LINE_SYNC_ERROR = "Odoo Workbench product line sync failed."
+
+
+def _line_error_message(exc: Exception) -> str:
+    safe_message = getattr(exc, "safe_message", None)
+    if isinstance(safe_message, str) and safe_message.strip():
+        return safe_message.strip()
+    if isinstance(exc, WorkbenchContractError):
+        return str(exc)
+    return SAFE_PRODUCT_LINE_SYNC_ERROR
 
 
 def _review_status_to_odoo(status: ReviewStatus) -> str:

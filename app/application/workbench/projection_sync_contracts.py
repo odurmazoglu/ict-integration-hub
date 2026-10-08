@@ -20,6 +20,10 @@ PROJECTION_SYNC_WARNING = (
     "Odoo Workbench projection was not updated; the Hub state is committed and authoritative. "
     "Run the Workbench projection reconcile to converge."
 )
+PRODUCT_LINE_SYNC_WARNING = (
+    "Odoo Workbench product lines were not updated; the Hub state is committed and authoritative. "
+    "Run the Workbench projection reconcile to converge."
+)
 
 
 class ProjectionSyncOutcome(StrEnum):
@@ -38,6 +42,25 @@ class ProjectionFieldChange(ApplicationDTO):
     after: Any
 
 
+class ProductLineSyncOutcome(StrEnum):
+    """PR B: what happened (or would happen, in a dry-run) to one product line child row."""
+
+    CREATED = "created"
+    UPDATED = "updated"
+    NO_CHANGE = "no_change"
+    #: The row no longer belongs to the projection; it is archived, never deleted.
+    DEACTIVATED = "deactivated"
+
+
+@dataclass(frozen=True, slots=True)
+class ProductLineSyncResult(ApplicationDTO):
+    line_key: str
+    outcome: ProductLineSyncOutcome
+    line_number: str | None = None
+    odoo_record_id: int | None = None
+    changes: tuple[ProjectionFieldChange, ...] = field(default_factory=tuple)
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectionSyncResult(ApplicationDTO):
     """Outcome of projecting one review. ``applied`` is False for a dry-run plan."""
@@ -49,10 +72,18 @@ class ProjectionSyncResult(ApplicationDTO):
     review_version: int | None = None
     changes: tuple[ProjectionFieldChange, ...] = field(default_factory=tuple)
     error: str | None = None
+    #: PR B child rows; empty when product line projection is disabled or not applicable.
+    line_results: tuple[ProductLineSyncResult, ...] = field(default_factory=tuple)
+    #: PR B: the product lines of this review failed; the parent outcome above is unaffected.
+    line_error: str | None = None
 
     @property
     def failed(self) -> bool:
         return self.outcome is ProjectionSyncOutcome.ERROR
+
+    @property
+    def line_failed(self) -> bool:
+        return self.line_error is not None
 
 
 class WorkbenchProjectionSyncPublisher(Protocol):
@@ -86,13 +117,20 @@ def sync_after_commit(
 def projection_sync_warnings(result: ProjectionSyncResult | None) -> tuple[str, ...]:
     """The visible warning a use case attaches to its (already committed) result."""
 
-    if result is None or not result.failed:
+    if result is None:
         return ()
-    return (PROJECTION_SYNC_WARNING,)
+    if result.failed:
+        return (PROJECTION_SYNC_WARNING,)
+    if result.line_failed:
+        return (PRODUCT_LINE_SYNC_WARNING,)
+    return ()
 
 
 __all__ = [
+    "PRODUCT_LINE_SYNC_WARNING",
     "PROJECTION_SYNC_WARNING",
+    "ProductLineSyncOutcome",
+    "ProductLineSyncResult",
     "ProjectionFieldChange",
     "ProjectionSyncOutcome",
     "ProjectionSyncResult",

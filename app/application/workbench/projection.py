@@ -18,6 +18,7 @@ from app.application.workbench.dto import (
 )
 from app.application.workbench.exceptions import WorkbenchCandidateReadError, WorkbenchContractError
 from app.application.workbench.operator_guidance import WorkbenchOperatorGuidance
+from app.application.workbench.product_line_projection import WorkbenchProductLineProjection
 from app.application.workflow import ManualReviewReason, WorkflowType
 
 CLASSIFICATION_STATUS_BADGES: dict[str, str] = {
@@ -79,6 +80,8 @@ class WorkbenchProjectionLineResolution(ApplicationDTO):
     expense_account_id: int | None = None
     asset_account_id: int | None = None
     depreciation_model_id: int | None = None
+    #: PR B: the accepted evidence's ``matched_by`` for a product line (display only).
+    matched_by: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.kind, "kind is required.")
@@ -144,6 +147,13 @@ class WorkbenchProjection(ApplicationDTO):
     #: ADR-0013 operator guidance (next action, to-do, completed summary). ``None`` when
     #: the synchronizer was composed without guidance facts; unmapped fields ignore it.
     operator_guidance: WorkbenchOperatorGuidance | None = None
+    #: PR B per-line child projection. ``None`` means product line projection is not
+    #: composed (disabled): no child row is read or written for this review. ``()``
+    #: means the review has no product-resolution lines (existing rows get archived).
+    product_lines: tuple[WorkbenchProductLineProjection, ...] | None = None
+    #: PR B: the product lines could not be derived from committed Hub facts; the parent
+    #: projection is unaffected and no child row is touched.
+    product_line_error: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -168,6 +178,11 @@ class WorkbenchProjection(ApplicationDTO):
         object.__setattr__(self, "effective_resolutions", resolutions)
         if self.classification_review_version is not None:
             _require_positive_int(self.classification_review_version, "classification_review_version must be positive.")
+        if self.product_lines is not None:
+            lines = tuple(self.product_lines)
+            if not all(isinstance(line, WorkbenchProductLineProjection) for line in lines):
+                raise WorkbenchContractError("product_lines must contain product line projections.")
+            object.__setattr__(self, "product_lines", lines)
 
 
 @dataclass(frozen=True, slots=True)

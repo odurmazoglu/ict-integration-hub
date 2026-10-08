@@ -14,6 +14,14 @@ existing use cases, plus Hub-owned operator guidance fields. See
 "no scheduler" describe the decision-only slice; the ADR-0013 tick is the Hub-owned
 scheduler for operator requests and is disabled by default.
 
+## Product Line Child Projection (PR B)
+
+Per-invoice-line, read-only child rows (`x_ipp_wb_product_line`, "Ürün Satırları" tab)
+are projected by the same synchronizer and reconcile CLI when
+`ODOO_WORKBENCH_PRODUCT_LINE_PROJECTION_ENABLED=true`. Off by default: no child read or
+write happens and the parent projection is unchanged. Contract, evidence → state mapping
+and the Studio provisioning runbook: [Odoo Workbench Product Lines](ODOO_WORKBENCH_PRODUCT_LINES.md).
+
 ## Architecture
 
 Odoo Online cannot install custom Python modules. The selected architecture uses an Odoo Studio model as a projection store and keeps all decision authority in ICT IPP.
