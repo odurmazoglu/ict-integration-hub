@@ -7,9 +7,14 @@ never an operator input -- and are written to the Studio child model
 
 Everything here is pure: the composition root reads the committed facts (source
 invoice, the classification version's Stage-1 execution evidence, the accepted
-decision's effective resolution) and this module derives the projected lines from
-them. No live Odoo product or partner resolution happens here; the effective
-supplier is the one the persisted product matching itself ran under.
+decision's effective resolution, the review's reclassification history) and this
+module derives the projected lines from them.
+
+Committed-truth boundary: projection never matches anything. There is no Odoo call,
+no supplier re-resolution, no approximate or name-based inference and no product lookup in
+current master data. The supplier is the one the *persisted* product matching ran
+under; the product is the one *persisted* evidence or the accepted decision names. A
+fact the Hub has not committed is projected as empty, never guessed.
 
 Evidence -> state mapping (the only states this module ever produces):
 
@@ -68,7 +73,9 @@ PRODUCT_LINE_REASON_CODES = frozenset(
     }
 )
 #: Any product-matching reason marks the review as a product-resolution review.
-PRODUCT_REVIEW_REASON_CODES = PRODUCT_LINE_REASON_CODES | {ManualReviewReasonCode.PRODUCT_MAPPING_INCOMPLETE}
+PRODUCT_REVIEW_REASON_CODES: frozenset[str] = frozenset(
+    PRODUCT_LINE_REASON_CODES | {ManualReviewReasonCode.PRODUCT_MAPPING_INCOMPLETE}
+)
 SUPPLIER_BLOCKER_CODES = frozenset(
     {
         ManualReviewReasonCode.SUPPLIER_NOT_FOUND,
@@ -128,6 +135,8 @@ class WorkbenchProductLineProjection(ApplicationDTO):
     company_id: int
     review_version: int
     line_number: str
+    #: UI ordering only (never identity): see :func:`line_sequences`.
+    line_sequence: int
     supplier_partner_id: int | None
     seller_item_code: str | None
     description: str | None
@@ -207,8 +216,9 @@ class ProductLineFacts:
     source_lines: Sequence[SourceLine]
     supplier_match: SupplierMatch | None = None
     evidence_lines: Mapping[str, LineMatch] | None = None
-    evidence_product_mode: bool = False
     decision_resolutions: Mapping[str, DecisionLineResolution] | None = None
+    #: Committed reclassification history named a product reason at some earlier version.
+    had_product_reasons: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,7 +233,31 @@ class ProductLineReadFacts:
     source_lines: Sequence[SourceLine]
     supplier_match: SupplierMatch | None = None
     evidence_lines: Mapping[str, LineMatch] | None = None
-    evidence_product_mode: bool = False
+    had_product_reasons: bool = False
+
+
+def line_sequences(line_numbers: Sequence[str]) -> tuple[int, ...]:
+    """Deterministic numeric UI order for already-validated (non-blank, unique) line ids.
+
+    * Every id is a plain decimal integer and their integer values are distinct ->
+      the integer itself (``1, 2, 10`` sort as 1, 2, 10; ``000001`` -> 1).
+    * Otherwise (any non-numeric id, or ``1``/``01`` colliding) -> the 1-based ordinal
+      position in the immutable source invoice, for *every* line of the review, so a
+      mix of numeric and non-numeric ids can never produce equal sequences.
+
+    Only the immutable source line ids and their source order are used -- never a
+    description, seller code or any mutable field. The line key is unaffected.
+    """
+
+    if all(_is_plain_integer(number) for number in line_numbers):
+        values = tuple(int(number) for number in line_numbers)
+        if len(set(values)) == len(values):
+            return values
+    return tuple(range(1, len(line_numbers) + 1))
+
+
+def _is_plain_integer(value: str) -> bool:
+    return value.isascii() and value.isdigit() and len(value) <= 9
 
 
 def product_line_key(*, company_id: int, review_id: str, line_number: str) -> str:
@@ -269,24 +303,32 @@ def build_product_line_projections(facts: ProductLineFacts) -> tuple[WorkbenchPr
             facts,
             line,
             number=number,
+            sequence=sequence,
             supplier=supplier,
             reason=line_reasons.get(number),
             supplier_blocked=supplier_blocked,
         )
-        for line, number in zip(facts.source_lines, numbers, strict=True)
+        for line, number, sequence in zip(facts.source_lines, numbers, line_sequences(numbers), strict=True)
     )
 
 
 def _is_product_review(facts: ProductLineFacts) -> bool:
     """Exact line inclusion rule (see module docstring for the evidence semantics).
 
-    A review is a product-resolution review when its reasons (current blockers or
-    decision basis) contain any product-matching reason, when its current Stage-1
-    evidence is product-mode with at least one matched line, or when its accepted
-    decision resolved at least one line to a product. Whole-invoice operating-expense,
-    accounting-resolution and fixed-asset reviews without any product reason are not.
+    A review is a product-resolution review when any of these committed facts holds:
+
+    1. its reasons (current blockers or decision basis) contain a product reason;
+    2. its committed reclassification history contains a product reason -- sticky, so
+       a review whose last PRODUCT_NOT_FOUND line was just mapped keeps its rows;
+    3. pending: its current Stage-1 evidence has at least one MATCHED product line;
+    4. decided: its accepted decision resolved at least one line to a product.
+
+    Whole-invoice operating-expense, accounting-resolution and fixed-asset reviews
+    (their lines are INVALID_INPUT / account-resolved) never satisfy any of these.
     """
 
+    if facts.had_product_reasons:
+        return True
     if any(reason.code in PRODUCT_REVIEW_REASON_CODES for reason in facts.reasons):
         return True
     if facts.reasons_role is ReviewReasonsRole.DECISION_BASIS:
@@ -294,9 +336,7 @@ def _is_product_review(facts: ProductLineFacts) -> bool:
             resolution.kind == _PRODUCT_RESOLUTION_KIND and resolution.product_id is not None
             for resolution in (facts.decision_resolutions or {}).values()
         )
-    return facts.evidence_product_mode and any(
-        match.status is ProductMatchStatus.MATCHED for match in (facts.evidence_lines or {}).values()
-    )
+    return any(match.status is ProductMatchStatus.MATCHED for match in (facts.evidence_lines or {}).values())
 
 
 def _line_projection(
@@ -304,6 +344,7 @@ def _line_projection(
     line: SourceLine,
     *,
     number: str,
+    sequence: int,
     supplier: int | None,
     reason: ManualReviewReasonCode | None,
     supplier_blocked: bool,
@@ -321,6 +362,7 @@ def _line_projection(
         company_id=facts.company_id,
         review_version=facts.review_version,
         line_number=number,
+        line_sequence=sequence,
         supplier_partner_id=supplier,
         seller_item_code=seller_code,
         description=_text(line.description),
@@ -431,11 +473,13 @@ def _text(value: object) -> str | None:
 
 __all__ = [
     "PRODUCT_LINE_KEY_PREFIX",
+    "PRODUCT_REVIEW_REASON_CODES",
     "PRODUCT_LINE_STATE_LABELS",
     "ProductLineFacts",
     "ProductLineReadFacts",
     "ProductLineMatchState",
     "WorkbenchProductLineProjection",
     "build_product_line_projections",
+    "line_sequences",
     "product_line_key",
 ]

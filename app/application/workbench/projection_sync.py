@@ -279,7 +279,7 @@ def _product_lines(
             source_lines=read.source_lines or (source.invoice.lines if decided and source is not None else ()),
             supplier_match=(source.partner_match if source is not None else None) if decided else read.supplier_match,
             evidence_lines=None if decided else read.evidence_lines,
-            evidence_product_mode=False if decided else read.evidence_product_mode,
+            had_product_reasons=read.had_product_reasons,
             decision_resolutions=(
                 {
                     (line_number or "").strip(): resolution

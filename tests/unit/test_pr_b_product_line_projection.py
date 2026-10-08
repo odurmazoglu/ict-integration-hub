@@ -4,7 +4,8 @@ Three layers:
 
 * the pure line builder (identity, inclusion rule, evidence -> state mapping);
 * the child publisher against an Odoo Studio fake that reads values back in Odoo's
-  shapes (Many2one ``[id, name]``, archived rows only with an explicit active domain);
+  shapes (Many2one ``[id, name]``) with no native archive filtering (currency is the
+  explicit Hub-owned ``x_studio_ipp_is_current``);
 * the real composition + reconcile CLI over SQLite-persisted reviews (pending
   PRODUCT_NOT_FOUND -> accepted human product selection), proving idempotency, version
   changes and the disabled gate end to end.
@@ -29,6 +30,7 @@ from app.application.workbench.product_line_projection import (
     ProductLineFacts,
     ProductLineMatchState,
     build_product_line_projections,
+    line_sequences,
     product_line_key,
 )
 from app.application.workbench.projection import WorkbenchProjection
@@ -126,7 +128,6 @@ def _dfccd66e_facts(**overrides: Any) -> ProductLineFacts:
             "1": _Match(ProductMatchStatus.MATCHED, 393, "supplier_product_code"),
             "2": _Match(ProductMatchStatus.NOT_FOUND),
         },
-        "evidence_product_mode": False,
     }
     values.update(overrides)
     return ProductLineFacts(**values)
@@ -202,7 +203,6 @@ def test_evidence_ambiguous_and_invalid_input_map_to_their_states() -> None:
             "1": _Match(ProductMatchStatus.MULTIPLE_MATCHES),
             "2": _Match(ProductMatchStatus.INVALID_INPUT),
         },
-        evidence_product_mode=True,
     )
     # Neither line matched and no reason: not a product review by itself...
     assert build_product_line_projections(facts) == ()
@@ -276,7 +276,6 @@ def test_fully_matched_product_mode_review_is_included_so_completed_lines_stay_v
             "1": _Match(ProductMatchStatus.MATCHED, 393, "seller_item_code"),
             "2": _Match(ProductMatchStatus.MATCHED, 394, "seller_item_code"),
         },
-        evidence_product_mode=True,
     )
 
     lines = build_product_line_projections(facts)
@@ -293,10 +292,10 @@ def test_operating_expense_review_without_product_reasons_is_not_a_product_revie
         evidence_lines=None,
         supplier_match=None,
     )
+    # Whole-invoice operating-expense evidence: identifier-free lines are INVALID_INPUT.
     opex_evidence = _dfccd66e_facts(
         reasons=(),
-        evidence_lines={"1": _Match(ProductMatchStatus.MATCHED, 393), "2": _Match(ProductMatchStatus.INVALID_INPUT)},
-        evidence_product_mode=False,
+        evidence_lines={"1": _Match(ProductMatchStatus.INVALID_INPUT), "2": _Match(ProductMatchStatus.INVALID_INPUT)},
     )
 
     assert build_product_line_projections(pending_opex) == ()
@@ -375,13 +374,10 @@ class TwoModelStudio:
         if model == "res.currency":
             return ({"id": 31, "name": "TRY"},)
         rows = self.rows[model]
-        explicit_active = any(clause[0] == LINE.active for clause in domain)
         matches = [
             (record_id, row)
             for record_id, row in rows.items()
             if all(_matches(row.get(name), op, value) for name, op, value in domain)
-            # Odoo's active_test: archived rows are invisible unless the domain names the field.
-            and (model != LINE_MODEL or explicit_active or row.get(LINE.active) is not False)
         ]
         return tuple(self._read_shape(model, record_id, row, fields) for record_id, row in matches)[:limit]
 
@@ -481,7 +477,7 @@ def test_first_apply_creates_parent_and_one_child_per_line_under_that_parent() -
         ("1", "matched", 393),
         ("2", "product_not_found", None),
     ]
-    assert rows[0][LINE.active] is True
+    assert rows[0][LINE.is_current] is True
     assert rows[0][LINE.name] == "ICF2026000008700 · Satır 1"
     assert rows[0][LINE.line_key] == f"ipp-pl:v1:1:{DFCCD66E}:1"
     assert rows[0][LINE.supplier] == ICT_BULUT_PARTNER_ID
@@ -515,7 +511,6 @@ def test_review_version_change_updates_the_same_child_rows_without_duplicates() 
             "1": _Match(ProductMatchStatus.MATCHED, 393, "supplier_product_code"),
             "2": _Match(ProductMatchStatus.MATCHED, 394, "supplier_product_code"),
         },
-        evidence_product_mode=True,
     )
 
     result = publisher.sync_projection(
@@ -548,7 +543,7 @@ def test_dry_run_plans_creates_with_zero_writes() -> None:
     assert studio.creates == [] and studio.writes == []
 
 
-def test_unprojected_child_is_archived_not_deleted_and_reactivated_when_projected_again() -> None:
+def test_unprojected_child_becomes_non_current_not_deleted_and_is_reused_when_projected_again() -> None:
     studio = TwoModelStudio()
     publisher = _line_publisher(studio)
     publisher.sync_projection(_projection(), apply=True)
@@ -557,15 +552,15 @@ def test_unprojected_child_is_archived_not_deleted_and_reactivated_when_projecte
 
     assert [line.outcome for line in gone.line_results] == [ProductLineSyncOutcome.DEACTIVATED] * 2
     assert len(studio.line_rows()) == 2
-    assert {row[LINE.active] for row in studio.line_rows()} == {False}
-    # Archived rows are not re-archived.
+    assert {row[LINE.is_current] for row in studio.line_rows()} == {False}
+    # Non-current rows are not deactivated again.
     assert publisher.sync_projection(_projection(product_lines=()), apply=True).line_results == ()
 
     back = publisher.sync_projection(_projection(), apply=True)
 
     assert [line.outcome for line in back.line_results] == [ProductLineSyncOutcome.UPDATED] * 2
-    assert {change.field for change in back.line_results[0].changes} == {LINE.active}
-    assert {row[LINE.active] for row in studio.line_rows()} == {True}
+    assert {change.field for change in back.line_results[0].changes} == {LINE.is_current}
+    assert {row[LINE.is_current] for row in studio.line_rows()} == {True}
     assert len(studio.line_rows()) == 2
 
 
@@ -714,8 +709,8 @@ def test_end_to_end_pending_review_projects_lines_through_real_composition(engin
 
     dry_text, dry = _reconcile(synchronizer, apply=False)
 
-    assert "line CREATE     1 ipp-pl:v1:1:review:vitel:1" in dry_text
-    assert "Lines: CREATE=1 UPDATE=0 NO_CHANGE=0 DEACTIVATE=0 ERROR=0 | applied=False" in dry_text
+    assert "CHILD CREATE     1 ipp-pl:v1:1:review:vitel:1" in dry_text
+    assert "Children: CREATE=1 UPDATE=0 NO_CHANGE=0 DEACTIVATE=0 ERROR=0 | applied=False" in dry_text
     assert studio.creates == [] and studio.writes == []
     assert not dry.has_errors
 
@@ -732,8 +727,8 @@ def test_end_to_end_pending_review_projects_lines_through_real_composition(engin
     again_text, again = _reconcile(synchronizer, apply=True)
 
     assert "Totals: CREATE=0 UPDATE=0 NO_CHANGE=1" in again_text
-    assert "Lines: CREATE=0 UPDATE=0 NO_CHANGE=1 DEACTIVATE=0 ERROR=0" in again_text
-    assert "line " not in again_text.replace("Lines:", "")
+    assert "Children: CREATE=0 UPDATE=0 NO_CHANGE=1 DEACTIVATE=0 ERROR=0" in again_text
+    assert "CHILD " not in again_text
     assert len(studio.line_rows()) == 1
     assert not again.has_errors
 
@@ -750,7 +745,7 @@ def test_end_to_end_accepted_human_selection_updates_the_same_child_row(engine) 
     text, report = _reconcile(synchronizer, apply=True)
 
     assert report.results[0].outcome is ProjectionSyncOutcome.UPDATED
-    assert "line UPDATE     1" in text
+    assert "CHILD UPDATE     1" in text
     assert list(studio.rows[LINE_MODEL]) == [record_id]
     row = studio.rows[LINE_MODEL][record_id]
     assert (row[LINE.match_state], row[LINE.product], row[LINE.review_version]) == ("matched", VITEL_PRODUCT_ID, 2)
@@ -769,7 +764,7 @@ def test_disabled_gate_keeps_parent_projection_identical_and_never_calls_the_chi
     _reconcile(_synchronizer(engine, enabled, lines=True), apply=True)
 
     assert disabled.child_calls() == []
-    assert "Lines:" not in disabled_text and "    line " not in disabled_text
+    assert "Children:" not in disabled_text and "CHILD" not in disabled_text
     strip = {"x_studio_last_sync_at"}
     assert [{k: v for k, v in values.items() if k not in strip} for model, values in disabled.creates] == [
         {k: v for k, v in values.items() if k not in strip}
@@ -794,7 +789,7 @@ def test_reconcile_exit_reports_line_errors(engine) -> None:
     text, report = _reconcile(_synchronizer(engine, studio, lines=True), apply=True)
 
     assert report.results[0].outcome is ProjectionSyncOutcome.CREATED
-    assert "line ERROR:" in text
+    assert "CHILD ERROR:" in text
     assert "ERROR=1 | applied=True" in text.splitlines()[-1]
     assert report.has_errors
     assert studio.line_rows() == []
@@ -834,3 +829,188 @@ def test_unexpected_line_fact_failure_is_isolated_from_the_parent(engine, monkey
     assert result.outcome is ProjectionSyncOutcome.CREATED
     assert result.line_error == "Workbench product lines could not be derived from committed Hub evidence."
     assert studio.child_calls() == []
+
+
+# --------------------------------------------------------------------------- 7. final hardening
+
+
+def test_numeric_line_ids_order_numerically_while_keys_keep_the_source_id() -> None:
+    facts = _dfccd66e_facts(
+        reasons=(_reason(ManualReviewReasonCode.PRODUCT_NOT_FOUND, "10"),),
+        # Source order deliberately not numeric: the sequence, not the source order, sorts.
+        source_lines=(_Line("10"), _Line("1"), _Line("2")),
+        evidence_lines=None,
+        supplier_match=None,
+    )
+
+    lines = build_product_line_projections(facts)
+    ordered = sorted(lines, key=lambda line: line.line_sequence)
+
+    assert [line.line_number for line in ordered] == ["1", "2", "10"]
+    assert [line.line_sequence for line in ordered] == [1, 2, 10]
+    assert [line.line_key for line in ordered] == [
+        product_line_key(company_id=1, review_id=DFCCD66E, line_number=number) for number in ("1", "2", "10")
+    ]
+    # A text sort of the visible ids is exactly what the sequence avoids.
+    assert sorted(line.line_number for line in lines) == ["1", "10", "2"]
+
+
+def test_numeric_line_order_reaches_odoo_as_the_integer_sequence_field() -> None:
+    studio = TwoModelStudio()
+    facts = _dfccd66e_facts(source_lines=(_Line("1", "100020"), _Line("2", "100021"), _Line("10", "X")))
+
+    _line_publisher(studio).sync_projection(
+        _projection(product_lines=build_product_line_projections(facts)), apply=True
+    )
+
+    rows = sorted(studio.line_rows(), key=lambda row: row[LINE.line_sequence])
+    assert [(row[LINE.line_number], row[LINE.line_sequence]) for row in rows] == [("1", 1), ("2", 2), ("10", 10)]
+
+
+def test_non_numeric_line_ids_get_a_stable_ordinal_and_an_unchanged_key() -> None:
+    assert line_sequences(("A1", "B2", "C3")) == (1, 2, 3)
+    # Mixed numeric/non-numeric: ordinals for every line, so sequences never collide.
+    assert line_sequences(("1", "A", "2")) == (1, 2, 3)
+    # Distinct ids with equal integer values ("1" / "01"): ordinals, never a duplicate.
+    assert line_sequences(("1", "01")) == (1, 2)
+    # Leading-zero ids that stay distinct keep their integer value (Apple 000001/000002).
+    assert line_sequences(("000001", "000002")) == (1, 2)
+
+    facts = _dfccd66e_facts(source_lines=(_Line("L-A", "100020"), _Line("L-B", "100021")), evidence_lines=None)
+    first, second = build_product_line_projections(facts)
+    again = build_product_line_projections(facts)
+
+    assert (first.line_sequence, second.line_sequence) == (1, 2)
+    assert first.line_key == product_line_key(company_id=1, review_id=DFCCD66E, line_number="L-A")
+    assert [line.line_sequence for line in again] == [1, 2]
+
+
+def test_lifecycle_unresolved_then_matched_keeps_the_same_current_child_record() -> None:
+    studio = TwoModelStudio()
+    publisher = _line_publisher(studio)
+    # vN: line 1 PRODUCT_NOT_FOUND.
+    v1 = _dfccd66e_facts(
+        review_version=1,
+        source_lines=(_Line("1", "100021", "Microsoft 365 Business Standard"),),
+        reasons=(_reason(ManualReviewReasonCode.PRODUCT_NOT_FOUND, "1"),),
+        evidence_lines={"1": _Match(ProductMatchStatus.NOT_FOUND)},
+    )
+    publisher.sync_projection(_projection(version=1, product_lines=build_product_line_projections(v1)), apply=True)
+    ((record_id, row),) = studio.rows[LINE_MODEL].items()
+    assert (row[LINE.match_state], row[LINE.product], row[LINE.is_current]) == ("product_not_found", None, True)
+
+    # vN+1 after mapping + reclassification: line 1 MATCHED, no PRODUCT_NOT_FOUND left.
+    v2 = replace(
+        v1,
+        review_version=2,
+        reasons=(),
+        evidence_lines={"1": _Match(ProductMatchStatus.MATCHED, 394, "supplier_product_code")},
+        had_product_reasons=True,
+    )
+    result = publisher.sync_projection(
+        _projection(version=2, product_lines=build_product_line_projections(v2)), apply=True
+    )
+
+    assert [line.outcome for line in result.line_results] == [ProductLineSyncOutcome.UPDATED]
+    assert list(studio.rows[LINE_MODEL]) == [record_id]
+    row = studio.rows[LINE_MODEL][record_id]
+    assert (row[LINE.match_state], row[LINE.product], row[LINE.is_current]) == ("matched", 394, True)
+    assert row[LINE.review_version] == 2
+    assert (
+        publisher.sync_projection(_projection(version=2, product_lines=build_product_line_projections(v2)), apply=True)
+        .line_results[0]
+        .outcome
+        is ProductLineSyncOutcome.NO_CHANGE
+    )
+
+
+def test_committed_history_keeps_a_resolved_review_included_even_without_new_evidence() -> None:
+    # vN+1 with no product reason and no Stage-1 evidence (e.g. a tax blocker stopped
+    # the evidence gate): only the committed history proves it is a product review.
+    resolved = _dfccd66e_facts(
+        reasons=(_reason(ManualReviewReasonCode.TAX_NOT_FOUND, "1"),),
+        evidence_lines=None,
+        supplier_match=None,
+    )
+
+    assert build_product_line_projections(resolved) == ()
+    lines = build_product_line_projections(replace(resolved, had_product_reasons=True))
+    assert [line.match_state for line in lines] == [ProductLineMatchState.NO_EVIDENCE] * 2
+    assert {line.product_id for line in lines} == {None}
+
+
+def test_repository_reports_reason_codes_from_committed_reclassifications(engine) -> None:
+    from app.models.workbench_review_reclassification import WorkbenchReviewReclassification
+    from app.persistence import SqlAlchemyReviewRepository
+
+    with sessionmaker(bind=engine)() as db:
+        db.add(
+            WorkbenchReviewReclassification(
+                review_id=REVIEW_ID,
+                company_id=COMPANY_ID,
+                from_version=1,
+                to_version=2,
+                source_invoice_id="ettn",
+                trigger="master_data_changed",
+                previous_workflow="manual_review",
+                previous_review_reasons=[{"code": "PRODUCT_NOT_FOUND", "line_number": "1"}],
+                new_workflow="vendor_bill",
+                new_review_reasons=[],
+            )
+        )
+        db.commit()
+        repository = SqlAlchemyReviewRepository(db)
+
+        assert repository.list_reclassification_reason_codes(review_id=REVIEW_ID, company_id=COMPANY_ID) == {
+            "PRODUCT_NOT_FOUND"
+        }
+        assert repository.list_reclassification_reason_codes(review_id=REVIEW_ID, company_id=2) == frozenset()
+
+
+def test_committed_supplier_evidence_projects_and_absent_evidence_projects_empty() -> None:
+    with_evidence = build_product_line_projections(_dfccd66e_facts())
+    without = build_product_line_projections(_dfccd66e_facts(supplier_match=None, evidence_lines=None))
+
+    assert {line.supplier_partner_id for line in with_evidence} == {ICT_BULUT_PARTNER_ID}
+    assert {line.supplier_partner_id for line in without} == {None}
+
+
+def test_matched_product_never_comes_from_seller_code_or_master_data_lookalikes() -> None:
+    # The seller code equals an existing product's default code, but committed evidence
+    # says NOT_FOUND: the projection shows no product.
+    facts = _dfccd66e_facts(
+        source_lines=(_Line("1", "CFQ7TTC0LH18:0001"), _Line("2", "100021")),
+        reasons=(_reason(ManualReviewReasonCode.PRODUCT_NOT_FOUND, "1"),),
+        evidence_lines={"1": _Match(ProductMatchStatus.NOT_FOUND), "2": _Match(ProductMatchStatus.NOT_FOUND)},
+    )
+
+    assert {line.product_id for line in build_product_line_projections(facts)} == {None}
+
+
+def test_projection_performs_no_supplier_or_product_resolution_against_odoo(engine) -> None:
+    _seed_pending(engine)
+    studio = TwoModelStudio()
+    synchronizer = _synchronizer(engine, studio, lines=True)
+
+    synchronizer.plan(review_id=REVIEW_ID, company_id=COMPANY_ID)
+    synchronizer.sync(review_id=REVIEW_ID, company_id=COMPANY_ID)
+
+    touched = {model for _, model in studio.calls}
+    assert touched <= {PARENT_MODEL, LINE_MODEL, "res.currency"}
+    assert not touched & {"res.partner", "product.product", "product.template", "product.supplierinfo"}
+    # Only projection rows were written -- never a partner, product or supplierinfo.
+    assert {model for model, _ in studio.creates} <= {PARENT_MODEL, LINE_MODEL}
+    assert {model for model, *_ in studio.writes} <= {PARENT_MODEL, LINE_MODEL}
+
+
+def test_no_duplicate_child_can_be_created_for_an_existing_key_across_versions_and_reruns() -> None:
+    studio = TwoModelStudio()
+    publisher = _line_publisher(studio)
+    for version in (3, 3, 4, 5, 5):
+        publisher.sync_projection(_projection(version=version), apply=True)
+    publisher.sync_projection(_projection(version=5, product_lines=()), apply=True)
+    publisher.sync_projection(_projection(version=6), apply=True)
+
+    keys = [row[LINE.line_key] for row in studio.line_rows()]
+    assert len(keys) == len(set(keys)) == 2
+    assert [model for model, _ in studio.creates].count(LINE_MODEL) == 2

@@ -716,6 +716,33 @@ class SqlAlchemyReviewRepository:
         except SQLAlchemyError as exc:
             raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
 
+    def list_reclassification_reason_codes(self, *, review_id: str, company_id: int) -> frozenset[str]:
+        """Every reason code named before or after any committed reclassification (read-only).
+
+        PR B uses it to keep a product-resolution review's line rows current after its
+        last product reason was resolved; the events themselves are never modified.
+        """
+
+        try:
+            rows = self._session.execute(
+                select(
+                    WorkbenchReviewReclassification.previous_review_reasons,
+                    WorkbenchReviewReclassification.new_review_reasons,
+                ).where(
+                    WorkbenchReviewReclassification.review_id == review_id,
+                    WorkbenchReviewReclassification.company_id == company_id,
+                )
+            ).all()
+        except SQLAlchemyError as exc:
+            raise ReviewPersistenceError(SAFE_PERSISTENCE_ERROR) from exc
+        codes: set[str] = set()
+        for previous, new in rows:
+            for reasons in (previous, new):
+                for reason in reasons if isinstance(reasons, list) else ():
+                    if isinstance(reason, dict) and isinstance(reason.get("code"), str):
+                        codes.add(reason["code"])
+        return frozenset(codes)
+
     def get_review_execution_evidence(
         self,
         *,

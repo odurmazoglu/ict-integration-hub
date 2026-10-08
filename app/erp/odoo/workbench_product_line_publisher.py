@@ -6,13 +6,15 @@ business input; Odoo is only the operator-facing view.
 
 Upsert rules (one review at a time):
 
-* rows are found by ``(review id, company id)`` including archived rows, and matched
-  to projected lines by the Hub line key -- never by Odoo record id, description or
-  seller code;
+* rows are found by ``(review id, company id)`` -- every row, current or not -- and
+  matched to projected lines by the Hub line key, never by Odoo record id,
+  description or seller code;
 * a missing row is created, a changed row gets only its changed fields written, an
   equal row is not touched (semantic comparison, Odoo read shapes normalized);
-* a row whose key is no longer projected is archived (``active = False``), never
-  deleted; a row that becomes projected again is re-activated;
+* currency is the explicit Hub-owned boolean ``x_studio_ipp_is_current`` (no native
+  Odoo archive field is used or assumed): a row whose key is no longer projected is
+  set to ``False`` (DEACTIVATE), never deleted; a row that becomes projected again is
+  the same record set back to ``True``;
 * two rows with the same key, or more rows than the safety cap, fail this review's
   lines closed before any write.
 """
@@ -56,12 +58,13 @@ class OdooWorkbenchProductLineFieldMapping:
     model: str = "x_ipp_wb_product_line"
     parent: str = "x_studio_ipp_workbench_id"
     line_key: str = "x_studio_ipp_line_key"
-    active: str = "x_active"
+    is_current: str = "x_studio_ipp_is_current"
     name: str = "x_name"
     review_id: str = "x_studio_ipp_review_id"
     company_id: str = "x_studio_ipp_company_id"
     review_version: str = "x_studio_ipp_review_version"
     line_number: str = "x_studio_ipp_line_number"
+    line_sequence: str = "x_studio_ipp_line_sequence"
     supplier: str = "x_studio_ipp_supplier_id"
     seller_code: str = "x_studio_ipp_seller_code"
     description: str = "x_studio_ipp_description"
@@ -168,15 +171,15 @@ class OdooWorkbenchProductLinePublisher:
             if key in desired:
                 continue
             for row in rows:
-                if _normalized(row.get(self._mapping.active)) is None:
-                    continue  # already archived: nothing to do
+                if _normalized(row.get(self._mapping.is_current)) is None:
+                    continue  # already non-current: nothing to do
                 plan.append(
                     _Step(
                         key or "",
                         _text(row.get(self._mapping.line_number)),
                         ProductLineSyncOutcome.DEACTIVATED,
                         _record_id(row),
-                        _field_changes(row, {self._mapping.active: False}, html_fields=frozenset()),
+                        _field_changes(row, {self._mapping.is_current: False}, html_fields=frozenset()),
                     )
                 )
         return plan
@@ -192,7 +195,7 @@ class OdooWorkbenchProductLinePublisher:
                     self._adapter.write(model=self._mapping.model, record_id=step.record_id, values=values)
                 elif step.outcome is ProductLineSyncOutcome.DEACTIVATED and step.record_id is not None:
                     self._adapter.write(
-                        model=self._mapping.model, record_id=step.record_id, values={self._mapping.active: False}
+                        model=self._mapping.model, record_id=step.record_id, values={self._mapping.is_current: False}
                     )
             except ErpRepositoryError as exc:
                 raise _publish_error(exc) from exc
@@ -227,7 +230,6 @@ class OdooWorkbenchProductLinePublisher:
                 domain=[
                     [mapping.review_id, "=", review_id],
                     [mapping.company_id, "=", company_id],
-                    [mapping.active, "in", [True, False]],
                 ],
                 fields=mapping.read_fields(),
                 limit=MAX_LINES_PER_REVIEW,
@@ -257,11 +259,12 @@ class OdooWorkbenchProductLinePublisher:
             mapping.name: f"{projection.invoice_number or projection.review_id} · Satır {line.line_number}",
             mapping.parent: parent_record_id,
             mapping.line_key: line.line_key,
-            mapping.active: True,
+            mapping.is_current: True,
             mapping.review_id: line.review_id,
             mapping.company_id: line.company_id,
             mapping.review_version: line.review_version,
             mapping.line_number: line.line_number,
+            mapping.line_sequence: line.line_sequence,
             mapping.supplier: line.supplier_partner_id,
             mapping.seller_code: line.seller_item_code,
             mapping.description: line.description,

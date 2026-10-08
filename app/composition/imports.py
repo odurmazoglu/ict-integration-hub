@@ -38,7 +38,7 @@ from app.application.workbench.operator_guidance import (
     resolve_accounting_labels,
 )
 from app.application.workbench.ports import SelectedProductReader
-from app.application.workbench.product_line_projection import ProductLineReadFacts
+from app.application.workbench.product_line_projection import PRODUCT_REVIEW_REASON_CODES, ProductLineReadFacts
 from app.application.workbench.product_remediation import normalize_seller_item_code
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.application.workflow import ManualReviewReasonCode
@@ -272,8 +272,15 @@ def _product_line_read_facts(
     The source lines are the immutable source invoice (the evidence's own pinned
     invoice when a pre-feature review has no source row). The Stage-1 execution
     evidence of ``evidence_version`` is the product matching that ran under the
-    review's effective supplier (PR #211); ``None`` when that version has none.
+    review's effective supplier (PR #211); ``None`` when that version has none. The
+    reclassification history keeps a once-product-resolution review included.
+    Committed Hub rows only: no Odoo call, no matching.
     """
+
+    had_product_reasons = bool(
+        PRODUCT_REVIEW_REASON_CODES
+        & evidence_reader.list_reclassification_reason_codes(review_id=review.review_id, company_id=company_id)
+    )
 
     evidence = None
     if evidence_version is not None:
@@ -288,7 +295,7 @@ def _product_line_read_facts(
     except ReviewNotFoundError:
         source_lines = evidence.invoice.lines if evidence is not None else ()
     if evidence is None:
-        return ProductLineReadFacts(source_lines=source_lines)
+        return ProductLineReadFacts(source_lines=source_lines, had_product_reasons=had_product_reasons)
     evidence_lines = {}
     for item in evidence.product_match.line_results:
         number = (item.line_number or "").strip()
@@ -299,7 +306,7 @@ def _product_line_read_facts(
         source_lines=source_lines,
         supplier_match=evidence.partner_match,
         evidence_lines=evidence_lines,
-        evidence_product_mode=evidence.operating_expense_match is None and evidence.fixed_asset_accounting is None,
+        had_product_reasons=had_product_reasons,
     )
 
 

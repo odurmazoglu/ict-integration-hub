@@ -10,9 +10,11 @@ with field-level differences.
 
 PR B: when ``ODOO_WORKBENCH_PRODUCT_LINE_PROJECTION_ENABLED`` is true, each review's
 product line child rows (``x_ipp_wb_product_line``) are diffed too and reported as
-``line CREATE / UPDATE / DEACTIVATE`` (``NO_CHANGE`` lines are counted, not listed),
-with separate ``Lines:`` totals. A product line error never hides the parent result
-and makes the exit code 1. Disabled, the output is exactly the parent-only report.
+``CHILD CREATE / UPDATE / DEACTIVATE`` (``NO_CHANGE`` children are counted, not
+listed), with separate ``Children:`` totals. DEACTIVATE means the Hub-owned
+``x_studio_ipp_is_current`` goes True -> False; nothing is archived or deleted. A child
+error never hides the parent result and makes the exit code 1. Disabled, the output is
+exactly the parent-only report.
 
 ``--apply`` creates/updates Workbench projection rows only, through the same
 canonical :class:`WorkbenchProjectionSynchronizer` every runtime transition uses.
@@ -137,7 +139,7 @@ def run_reconcile(
     if report.has_line_projection:
         line_totals = report.line_totals
         line_summary = " ".join(f"{label}={line_totals.get(label, 0)}" for label in (*_LINE_LABELS.values(), "ERROR"))
-        out.write(f"Lines: {line_summary} | applied={apply}\n")
+        out.write(f"Children: {line_summary} | applied={apply}\n")
     return report
 
 
@@ -151,12 +153,14 @@ def _write_result(out: TextIO, result: ProjectionSyncResult) -> None:
     for change in result.changes:
         out.write(f"    {change.field}: {_preview(change.before)} -> {_preview(change.after)}\n")
     if result.line_error:
-        out.write(f"    line ERROR: {result.line_error}\n")
+        out.write(f"    CHILD ERROR: {result.line_error}\n")
     for line in result.line_results:
         if line.outcome is ProductLineSyncOutcome.NO_CHANGE:
             continue
         line_record = f" odoo_id={line.odoo_record_id}" if line.odoo_record_id is not None else ""
-        out.write(f"    line {_LINE_LABELS[line.outcome]:<10} {line.line_number or '?'} {line.line_key}{line_record}\n")
+        out.write(
+            f"    CHILD {_LINE_LABELS[line.outcome]:<10} {line.line_number or '?'} {line.line_key}{line_record}\n"
+        )
         for change in line.changes:
             out.write(f"        {change.field}: {_preview(change.before)} -> {_preview(change.after)}\n")
 
