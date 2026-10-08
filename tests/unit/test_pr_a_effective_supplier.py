@@ -439,6 +439,91 @@ async def test_unproven_accepted_supplier_fails_closed_everywhere(session: Sessi
         (ManualReviewReasonCode.PRODUCT_NOT_FOUND, "1"),
     }, why
     assert outcome.executable is False
+    assert _no_execution_evidence(session, review_id, 2)
+
+
+@pytest.mark.parametrize(
+    ("proof", "why"),
+    [
+        (contact(PARTNER_X, parent_id=PARTNER_OTHER, vat=VAT), "contact"),
+        (None, "missing"),
+        (head(PARTNER_X, company_id=2, vat=VAT), "other company"),
+    ],
+)
+async def test_unproven_accepted_supplier_fails_closed_when_raw_supplier_is_not_found(
+    session: Session, proof, why
+) -> None:
+    """Same with no active exact-VAT partner at all (raw NOT_FOUND): the invalid effect never
+    becomes authority -- SUPPLIER_NOT_FOUND and PRODUCT_NOT_FOUND stay, nothing executes."""
+
+    partners = PartnerRepo()
+    odoo = _odoo_with_product_z()
+    engine = _engine(partners, odoo)
+    review_id = await _import(session, engine, _invoice())
+    _supplierinfo(odoo, partner_id=PARTNER_X)
+
+    mode = SupplierResolutionMode.ONE_OFF_VENDOR
+    outcome = await _reclassify(
+        session,
+        _reclassifier(
+            session, engine, EffectReader(_effect(review_id, mode=mode)), CanonicalPartners({PARTNER_X: proof})
+        ),
+        review_id,
+        1,
+    )
+
+    assert _codes(outcome.new_review_reasons) == {
+        (ManualReviewReasonCode.SUPPLIER_NOT_FOUND, None),
+        (ManualReviewReasonCode.PRODUCT_NOT_FOUND, "1"),
+    }, why
+    assert outcome.executable is False
+    assert _no_execution_evidence(session, review_id, 2)
+
+
+def _no_execution_evidence(session: Session, review_id: str, version: int) -> bool:
+    try:
+        SqlAlchemyReviewRepository(session).get_review_execution_evidence(
+            review_id=review_id, company_id=COMPANY, review_version=version
+        )
+    except ReviewNotFoundError:
+        return True
+    return False
+
+
+async def test_current_deterministic_supplier_wins_over_an_older_accepted_effect(session: Session) -> None:
+    """Decided precedence: a MATCH_EXISTING effect resolves an ambiguity *at that state*; it is
+    never a permanent override. Raw deterministic A + historical effect B -> effective A:
+    products match under A's supplierinfo (B's is ignored) and execution bills A."""
+
+    partner_a, partner_b = PARTNER_X, PARTNER_OTHER
+    partners = PartnerRepo(head(partner_a, vat=VAT), head(partner_b, vat="9999999999"))
+    odoo = _odoo_with_product_z()
+    _supplierinfo(odoo, partner_id=partner_a, tmpl=TEMPLATE_Z)  # A: 100020 -> 393
+    _supplierinfo(odoo, partner_id=partner_b, tmpl=163)  # B: 100020 -> 394 (must NOT be used)
+    engine = _engine(partners, odoo)
+    review_id = await _import(session, engine, _invoice())
+    effects = EffectReader(_effect(review_id, partner_id=partner_b))
+
+    outcome = await _reclassify(session, _reclassifier(session, engine, effects, partners), review_id, 1)
+
+    assert outcome.new_review_reasons == () and outcome.new_workflow is WorkflowType.VENDOR_BILL
+    evidence, line = _stage1_line(session, review_id, 1)  # unchanged facts -> same version's evidence
+    assert (line.status, line.product_id) == (ProductMatchStatus.MATCHED, PRODUCT_Z)
+    assert line.product_id != 394
+    assert (evidence.partner_match.partner_id, evidence.partner_match.matched_by) == (partner_a, "tax_number")
+    # The historical effect is never even read, let alone proven or applied.
+    assert effects.calls == 0 and partners.proof_reads == []
+
+    # Same precedence in the use-case entry point (MapExisting / CreateNew).
+    resolution = EffectiveSupplierResolver(
+        partner_matcher=PartnerMatchingEngine(SimpleNamespace(partner_repository=partners)),
+        accepted_supplier_reader=AcceptedSupplierReader(effect_reader=effects, partner_reader=partners),
+    ).resolve(review_id=review_id, company_id=COMPANY, invoice=_invoice())
+    assert (resolution.supplier.partner_id, resolution.supplier.origin) == (
+        partner_a,
+        EffectiveSupplierOrigin.DETERMINISTIC,
+    )
+    assert effects.calls == 0
 
 
 async def test_conflicting_supplierinfo_under_the_effective_supplier_still_fails_closed(session: Session) -> None:
@@ -721,6 +806,19 @@ async def test_map_existing_under_match_existing_writes_for_x_and_the_line_resol
     assert result.supplier_partner_id == PARTNER_X
     assert result.line_resolved is True and result.remaining_product_lines == ()  # ... and found again for X
     assert result.current_version == 3
+    # ... and the MASTER_DATA_CHANGED reclassification executes against the same X.
+    item = SqlAlchemyReviewRepository(session).get_review_item(ReviewDetailQuery(review_id=review_id, company_id=1))
+    assert (item.version, item.review_reasons, item.workflow) == (3, (), WorkflowType.VENDOR_BILL)
+    evidence, line = _stage1_line(session, review_id, 3)
+    assert (line.status, line.product_id, line.matched_by) == (
+        ProductMatchStatus.MATCHED,
+        PRODUCT_Z,
+        "supplier_product_code",
+    )
+    assert (evidence.partner_match.partner_id, evidence.partner_match.matched_by) == (
+        PARTNER_X,
+        ACCEPTED_SUPPLIER_MATCHED_BY,
+    )
 
 
 async def test_map_existing_ict_bulut_deterministic_path_is_unchanged(session: Session) -> None:
@@ -839,6 +937,34 @@ def test_ingestion_clears_inputs_only_after_a_successful_product_mapping(outcome
     assert ack.calls[-1]["clear_request_inputs"] is clears
 
 
+@pytest.mark.parametrize("action", list(OperatorRequestAction))
+@pytest.mark.parametrize("outcome", [o for o in OperatorRequestOutcome if o is not OperatorRequestOutcome.RETRY_LATER])
+def test_input_clearing_matrix_is_product_mapping_success_only(action, outcome) -> None:
+    from app.application.workbench.operator_request_ingestion import _clears_request_inputs
+
+    expected = action is OperatorRequestAction.PRODUCT_MAPPING and outcome in {
+        OperatorRequestOutcome.COMPLETED,
+        OperatorRequestOutcome.ALREADY_COMPLETED,
+    }
+    assert _clears_request_inputs(SimpleNamespace(action=action), outcome) is expected
+
+
+def test_unauthorized_product_mapping_keeps_its_inputs() -> None:
+    ack = FakeAcknowledger()
+    handler = ScriptedHandler([])
+    _workflow(
+        FakeReader([_product_mapping_request()]),
+        handler,
+        acknowledger=ack,
+        actors={},
+        action=OperatorRequestAction.PRODUCT_MAPPING,
+    ).run(company_id=COMPANY)
+
+    assert handler.calls == []
+    assert ack.calls[-1]["outcome"] is OperatorRequestOutcome.UNAUTHORIZED
+    assert ack.calls[-1]["clear_request_inputs"] is False
+
+
 def test_other_actions_never_clear_inputs_even_when_completed() -> None:
     ack = FakeAcknowledger()
     handler = ScriptedHandler([OperatorActionOutcome(outcome=OperatorRequestOutcome.COMPLETED, message="ok")])
@@ -935,6 +1061,9 @@ def test_resolved_lines_come_from_current_execution_evidence_and_degrade_safely(
     assert lines == (
         ResolvedProductLine("1", SELLER_CODE, "Microsoft 365 Business Basic", "Microsoft 365 Business Basic"),
     )
+
+    # A line the current reasons still call PRODUCT_NOT_FOUND is never listed, whatever the evidence says.
+    assert _resolved_product_lines(_review("1", "2"), COMPANY, _Source(invoice), _Evidence(match), odoo) == ()
 
     # No evidence for the current version -> nothing is claimed.
     assert _resolved_product_lines(review, COMPANY, _Source(invoice), _Evidence(missing=True), odoo) == ()
