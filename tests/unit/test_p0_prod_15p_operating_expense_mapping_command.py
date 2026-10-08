@@ -88,6 +88,7 @@ from app.persistence import (
     SqlAlchemyUnitOfWork,
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.effective_supplier_support import CanonicalPartners
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -331,6 +332,7 @@ def _use_case(
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=review_repository,
             supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+            supplier_partner_reader=CanonicalPartners(),
             operating_expense_matcher=OperatingExpenseMatchingEngine(mapping_repository),
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
@@ -566,6 +568,7 @@ async def test_account_scoped_to_another_company_is_rejected(session: Session) -
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=SqlAlchemyReviewRepository(session),
             supplier_remediation_effect_reader=effect_repo,
+            supplier_partner_reader=CanonicalPartners(),
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
     )

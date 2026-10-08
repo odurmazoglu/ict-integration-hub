@@ -14,6 +14,7 @@ from app.application.decision import (
     VendorBillReviewRecommendationStrategy,
     WorkflowStrategyResolver,
 )
+from app.application.effective_supplier import AcceptedSupplierReader, EffectiveSupplierResolver
 from app.application.exceptions.base import ApplicationError
 from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.ports import InvoiceImportHistory
@@ -28,13 +29,15 @@ from app.application.workbench import (
     WorkbenchProjectionPublisher,
 )
 from app.application.workbench.dto import ReviewItem
-from app.application.workbench.exceptions import WorkbenchContractError
+from app.application.workbench.exceptions import ReviewNotFoundError, WorkbenchContractError
 from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
 from app.application.workbench.operator_guidance import (
     OperatorGuidanceFacts,
+    ResolvedProductLine,
     UnmatchedProductLine,
     resolve_accounting_labels,
 )
+from app.application.workbench.ports import SelectedProductReader
 from app.application.workbench.product_remediation import normalize_seller_item_code
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.application.workflow import ManualReviewReasonCode
@@ -73,7 +76,7 @@ from app.erp.odoo.workbench_reference_repositories import (
     OdooSalesOrderReferenceRepository,
 )
 from app.erp.provider import StaticRepositoryProvider
-from app.matching import PartnerMatchingEngine, ProductMatchingEngine
+from app.matching import PartnerMatchingEngine, ProductMatchingEngine, ProductMatchStatus
 from app.persistence import (
     SqlAlchemyExecutionRuntimeRepository,
     SqlAlchemyExecutionSourceInvoiceReader,
@@ -84,6 +87,7 @@ from app.persistence import (
     SqlAlchemyReviewExecutionEvidenceReader,
     SqlAlchemyReviewRepository,
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
+    SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyUnitOfWork,
 )
 from app.persistence.workbench_review_accounting_resolution_repository import (
@@ -174,6 +178,17 @@ def build_workbench_projection_synchronizer(
             adapter=OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
         )
 
+    # Resolved product lines ("Tamamlananlar") follow the same switch as the product guidance.
+    product_name_reader = (
+        OdooSelectedProductReader(
+            product_repository=OdooProductRepository(
+                adapter=OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
+            )
+        )
+        if guidance_mapped and product_mapping
+        else None
+    )
+
     @contextmanager
     def read_scope() -> Iterator[WorkbenchProjectionSources]:
         with open_read_only_session(bound_engine) as read_session:
@@ -188,6 +203,8 @@ def build_workbench_projection_synchronizer(
                         label_reader=label_reader,
                         source_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(read_session),
                         product_mapping_enabled=product_mapping,
+                        execution_evidence_reader=review_repository,
+                        product_name_reader=product_name_reader,
                     )
                     if guidance_mapped
                     else None
@@ -218,6 +235,8 @@ def _operator_guidance_facts(
     label_reader: FixedAssetAccountingReader | None = None,
     source_reader: SqlAlchemyReviewSourceInvoiceEvidenceReader | None = None,
     product_mapping_enabled: bool = False,
+    execution_evidence_reader: SqlAlchemyReviewRepository | None = None,
+    product_name_reader: SelectedProductReader | None = None,
 ) -> OperatorGuidanceFacts:
     """ADR-0013 guidance facts, read from the same private read-only session."""
 
@@ -240,6 +259,14 @@ def _operator_guidance_facts(
         unmatched_product_lines=(
             _unmatched_product_lines(review, company_id, source_reader)
             if product_mapping_enabled and source_reader is not None
+            else ()
+        ),
+        resolved_product_lines=(
+            _resolved_product_lines(review, company_id, source_reader, execution_evidence_reader, product_name_reader)
+            if product_mapping_enabled
+            and source_reader is not None
+            and execution_evidence_reader is not None
+            and product_name_reader is not None
             else ()
         ),
     )
@@ -274,6 +301,72 @@ def _unmatched_product_lines(
         )
         for line in source.invoice.lines
         if (line.line_number or "").strip() in wanted
+    )
+
+
+def _resolved_product_lines(
+    review: ReviewItem,
+    company_id: int,
+    source_reader: SqlAlchemyReviewSourceInvoiceEvidenceReader,
+    execution_evidence_reader: SqlAlchemyReviewRepository,
+    product_name_reader: SelectedProductReader,
+) -> tuple[ResolvedProductLine, ...]:
+    """Lines the *current* version's Stage-1 execution evidence matches to a product.
+
+    That evidence is what reclassification just computed (product matching under the
+    review's effective supplier) and what a decision would execute. No evidence for the
+    current version -> nothing is shown; nothing historical is inferred.
+    """
+
+    log = logging.getLogger(__name__)
+    try:
+        evidence = execution_evidence_reader.get_review_execution_evidence(
+            review_id=review.review_id, company_id=company_id, review_version=review.version
+        )
+        source = source_reader.get(review_id=review.review_id, company_id=company_id)
+    except ApplicationError as exc:
+        if not isinstance(exc, ReviewNotFoundError):
+            log.warning(
+                "workbench.operator_guidance.resolved_product_lines_unavailable",
+                extra={"review_id": review.review_id, "error": getattr(exc, "safe_message", None) or str(exc)},
+            )
+        return ()
+    unresolved = {
+        (reason.line_number or "").strip()
+        for reason in review.review_reasons
+        if reason.code is ManualReviewReasonCode.PRODUCT_NOT_FOUND
+    }
+    matched = {
+        (item.line_number or "").strip(): item.result.product_id
+        for item in evidence.product_match.line_results
+        if item.result.status is ProductMatchStatus.MATCHED
+        and type(item.result.product_id) is int
+        and (item.line_number or "").strip() not in unresolved
+    }
+    if not matched:
+        return ()
+    names: dict[int, str] = {}
+    try:
+        names = {
+            product.id: product.name
+            for product in product_name_reader.find_products_by_ids(tuple(dict.fromkeys(matched.values())))
+            if product.name
+        }
+    except ApplicationError as exc:
+        # Presentation only: an unreadable name degrades to "okunamadı", never fails the projection.
+        log.warning(
+            "workbench.operator_guidance.product_label_unavailable",
+            extra={"review_id": review.review_id, "error": getattr(exc, "safe_message", None) or str(exc)},
+        )
+    return tuple(
+        ResolvedProductLine(
+            line_number=number,
+            seller_item_code=normalize_seller_item_code(line.seller_item_code),
+            description=(line.description or "").strip() or None,
+            product_name=names.get(matched[number]),
+        )
+        for line in source.invoice.lines
+        if (number := (line.line_number or "").strip()) in matched
     )
 
 
@@ -531,4 +624,41 @@ def build_deterministic_decision_engine(
         session=session,
         provider=provider,
         read_adapter=read_adapter,
+    )
+
+
+def build_supplier_partner_reader(
+    *,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> OdooPartnerRepository:
+    """Read-only partner reader that proves an accepted supplier resolution's partner (PR A)."""
+
+    return OdooPartnerRepository(
+        adapter=OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
+    )
+
+
+def build_effective_supplier_resolver(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> EffectiveSupplierResolver:
+    """The effective-supplier resolver for product-remediation use cases (PR A).
+
+    Uses the same ``PartnerMatchingEngine`` over the same read-only provider as the
+    deterministic ``DecisionEngine``, so a use case and its follow-up reclassification
+    agree on the supplier by construction.
+    """
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    read_adapter = OdooReadOnlyAdapter(client=resolved_odoo_client)
+    provider = build_odoo_read_repository_provider(read_adapter=read_adapter)
+    return EffectiveSupplierResolver(
+        partner_matcher=PartnerMatchingEngine(provider),
+        accepted_supplier_reader=AcceptedSupplierReader(
+            effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+            partner_reader=OdooPartnerRepository(adapter=read_adapter),
+        ),
     )

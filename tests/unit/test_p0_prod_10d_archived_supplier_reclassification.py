@@ -85,6 +85,7 @@ from app.persistence import (
 )
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.effective_supplier_support import CanonicalPartners
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -326,6 +327,7 @@ async def _reclassify(
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=SqlAlchemyReviewRepository(session),
         supplier_remediation_effect_reader=remediation_effect_reader,
+        supplier_partner_reader=CanonicalPartners(),
     )
     outcome = await use_case.execute(
         ReclassifyReviewCommand(

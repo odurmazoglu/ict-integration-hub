@@ -38,6 +38,7 @@ from app.application.commands.product_remediation import (
     ValidatedProductCategory,
 )
 from app.application.dto.product_remediation import SupplierInfoWriteStatus
+from app.application.effective_supplier import EffectiveSupplierResolverPort
 from app.application.exceptions.product_remediation import (
     ProductWriteAuthenticationError,
     ProductWriteAuthorizationError,
@@ -63,7 +64,6 @@ from app.application.workbench.ports import (
     ProductRemediationReservationWriter,
     ReviewQueueReader,
     ReviewSourceInvoiceEvidenceReader,
-    SupplierRemediationEffectWriter,
 )
 from app.application.workbench.product_remediation import (
     CreateNewProductCommand,
@@ -107,7 +107,7 @@ class CreateNewProductUseCase:
         *,
         review_reader: ReviewQueueReader,
         source_invoice_reader: ReviewSourceInvoiceEvidenceReader,
-        remediation_effect_reader: SupplierRemediationEffectWriter,
+        effective_supplier_resolver: EffectiveSupplierResolverPort,
         reservation_writer: ProductRemediationReservationWriter,
         identity_claim_writer: ProductIdentityClaimWriter,
         existing_supplier_info_reader: ExistingSupplierInfoReader,
@@ -120,7 +120,7 @@ class CreateNewProductUseCase:
     ) -> None:
         self._review_reader = review_reader
         self._source_invoice_reader = source_invoice_reader
-        self._remediation_effect_reader = remediation_effect_reader
+        self._effective_supplier_resolver = effective_supplier_resolver
         self._reservation_writer = reservation_writer
         self._identity_claim_writer = identity_claim_writer
         self._existing_supplier_info_reader = existing_supplier_info_reader
@@ -157,7 +157,7 @@ class CreateNewProductUseCase:
         self._require_eligible(review, command)
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
         seller_item_code = self._require_seller_item_code(source, command)
-        resolved_partner_id = self._require_resolved_supplier(command)
+        resolved_partner_id = self._require_resolved_supplier(command, source)
         category = self._validate_category(
             review_id=command.review_id,
             company_id=command.company_id,
@@ -224,16 +224,19 @@ class CreateNewProductUseCase:
             )
         return normalized
 
-    def _require_resolved_supplier(self, command: CreateNewProductCommand) -> int:
-        effect = self._remediation_effect_reader.find_latest_remediation_effect(
-            review_id=command.review_id,
-            company_id=command.company_id,
+    def _require_resolved_supplier(self, command: CreateNewProductCommand, source) -> int:
+        """The review's effective supplier (PR A): the raw deterministic match, else a proven
+        accepted supplier resolution -- the same partner product matching and execution use.
+        Before PR A only an accepted resolution counted, so a VAT-matched supplier was refused."""
+
+        resolution = self._effective_supplier_resolver.resolve(
+            review_id=command.review_id, company_id=command.company_id, invoice=source.invoice
         )
-        if effect is None:
+        if resolution.supplier is None:
             raise ProductRemediationSupplierUnresolvedError(
-                "No accepted supplier resolution exists for this review; resolve the supplier first."
+                resolution.failure or "The review has no effective supplier; resolve the supplier first."
             )
-        return effect.resolved_partner_id
+        return resolution.supplier.partner_id
 
     def _require_matching_intent(
         self,

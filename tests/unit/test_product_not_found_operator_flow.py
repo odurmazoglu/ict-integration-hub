@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from app.application.effective_supplier import AcceptedSupplierReader, EffectiveSupplierResolver
 from app.application.exceptions.product_remediation import SupplierInfoWriteTransportError
 from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
@@ -66,6 +67,7 @@ from app.erp.odoo.workbench_operator_request_reader import OdooOperatorRequestFi
 from app.erp.write.odoo_product_write_policy import OdooProductWritePolicy
 from app.erp.write.odoo_supplierinfo_writer import OdooSupplierInfoRepository, OdooSupplierInfoWriter
 from app.matching import PartnerMatchResult, PartnerMatchStatus, ProductMatchingEngine, ProductMatchStatus
+from tests.unit.effective_supplier_support import CanonicalPartners, raw_not_found
 from tests.unit.test_adr_0013_operator_request_ingestion import (
     DECIDER,
     OPERATOR,
@@ -299,6 +301,10 @@ class Harness:
             version=2,
         )
         self.claim = claim
+        #: No accepted supplier resolution unless a test records one (PR A).
+        self.effect: Any = None
+        self.partners = CanonicalPartners()
+        self.accepted_supplier_reader = AcceptedSupplierReader(effect_reader=self, partner_reader=self.partners)
         self.commits = 0
         self.rollbacks = 0
         self.reclassify_calls: list[Any] = []
@@ -307,7 +313,9 @@ class Harness:
         self.use_case = MapExistingProductUseCase(
             review_reader=self,
             source_invoice_reader=self,
-            execution_evidence_reader=self,
+            effective_supplier_resolver=EffectiveSupplierResolver(
+                partner_matcher=self, accepted_supplier_reader=self.accepted_supplier_reader
+            ),
             product_reader=self.odoo,
             identity_claim_reader=self,
             existing_supplier_info_reader=OdooExistingSupplierInfoReader(
@@ -337,10 +345,12 @@ class Harness:
             invoice=self.invoice,
         )
 
-    def get_review_execution_evidence(self, *, review_id, company_id, review_version):
-        if self.partner_match is None:
-            raise ReviewNotFoundError("missing")
-        return SimpleNamespace(partner_match=self.partner_match)
+    def match_invoice(self, invoice, *, company_id=None):
+        """Raw deterministic partner match (PartnerMatchingEngine shape)."""
+        return self.partner_match or raw_not_found()
+
+    def find_latest_remediation_effect(self, *, review_id, company_id):
+        return self.effect
 
     def find(self, *, company_id, resolved_supplier_partner_id, seller_item_code):
         return self.claim

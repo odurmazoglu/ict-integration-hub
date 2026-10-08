@@ -86,6 +86,7 @@ from app.persistence import (
     SqlAlchemyUnitOfWork,
     SqlAlchemyWriteAuthorizationRepository,
 )
+from tests.unit.effective_supplier_support import effect_based_supplier_resolver
 from tests.unit.test_odoo_product_writer import FakeProductJson2Client, _variant_row, _writer
 from tests.unit.test_p0_prod_09g_product_remediation_narrow_authorization import (
     ACTOR,
@@ -260,7 +261,7 @@ class _Harness:
         self.use_case = CreateNewProductUseCase(
             review_reader=_FakeReviewReader(_review_item()),
             source_invoice_reader=_FakeSourceReader(_source_evidence()),
-            remediation_effect_reader=effect_repo,
+            effective_supplier_resolver=effect_based_supplier_resolver(effect_repo),
             reservation_writer=self.reservation_repo,
             identity_claim_writer=SqlAlchemyReviewProductIdentityClaimRepository(db),
             existing_supplier_info_reader=_FakeExistingSupplierInfoReader(),

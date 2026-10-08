@@ -9,7 +9,11 @@ from app.application.workbench.accounting_resolution_use_cases import SubmitRevi
 from app.application.workbench.execution_evidence_recovery_use_cases import RebuildReviewExecutionEvidenceUseCase
 from app.application.workbench.fixed_asset_lookup import FixedAssetAccountPolicy
 from app.application.workbench.purchase_purpose_use_cases import SubmitPurchasePurposeUseCase
-from app.composition.imports import build_deterministic_decision_engine, build_runtime_workbench_projection_synchronizer
+from app.composition.imports import (
+    build_deterministic_decision_engine,
+    build_runtime_workbench_projection_synchronizer,
+    build_supplier_partner_reader,
+)
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -73,6 +77,7 @@ def build_submit_review_accounting_resolution_use_case(
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=review_repository,
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
         operating_expense_matcher=OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session)),
         review_accounting_resolution_reader=accounting_resolution_repository,
     )
@@ -119,6 +124,7 @@ def build_rebuild_review_execution_evidence_use_case(
         ),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
         operating_expense_matcher=OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session)),
         review_accounting_resolution_reader=accounting_resolution_repository,
     )

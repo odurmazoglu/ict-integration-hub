@@ -12,6 +12,7 @@ from app.application.workbench.retirement_recovery import GetOneOffVendorRetirem
 from app.composition.imports import (
     build_deterministic_decision_engine,
     build_runtime_workbench_projection_synchronizer,
+    build_supplier_partner_reader,
 )
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
@@ -84,6 +85,7 @@ def build_resolve_workbench_supplier_use_case(
         # compatibility (pre-redesign archived ONE_OFF_VENDOR effects and MATCH_EXISTING
         # ambiguity) -- new ONE_OFF_VENDOR partners stay active and match on their own.
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
         # P0-PROD-15P: same persistent mapping table the production DecisionEngine's own
         # rule engine queries (a fresh, session-scoped instance) -- lets a MATCH_EXISTING
         # reclassification also resolve OPERATING_EXPENSE_MAPPING_REQUIRED once a real

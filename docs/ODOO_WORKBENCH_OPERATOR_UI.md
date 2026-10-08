@@ -89,8 +89,12 @@ What the Hub does (`app/application/workbench/product_mapping_use_cases.py`):
    PRODUCT_NOT_FOUND (otherwise *Güncel Değil* / *Reddedildi*);
 2. takes the seller product code from the immutable source line -- a line without one is
    refused ("satıcı ürün kodu yok"); no code is ever invented;
-3. takes the supplier from the version's deterministic supplier match (the same partner
-   the product matcher uses) -- an unresolved supplier is refused;
+3. takes the review's **effective supplier** (`app/application/effective_supplier.py`): the
+   raw exact-VAT match (collapsed to its commercial partner), else an accepted
+   MATCH_EXISTING / CREATE_PERMANENT_SUPPLIER / ONE_OFF_VENDOR resolution whose partner is
+   proven read-only to be its own commercial partner in a compatible company. It is the
+   same supplier reclassification matches products under and execution bills; an
+   unresolved or unproven supplier is refused;
 4. validates the product read-only (exists, active, same or shared company, has a template);
 5. fails closed, changing nothing, when Odoo already maps this supplier + seller code to a
    *different* product, has several such rows, or a CREATE_NEW_PRODUCT is recorded for it;
@@ -99,8 +103,15 @@ What the Hub does (`app/application/workbench/product_mapping_use_cases.py`):
    `product_tmpl_id`/`product_id` = selected product, `product_name` = invoice line
    description) through the existing guarded `OdooSupplierInfoWriter`, consuming a narrow
    single-use `MAP_EXISTING_PRODUCT` authorization;
-7. reclassifies the review (`MASTER_DATA_CHANGED`); the note records actor, line, supplier,
-   seller code, product and supplierinfo id.
+7. reclassifies the review (`MASTER_DATA_CHANGED`); the note records actor, line, supplier
+   (and its origin, e.g. `deterministic` / `match_existing`), seller code, product and
+   supplierinfo id.
+
+After a *successful* product mapping (Hub result *Tamamlandı*, incl. an already-applied one) the
+acknowledgement also empties the request inputs *İşlem*, *Fatura Satırı* and *Odoo Ürünü*
+in the same write, so a completed mapping never looks ready to resubmit. Result, message
+and processed time are written as usual. Rejected/stale/failed requests keep their inputs
+so the operator can correct and resubmit.
 
 The mapping is supplier-specific: the deterministic key is *(supplier partner, seller
 product code)*, so the same code from another supplier never reuses it. Future invoices
@@ -157,6 +168,14 @@ Guidance (written by the projection publisher, full-snapshot, idempotent):
 | Yapılması Gerekenler | `x_studio_ipp_todo` | Html (readonly) | `TODO_FIELD` |
 | Tamamlananlar | `x_studio_ipp_completed` | Html (readonly) | `COMPLETED_FIELD` |
 | Uygun Demirbaş Hesapları | `x_studio_ipp_eligible_asset_account_ids` | Many2many `account.account`, invisible | `ELIGIBLE_ASSET_ACCOUNTS_FIELD` |
+
+*Tamamlananlar* lists product lines the current version resolves, e.g.
+`✓ Satır 1 — 100020 — Microsoft 365 Business Basic → Microsoft 365 Business Basic`
+(line, seller code, invoice description → Odoo product). The source is the current
+version's Stage-1 execution evidence; no line is listed when that evidence does not exist,
+and the text never claims who made the match. The product name is read through the
+existing read-only product reader; if Odoo cannot answer it shows "ürün bilgisi şu an
+okunamadı". Shown only while "Ürün Eşleştir" is enabled (same switch as its guidance).
 
 *Tamamlananlar* shows accounting in operator language, e.g. `Muhasebe: Sabit Kıymet /
 Demirbaş — <hesap kodu> — <hesap adı> — <amortisman modeli>` or `Muhasebe: Gider — <hesap

@@ -246,6 +246,7 @@ class OdooOperatorRequestAcknowledger:
         outcome: OperatorRequestOutcome,
         message: str,
         processed_at: datetime,
+        clear_request_inputs: bool = False,
     ) -> bool:
         mapping = self._mapping
         try:
@@ -268,6 +269,13 @@ class OdooOperatorRequestAcknowledger:
             mapping.processed_at: processed_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"),
             mapping.ready: False,
         }
+        if clear_request_inputs:
+            # Same single write: the completed request no longer looks ready to resubmit.
+            # Result/message/processed_at above stay; only the request's own inputs empty.
+            values[mapping.action] = False
+            for field_name in (mapping.line, mapping.product):
+                if field_name is not None:
+                    values[field_name] = False
         try:
             self._adapter.write(model=mapping.model, record_id=odoo_record_id, values=values)
         except ErpRepositoryError as exc:

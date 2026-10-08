@@ -7,7 +7,11 @@ from app.application.use_cases.reclassify_review import ReclassifyWorkbenchRevie
 from app.application.workbench.product_mapping_use_cases import MapExistingProductUseCase
 from app.application.workbench.product_remediation_category import ProductRemediationCategoryPolicy
 from app.application.workbench.product_remediation_use_cases import CreateNewProductUseCase
-from app.composition.imports import build_deterministic_decision_engine
+from app.composition.imports import (
+    build_deterministic_decision_engine,
+    build_effective_supplier_resolver,
+    build_supplier_partner_reader,
+)
 from app.composition.purchase_account_discovery import (
     build_get_product_purchase_account_use_case,
     build_list_category_purchase_accounts_use_case,
@@ -62,7 +66,9 @@ def build_create_new_product_use_case(
     return CreateNewProductUseCase(
         review_reader=SqlAlchemyReviewRepository(session),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
-        remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        effective_supplier_resolver=build_effective_supplier_resolver(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        ),
         reservation_writer=SqlAlchemyReviewProductRemediationReservationRepository(session),
         identity_claim_writer=SqlAlchemyReviewProductIdentityClaimRepository(session),
         existing_supplier_info_reader=OdooExistingSupplierInfoReader(repository=supplierinfo_repository),
@@ -110,7 +116,9 @@ def build_map_existing_product_use_case(
     return MapExistingProductUseCase(
         review_reader=review_repository,
         source_invoice_reader=source_invoice_reader,
-        execution_evidence_reader=review_repository,
+        effective_supplier_resolver=build_effective_supplier_resolver(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        ),
         product_reader=OdooSelectedProductReader(
             product_repository=OdooProductRepository(adapter=OdooReadOnlyAdapter(client=resolved_odoo_client))
         ),
@@ -126,6 +134,7 @@ def build_map_existing_product_use_case(
             source_invoice_reader=source_invoice_reader,
             reclassification_writer=review_repository,
             supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+            supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
             operating_expense_matcher=OperatingExpenseMatchingEngine(
                 SqlAlchemyOperatingExpenseMappingRepository(session)
             ),

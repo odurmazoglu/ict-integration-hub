@@ -84,6 +84,7 @@ from app.persistence import (
     SqlAlchemyUnitOfWork,
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.effective_supplier_support import CanonicalPartners
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -333,6 +334,7 @@ def _reclassifier(session: Session, *, facts: _Facts, mapping_repository) -> Rec
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=review_repository,
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        supplier_partner_reader=CanonicalPartners(),
         operating_expense_matcher=OperatingExpenseMatchingEngine(mapping_repository),
         review_accounting_resolution_reader=SqlAlchemyReviewAccountingResolutionRepository(session),
     )

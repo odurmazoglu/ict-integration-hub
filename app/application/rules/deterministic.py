@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.application.commands import ImportInvoiceCommand
 from app.application.dto import RuleEvaluationResult
+from app.application.effective_supplier import supplier_match_for_product_matching
 from app.application.exceptions import ApplicationError
 from app.application.expense_mapping import (
     NullOperatingExpenseMatcher,
@@ -107,7 +108,11 @@ class DeterministicRuleEngine:
     def evaluate(self, command: ImportInvoiceCommand) -> RuleEvaluationResult:
         invoice = _invoice(command)
         partner_match = _evaluate_partner(self._partner_matcher, invoice, command.company_id)
-        product_match = _evaluate_products(self._product_matcher, invoice, command.company_id, partner_match)
+        # Product matching uses the review's *effective* supplier -- the same one execution
+        # uses -- so supplierinfo written for an accepted supplier is found again. Without an
+        # accepted supplier (every import) this is the raw match, unchanged.
+        product_partner_match = supplier_match_for_product_matching(partner_match, command.accepted_supplier)
+        product_match = _evaluate_products(self._product_matcher, invoice, command.company_id, product_partner_match)
         tax_match = _evaluate_taxes(self._tax_mapper, invoice, command.company_id)
         operating_expense_match = _evaluate_operating_expense(
             self._operating_expense_matcher,
@@ -189,7 +194,7 @@ def _evaluate_products(
     matcher: ProductMatcher,
     invoice: InternalInvoice,
     company_id: int | None,
-    partner_match: PartnerMatchResult,
+    partner_match: PartnerMatchResult | None,
 ) -> InvoiceProductMatchResult:
     try:
         return matcher.match_invoice(invoice, company_id=company_id, partner_match=partner_match)

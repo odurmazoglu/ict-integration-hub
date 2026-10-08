@@ -301,8 +301,14 @@ class OperatorRequestAcknowledger(Protocol):
         outcome: OperatorRequestOutcome,
         message: str,
         processed_at: datetime,
+        clear_request_inputs: bool = False,
     ) -> bool:
-        """Write the result and clear the ready flag iff the row still carries this request."""
+        """Write the result and clear the ready flag iff the row still carries this request.
+
+        ``clear_request_inputs`` additionally empties the request's own input fields
+        (action, invoice line, product) in the same write; result/message/processed_at
+        are always written, never cleared.
+        """
 
 
 class OperatorRequestLedger(Protocol):
@@ -554,7 +560,13 @@ class OperatorRequestIngestionWorkflow:
         if refresh and self._projection_refresher is not None:
             # The synchronizer never raises; it logs and reports its own failures.
             self._projection_refresher.sync(review_id=request.review_id, company_id=request.company_id)
-        acknowledged = self._acknowledge(request.odoo_record_id, request.requested_at, outcome, message)
+        acknowledged = self._acknowledge(
+            request.odoo_record_id,
+            request.requested_at,
+            outcome,
+            message,
+            clear_request_inputs=_clears_request_inputs(request, outcome),
+        )
         return OperatorRequestResult(
             odoo_record_id=request.odoo_record_id,
             review_id=request.review_id,
@@ -566,7 +578,13 @@ class OperatorRequestIngestionWorkflow:
         )
 
     def _acknowledge(
-        self, odoo_record_id: int, requested_at: datetime | None, outcome: OperatorRequestOutcome, message: str
+        self,
+        odoo_record_id: int,
+        requested_at: datetime | None,
+        outcome: OperatorRequestOutcome,
+        message: str,
+        *,
+        clear_request_inputs: bool = False,
     ) -> bool:
         try:
             return self._acknowledger.acknowledge(
@@ -575,6 +593,7 @@ class OperatorRequestIngestionWorkflow:
                 outcome=outcome,
                 message=message,
                 processed_at=self._clock(),
+                clear_request_inputs=clear_request_inputs,
             )
         except ApplicationError as exc:
             # Hub state is authoritative and the ledger is terminal: the next tick re-acknowledges.
@@ -620,6 +639,15 @@ def operator_request_key(request: OperatorRequest) -> str:
         payload["product_id"] = request.product_id
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return f"odoo-operator-request:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
+
+
+#: A completed product mapping leaves nothing to resubmit; any other action/outcome
+#: keeps its inputs exactly as before (an operator fixes and resubmits a rejected one).
+_INPUT_CLEARING_OUTCOMES = frozenset({OperatorRequestOutcome.COMPLETED, OperatorRequestOutcome.ALREADY_COMPLETED})
+
+
+def _clears_request_inputs(request: OperatorRequest, outcome: OperatorRequestOutcome) -> bool:
+    return request.action is OperatorRequestAction.PRODUCT_MAPPING and outcome in _INPUT_CLEARING_OUTCOMES
 
 
 def _outcome_for_terminal(status: OperatorRequestLedgerStatus) -> OperatorRequestOutcome:

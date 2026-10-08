@@ -65,6 +65,23 @@ class OdooPartnerRepository:
         )
         return tuple(_partner(record) for record in records)
 
+    def find_by_ids_including_archived(self, ids: Sequence[int]) -> Sequence[Partner]:
+        """``find_by_ids`` without Odoo's implicit ``active=True`` filter (read-only).
+
+        Used only to prove an accepted supplier resolution's partner: an archived
+        Hub-owned ONE_OFF_VENDOR partner is a legitimate accepted supplier (P0-PROD-10D).
+        """
+
+        if not ids:
+            return ()
+        records = self._adapter.search_read_all(
+            model="res.partner",
+            domain=[["id", "in", list(ids)], ["active", "in", [True, False]]],
+            fields=PARTNER_FIELDS,
+            max_records=len(ids),
+        )
+        return tuple(_partner(record) for record in records)
+
 
 def _partner(record: dict[str, Any]) -> Partner:
     return Partner(

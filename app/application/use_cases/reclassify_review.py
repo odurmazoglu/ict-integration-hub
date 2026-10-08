@@ -27,6 +27,7 @@ implementation of this same computation.
 from __future__ import annotations
 
 from app.application.decision import DecisionEngine
+from app.application.effective_supplier import SupplierPartnerReader
 from app.application.expense_mapping.matcher import OperatingExpenseMatcher
 from app.application.use_cases.effective_decision import SAFE_EFFECTIVE_DECISION_ERROR, EffectiveDecisionResolver
 from app.application.use_cases.review_classification_outcome import (
@@ -61,6 +62,7 @@ class ReclassifyWorkbenchReviewUseCase:
         source_invoice_reader: ReviewSourceInvoiceEvidenceReader,
         reclassification_writer: ReviewReclassificationWriter,
         supplier_remediation_effect_reader: SupplierRemediationEffectWriter | None = None,
+        supplier_partner_reader: SupplierPartnerReader | None = None,
         operating_expense_matcher: OperatingExpenseMatcher | None = None,
         review_accounting_resolution_reader: ReviewAccountingResolutionReader | None = None,
     ) -> None:
@@ -69,6 +71,7 @@ class ReclassifyWorkbenchReviewUseCase:
             decision_engine=decision_engine,
             source_invoice_reader=source_invoice_reader,
             supplier_remediation_effect_reader=supplier_remediation_effect_reader,
+            supplier_partner_reader=supplier_partner_reader,
             operating_expense_matcher=operating_expense_matcher,
             review_accounting_resolution_reader=review_accounting_resolution_reader,
         )

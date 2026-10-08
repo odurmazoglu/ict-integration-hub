@@ -4,7 +4,9 @@ Order (every check before any write; the only Odoo write is one product.supplier
 
 1. review pending at exactly ``expected_version``; the line carries PRODUCT_NOT_FOUND;
 2. seller product code from the immutable source line (none -> refused, never invented);
-3. supplier = this version's deterministic supplier match (the partner the matcher uses);
+3. supplier = the review's effective supplier (``EffectiveSupplierResolver``): the raw
+   deterministic match, else a proven accepted supplier resolution -- the exact partner
+   the follow-up reclassification matches products under;
 4. selected product: exists, active, company-compatible, has a template (read-only);
 5. no CREATE_NEW_PRODUCT identity claim and no supplierinfo mapping this supplier/code
    to a different product (fail closed); an identical existing mapping is reused;
@@ -23,16 +25,16 @@ from typing import Protocol
 
 from app.application.commands.product_remediation import CreateSupplierInfoCommand
 from app.application.dto.product_remediation import SupplierInfoWriteStatus
+from app.application.effective_supplier import EffectiveSupplier, EffectiveSupplierResolverPort
 from app.application.ports.existing_supplier_info_reader import ExistingSupplierInfoReader
 from app.application.ports.supplier_info_writer import SupplierInfoWriter
 from app.application.services import UnitOfWork
 from app.application.workbench.dto import ReviewStatus
-from app.application.workbench.evidence import ReviewExecutionEvidence
+from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import (
     ProductRemediationContractError,
     ProductRemediationEligibilityError,
     ProductRemediationSupplierUnresolvedError,
-    ReviewNotFoundError,
     ReviewStateConflictError,
     ReviewVersionConflictError,
 )
@@ -63,15 +65,9 @@ from app.application.workbench.write_authorization import (
     product_mapping_authorization_consumer_id,
 )
 from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
-from app.matching import PartnerMatchStatus
+from app.domain.invoice import InternalInvoice
 
 STALE_MESSAGE = "İnceleme bu istekten sonra değişti; güncel kaydı kontrol edip tekrar gönderin."
-
-
-class ExecutionEvidenceReader(Protocol):
-    def get_review_execution_evidence(
-        self, *, review_id: str, company_id: int, review_version: int
-    ) -> ReviewExecutionEvidence: ...
 
 
 class Reclassifier(Protocol):
@@ -84,7 +80,7 @@ class MapExistingProductUseCase:
         *,
         review_reader: ReviewQueueReader,
         source_invoice_reader: ReviewSourceInvoiceEvidenceReader,
-        execution_evidence_reader: ExecutionEvidenceReader,
+        effective_supplier_resolver: EffectiveSupplierResolverPort,
         product_reader: SelectedProductReader,
         identity_claim_reader: ProductIdentityClaimWriter,
         existing_supplier_info_reader: ExistingSupplierInfoReader,
@@ -95,7 +91,7 @@ class MapExistingProductUseCase:
     ) -> None:
         self._review_reader = review_reader
         self._source_invoice_reader = source_invoice_reader
-        self._execution_evidence_reader = execution_evidence_reader
+        self._effective_supplier_resolver = effective_supplier_resolver
         self._product_reader = product_reader
         self._identity_claim_reader = identity_claim_reader
         self._existing_supplier_info_reader = existing_supplier_info_reader
@@ -109,14 +105,16 @@ class MapExistingProductUseCase:
             raise ProductRemediationContractError("A canonical MapExistingProductCommand is required.")
         line_number = command.line_number.strip()
         self._require_eligible_review(command, line_number)
-        line = self._source_line(command, line_number)
+        source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
+        line = _source_line(source, line_number)
         seller_item_code = normalize_seller_item_code(line.seller_item_code)
         if seller_item_code is None:
             raise ProductMappingSellerCodeMissingError(
                 f"Satır {line_number} için faturada satıcı ürün kodu yok; tedarikçiye özel ürün eşleştirmesi "
                 "yapılamaz. Teknik destek alın."
             )
-        partner_id = self._matched_supplier(command)
+        supplier = self._effective_supplier(command, source.invoice)
+        partner_id = supplier.partner_id
         product = self._selected_product(command)
         self._require_no_create_in_flight(command, partner_id, seller_item_code)
         existing_id = await self._existing_identical_mapping(command, partner_id, seller_item_code, product)
@@ -133,7 +131,7 @@ class MapExistingProductUseCase:
                     company_id=command.company_id,
                     expected_version=command.expected_version,
                     trigger=ReviewReclassificationTrigger.MASTER_DATA_CHANGED,
-                    note=_note(command, line_number, seller_item_code, partner_id, product, supplierinfo_id),
+                    note=_note(command, line_number, seller_item_code, supplier, product, supplierinfo_id),
                 )
             )
             self._unit_of_work.commit()
@@ -174,31 +172,13 @@ class MapExistingProductUseCase:
                 "engeli yok)."
             )
 
-    def _source_line(self, command: MapExistingProductCommand, line_number: str):
-        source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
-        lines = [item for item in source.invoice.lines if (item.line_number or "").strip() == line_number]
-        if not lines:
-            raise ProductRemediationEligibilityError(f"Fatura satırı bulunamadı: {line_number}.")
-        if len(lines) > 1:
-            # A line number is the operator-visible identity; if the source invoice repeats it,
-            # "which line" cannot be proven, so nothing is mapped.
-            raise ProductRemediationEligibilityError(
-                f"Faturada {line_number} numaralı birden fazla satır var; satır kesin belirlenemediği için eşleştirme "
-                "yapılmadı. Teknik destek alın."
-            )
-        return lines[0]
-
-    def _matched_supplier(self, command: MapExistingProductCommand) -> int:
-        try:
-            evidence = self._execution_evidence_reader.get_review_execution_evidence(
-                review_id=command.review_id, company_id=command.company_id, review_version=command.expected_version
-            )
-        except ReviewNotFoundError as exc:
-            raise ProductRemediationSupplierUnresolvedError(_SUPPLIER_UNRESOLVED) from exc
-        match = evidence.partner_match
-        if match.status is not PartnerMatchStatus.MATCHED or type(match.partner_id) is not int or match.partner_id <= 0:
-            raise ProductRemediationSupplierUnresolvedError(_SUPPLIER_UNRESOLVED)
-        return match.partner_id
+    def _effective_supplier(self, command: MapExistingProductCommand, invoice: InternalInvoice) -> EffectiveSupplier:
+        resolution = self._effective_supplier_resolver.resolve(
+            review_id=command.review_id, company_id=command.company_id, invoice=invoice
+        )
+        if resolution.supplier is None:
+            raise ProductRemediationSupplierUnresolvedError(resolution.failure or _SUPPLIER_UNRESOLVED)
+        return resolution.supplier
 
     def _selected_product(self, command: MapExistingProductCommand) -> ResolutionProductRecord:
         products = [
@@ -303,6 +283,20 @@ class MapExistingProductUseCase:
 _SUPPLIER_UNRESOLVED = "Bu incelemede tedarikçi henüz kesin olarak eşleşmedi; önce tedarikçi adımı tamamlanmalı."
 
 
+def _source_line(source: ReviewSourceInvoiceEvidence, line_number: str):
+    lines = [item for item in source.invoice.lines if (item.line_number or "").strip() == line_number]
+    if not lines:
+        raise ProductRemediationEligibilityError(f"Fatura satırı bulunamadı: {line_number}.")
+    if len(lines) > 1:
+        # A line number is the operator-visible identity; if the source invoice repeats it,
+        # "which line" cannot be proven, so nothing is mapped.
+        raise ProductRemediationEligibilityError(
+            f"Faturada {line_number} numaralı birden fazla satır var; satır kesin belirlenemediği için eşleştirme "
+            "yapılmadı. Teknik destek alın."
+        )
+    return lines[0]
+
+
 def _product_not_found_lines(reasons: tuple[ManualReviewReason, ...]) -> tuple[str, ...]:
     lines = [
         (reason.line_number or "").strip()
@@ -320,12 +314,13 @@ def _note(
     command: MapExistingProductCommand,
     line_number: str,
     code: str,
-    partner_id: int,
+    supplier: EffectiveSupplier,
     product: ResolutionProductRecord,
     supplierinfo_id: int | None,
 ) -> str:
     return (
-        f"Product mapping by {command.approved_by}: line {line_number}, supplier partner {partner_id}, "
+        f"Product mapping by {command.approved_by}: line {line_number}, supplier partner {supplier.partner_id} "
+        f"({supplier.origin.value}), "
         f"seller code {code!r} -> product.product {product.id} (template {product.product_tmpl_id}), "
         f"supplierinfo {supplierinfo_id}."
     )[:1024]
