@@ -640,7 +640,7 @@ def test_parent_and_child_requests_for_the_same_line_never_both_apply() -> None:
     """Same line, same snapshotted version, one tick: the first wins; the second is stale."""
 
     from app.application.workbench.operator_request_handlers import ProductMappingRequestHandler as Handler
-    from app.composition.operator_requests import SequentialOperatorRequestWorkflows
+    from app.composition.operator_requests import OperatorRequestChannel, SequentialOperatorRequestWorkflows
     from tests.unit.test_adr_0013_operator_request_ingestion import FakeAcknowledger, FakeReader
 
     harness, odoo = _world()
@@ -669,7 +669,9 @@ def test_parent_and_child_requests_for_the_same_line_never_both_apply() -> None:
         transient_errors=(ErpRepositoryError,),
     )
 
-    child_result, parent_result = SequentialOperatorRequestWorkflows((lines, parent)).run(company_id=COMPANY).results
+    channels = (OperatorRequestChannel("product_line", lines), OperatorRequestChannel("parent", parent))
+    composite = SequentialOperatorRequestWorkflows(channels, reset=lambda: None)
+    child_result, parent_result = composite.run(company_id=COMPANY).results
 
     assert child_result.outcome is OperatorRequestOutcome.COMPLETED
     assert parent_result.outcome is OperatorRequestOutcome.STALE
@@ -762,7 +764,7 @@ def test_tick_runs_child_lines_before_parent_rows_only_when_enabled(monkeypatch:
     assert isinstance(disabled, OperatorRequestIngestionWorkflow)
     assert OperatorRequestAction.PRODUCT_LINE_MAPPING not in disabled._handlers
     assert isinstance(enabled, SequentialOperatorRequestWorkflows)
-    lines, parent = enabled._workflows
+    lines, parent = (channel.workflow for channel in enabled._channels)
     assert set(lines._handlers) == {OperatorRequestAction.PRODUCT_LINE_MAPPING}
     assert type(lines._handlers[OperatorRequestAction.PRODUCT_LINE_MAPPING]).__name__ == "ProductMappingRequestHandler"
     assert OperatorRequestAction.PRODUCT_MAPPING in parent._handlers  # the parent path is unchanged

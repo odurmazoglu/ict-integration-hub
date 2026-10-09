@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -74,6 +75,8 @@ logger = logging.getLogger(__name__)
 #: Distinct from the Uyumsoft poll lock: the two ticks never block each other.
 OPERATOR_REQUEST_ADVISORY_LOCK_KEY = -2752363236075536947
 OPERATOR_REQUEST_JUSTIFICATION = "Odoo Workbench operator request (ADR-0013)"
+PRODUCT_LINE_CHANNEL = "product_line"
+PARENT_CHANNEL = "parent"
 
 
 class ReviewVersionCheckedAuthorizationIssuer:
@@ -234,21 +237,72 @@ def build_product_line_request_workflow(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class OperatorRequestChannel:
+    """One named request source (e.g. Workbench child line rows, parent rows) of a tick."""
+
+    name: str
+    workflow: OperatorRequestIngestionWorkflow
+
+
+class OperatorRequestChannelError(RuntimeError):
+    """One or more channels of a tick failed unexpectedly; the other channels still ran.
+
+    Raised *after* every runnable channel has been processed, so the periodic task
+    scheduler still records the tick as crashed (``periodic_task_crashed``). Each failure
+    was already logged with its traceback when it happened.
+    """
+
+    def __init__(self, failed_channels: Sequence[str], result: OperatorRequestIngestionResult) -> None:
+        self.failed_channels = tuple(failed_channels)
+        self.result = result
+        super().__init__(f"Operator request channel(s) failed: {', '.join(self.failed_channels)}.")
+
+
 class SequentialOperatorRequestWorkflows:
     """Run several request channels one after another in one tick; results are concatenated.
 
     Channels never run concurrently, so two requests for the same review are serialized
     and the optimistic review-version check decides between them.
+
+    Isolation (pre-gate hardening N1): an unexpected exception escaping one channel is
+    logged with its traceback, the shared sessions are reset (rolled back) so the next
+    channel starts from a clean transaction state, and the remaining channels still run.
+    Nothing is swallowed: after all channels ran, ``OperatorRequestChannelError`` is
+    raised, chained to the first failure. Per-request retry, ledger and idempotency stay
+    inside each workflow: a request whose channel crashed was neither acknowledged nor
+    finished, so a later tick resumes it from its ledger state. If the reset itself fails,
+    no further channel runs (its session state could not be proven clean).
     """
 
-    def __init__(self, workflows: Sequence[OperatorRequestIngestionWorkflow]) -> None:
-        self._workflows = tuple(workflows)
+    def __init__(self, channels: Sequence[OperatorRequestChannel], *, reset: Callable[[], None]) -> None:
+        self._channels = tuple(channels)
+        self._reset = reset
 
     def run(self, *, company_id: int) -> OperatorRequestIngestionResult:
         results: list[OperatorRequestResult] = []
-        for workflow in self._workflows:
-            results.extend(workflow.run(company_id=company_id).results)
-        return OperatorRequestIngestionResult(company_id=company_id, results=tuple(results))
+        failed: list[str] = []
+        first_error: BaseException | None = None
+        for channel in self._channels:
+            try:
+                results.extend(channel.workflow.run(company_id=company_id).results)
+                continue
+            except Exception as exc:  # noqa: BLE001 - logged with traceback and re-raised below
+                logger.exception(
+                    "workbench.operator_request.channel_failed",
+                    extra={"channel": channel.name, "error_type": type(exc).__name__},
+                )
+                failed.append(channel.name)
+                first_error = first_error or exc
+            try:
+                self._reset()
+            except Exception:
+                logger.exception("workbench.operator_request.channel_reset_failed", extra={"channel": channel.name})
+                break
+        result = OperatorRequestIngestionResult(company_id=company_id, results=tuple(results))
+        if failed:
+            raise OperatorRequestChannelError(failed, result) from first_error
+        return result
 
 
 class OperatorRequestTick:
@@ -342,6 +396,18 @@ def _tick_workflow(
         odoo_client=odoo_client,
         line_request_mapping=line_request_mapping,
     )
-    # Child line rows first: a parent request processed earlier in the same tick would
-    # refresh (rewrite) the child rows and so invalidate their requester check.
-    return SequentialOperatorRequestWorkflows((lines, parent))
+    # Fixed order for deterministic results; either order is safe because the optimistic
+    # review-version check serializes two requests for the same review. A child channel
+    # failure never blocks the parent channel (see SequentialOperatorRequestWorkflows).
+    return SequentialOperatorRequestWorkflows(
+        (
+            OperatorRequestChannel(name=PRODUCT_LINE_CHANNEL, workflow=lines),
+            OperatorRequestChannel(name=PARENT_CHANNEL, workflow=parent),
+        ),
+        reset=lambda: _rollback(business_session, ledger_session),
+    )
+
+
+def _rollback(*sessions: Session) -> None:
+    for session in sessions:
+        session.rollback()
