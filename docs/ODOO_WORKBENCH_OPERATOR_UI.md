@@ -131,6 +131,13 @@ needs technical support.
 All fields live on the existing parent model `x_ipp_import_workbench`. Odoo users write
 them only through the form; the Hub only reads them.
 
+The UI is not a security boundary. Any user with write access to the row can set
+*İsteyen* through raw JSON-2 and so act as any allowlisted actor; the actor allowlist
+limits *whom* one can impersonate but does not prevent impersonation. Keep write access to
+the Workbench models limited to allowlisted actors. See the exposure analysis and the
+recommended identity binding in
+[ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md §3.1](ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md#31-requested_by-impersonation-exposure).
+
 | Label | Technical name (suggested) | Type | Env key `ODOO_WORKBENCH_REQUEST_…` |
 | --- | --- | --- | --- |
 | İşlem | `x_studio_ipp_req_action` | Selection (labels above, incl. `Ürün Eşleştir`) | `ACTION_FIELD` |
