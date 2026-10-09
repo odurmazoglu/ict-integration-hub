@@ -660,6 +660,13 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # PR C's product_line_mapping ledger action (202607170039) only widened the same
+    # ledger action CHECK constraint: one "-1" step consumes it and changes no table.
+    tables_before_line_action_downgrade = set(inspector.get_table_names())
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert set(inspector.get_table_names()) == tables_before_line_action_downgrade
+
     # The operator request ledger product_mapping action (202607170038) only widened the
     # ledger action CHECK constraint: one "-1" step consumes it and changes no table.
     tables_before_ledger_action_downgrade = set(inspector.get_table_names())

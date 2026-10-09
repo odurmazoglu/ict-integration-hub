@@ -942,7 +942,11 @@ def test_ingestion_clears_inputs_only_after_a_successful_product_mapping(outcome
 def test_input_clearing_matrix_is_product_mapping_success_only(action, outcome) -> None:
     from app.application.workbench.operator_request_ingestion import _clears_request_inputs
 
-    expected = action is OperatorRequestAction.PRODUCT_MAPPING and outcome in {
+    # PR C: the child line channel is the same mapping and clears its own product input too.
+    expected = action in {
+        OperatorRequestAction.PRODUCT_MAPPING,
+        OperatorRequestAction.PRODUCT_LINE_MAPPING,
+    } and outcome in {
         OperatorRequestOutcome.COMPLETED,
         OperatorRequestOutcome.ALREADY_COMPLETED,
     }

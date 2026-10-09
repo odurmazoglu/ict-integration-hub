@@ -1,4 +1,4 @@
-"""Operator request ledger action constraint (hotfix for #208 ``product_mapping``).
+"""Operator request ledger action constraint (#208 ``product_mapping``, PR C ``product_line_mapping``).
 
 The ledger's ck_workbench_operator_requests_action must accept every operator action
 the poller can parse, and the application enum, the Odoo label mapping, the ORM model
@@ -28,7 +28,7 @@ from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
 from app.core.config import get_settings
 from app.db.base import Base
-from app.erp.odoo.workbench_operator_request_reader import ACTION_BY_ODOO_VALUE
+from app.erp.odoo.workbench_operator_request_reader import ACTION_BY_ODOO_VALUE, PARENT_ROW_ACTIONS
 from app.models.workbench_operator_request import OPERATOR_REQUEST_ACTIONS, WorkbenchOperatorRequest
 from app.persistence.workbench_operator_request_ledger import SqlAlchemyOperatorRequestLedger
 
@@ -43,6 +43,7 @@ ACTION_INPUTS: dict[OperatorRequestAction, dict[str, Any]] = {
     OperatorRequestAction.DECISION: {},
     OperatorRequestAction.EXECUTE_VENDOR_BILL: {},
     OperatorRequestAction.PRODUCT_MAPPING: {"line_number": "1", "product_id": 393},
+    OperatorRequestAction.PRODUCT_LINE_MAPPING: {"line_number": "2", "product_id": 394},
 }
 
 
@@ -72,9 +73,12 @@ def test_model_action_tuple_equals_the_application_action_enum() -> None:
     assert "product_mapping" in OPERATOR_REQUEST_ACTIONS
 
 
-def test_every_parsed_odoo_value_is_an_application_action_and_every_action_is_parseable() -> None:
-    assert {action.value for action in ACTION_BY_ODOO_VALUE.values()} == APPLICATION_ACTIONS
+def test_every_parsed_parent_value_is_a_parent_action_and_every_parent_action_is_parseable() -> None:
+    assert {action.value for action in ACTION_BY_ODOO_VALUE.values()} == {a.value for a in PARENT_ROW_ACTIONS}
     assert ACTION_BY_ODOO_VALUE["Ürün Eşleştir"] is OperatorRequestAction.PRODUCT_MAPPING
+    # PR C: the child line action is only ever built by the child row reader, never parsed from a parent row.
+    assert APPLICATION_ACTIONS - {a.value for a in PARENT_ROW_ACTIONS} == {"product_line_mapping"}
+    assert "product_line_mapping" not in ACTION_BY_ODOO_VALUE
 
 
 def test_model_check_constraint_lists_exactly_the_application_actions() -> None:
@@ -148,15 +152,29 @@ def _insert(engine, action: str, request_key: str) -> None:
         connection.execute(text(_raw_insert(action, request_key)))
 
 
-def test_head_is_202607170038_on_top_of_202607170037(migrated) -> None:
+def test_202607170038_widens_202607170037_for_product_mapping(migrated) -> None:
     config, engine = migrated
     command.upgrade(config, "202607170037")
     assert _version(engine) == "202607170037"
     with pytest.raises(IntegrityError):
         _insert(engine, "product_mapping", "k-before")
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "202607170038")
     assert _version(engine) == "202607170038"
+    _insert(engine, "product_mapping", "k-after")
+    with pytest.raises(IntegrityError):
+        _insert(engine, "product_line_mapping", "k-line-before")
+
+
+def test_head_is_202607170039_which_adds_product_line_mapping(migrated) -> None:
+    config, engine = migrated
+    command.upgrade(config, "202607170038")
+    with pytest.raises(IntegrityError):
+        _insert(engine, "product_line_mapping", "k-line-before")
+
+    command.upgrade(config, "head")
+    assert _version(engine) == "202607170039"
+    _insert(engine, "product_line_mapping", "k-line-after")
 
 
 def test_migrated_schema_accepts_every_action_and_rejects_unknown(migrated) -> None:
@@ -190,7 +208,7 @@ def test_real_ledger_records_a_product_mapping_request_on_the_migrated_schema(mi
 
 def test_downgrade_refuses_while_product_mapping_rows_exist_and_changes_nothing(migrated) -> None:
     config, engine = migrated
-    command.upgrade(config, "head")
+    command.upgrade(config, "202607170038")
     _insert(engine, "product_mapping", "k-pm")
     _insert(engine, "decision", "k-dec")
 
@@ -214,7 +232,57 @@ def test_upgrade_downgrade_upgrade_round_trip_without_product_mapping_rows(migra
         _insert(engine, "product_mapping", "k-pm")
 
     command.upgrade(config, "head")
-    assert _version(engine) == "202607170038"
+    assert _version(engine) == "202607170039"
     _insert(engine, "product_mapping", "k-pm")
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM workbench_operator_requests")) == 2
+
+
+# --- migrated schema: 202607170038 -> 202607170039 (PR C) ---------------------------
+
+
+def test_real_ledger_records_a_product_line_mapping_request_on_the_migrated_schema(migrated) -> None:
+    config, engine = migrated
+    command.upgrade(config, "head")
+    request = _request(OperatorRequestAction.PRODUCT_LINE_MAPPING, 21)
+
+    with Session(engine) as session:
+        SqlAlchemyOperatorRequestLedger(session).start(
+            request_key=operator_request_key(request), request=request, actor="operator"
+        )
+        session.commit()
+
+    with engine.connect() as connection:
+        row = connection.execute(text("SELECT action, odoo_record_id FROM workbench_operator_requests")).one()
+    assert tuple(row) == ("product_line_mapping", 21)
+
+
+def test_0039_downgrade_refuses_while_product_line_mapping_rows_exist_and_changes_nothing(migrated) -> None:
+    config, engine = migrated
+    command.upgrade(config, "head")
+    _insert(engine, "product_line_mapping", "k-pl")
+    _insert(engine, "product_mapping", "k-pm")
+
+    with pytest.raises(RuntimeError, match="product_line_mapping"):
+        command.downgrade(config, "202607170038")
+
+    assert _version(engine) == "202607170039"
+    with engine.connect() as connection:
+        rows = sorted(connection.execute(text("SELECT request_key, action FROM workbench_operator_requests")))
+    assert rows == [("k-pl", "product_line_mapping"), ("k-pm", "product_mapping")]
+
+
+def test_0039_round_trip_without_product_line_mapping_rows_keeps_product_mapping(migrated) -> None:
+    config, engine = migrated
+    command.upgrade(config, "head")
+    _insert(engine, "product_mapping", "k-pm")
+
+    command.downgrade(config, "202607170038")
+    assert _version(engine) == "202607170038"
+    with pytest.raises(IntegrityError):
+        _insert(engine, "product_line_mapping", "k-pl")
+
+    command.upgrade(config, "head")
+    _insert(engine, "product_line_mapping", "k-pl")
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM workbench_operator_requests")) == 2

@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     #: JSON ``{"<odoo_user_id>": {"actor": "<name>", "permissions": [...]}}`` mapping Odoo
     #: users to Hub actors with existing permission names. Empty: every request is refused.
     odoo_operator_request_actors: str | None = None
+    #: PR C: also consume existing-product mapping requests submitted on Workbench child
+    #: product line rows (``ODOO_WORKBENCH_PRODUCT_LINE_REQ_*`` contract) in the same tick.
+    #: Off by default: the Hub never reads child request fields until Studio provisions them.
+    odoo_workbench_product_line_requests_enabled: bool = False
 
     @property
     def uyumsoft_wsdl_url(self) -> str:

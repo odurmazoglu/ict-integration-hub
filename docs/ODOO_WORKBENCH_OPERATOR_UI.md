@@ -113,6 +113,12 @@ in the same write, so a completed mapping never looks ready to resubmit. Result,
 and processed time are written as usual. Rejected/stale/failed requests keep their inputs
 so the operator can correct and resubmit.
 
+The same mapping can also be requested directly on one row of the *Ürün Satırları* tab
+(PR C, gated by `ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS_ENABLED`): the operator picks the
+product on the line and presses the row's *Eşleştir*. It runs the same use case, with the
+line identity taken from the Hub-owned child projection. See
+[ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md](ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md).
+
 The mapping is supplier-specific: the deterministic key is *(supplier partner, seller
 product code)*, so the same code from another supplier never reuses it. Future invoices
 from the same supplier with the same seller code match automatically. A double-click or

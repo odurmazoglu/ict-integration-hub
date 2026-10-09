@@ -70,6 +70,14 @@ class OperatorRequestAction(StrEnum):
     DECISION = "decision"
     EXECUTE_VENDOR_BILL = "execute_vendor_bill"
     PRODUCT_MAPPING = "product_mapping"
+    #: PR C: the same existing-product mapping, submitted on one Workbench *child* product
+    #: line row instead of the parent row. Its ``odoo_record_id`` is the child row id and its
+    #: line identity comes from the Hub-owned child projection, never from operator input.
+    PRODUCT_LINE_MAPPING = "product_line_mapping"
+
+
+#: Both channels of the one existing-product mapping use case (parent row, child line row).
+PRODUCT_MAPPING_ACTIONS = frozenset({OperatorRequestAction.PRODUCT_MAPPING, OperatorRequestAction.PRODUCT_LINE_MAPPING})
 
 
 #: Existing permission each action requires -- identical to its REST endpoint.
@@ -82,6 +90,7 @@ ACTION_PERMISSIONS: dict[OperatorRequestAction, frozenset[str]] = {
     # Like the writing supplier modes: deciding needs workbench_review_decide; the
     # supplierinfo write additionally needs the narrow authorization (workbench_execute).
     OperatorRequestAction.PRODUCT_MAPPING: frozenset({PERMISSION_REVIEW_DECIDE}),
+    OperatorRequestAction.PRODUCT_LINE_MAPPING: frozenset({PERMISSION_REVIEW_DECIDE}),
 }
 
 #: Supplier modes that write an Odoo partner: they additionally need the narrow write
@@ -146,9 +155,9 @@ class OperatorRequest(ApplicationDTO):
     asset_account_id: int | None = None
     depreciation_model_id: int | None = None
     note: str | None = None
-    #: PRODUCT_MAPPING: the immutable source invoice line the operator resolves.
+    #: PRODUCT_MAPPING / PRODUCT_LINE_MAPPING: the immutable source invoice line resolved.
     line_number: str | None = None
-    #: PRODUCT_MAPPING: the existing Odoo product.product selected for that line.
+    #: PRODUCT_MAPPING / PRODUCT_LINE_MAPPING: the existing Odoo product.product selected.
     product_id: int | None = None
 
     def __post_init__(self) -> None:
@@ -176,7 +185,7 @@ class OperatorRequest(ApplicationDTO):
             raise WorkbenchContractError("Satın alma amacı seçilmelidir.")
         if self.action is OperatorRequestAction.ACCOUNTING_RESOLUTION and self.treatment_type is None:
             raise WorkbenchContractError("Muhasebe işlemi seçilmelidir.")
-        if self.action is OperatorRequestAction.PRODUCT_MAPPING:
+        if self.action in PRODUCT_MAPPING_ACTIONS:
             if self.line_number is None or not self.line_number.strip():
                 raise WorkbenchContractError("Eşleştirilecek fatura satırı seçilmelidir.")
             if self.product_id is None:
@@ -632,7 +641,7 @@ def operator_request_key(request: OperatorRequest) -> str:
         "depreciation_model_id": request.depreciation_model_id,
         "note": request.note,
     }
-    # Added for PRODUCT_MAPPING only when present, so every existing request key is unchanged.
+    # Added for PRODUCT_MAPPING / PRODUCT_LINE_MAPPING only when present, so every existing request key is unchanged.
     if request.line_number is not None:
         payload["line_number"] = request.line_number
     if request.product_id is not None:
@@ -641,13 +650,13 @@ def operator_request_key(request: OperatorRequest) -> str:
     return f"odoo-operator-request:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
-#: A completed product mapping leaves nothing to resubmit; any other action/outcome
+#: A completed product mapping (either channel) leaves nothing to resubmit; any other action/outcome
 #: keeps its inputs exactly as before (an operator fixes and resubmits a rejected one).
 _INPUT_CLEARING_OUTCOMES = frozenset({OperatorRequestOutcome.COMPLETED, OperatorRequestOutcome.ALREADY_COMPLETED})
 
 
 def _clears_request_inputs(request: OperatorRequest, outcome: OperatorRequestOutcome) -> bool:
-    return request.action is OperatorRequestAction.PRODUCT_MAPPING and outcome in _INPUT_CLEARING_OUTCOMES
+    return request.action in PRODUCT_MAPPING_ACTIONS and outcome in _INPUT_CLEARING_OUTCOMES
 
 
 def _outcome_for_terminal(status: OperatorRequestLedgerStatus) -> OperatorRequestOutcome:
@@ -684,6 +693,7 @@ __all__ = [
     "ALREADY_COMPLETED_MESSAGE",
     "DEFAULT_OPERATOR_REQUEST_LIMIT",
     "MAX_OPERATOR_REQUEST_ATTEMPTS",
+    "PRODUCT_MAPPING_ACTIONS",
     "PERMISSION_EXECUTE",
     "PERMISSION_REVIEW_DECIDE",
     "STALE_REQUEST_MESSAGE",

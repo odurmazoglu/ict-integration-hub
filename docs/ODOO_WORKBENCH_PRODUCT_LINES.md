@@ -7,9 +7,11 @@ Read-only, per-invoice-line Workbench child projection for PRODUCT_NOT_FOUND han
 * Rows are a **projection of committed Hub truth**. Only the canonical projection sync
   (`WorkbenchProjectionSynchronizer`) writes them: runtime transitions and
   `python -m app.cli.reconcile_workbench_projection`. The Hub never reads them back as input.
-* There are no operator request fields on this model: no `req_action`, `req_product`,
-  `ready`, `requested_by`, `requested_at`, `result`, new-product fields or fuzzy
-  candidates. Line-level requests are a later PR.
+* PR B adds no operator request fields to this model. PR C adds a separate, gated set of
+  request fields (`x_studio_ipp_req_*`) for existing-product mapping on one line; see
+  [ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md](ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md). The
+  projection publisher never reads or writes those fields, and no projection field is ever
+  read back as business input.
 * The parent-level "Ürün Eşleştir" path (`x_studio_ipp_req_line`,
   `x_studio_ipp_req_product`, server action 1026, the #208 handler) is unchanged and stays
   operational.
