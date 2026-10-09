@@ -122,6 +122,18 @@ def _validate_common_settings(settings: Settings, errors: list[str]) -> None:
 def _validate_operator_request_settings(settings: Settings, errors: list[str]) -> None:
     """ADR-0013: the request tick needs an explicit company and a live projection to refresh."""
 
+    if settings.odoo_workbench_product_line_requests_enabled:
+        # PR C: child line requests ride on the request tick and need live child rows.
+        if not settings.odoo_workbench_operator_requests_enabled:
+            errors.append(
+                "ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS_ENABLED=true requires "
+                "ODOO_WORKBENCH_OPERATOR_REQUESTS_ENABLED=true."
+            )
+        if not settings.odoo_workbench_product_line_projection_enabled:
+            errors.append(
+                "ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS_ENABLED=true requires "
+                "ODOO_WORKBENCH_PRODUCT_LINE_PROJECTION_ENABLED=true."
+            )
     if not settings.odoo_workbench_operator_requests_enabled:
         return
     if settings.odoo_workbench_operator_requests_company_id is None:

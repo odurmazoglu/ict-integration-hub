@@ -8,8 +8,9 @@ from app.db.types import AwareDateTime
 
 OPERATOR_REQUEST_STATUSES = ("in_progress", "completed", "stale", "rejected", "unauthorized", "failed")
 #: Must equal ``OperatorRequestAction`` values (guarded by a regression test); the CHECK
-#: constraint below is generated from this tuple, and migration 202607170038 added
-#: ``product_mapping``.
+#: constraint below is generated from this tuple. Migration 202607170038 added
+#: ``product_mapping``; 202607170039 added ``product_line_mapping`` (PR C), whose
+#: ``odoo_record_id`` is a Workbench *child* product line row, not a parent row.
 OPERATOR_REQUEST_ACTIONS = (
     "supplier_resolution",
     "purchase_purpose",
@@ -17,6 +18,7 @@ OPERATOR_REQUEST_ACTIONS = (
     "decision",
     "execute_vendor_bill",
     "product_mapping",
+    "product_line_mapping",
 )
 
 

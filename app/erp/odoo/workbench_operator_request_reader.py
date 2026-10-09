@@ -36,8 +36,12 @@ from app.erp.exceptions import ErpRepositoryError
 SAFE_REQUEST_READ_ERROR = "Odoo Workbench operator requests could not be read."
 SAFE_REQUEST_ACK_ERROR = "Odoo Workbench operator request result could not be written."
 
+#: Actions a *parent* Workbench row may request. ``product_line_mapping`` is deliberately
+#: absent: it exists only on a child product line row (``workbench_product_line_request_reader``),
+#: whose line identity is Hub-owned; a parent row naming it fails closed as unsupported.
+PARENT_ROW_ACTIONS = frozenset(set(OperatorRequestAction) - {OperatorRequestAction.PRODUCT_LINE_MAPPING})
 ACTION_BY_ODOO_VALUE: dict[str, OperatorRequestAction] = {
-    **{action.value: action for action in OperatorRequestAction},
+    **{action.value: action for action in OperatorRequestAction if action in PARENT_ROW_ACTIONS},
     "Tedarikçi Çözümü": OperatorRequestAction.SUPPLIER_RESOLUTION,
     "Satın Alma Amacı": OperatorRequestAction.PURCHASE_PURPOSE,
     "Muhasebe İşlemi": OperatorRequestAction.ACCOUNTING_RESOLUTION,
@@ -249,26 +253,15 @@ class OdooOperatorRequestAcknowledger:
         clear_request_inputs: bool = False,
     ) -> bool:
         mapping = self._mapping
-        try:
-            rows = self._adapter.search_read(
-                model=mapping.model,
-                domain=[["id", "=", odoo_record_id]],
-                fields=["id", mapping.ready, mapping.requested_at],
-                limit=1,
-            )
-        except ErpRepositoryError as exc:
-            raise WorkbenchProjectionPublishError(SAFE_REQUEST_ACK_ERROR) from exc
-        if not rows:
-            return False
-        if _optional_datetime(rows[0].get(mapping.requested_at)) != requested_at:
-            # The operator submitted a newer request meanwhile; never clear or overwrite it.
-            return False
-        values = {
-            mapping.result: ODOO_RESULT_BY_OUTCOME[outcome],
-            mapping.message: message,
-            mapping.processed_at: processed_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"),
-            mapping.ready: False,
-        }
+        values = request_result_values(
+            result_field=mapping.result,
+            message_field=mapping.message,
+            processed_at_field=mapping.processed_at,
+            ready_field=mapping.ready,
+            outcome=outcome,
+            message=message,
+            processed_at=processed_at,
+        )
         if clear_request_inputs:
             # Same single write: the completed request no longer looks ready to resubmit.
             # Result/message/processed_at above stay; only the request's own inputs empty.
@@ -276,11 +269,63 @@ class OdooOperatorRequestAcknowledger:
             for field_name in (mapping.line, mapping.product):
                 if field_name is not None:
                     values[field_name] = False
-        try:
-            self._adapter.write(model=mapping.model, record_id=odoo_record_id, values=values)
-        except ErpRepositoryError as exc:
-            raise WorkbenchProjectionPublishError(SAFE_REQUEST_ACK_ERROR) from exc
-        return True
+        return acknowledge_same_request(
+            self._adapter,
+            model=mapping.model,
+            record_id=odoo_record_id,
+            requested_at_field=mapping.requested_at,
+            requested_at=requested_at,
+            values=values,
+        )
+
+
+def request_result_values(
+    *,
+    result_field: str,
+    message_field: str,
+    processed_at_field: str,
+    ready_field: str,
+    outcome: OperatorRequestOutcome,
+    message: str,
+    processed_at: datetime,
+) -> dict[str, Any]:
+    """The Hub-owned result fields of one request row, plus the cleared ready flag."""
+
+    return {
+        result_field: ODOO_RESULT_BY_OUTCOME[outcome],
+        message_field: message,
+        processed_at_field: processed_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+        ready_field: False,
+    }
+
+
+def acknowledge_same_request(
+    adapter: _Json2Adapter,
+    *,
+    model: str,
+    record_id: int,
+    requested_at_field: str,
+    requested_at: datetime | None,
+    values: dict[str, Any],
+) -> bool:
+    """Write ``values`` iff the row still carries the request submitted at ``requested_at``."""
+
+    try:
+        rows = adapter.search_read(
+            model=model, domain=[["id", "=", record_id]], fields=["id", requested_at_field], limit=1
+        )
+    except ErpRepositoryError as exc:
+        raise WorkbenchProjectionPublishError(SAFE_REQUEST_ACK_ERROR) from exc
+    if not rows:
+        return False
+    if _optional_datetime(rows[0].get(requested_at_field)) != requested_at:
+        # The operator submitted a newer request meanwhile; never clear or overwrite it.
+        return False
+    try:
+        adapter.write(model=model, record_id=record_id, values=values)
+    except ErpRepositoryError as exc:
+        raise WorkbenchProjectionPublishError(SAFE_REQUEST_ACK_ERROR) from exc
+    return True
 
 
 def _get(record: dict[str, Any], field_name: str | None) -> Any:
@@ -359,10 +404,13 @@ def _optional_datetime(value: Any) -> datetime | None:
 __all__ = [
     "ACTION_BY_ODOO_VALUE",
     "ODOO_RESULT_BY_OUTCOME",
+    "PARENT_ROW_ACTIONS",
     "PURPOSE_BY_ODOO_VALUE",
     "SUPPLIER_MODE_BY_ODOO_VALUE",
     "TREATMENT_BY_ODOO_VALUE",
     "OdooOperatorRequestAcknowledger",
     "OdooOperatorRequestFieldMapping",
     "OdooOperatorRequestReader",
+    "acknowledge_same_request",
+    "request_result_values",
 ]

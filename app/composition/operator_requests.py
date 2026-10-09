@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -29,6 +29,7 @@ from app.application.workbench.operator_request_ingestion import (
     OperatorRequestAction,
     OperatorRequestIngestionResult,
     OperatorRequestIngestionWorkflow,
+    OperatorRequestResult,
 )
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.write_authorization import WriteAuthorizationOperationType
@@ -56,6 +57,11 @@ from app.erp.odoo.workbench_operator_request_reader import (
     OdooOperatorRequestAcknowledger,
     OdooOperatorRequestFieldMapping,
     OdooOperatorRequestReader,
+)
+from app.erp.odoo.workbench_product_line_request_reader import (
+    OdooProductLineRequestAcknowledger,
+    OdooProductLineRequestFieldMapping,
+    OdooProductLineRequestReader,
 )
 from app.erp.odoo.workbench_projection_publisher import OdooWorkbenchJson2ProjectionAdapter
 from app.persistence import SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
@@ -188,6 +194,63 @@ def build_operator_request_workflow(
     )
 
 
+def build_product_line_request_workflow(
+    *,
+    business_session: Session,
+    ledger_session: Session,
+    settings: Settings,
+    line_request_mapping: OdooProductLineRequestFieldMapping,
+    odoo_client: OdooJson2Client | None = None,
+) -> OperatorRequestIngestionWorkflow:
+    """PR C: the same pipeline for requests submitted on Workbench child product line rows.
+
+    Only ``PRODUCT_LINE_MAPPING`` is handled, by the *same* handler and use case as the
+    parent "Ürün Eşleştir" request (#208); ledger, actor directory, authorization issuer
+    and projection refresh are the parent tick's own components.
+    """
+
+    client = odoo_client or OdooJson2Client.from_settings(settings)
+    projection_adapter = OdooWorkbenchJson2ProjectionAdapter(client=client)
+    return OperatorRequestIngestionWorkflow(
+        reader=OdooProductLineRequestReader(adapter=projection_adapter, mapping=line_request_mapping),
+        acknowledger=OdooProductLineRequestAcknowledger(adapter=projection_adapter, mapping=line_request_mapping),
+        ledger=SqlAlchemyOperatorRequestLedger(ledger_session),
+        actors=OperatorActorDirectory.from_json(settings.odoo_operator_request_actors),
+        handlers={
+            OperatorRequestAction.PRODUCT_LINE_MAPPING: ProductMappingRequestHandler(
+                use_case=build_map_existing_product_use_case(
+                    session=business_session, settings=settings, odoo_client=client
+                )
+            )
+        },
+        authorization_issuer=ReviewVersionCheckedAuthorizationIssuer(
+            use_case=build_create_write_authorization_use_case(session=business_session),
+            review_reader=SqlAlchemyReviewRepository(business_session),
+        ),
+        projection_refresher=build_runtime_workbench_projection_synchronizer(
+            session=business_session, settings=settings, odoo_client=client
+        ),
+        transient_errors=(ErpRepositoryError, ConnectorError),
+    )
+
+
+class SequentialOperatorRequestWorkflows:
+    """Run several request channels one after another in one tick; results are concatenated.
+
+    Channels never run concurrently, so two requests for the same review are serialized
+    and the optimistic review-version check decides between them.
+    """
+
+    def __init__(self, workflows: Sequence[OperatorRequestIngestionWorkflow]) -> None:
+        self._workflows = tuple(workflows)
+
+    def run(self, *, company_id: int) -> OperatorRequestIngestionResult:
+        results: list[OperatorRequestResult] = []
+        for workflow in self._workflows:
+            results.extend(workflow.run(company_id=company_id).results)
+        return OperatorRequestIngestionResult(company_id=company_id, results=tuple(results))
+
+
 class OperatorRequestTick:
     """One single-flight tick: fresh sessions and workflow, one run, everything closed."""
 
@@ -197,7 +260,9 @@ class OperatorRequestTick:
         session_factory: Callable[[], Session],
         lock: PollLock,
         company_id: int,
-        workflow_factory: Callable[[Session, Session], OperatorRequestIngestionWorkflow],
+        workflow_factory: Callable[
+            [Session, Session], OperatorRequestIngestionWorkflow | SequentialOperatorRequestWorkflows
+        ],
     ) -> None:
         self._session_factory = session_factory
         self._lock = lock
@@ -226,6 +291,11 @@ def build_operator_request_tick(
     # Fail at startup, not on the first request, if the mapping or actor JSON is wrong.
     mapping = OdooOperatorRequestFieldMapping.from_environment()
     OperatorActorDirectory.from_json(settings.odoo_operator_request_actors)
+    line_mapping = (
+        OdooProductLineRequestFieldMapping.from_environment(parent=mapping)
+        if settings.odoo_workbench_product_line_requests_enabled
+        else None
+    )
     session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     lock: PollLock = (
         PostgresAdvisoryPollLock(engine, key=OPERATOR_REQUEST_ADVISORY_LOCK_KEY)
@@ -236,11 +306,42 @@ def build_operator_request_tick(
         session_factory=session_factory,
         lock=lock,
         company_id=settings.odoo_workbench_operator_requests_company_id,
-        workflow_factory=lambda business, ledger: build_operator_request_workflow(
+        workflow_factory=lambda business, ledger: _tick_workflow(
             business_session=business,
             ledger_session=ledger,
             settings=settings,
             odoo_client=odoo_client,
             request_mapping=mapping,
+            line_request_mapping=line_mapping,
         ),
     )
+
+
+def _tick_workflow(
+    *,
+    business_session: Session,
+    ledger_session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None,
+    request_mapping: OdooOperatorRequestFieldMapping,
+    line_request_mapping: OdooProductLineRequestFieldMapping | None,
+) -> OperatorRequestIngestionWorkflow | SequentialOperatorRequestWorkflows:
+    parent = build_operator_request_workflow(
+        business_session=business_session,
+        ledger_session=ledger_session,
+        settings=settings,
+        odoo_client=odoo_client,
+        request_mapping=request_mapping,
+    )
+    if line_request_mapping is None:
+        return parent
+    lines = build_product_line_request_workflow(
+        business_session=business_session,
+        ledger_session=ledger_session,
+        settings=settings,
+        odoo_client=odoo_client,
+        line_request_mapping=line_request_mapping,
+    )
+    # Child line rows first: a parent request processed earlier in the same tick would
+    # refresh (rewrite) the child rows and so invalidate their requester check.
+    return SequentialOperatorRequestWorkflows((lines, parent))
