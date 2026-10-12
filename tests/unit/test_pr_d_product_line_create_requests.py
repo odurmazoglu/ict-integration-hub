@@ -699,3 +699,53 @@ def test_migration_round_trip_without_rows(migrated) -> None:
     assert "workbench_product_line_creations" not in inspect(engine).get_table_names()
     command.upgrade(config, "head")
     _insert_creation(engine)
+
+
+def test_migration_swaps_the_claim_owner_fk_for_an_owner_kind_and_restores_it(migrated) -> None:
+    config, engine = migrated
+    command.upgrade(config, "head")
+    columns = {c["name"] for c in inspect(engine).get_columns("workbench_review_product_identity_claims")}
+    assert "owner_kind" in columns
+    assert inspect(engine).get_foreign_keys("workbench_review_product_identity_claims") == []
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO workbench_review_product_identity_claims (company_id, resolved_supplier_partner_id, "
+                "seller_item_code, owner_review_id, owner_company_id, owner_review_version, owner_line_number, "
+                "owner_kind) VALUES (1, 24, 'TFZP', 'review:x', 1, 2, '1', 'product_line_creation')"
+            )
+        )
+    with pytest.raises(RuntimeError, match="1 product_line_creation identity claim"):
+        command.downgrade(config, "202607170039")
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM workbench_review_product_identity_claims"))
+
+    command.downgrade(config, "202607170039")
+
+    engine = create_engine(engine.url)  # reflect the rebuilt table through fresh connections
+    (fk,) = inspect(engine).get_foreign_keys("workbench_review_product_identity_claims")
+    assert fk["name"] == "fk_wrpr_identity_claims_owner"
+    assert fk["referred_table"] == "workbench_review_product_remediation_reservations"
+    columns = {c["name"] for c in inspect(engine).get_columns("workbench_review_product_identity_claims")}
+    assert "owner_kind" not in columns
+
+
+def test_uom_unit_code_map_is_bounded_by_the_allowlist() -> None:
+    assert not any(
+        "UOM_UNIT_CODES" in e
+        for e in runtime_configuration_errors(_ready_settings(product_creation_uom_unit_codes={1: ("C62",)}))
+    )
+    errors = runtime_configuration_errors(_ready_settings(product_creation_uom_unit_codes={5: ("DAY",)}))
+    assert any("may only list uom ids" in e for e in errors)
+    errors = runtime_configuration_errors(_ready_settings(product_creation_uom_unit_codes={1: ()}))
+    assert any("at least one unit code" in e for e in errors)
+
+
+def test_vendor_code_lookup_spans_every_vendor_with_literal_text() -> None:
+    adapter = _Adapter([({"id": 88},)])
+    assert OdooProductCatalogReader(adapter=adapter).find_supplierinfo_ids_by_product_code(" XY_9 ", company_id=1) == (
+        88,
+    )
+    (call,) = adapter.calls
+    assert call["model"] == "product.supplierinfo"
+    assert call["domain"] == [["product_code", "=ilike", "XY\\_9"], ["company_id", "in", [1, False]]]

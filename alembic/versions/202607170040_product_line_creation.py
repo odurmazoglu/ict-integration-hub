@@ -10,12 +10,18 @@ Create Date: 2026-10-12 12:00:00.000000
 * Creates ``workbench_product_line_creations``: one row per review line/version with the
   immutable operator intent, the Hub-derived supplier identity, the crash-recovery status
   and the created Odoo ids.
+* ``workbench_review_product_identity_claims`` (the shared supplier-product lock): adds
+  ``owner_kind`` (``remediation_reservation`` | ``product_line_creation``, existing rows
+  get ``remediation_reservation``) and drops the composite FK ``fk_wrpr_identity_claims_owner``
+  to the reservation table -- a PR D claim's owner is a creation row, and PostgreSQL cannot
+  point one FK at two tables. The unique identity constraint (the lock) is unchanged.
 
-No existing row, column, index or constraint is otherwise changed.
+No existing row is rewritten; no other column, index or constraint is changed.
 
 Downgrade refuses (nothing is deleted or changed) while any ``product_line_create``
-ledger row or any ``workbench_product_line_creations`` row exists: both are audit and
-idempotency history of Odoo master-data writes.
+ledger row, any ``workbench_product_line_creations`` row or any ``product_line_creation``
+identity claim exists: they are audit and idempotency history of Odoo master-data writes.
+Otherwise it restores the FK exactly.
 """
 
 from collections.abc import Sequence
@@ -40,6 +46,12 @@ _NEW_ACTIONS = (
     "'execute_vendor_bill', 'product_mapping', 'product_line_mapping', 'product_line_create')"
 )
 _TABLE = "workbench_product_line_creations"
+_CLAIMS = "workbench_review_product_identity_claims"
+_CLAIM_OWNER_FK = "fk_wrpr_identity_claims_owner"
+_CLAIM_OWNER_KIND_CK = "ck_wrpr_identity_claims_owner_kind"
+_RESERVATIONS = "workbench_review_product_remediation_reservations"
+_OWNER_COLUMNS = ["owner_review_id", "owner_company_id", "owner_review_version", "owner_line_number"]
+_RESERVATION_COLUMNS = ["review_id", "company_id", "review_version", "line_number"]
 
 
 def upgrade() -> None:
@@ -93,18 +105,32 @@ def upgrade() -> None:
         sa.UniqueConstraint("review_id", "company_id", "review_version", "line_number", name="uq_wplc_line"),
     )
     op.create_index("ix_wplc_company_review", _TABLE, ["company_id", "review_id"])
+    with op.batch_alter_table(_CLAIMS) as batch_op:
+        batch_op.add_column(
+            sa.Column("owner_kind", sa.String(length=32), nullable=False, server_default="remediation_reservation")
+        )
+        batch_op.create_check_constraint(
+            _CLAIM_OWNER_KIND_CK, "owner_kind IN ('remediation_reservation', 'product_line_creation')"
+        )
+        batch_op.drop_constraint(_CLAIM_OWNER_FK, type_="foreignkey")
 
 
 def downgrade() -> None:
     bind = op.get_bind()
     ledger_rows = bind.scalar(sa.text(f"SELECT count(*) FROM {_LEDGER} WHERE action = 'product_line_create'"))
     creation_rows = bind.scalar(sa.text(f"SELECT count(*) FROM {_TABLE}"))
-    if ledger_rows or creation_rows:
+    line_claims = bind.scalar(sa.text(f"SELECT count(*) FROM {_CLAIMS} WHERE owner_kind = 'product_line_creation'"))
+    if ledger_rows or creation_rows or line_claims:
         raise RuntimeError(
-            f"Refusing to downgrade 202607170040: {ledger_rows} 'product_line_create' ledger row(s) and "
-            f"{creation_rows} {_TABLE} row(s) exist. They are audit/idempotency history of Odoo product "
-            "creation and are not deleted automatically; resolve them explicitly before downgrading."
+            f"Refusing to downgrade 202607170040: {ledger_rows} 'product_line_create' ledger row(s), "
+            f"{creation_rows} {_TABLE} row(s) and {line_claims} product_line_creation identity claim(s) exist. "
+            "They are audit/idempotency history of Odoo product creation and are not deleted automatically; "
+            "resolve them explicitly before downgrading."
         )
+    with op.batch_alter_table(_CLAIMS) as batch_op:
+        batch_op.create_foreign_key(_CLAIM_OWNER_FK, _RESERVATIONS, _OWNER_COLUMNS, _RESERVATION_COLUMNS)
+        batch_op.drop_constraint(_CLAIM_OWNER_KIND_CK, type_="check")
+        batch_op.drop_column("owner_kind")
     op.drop_index("ix_wplc_company_review", table_name=_TABLE)
     op.drop_table(_TABLE)
     with op.batch_alter_table(_LEDGER) as batch_op:

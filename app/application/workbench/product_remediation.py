@@ -34,6 +34,12 @@ from app.application.workbench.exceptions import ProductRemediationContractError
 # guessed/defaulted here; the operator explicitly picks goods vs. service.
 ALLOWED_REMEDIATION_PRODUCT_TYPES = frozenset({"consu", "service"})
 
+#: Which table owns an identity claim (PR D, migration 202607170040). The claim stays ONE
+#: shared single-winner lock per supplier-product identity for both creation flows.
+CLAIM_OWNER_REMEDIATION_RESERVATION = "remediation_reservation"
+CLAIM_OWNER_PRODUCT_LINE_CREATION = "product_line_creation"
+CLAIM_OWNER_KINDS = frozenset({CLAIM_OWNER_REMEDIATION_RESERVATION, CLAIM_OWNER_PRODUCT_LINE_CREATION})
+
 
 class ProductReservationStatus(StrEnum):
     """Internal durable state machine for one review-line's CREATE_NEW_PRODUCT reservation.
@@ -254,8 +260,12 @@ class ProductIdentityClaim(ApplicationDTO):
     owner_company_id: int
     owner_review_version: int
     owner_line_number: str
+    #: ``remediation_reservation`` (REST CREATE_NEW_PRODUCT) or ``product_line_creation`` (PR D).
+    owner_kind: str = CLAIM_OWNER_REMEDIATION_RESERVATION
 
     def __post_init__(self) -> None:
+        if self.owner_kind not in CLAIM_OWNER_KINDS:
+            raise ProductRemediationContractError("owner_kind must be a known identity claim owner.")
         _require_positive_int(self.company_id, "company_id must be positive.")
         _require_positive_int(self.resolved_supplier_partner_id, "resolved_supplier_partner_id must be positive.")
         _require_text(self.seller_item_code, "seller_item_code is required.")
@@ -309,6 +319,9 @@ def _require_positive_int(value: int | None, message: str) -> None:
 
 __all__ = [
     "ALLOWED_REMEDIATION_PRODUCT_TYPES",
+    "CLAIM_OWNER_KINDS",
+    "CLAIM_OWNER_PRODUCT_LINE_CREATION",
+    "CLAIM_OWNER_REMEDIATION_RESERVATION",
     "CreateNewProductCommand",
     "CreateNewProductResult",
     "ExistingSupplierInfo",

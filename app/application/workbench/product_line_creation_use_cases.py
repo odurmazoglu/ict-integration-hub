@@ -67,7 +67,11 @@ from app.application.workbench.product_line_creation import (
 from app.application.workbench.product_line_creation_policy import ProductLineCreationPolicy, ValidatedNewProduct
 from app.application.workbench.product_mapping import ProductMappingSellerCodeMissingError
 from app.application.workbench.product_mapping_use_cases import Reclassifier
-from app.application.workbench.product_remediation import ExistingSupplierInfo, normalize_seller_item_code
+from app.application.workbench.product_remediation import (
+    CLAIM_OWNER_PRODUCT_LINE_CREATION,
+    ExistingSupplierInfo,
+    normalize_seller_item_code,
+)
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import (
     ReclassifyReviewCommand,
@@ -85,8 +89,12 @@ from app.domain.invoice import InternalInvoice
 
 STALE_MESSAGE = "İnceleme bu istekten sonra değişti; güncel kaydı kontrol edip tekrar gönderin."
 #: An Odoo request outlives its HTTP client: a create whose response was lost may still
-#: commit server-side. Its absence proves nothing until this grace has passed.
-DEFAULT_CREATE_OUTCOME_GRACE = timedelta(minutes=10)
+#: commit server-side. Its absence proves nothing until this grace has passed. Odoo Online's
+#: server-side request time limit is not documented for this instance, so the grace is far
+#: above any plausible worker limit; the cost is only a rare wait for the operator.
+DEFAULT_CREATE_OUTCOME_GRACE = timedelta(minutes=30)
+#: Column bound of the stored supplier product name (the invoice line description).
+MAX_SUPPLIER_PRODUCT_NAME_LENGTH = 512
 
 # Raised by OdooProductWriter BEFORE the network call (gate, payload validation) or when Odoo
 # refused the request outright: certain that no product.template was created.
@@ -182,9 +190,11 @@ class CreateLineProductUseCase:
             review_version=command.expected_version,
             seller_item_code=seller_item_code,
             intent=command.intent,
+            source_unit_code=line.unit_code,
+            invoice_seller_codes=_invoice_seller_codes(source),
         )
         await self._require_no_supplier_mapping(command, supplier.partner_id, seller_item_code)
-        self._require_identity_unclaimed(command, supplier.partner_id, seller_item_code)
+        self._require_identity_unclaimed(command, supplier.partner_id, seller_item_code, line_number)
 
         attempt = ProductLineCreation(
             review_id=command.review_id,
@@ -197,7 +207,7 @@ class CreateLineProductUseCase:
             intent=command.intent,
             approved_by=command.approved_by,
             create_attempted_at=self._clock(),
-            supplier_product_name=(line.description or "").strip() or None,
+            supplier_product_name=(line.description or "").strip()[:MAX_SUPPLIER_PRODUCT_NAME_LENGTH] or None,
         )
         try:
             # One commit BEFORE the Odoo call: the claim is the cross-review single-winner
@@ -437,15 +447,60 @@ class CreateLineProductUseCase:
                 f"{', '.join(f'#{row.id}' for row in existing)}); yeni ürün oluşturulmadı."
             )
 
-    def _require_identity_unclaimed(self, command: CreateLineProductCommand, partner_id: int, code: str) -> None:
+    def _require_identity_unclaimed(
+        self, command: CreateLineProductCommand, partner_id: int, code: str, line_number: str
+    ) -> None:
+        """No other owner may hold the supplier-product identity claim.
+
+        The one exception is THIS line's own unresolved attempt from an older review
+        version (the review moved after a lost response, so that attempt can no longer be
+        resumed at its own version). Its supplier mapping is already proven absent by the
+        caller; after the in-flight grace the old attempt is discarded and its claim
+        released, inside the grace the request waits. Anything else fails closed.
+        """
+
         claim = self._claims.find(
             company_id=command.company_id, resolved_supplier_partner_id=partner_id, seller_item_code=code
         )
-        if claim is not None:
+        if claim is None:
+            return
+        own_line = claim.owner_kind == CLAIM_OWNER_PRODUCT_LINE_CREATION and (
+            claim.owner_review_id,
+            claim.owner_company_id,
+            claim.owner_line_number,
+        ) == (command.review_id, command.company_id, line_number)
+        previous = (
+            self._creations.find(
+                review_id=claim.owner_review_id,
+                company_id=claim.owner_company_id,
+                review_version=claim.owner_review_version,
+                line_number=claim.owner_line_number,
+            )
+            if own_line
+            else None
+        )
+        if previous is None:
             raise ProductLineCreateDuplicateError(
                 f"'{code}' kodu için başka bir inceleme satırında ({claim.owner_review_id}, satır "
                 f"{claim.owner_line_number}) yeni ürün oluşturma kaydı var; ikinci bir ürün oluşturulmadı."
             )
+        if previous.status is ProductLineCreationStatus.NEEDS_RECONCILIATION:
+            raise ProductLineCreateReconciliationRequiredError(
+                "Bu satırın önceki bir sürümdeki ürün oluşturma denemesi teknik inceleme bekliyor; yeni ürün "
+                "oluşturulmadı. Teknik destek alın."
+            )
+        if previous.status is not ProductLineCreationStatus.CREATE_ATTEMPTED:
+            raise ProductLineCreateDuplicateError(
+                f"Bu satır için önceki bir sürümde zaten yeni ürün oluşturuldu (#{previous.product_id}); ikinci "
+                "bir ürün oluşturulmadı."
+            )
+        retry_at = previous.create_attempted_at + self._outcome_grace
+        if self._clock() < retry_at:
+            raise ProductLineCreateInFlightError(
+                "Bu satırın önceki ürün oluşturma denemesinin sonucu henüz kesinleşmedi; "
+                f"{retry_at.astimezone(UTC):%H:%M} UTC sonrasında tekrar gönderin."
+            )
+        self._discard(previous)
 
     def _claim_authorization(
         self, command: CreateLineProductCommand, line_number: str
@@ -575,6 +630,11 @@ def _source_line(source: ReviewSourceInvoiceEvidence, line_number: str):
             "oluşturulmadı. Teknik destek alın."
         )
     return lines[0]
+
+
+def _invoice_seller_codes(source: ReviewSourceInvoiceEvidence) -> tuple[str, ...]:
+    codes = (normalize_seller_item_code(line.seller_item_code) for line in source.invoice.lines)
+    return tuple(dict.fromkeys(code for code in codes if code is not None))
 
 
 def _product_not_found_lines(reasons: tuple[ManualReviewReason, ...]) -> tuple[str, ...]:

@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.application.commands.product_remediation import (
@@ -71,7 +71,7 @@ from app.application.workbench.write_authorization import (
     WriteAuthorizationOperationType,
     product_line_creation_authorization_consumer_id,
 )
-from app.connectors.exceptions import ConnectorTimeoutError, ConnectorValidationError
+from app.connectors.exceptions import ConnectorAuthorizationError, ConnectorTimeoutError, ConnectorValidationError
 from app.db.base import Base
 from app.erp.odoo.existing_supplier_info_reader import OdooExistingSupplierInfoReader
 from app.erp.write.odoo_product_write_policy import OdooProductWritePolicy
@@ -233,6 +233,12 @@ class CatalogPort:
             sorted(tid for tid, row in self.odoo.templates.items() if row["active"] and row["name"].casefold() == key)
         )
 
+    def find_supplierinfo_ids_by_product_code(self, product_code: str, *, company_id: int) -> tuple[int, ...]:
+        key = product_code.strip().casefold()
+        return tuple(
+            sorted(row["id"] for row in self.odoo.supplierinfo if (row.get("product_code") or "").casefold() == key)
+        )
+
     def read_template(self, template_id: int) -> CreatedProductSnapshot | None:
         row = self.odoo.templates.get(template_id)
         if row is None:
@@ -359,6 +365,18 @@ def _intent(**overrides: Any) -> NewProductIntent:
 
 def _session() -> Session:
     engine = create_engine("sqlite://")
+
+    # pysqlite defers BEGIN and breaks SAVEPOINT semantics (the repositories use
+    # begin_nested); SQLAlchemy's documented workaround gives PostgreSQL-like transactions,
+    # so rollback-after-race assertions test the code, not the driver.
+    @event.listens_for(engine, "connect")
+    def _disable_pysqlite_transactions(dbapi_connection, _record) -> None:
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def _emit_begin(connection) -> None:
+        connection.exec_driver_sql("BEGIN")
+
     Base.metadata.create_all(
         engine,
         tables=[
@@ -378,6 +396,7 @@ class World:
         manual_roots: tuple[int, ...] = (MANAGEENGINE,),
         uoms: tuple[int, ...] = (UNITS,),
         lister: CategoryLister | None = None,
+        uom_unit_codes: dict[int, tuple[str, ...]] | None = None,
     ) -> None:
         self.odoo = CatalogOdoo()
         self.harness = Harness(_pr_d_invoice(), odoo=self.odoo)
@@ -397,6 +416,7 @@ class World:
             category_lister=lister or CategoryLister(),
             catalog_reader=self.catalog,
             allowed_uom_ids=uoms,
+            uom_unit_codes=uom_unit_codes,
             manual_only_category_ids=manual_roots,
         )
         self.use_case = CreateLineProductUseCase(
@@ -897,12 +917,12 @@ async def test_unknown_outcome_without_commit_waits_for_the_grace_then_creates_e
     with pytest.raises(ProductLineCreateOutcomeUnknownError):
         await world.run(world.command())
 
-    world.now = T0 + timedelta(minutes=9)
-    with pytest.raises(ProductLineCreateInFlightError, match="09:10 UTC"):
+    world.now = T0 + timedelta(minutes=29)
+    with pytest.raises(ProductLineCreateInFlightError, match="09:30 UTC"):
         await world.run(world.command())
     assert len(world.odoo.template_creates) == 1
 
-    world.now = T0 + timedelta(minutes=11)
+    world.now = T0 + timedelta(minutes=31)
     result = await world.run(world.command())
 
     assert len(world.odoo.template_creates) == 2
@@ -1025,3 +1045,221 @@ def test_claim_release_deletes_only_the_owners_own_claim() -> None:
     assert claims.find(company_id=COMPANY, resolved_supplier_partner_id=ICT_BULUT, seller_item_code="TFZP") == mine
     claims.release(mine)
     assert claims.find(company_id=COMPANY, resolved_supplier_partner_id=ICT_BULUT, seller_item_code="TFZP") is None
+
+
+# --------------------------------------------------------------------------- pre-merge review hardening
+
+
+async def test_writer_read_back_refusal_after_create_is_never_a_certain_no_write() -> None:
+    class ReadBackRefused(CatalogOdoo):
+        async def search_read(self, *, model, domain, fields, limit=20, offset=0):
+            if model == "product.template":
+                raise ConnectorAuthorizationError("Odoo authorization failed.")
+            return await super().search_read(model=model, domain=domain, fields=fields, limit=limit, offset=offset)
+
+    odoo = ReadBackRefused()
+    writer = OdooProductWriter(
+        repository=OdooProductTemplateRepository(client=odoo),
+        policy=OdooProductWritePolicy(
+            product_remediation_write_enabled=True, app_env="staging", odoo_host="test-ictteknoloji.odoo.com"
+        ),
+    )
+    # both the PR D path and the v1 path (no supplier link)
+    for command in (_create_command(), _create_command(supplier_link=None, category=None, name="Other")):
+        with pytest.raises(ProductDataIntegrityError, match="read-back failed") as caught:
+            await writer.create_product(command)
+        assert not isinstance(caught.value, ProductWriteValidationError)
+    assert len(odoo.new_templates()) == 2
+
+
+async def test_read_back_refusal_keeps_the_attempt_and_the_next_submission_adopts(world: World) -> None:
+    original = world.odoo.search_read
+    calls = {"n": 0}
+
+    async def refuse_first_template_read(*, model, domain, fields, limit=20, offset=0):
+        if model == "product.template" and calls["n"] == 0:
+            calls["n"] += 1
+            raise ConnectorValidationError("Odoo rejected the request payload.")
+        return await original(model=model, domain=domain, fields=fields, limit=limit, offset=offset)
+
+    world.odoo.search_read = refuse_first_template_read
+    with pytest.raises(ProductLineCreateOutcomeUnknownError):
+        await world.run(world.command())
+    assert world.creation().status is ProductLineCreationStatus.CREATE_ATTEMPTED
+    assert world.claim() is not None  # not released: the product exists
+
+    result = await world.run(world.command())
+
+    assert result.created_product and len(world.odoo.template_creates) == 1
+
+
+async def test_internal_reference_may_not_be_any_vendor_code(world: World) -> None:
+    with pytest.raises(ProductLineCreatePolicyError, match=r"\(01\.0001\)"):
+        await world.run(world.command(internal_reference="01.0001"))  # line 3's seller code
+    world.odoo.supplierinfo.append(
+        {
+            "id": 88,
+            "partner_id": 99,
+            "product_tmpl_id": 302,
+            "product_id": None,
+            "product_code": "XYZ-9",
+            "company_id": 1,
+        }
+    )
+    with pytest.raises(ProductLineCreatePolicyError, match="#88"):
+        await world.run(world.command(internal_reference="xyz-9"))
+    assert world.odoo.template_creates == []
+
+
+async def test_uom_allowlist_names_no_universal_unit_and_unit_codes_must_fit() -> None:
+    world = World(uoms=(UNITS, 5), uom_unit_codes={5: ("DAY",), UNITS: ("C62",)})
+    with pytest.raises(ProductLineCreatePolicyError, match=r"onaylı birimler: #1, #5"):
+        await world.run(world.command(uom_id=4))
+    with pytest.raises(ProductLineCreatePolicyError, match=r"faturadaki birimle \(C62\) uyumlu değil"):
+        await world.run(world.command(uom_id=5))
+    assert world.odoo.template_creates == []
+
+    result = await world.run(world.command(uom_id=UNITS))
+    assert world.odoo.templates[result.product_template_id]["uom_id"] == UNITS
+
+
+async def test_uom_without_a_unit_code_entry_is_only_allowlist_checked() -> None:
+    world = World(uoms=(UNITS, 5), uom_unit_codes={5: ("DAY",)})
+    result = await world.run(world.command(uom_id=UNITS))
+    assert result.created_product
+
+
+async def test_own_unresolved_attempt_from_an_older_version_is_recovered_after_the_grace(world: World) -> None:
+    world.odoo.create_failure = "timeout"
+    with pytest.raises(ProductLineCreateOutcomeUnknownError):
+        await world.run(world.command())
+    world.harness.review = replace(world.harness.review, version=3)  # the review moved meanwhile
+
+    world.now = T0 + timedelta(minutes=5)
+    with pytest.raises(ProductLineCreateInFlightError, match="önceki ürün oluşturma denemesinin"):
+        await world.run(world.command())
+    world.now = T0 + timedelta(minutes=31)
+    result = await world.run(world.command())
+
+    assert world.creation(version=2) is None
+    assert world.creation(version=3).status is ProductLineCreationStatus.COMPLETED
+    assert world.claim().owner_review_version == 3
+    assert world.odoo.new_templates() == [900] and result.created_product
+
+
+async def test_own_completed_creation_from_an_older_version_is_never_repeated(world: World) -> None:
+    reasons = world.harness.review.review_reasons
+    await world.run(world.command())
+    # contrived: the mapping vanished and the line is unmatched again at the new version
+    world.odoo.supplierinfo = [row for row in world.odoo.supplierinfo if row.get("product_code") != "TFZP"]
+    world.harness.review = replace(world.harness.review, review_reasons=reasons)
+
+    with pytest.raises(ProductLineCreateDuplicateError, match="önceki bir sürümde zaten yeni ürün"):
+        await world.run(world.command(product_name="Başka Ad"))
+    assert len(world.odoo.template_creates) == 1
+
+
+class _StaleClaims:
+    """A claim store whose read misses a concurrently committed claim (race window)."""
+
+    def __init__(self, inner: SqlAlchemyReviewProductIdentityClaimRepository) -> None:
+        self.inner = inner
+
+    def find(self, **kwargs):
+        return None
+
+    def claim(self, claim):
+        return self.inner.claim(claim)
+
+    def release(self, claim):
+        return self.inner.release(claim)
+
+
+async def test_concurrent_claim_by_another_line_loses_cleanly(world: World) -> None:
+    world.claims.claim(replace(_creation().identity_claim(), owner_review_id="review:other"))
+    world.session.commit()
+    world.use_case._claims = _StaleClaims(world.claims)
+
+    with pytest.raises(ProductLineCreateInFlightError, match="başka bir yeni ürün isteği"):
+        await world.run(world.command())
+
+    assert world.odoo.template_creates == [] and world.creation() is None
+    assert world.harness.consumed == []  # the authorization claim was rolled back too
+
+
+async def test_concurrent_insert_for_the_same_line_loses_cleanly(world: World) -> None:
+    world.repository.insert_attempt(_creation(intent=_intent(product_name="Diğer istek")))
+    world.session.commit()
+
+    class _StaleRepository:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def find(self, **kwargs):
+            return None
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    world.use_case._creations = _StaleRepository(world.repository)
+
+    with pytest.raises(ProductLineCreateInFlightError):
+        await world.run(world.command())
+
+    assert world.odoo.template_creates == []
+    assert world.claim() is None  # this request's claim was rolled back with the failed insert
+
+
+async def test_long_invoice_description_is_bounded_on_the_supplier_mapping(world: World) -> None:
+    world.harness.invoice = _invoice(_line("1", "TFZP", "Ç" * 600, "2"), *world.harness.invoice.lines[1:])
+
+    await world.run(world.command())
+
+    (payload,) = world.odoo.template_creates
+    assert len(payload["seller_ids"][0][2]["product_name"]) == 512
+    assert len(world.creation().supplier_product_name) == 512
+
+
+def test_identity_claims_name_their_owner_table() -> None:
+    session = _session()
+    claims = SqlAlchemyReviewProductIdentityClaimRepository(session)
+    line_claim = _creation().identity_claim()
+    assert line_claim.owner_kind == "product_line_creation"
+    claims.claim(line_claim)
+    v1_claim = replace(line_claim, seller_item_code="OTHER", owner_kind="remediation_reservation")
+    claims.claim(v1_claim)
+    assert (
+        claims.find(company_id=COMPANY, resolved_supplier_partner_id=ICT_BULUT, seller_item_code="TFZP") == line_claim
+    )
+    assert claims.find(company_id=COMPANY, resolved_supplier_partner_id=ICT_BULUT, seller_item_code="OTHER") == v1_claim
+    # release matches the owner kind too: a v1 claim is never released by PR D
+    claims.release(replace(v1_claim, owner_kind="product_line_creation"))
+    assert claims.find(company_id=COMPANY, resolved_supplier_partner_id=ICT_BULUT, seller_item_code="OTHER") == v1_claim
+    with pytest.raises(ProductRemediationContractError):
+        replace(line_claim, owner_kind="something_else")
+    assert (
+        ProductIdentityClaim(
+            **{
+                f: getattr(line_claim, f)
+                for f in (
+                    "company_id",
+                    "resolved_supplier_partner_id",
+                    "seller_item_code",
+                    "owner_review_id",
+                    "owner_company_id",
+                    "owner_review_version",
+                    "owner_line_number",
+                )
+            }
+        ).owner_kind
+        == "remediation_reservation"
+    )
+
+
+async def test_rest_create_claim_on_the_same_line_is_never_taken_over(world: World) -> None:
+    world.claims.claim(replace(_creation(review_version=1).identity_claim(), owner_kind="remediation_reservation"))
+    world.session.commit()
+
+    with pytest.raises(ProductLineCreateDuplicateError, match="başka bir inceleme satırında"):
+        await world.run(world.command())
+    assert world.odoo.template_creates == []

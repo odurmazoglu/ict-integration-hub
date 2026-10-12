@@ -173,13 +173,20 @@ class OdooProductWriter(ProductWriter):
 
         template_id = await self._repository.create_template(payload)
 
-        # Read the template back and validate identity fields never drifted from the request.
-        template = await self._repository.read_template(template_id, include_category=command.category is not None)
-        _validate_created_template(template, command=command, template_id=template_id)
+        try:
+            # Read the template back and validate identity fields never drifted from the request.
+            template = await self._repository.read_template(template_id, include_category=command.category is not None)
+            _validate_created_template(template, command=command, template_id=template_id)
 
-        # product.template and product.product creation are two separate remote reads/writes;
-        # this is read-after-write resolution of the variant Odoo created alongside the template.
-        variant_id = await self._repository.read_variant_id(template_id)
+            # product.template and product.product creation are two separate remote reads/writes;
+            # this is read-after-write resolution of the variant Odoo created alongside the template.
+            variant_id = await self._repository.read_variant_id(template_id)
+        except (ProductWriteValidationError, ProductWriteAuthenticationError, ProductWriteAuthorizationError) as exc:
+            # The template EXISTS: a validation/auth refusal of a read-back must never look like the
+            # "certain no write" classes callers use to retry the create (PR D pre-merge review).
+            raise ProductDataIntegrityError(
+                "The product was created in Odoo but its read-back failed; the outcome must be reconciled."
+            ) from exc
 
         return ProductWriteResult(
             status=ProductWriteStatus.CREATED,

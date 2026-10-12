@@ -1,7 +1,7 @@
 """PR D: read-only Odoo lookups for Workbench new-product creation.
 
-Only ``search_read`` on the already allowlisted ``product.product`` / ``product.template``
-models; this module has no path to an Odoo write. Text comparisons use ``=ilike`` with
+Only ``search_read`` on the already allowlisted ``product.product`` / ``product.template`` /
+``product.supplierinfo`` models; this module has no path to an Odoo write. Text comparisons use ``=ilike`` with
 the LIKE wildcards escaped, i.e. an exact, case-insensitive match -- never a pattern.
 """
 
@@ -15,6 +15,7 @@ from app.erp.odoo.adapter import OdooReadOnlyAdapter, many2one_id
 
 PRODUCT_MODEL = "product.product"
 TEMPLATE_MODEL = "product.template"
+SUPPLIERINFO_MODEL = "product.supplierinfo"
 #: Duplicate checks only need to know *that* (and a few of which) records exist.
 DUPLICATE_LOOKUP_LIMIT = 5
 #: A single-variant product has one; anything above this is reported as "several".
@@ -46,6 +47,18 @@ class OdooProductCatalogReader:
             model=TEMPLATE_MODEL,
             domain=[
                 ["name", "=ilike", escape_like(name.strip())],
+                ["company_id", "in", [company_id, False]],
+            ],
+            fields=["id"],
+            limit=DUPLICATE_LOOKUP_LIMIT,
+        )
+        return _ids(records)
+
+    def find_supplierinfo_ids_by_product_code(self, product_code: str, *, company_id: int) -> tuple[int, ...]:
+        records = self._adapter.search_read(
+            model=SUPPLIERINFO_MODEL,
+            domain=[
+                ["product_code", "=ilike", escape_like(product_code.strip())],
                 ["company_id", "in", [company_id, False]],
             ],
             fields=["id"],

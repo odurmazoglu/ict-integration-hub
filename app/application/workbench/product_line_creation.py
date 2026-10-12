@@ -39,7 +39,7 @@ from app.application.workbench.exceptions import (
     ProductRemediationDataIntegrityError,
     ProductRemediationEligibilityError,
 )
-from app.application.workbench.product_remediation import ProductIdentityClaim
+from app.application.workbench.product_remediation import CLAIM_OWNER_PRODUCT_LINE_CREATION, ProductIdentityClaim
 
 #: Bounds an operator-typed product name; product.template names are short in practice.
 MAX_PRODUCT_NAME_LENGTH = 255
@@ -211,6 +211,7 @@ class ProductLineCreation(ApplicationDTO):
             owner_company_id=self.company_id,
             owner_review_version=self.review_version,
             owner_line_number=self.line_number,
+            owner_kind=CLAIM_OWNER_PRODUCT_LINE_CREATION,
         )
 
 

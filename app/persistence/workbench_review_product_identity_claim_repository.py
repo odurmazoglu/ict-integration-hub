@@ -20,6 +20,7 @@ def _model_from_claim(claim: ProductIdentityClaim) -> WorkbenchReviewProductIden
         owner_company_id=claim.owner_company_id,
         owner_review_version=claim.owner_review_version,
         owner_line_number=claim.owner_line_number,
+        owner_kind=claim.owner_kind,
     )
 
 
@@ -32,6 +33,7 @@ def _claim_from_model(record: WorkbenchReviewProductIdentityClaim) -> ProductIde
         owner_company_id=int(record.owner_company_id),
         owner_review_version=int(record.owner_review_version),
         owner_line_number=str(record.owner_line_number),
+        owner_kind=str(record.owner_kind),
     )
 
 
@@ -109,6 +111,7 @@ class SqlAlchemyReviewProductIdentityClaimRepository:
                     model.owner_company_id == claim.owner_company_id,
                     model.owner_review_version == claim.owner_review_version,
                     model.owner_line_number == claim.owner_line_number,
+                    model.owner_kind == claim.owner_kind,
                 )
             )
             self._session.flush()
