@@ -101,6 +101,23 @@ class Settings(BaseSettings):
     #: product line rows (``ODOO_WORKBENCH_PRODUCT_LINE_REQ_*`` contract) in the same tick.
     #: Off by default: the Hub never reads child request fields until Studio provisions them.
     odoo_workbench_product_line_requests_enabled: bool = False
+    #: PR D: also consume NEW product requests submitted on Workbench child product line rows
+    #: (``ODOO_WORKBENCH_PRODUCT_LINE_NEW_*`` contract). Off by default: the Hub never reads the
+    #: create request fields until Studio provisions them and the gate is enabled.
+    odoo_workbench_product_line_create_enabled: bool = False
+    #: PR D: exact Odoo ``uom.uom`` ids an operator may choose for a new product. No UoM is
+    #: assumed: empty means product creation is refused (and the create gate fails startup).
+    product_creation_uom_ids: frozenset[OdooRecordId] = frozenset()
+    #: PR D: optional JSON ``{"<uom id>": ["<UN/CEFACT unit code>", ...]}``. For a listed UoM the
+    #: source invoice line's unit code must be one of the codes (e.g. Days only for ``DAY``
+    #: lines). Recommended for every UoM before a second UoM is added to the allowlist.
+    product_creation_uom_unit_codes: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    #: PR D: Odoo ``product.category`` ids whose whole subtree is manual-only (variant/license
+    #: catalogs, e.g. "Software Licenses / ManageEngine"). Required when the create gate is on.
+    product_creation_manual_only_category_ids: frozenset[OdooRecordId] = frozenset()
+    #: PR D: extra manual-only SKU regular expressions, added to the built-in ManageEngine
+    #: license SKU shape (which cannot be disabled).
+    product_creation_manual_only_sku_patterns: tuple[str, ...] = ()
 
     @property
     def uyumsoft_wsdl_url(self) -> str:

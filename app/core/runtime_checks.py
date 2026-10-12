@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -134,6 +135,8 @@ def _validate_operator_request_settings(settings: Settings, errors: list[str]) -
                 "ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS_ENABLED=true requires "
                 "ODOO_WORKBENCH_PRODUCT_LINE_PROJECTION_ENABLED=true."
             )
+    if settings.odoo_workbench_product_line_create_enabled:
+        _validate_product_line_create_settings(settings, errors)
     if not settings.odoo_workbench_operator_requests_enabled:
         return
     if settings.odoo_workbench_operator_requests_company_id is None:
@@ -145,6 +148,35 @@ def _validate_operator_request_settings(settings: Settings, errors: list[str]) -
         errors.append(
             "ODOO_WORKBENCH_OPERATOR_REQUESTS_ENABLED=true requires ODOO_WORKBENCH_PROJECTION_PUBLISH_ENABLED=true."
         )
+
+
+def _validate_product_line_create_settings(settings: Settings, errors: list[str]) -> None:
+    """PR D: the create channel shares the PR C child request contract and needs its policy inputs."""
+
+    if not settings.odoo_workbench_product_line_requests_enabled:
+        errors.append(
+            "ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED=true requires "
+            "ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS_ENABLED=true."
+        )
+    if not settings.product_creation_uom_ids:
+        errors.append("ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED=true requires PRODUCT_CREATION_UOM_IDS.")
+    unknown_uoms = set(settings.product_creation_uom_unit_codes) - set(settings.product_creation_uom_ids)
+    if unknown_uoms:
+        errors.append("PRODUCT_CREATION_UOM_UNIT_CODES may only list uom ids that are in PRODUCT_CREATION_UOM_IDS.")
+    if any(not codes for codes in settings.product_creation_uom_unit_codes.values()):
+        errors.append("PRODUCT_CREATION_UOM_UNIT_CODES entries must list at least one unit code.")
+    if not settings.product_creation_manual_only_category_ids:
+        errors.append(
+            "ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED=true requires PRODUCT_CREATION_MANUAL_ONLY_CATEGORY_IDS."
+        )
+    for pattern in settings.product_creation_manual_only_sku_patterns:
+        try:
+            if not pattern.strip():
+                raise re.error("empty pattern")
+            re.compile(pattern)
+        except re.error:
+            errors.append("PRODUCT_CREATION_MANUAL_ONLY_SKU_PATTERNS must be non-empty valid regular expressions.")
+            break
 
 
 def _validate_production_settings(settings: Settings, errors: list[str]) -> None:

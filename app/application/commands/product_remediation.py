@@ -43,6 +43,36 @@ class ValidatedProductCategory:
 
 
 @dataclass(frozen=True, slots=True)
+class ValidatedSupplierLink:
+    """The supplier mapping created *atomically* with a new product (PR D).
+
+    Sent as one inline ``seller_ids`` row of the same ``product.template`` create, so
+    Odoo commits the template, its variant and this ``product.supplierinfo`` in one
+    transaction. The ``(partner_id, product_code, company_id)`` row then doubles as a
+    durable creation key: after a lost response, its presence proves the create
+    committed and its absence (after the in-flight grace) proves it did not.
+
+    ``product_code`` is the supplier's own code from the immutable source line. It is
+    written ONLY here -- never to ``default_code`` (the command refuses a
+    ``default_code`` equal to it).
+    """
+
+    partner_id: int
+    product_code: str
+    company_id: int
+    product_name: str | None = None
+
+    def __post_init__(self) -> None:
+        for value, label in ((self.partner_id, "partner_id"), (self.company_id, "company_id")):
+            if type(value) is not int or value <= 0:
+                raise ProductWriteValidationError(f"A validated supplier link requires a positive {label}.")
+        if not isinstance(self.product_code, str) or not self.product_code.strip():
+            raise ProductWriteValidationError("A validated supplier link requires a product_code.")
+        if self.product_name is not None and (not isinstance(self.product_name, str) or not self.product_name.strip()):
+            raise ProductWriteValidationError("supplier link product_name must be non-empty text when provided.")
+
+
+@dataclass(frozen=True, slots=True)
 class CreateProductCommand(Command):
     """Application request to create one Odoo ``product.template`` from operator-supplied identity.
 
@@ -70,12 +100,19 @@ class CreateProductCommand(Command):
     approved_by: str | None = None
     authorization: WriteAuthorizationRecord | None = None
     category: ValidatedProductCategory | None = None
+    #: PR D: create the supplier mapping in the same Odoo transaction (see ValidatedSupplierLink).
+    supplier_link: ValidatedSupplierLink | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
             raise ProductWriteValidationError("name is required.")
         if self.category is not None and not isinstance(self.category, ValidatedProductCategory):
             raise ProductWriteValidationError("category must be an application-validated product category.")
+        if self.supplier_link is not None:
+            if not isinstance(self.supplier_link, ValidatedSupplierLink):
+                raise ProductWriteValidationError("supplier_link must be an application-validated supplier link.")
+            if self.category is None:
+                raise ProductWriteValidationError("A product created with a supplier link requires a category.")
         if self.type not in ALLOWED_PRODUCT_TEMPLATE_TYPES:
             raise ProductWriteValidationError("type must be a recognized Odoo product.template type.")
         if type(self.uom_id) is not int or isinstance(self.uom_id, bool) or self.uom_id <= 0:
@@ -86,6 +123,17 @@ class CreateProductCommand(Command):
             raise ProductWriteValidationError("default_code must be a non-empty string when provided.")
         if self.approved_by is not None and (not isinstance(self.approved_by, str) or not self.approved_by.strip()):
             raise ProductWriteValidationError("approved_by must be a non-empty name when provided.")
+        if (
+            self.supplier_link is not None
+            and self.default_code is not None
+            and _code_key(self.default_code) == _code_key(self.supplier_link.product_code)
+        ):
+            # Defense in depth for "never mirror a supplier code into Internal Reference".
+            raise ProductWriteValidationError("default_code must never equal the supplier's own product code.")
+
+
+def _code_key(value: str) -> str:
+    return "".join(value.split()).casefold()
 
 
 @dataclass(frozen=True, slots=True)

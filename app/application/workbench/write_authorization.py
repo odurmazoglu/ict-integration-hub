@@ -282,3 +282,19 @@ def product_mapping_authorization_consumer_id(
 
     identity = f"product-mapping-write:{company_id}:{review_id}:{expected_version}:{line_number}"
     return f"product-mapping-write:{uuid5(NAMESPACE_URL, identity)}"
+
+
+def product_line_creation_authorization_consumer_id(
+    *, company_id: int, review_id: str, expected_version: int, line_number: str, intent_digest: str
+) -> str:
+    """Deterministic consumer identity for a PR D new-product creation (CREATE_NEW_PRODUCT).
+
+    Binds the whole immutable product intent (name, type, storability, UoM, category,
+    internal reference) through its digest, so an authorization consumed for one intent
+    can never authorize a different product on the same line; a resume of the same
+    intent reuses its own consumed authorization. The ``product-line-create`` prefix keeps
+    it disjoint from every REST CREATE_NEW_PRODUCT consumer identity.
+    """
+
+    identity = f"product-line-create:{company_id}:{review_id}:{expected_version}:{line_number}:{intent_digest}"
+    return f"product-line-create:{uuid5(NAMESPACE_URL, identity)}"

@@ -1,4 +1,5 @@
-"""Operator request ledger action constraint (#208 ``product_mapping``, PR C ``product_line_mapping``).
+"""Operator request ledger action constraint (#208 ``product_mapping``, PR C ``product_line_mapping``,
+PR D ``product_line_create``).
 
 The ledger's ck_workbench_operator_requests_action must accept every operator action
 the poller can parse, and the application enum, the Odoo label mapping, the ORM model
@@ -24,6 +25,7 @@ from app.application.workbench.operator_request_ingestion import (
     OperatorRequestAction,
     operator_request_key,
 )
+from app.application.workbench.product_line_creation import NewProductIntent, NewProductKind
 from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
 from app.core.config import get_settings
@@ -44,6 +46,12 @@ ACTION_INPUTS: dict[OperatorRequestAction, dict[str, Any]] = {
     OperatorRequestAction.EXECUTE_VENDOR_BILL: {},
     OperatorRequestAction.PRODUCT_MAPPING: {"line_number": "1", "product_id": 393},
     OperatorRequestAction.PRODUCT_LINE_MAPPING: {"line_number": "2", "product_id": 394},
+    OperatorRequestAction.PRODUCT_LINE_CREATE: {
+        "line_number": "1",
+        "new_product": NewProductIntent(
+            product_name="Windows Server Standard (VM)", kind=NewProductKind.SERVICE, categ_id=41, uom_id=1
+        ),
+    },
 }
 
 
@@ -76,9 +84,11 @@ def test_model_action_tuple_equals_the_application_action_enum() -> None:
 def test_every_parsed_parent_value_is_a_parent_action_and_every_parent_action_is_parseable() -> None:
     assert {action.value for action in ACTION_BY_ODOO_VALUE.values()} == {a.value for a in PARENT_ROW_ACTIONS}
     assert ACTION_BY_ODOO_VALUE["Ürün Eşleştir"] is OperatorRequestAction.PRODUCT_MAPPING
-    # PR C: the child line action is only ever built by the child row reader, never parsed from a parent row.
-    assert APPLICATION_ACTIONS - {a.value for a in PARENT_ROW_ACTIONS} == {"product_line_mapping"}
+    # PR C/D: the child line actions are only ever built by the child row readers, never parsed from a parent row.
+    child_only = APPLICATION_ACTIONS - {a.value for a in PARENT_ROW_ACTIONS}
+    assert child_only == {"product_line_mapping", "product_line_create"}
     assert "product_line_mapping" not in ACTION_BY_ODOO_VALUE
+    assert "product_line_create" not in ACTION_BY_ODOO_VALUE
 
 
 def test_model_check_constraint_lists_exactly_the_application_actions() -> None:
@@ -166,15 +176,24 @@ def test_202607170038_widens_202607170037_for_product_mapping(migrated) -> None:
         _insert(engine, "product_line_mapping", "k-line-before")
 
 
-def test_head_is_202607170039_which_adds_product_line_mapping(migrated) -> None:
+def test_202607170039_adds_product_line_mapping(migrated) -> None:
     config, engine = migrated
     command.upgrade(config, "202607170038")
     with pytest.raises(IntegrityError):
         _insert(engine, "product_line_mapping", "k-line-before")
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "202607170039")
     assert _version(engine) == "202607170039"
     _insert(engine, "product_line_mapping", "k-line-after")
+    with pytest.raises(IntegrityError):
+        _insert(engine, "product_line_create", "k-create-before")
+
+
+def test_head_is_202607170040_which_adds_product_line_create(migrated) -> None:
+    config, engine = migrated
+    command.upgrade(config, "head")
+    assert _version(engine) == "202607170040"
+    _insert(engine, "product_line_create", "k-create-after")
 
 
 def test_migrated_schema_accepts_every_action_and_rejects_unknown(migrated) -> None:
@@ -232,7 +251,7 @@ def test_upgrade_downgrade_upgrade_round_trip_without_product_mapping_rows(migra
         _insert(engine, "product_mapping", "k-pm")
 
     command.upgrade(config, "head")
-    assert _version(engine) == "202607170039"
+    assert _version(engine) == "202607170040"
     _insert(engine, "product_mapping", "k-pm")
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM workbench_operator_requests")) == 2
@@ -259,7 +278,7 @@ def test_real_ledger_records_a_product_line_mapping_request_on_the_migrated_sche
 
 def test_0039_downgrade_refuses_while_product_line_mapping_rows_exist_and_changes_nothing(migrated) -> None:
     config, engine = migrated
-    command.upgrade(config, "head")
+    command.upgrade(config, "202607170039")
     _insert(engine, "product_line_mapping", "k-pl")
     _insert(engine, "product_mapping", "k-pm")
 

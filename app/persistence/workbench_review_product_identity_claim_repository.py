@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ def _model_from_claim(claim: ProductIdentityClaim) -> WorkbenchReviewProductIden
         owner_company_id=claim.owner_company_id,
         owner_review_version=claim.owner_review_version,
         owner_line_number=claim.owner_line_number,
+        owner_kind=claim.owner_kind,
     )
 
 
@@ -32,6 +33,7 @@ def _claim_from_model(record: WorkbenchReviewProductIdentityClaim) -> ProductIde
         owner_company_id=int(record.owner_company_id),
         owner_review_version=int(record.owner_review_version),
         owner_line_number=str(record.owner_line_number),
+        owner_kind=str(record.owner_kind),
     )
 
 
@@ -87,3 +89,31 @@ class SqlAlchemyReviewProductIdentityClaimRepository:
         except SQLAlchemyError as exc:
             raise ProductRemediationError(SAFE_IDENTITY_CLAIM_PERSISTENCE_ERROR) from exc
         return _claim_from_model(record) if record is not None else None
+
+    def release(self, claim: ProductIdentityClaim) -> None:
+        """PR D: delete exactly this claim -- same identity AND same owner line.
+
+        Used only after a proven no-write (the owner's Odoo create certainly did not
+        happen), so the identity becomes claimable again. Another owner's claim is never
+        touched; a missing claim is a no-op.
+        """
+
+        if not isinstance(claim, ProductIdentityClaim):
+            raise ProductRemediationError(SAFE_IDENTITY_CLAIM_PERSISTENCE_ERROR)
+        model = WorkbenchReviewProductIdentityClaim
+        try:
+            self._session.execute(
+                delete(model).where(
+                    model.company_id == claim.company_id,
+                    model.resolved_supplier_partner_id == claim.resolved_supplier_partner_id,
+                    model.seller_item_code == claim.seller_item_code,
+                    model.owner_review_id == claim.owner_review_id,
+                    model.owner_company_id == claim.owner_company_id,
+                    model.owner_review_version == claim.owner_review_version,
+                    model.owner_line_number == claim.owner_line_number,
+                    model.owner_kind == claim.owner_kind,
+                )
+            )
+            self._session.flush()
+        except SQLAlchemyError as exc:
+            raise ProductRemediationError(SAFE_IDENTITY_CLAIM_PERSISTENCE_ERROR) from exc

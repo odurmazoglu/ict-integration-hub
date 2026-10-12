@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
+from app.application.workbench.product_line_creation_policy import ProductLineCreationPolicy
+from app.application.workbench.product_line_creation_use_cases import CreateLineProductUseCase
 from app.application.workbench.product_mapping_use_cases import MapExistingProductUseCase
 from app.application.workbench.product_remediation_category import ProductRemediationCategoryPolicy
 from app.application.workbench.product_remediation_use_cases import CreateNewProductUseCase
@@ -20,6 +22,7 @@ from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.existing_supplier_info_reader import OdooExistingSupplierInfoReader
+from app.erp.odoo.product_line_creation_reader import OdooCreatedProductReader, OdooProductCatalogReader
 from app.erp.odoo.product_repository import OdooProductRepository
 from app.erp.odoo.selected_product_reader import OdooSelectedProductReader
 from app.erp.write.odoo_product_write_policy import OdooProductWritePolicy
@@ -27,6 +30,7 @@ from app.erp.write.odoo_product_writer import OdooProductTemplateRepository, Odo
 from app.erp.write.odoo_supplierinfo_writer import OdooSupplierInfoRepository, OdooSupplierInfoWriter
 from app.persistence import (
     SqlAlchemyOperatingExpenseMappingRepository,
+    SqlAlchemyProductLineCreationRepository,
     SqlAlchemyReviewAccountingResolutionRepository,
     SqlAlchemyReviewProductIdentityClaimRepository,
     SqlAlchemyReviewProductRemediationReservationRepository,
@@ -82,16 +86,7 @@ def build_create_new_product_use_case(
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
-        category_policy=ProductRemediationCategoryPolicy(
-            purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
-            category_lister=build_list_category_purchase_accounts_use_case(
-                settings=settings, odoo_client=resolved_odoo_client
-            ),
-            product_account_resolver=build_get_product_purchase_account_use_case(
-                settings=settings, odoo_client=resolved_odoo_client
-            ),
-            approved_category_ids=settings.resale_product_category_ids,
-        ),
+        category_policy=_category_policy(session=session, settings=settings, odoo_client=resolved_odoo_client),
     )
 
 
@@ -127,19 +122,107 @@ def build_map_existing_product_use_case(
         supplier_info_writer=OdooSupplierInfoWriter(
             repository=supplierinfo_repository, policy=OdooProductWritePolicy.from_settings(settings)
         ),
-        reclassifier=ReclassifyWorkbenchReviewUseCase(
-            decision_engine=build_deterministic_decision_engine(
-                session=session, settings=settings, odoo_client=resolved_odoo_client
-            ),
+        reclassifier=_master_data_reclassifier(
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
             source_invoice_reader=source_invoice_reader,
-            reclassification_writer=review_repository,
-            supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
-            supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
-            operating_expense_matcher=OperatingExpenseMatchingEngine(
-                SqlAlchemyOperatingExpenseMappingRepository(session)
-            ),
-            review_accounting_resolution_reader=SqlAlchemyReviewAccountingResolutionRepository(session),
+            review_repository=review_repository,
         ),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
+    )
+
+
+def build_create_line_product_use_case(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> CreateLineProductUseCase:
+    """Compose PR D Workbench new-product creation (one line -> one NEW product).
+
+    The single Odoo write is the existing ``OdooProductWriter`` behind the same
+    ``OdooProductWritePolicy`` (the narrow CREATE_NEW_PRODUCT authorization bypasses only
+    ``PRODUCT_REMEDIATION_WRITE_ENABLED``); the supplier mapping rides inline on that
+    create. Category rules are the existing CREATE_NEW_PRODUCT category policy; the
+    reclassifier is the existing-product mapping's (``MASTER_DATA_CHANGED``).
+    """
+
+    resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
+    read_adapter = OdooReadOnlyAdapter(client=resolved_odoo_client)
+    review_repository = SqlAlchemyReviewRepository(session)
+    source_invoice_reader = SqlAlchemyReviewSourceInvoiceEvidenceReader(session)
+    category_policy = _category_policy(session=session, settings=settings, odoo_client=resolved_odoo_client)
+    return CreateLineProductUseCase(
+        review_reader=review_repository,
+        source_invoice_reader=source_invoice_reader,
+        effective_supplier_resolver=build_effective_supplier_resolver(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        ),
+        policy=ProductLineCreationPolicy(
+            category_policy=category_policy,
+            category_lister=build_list_category_purchase_accounts_use_case(
+                settings=settings, odoo_client=resolved_odoo_client
+            ),
+            catalog_reader=OdooProductCatalogReader(adapter=read_adapter),
+            allowed_uom_ids=settings.product_creation_uom_ids,
+            manual_only_category_ids=settings.product_creation_manual_only_category_ids,
+            extra_manual_only_sku_patterns=settings.product_creation_manual_only_sku_patterns,
+            uom_unit_codes=settings.product_creation_uom_unit_codes,
+        ),
+        category_verifier=category_policy,
+        creation_repository=SqlAlchemyProductLineCreationRepository(session),
+        identity_claims=SqlAlchemyReviewProductIdentityClaimRepository(session),
+        existing_supplier_info_reader=OdooExistingSupplierInfoReader(
+            repository=OdooSupplierInfoRepository(client=resolved_odoo_client)
+        ),
+        product_writer=OdooProductWriter(
+            repository=OdooProductTemplateRepository(client=resolved_odoo_client),
+            policy=OdooProductWritePolicy.from_settings(settings),
+        ),
+        created_product_reader=OdooCreatedProductReader(adapter=read_adapter),
+        reclassifier=_master_data_reclassifier(
+            session=session,
+            settings=settings,
+            odoo_client=resolved_odoo_client,
+            source_invoice_reader=source_invoice_reader,
+            review_repository=review_repository,
+        ),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
+        write_authorization_repository=SqlAlchemyWriteAuthorizationRepository(session),
+    )
+
+
+def _category_policy(
+    *, session: Session, settings: Settings, odoo_client: OdooJson2Client
+) -> ProductRemediationCategoryPolicy:
+    return ProductRemediationCategoryPolicy(
+        purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
+        category_lister=build_list_category_purchase_accounts_use_case(settings=settings, odoo_client=odoo_client),
+        product_account_resolver=build_get_product_purchase_account_use_case(
+            settings=settings, odoo_client=odoo_client
+        ),
+        approved_category_ids=settings.resale_product_category_ids,
+    )
+
+
+def _master_data_reclassifier(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client,
+    source_invoice_reader: SqlAlchemyReviewSourceInvoiceEvidenceReader,
+    review_repository: SqlAlchemyReviewRepository,
+) -> ReclassifyWorkbenchReviewUseCase:
+    return ReclassifyWorkbenchReviewUseCase(
+        decision_engine=build_deterministic_decision_engine(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
+        source_invoice_reader=source_invoice_reader,
+        reclassification_writer=review_repository,
+        supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
+        supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=odoo_client),
+        operating_expense_matcher=OperatingExpenseMatchingEngine(SqlAlchemyOperatingExpenseMappingRepository(session)),
+        review_accounting_resolution_reader=SqlAlchemyReviewAccountingResolutionRepository(session),
     )

@@ -507,7 +507,8 @@ deleted automatically.
 * Requester impersonation: any Odoo user with write access to a Workbench row can submit
   as any allowlisted actor (section 3.1). The allowlist does not prevent this. Today only
   uid 2 can write the rows; identity binding is a recommended future change.
-* Only `product_not_found` lines with a seller code can be mapped. Lines without a code,
-  ambiguous lines and new products stay technical support (PR D/F).
+* Only `product_not_found` lines with a seller code can be mapped. Lines without a code and
+  ambiguous lines stay technical support (PR F). New products: PR D,
+  [ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md](ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md).
 * The parent "Ürün Eşleştir" remains until PR E. Both channels share one use case and one
   authorization type; the version check serializes them.
