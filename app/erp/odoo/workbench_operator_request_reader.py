@@ -36,10 +36,13 @@ from app.erp.exceptions import ErpRepositoryError
 SAFE_REQUEST_READ_ERROR = "Odoo Workbench operator requests could not be read."
 SAFE_REQUEST_ACK_ERROR = "Odoo Workbench operator request result could not be written."
 
-#: Actions a *parent* Workbench row may request. ``product_line_mapping`` is deliberately
-#: absent: it exists only on a child product line row (``workbench_product_line_request_reader``),
-#: whose line identity is Hub-owned; a parent row naming it fails closed as unsupported.
-PARENT_ROW_ACTIONS = frozenset(set(OperatorRequestAction) - {OperatorRequestAction.PRODUCT_LINE_MAPPING})
+#: Actions a *parent* Workbench row may request. ``product_line_mapping`` (PR C) and
+#: ``product_line_create`` (PR D) are deliberately absent: they exist only on a child product
+#: line row (``workbench_product_line_request_reader`` / ``..._create_request_reader``), whose
+#: line identity is Hub-owned; a parent row naming either fails closed as unsupported.
+PARENT_ROW_ACTIONS = frozenset(
+    set(OperatorRequestAction) - {OperatorRequestAction.PRODUCT_LINE_MAPPING, OperatorRequestAction.PRODUCT_LINE_CREATE}
+)
 ACTION_BY_ODOO_VALUE: dict[str, OperatorRequestAction] = {
     **{action.value: action for action in OperatorRequestAction if action in PARENT_ROW_ACTIONS},
     "Tedarikçi Çözümü": OperatorRequestAction.SUPPLIER_RESOLUTION,

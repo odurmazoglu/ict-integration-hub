@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from app.application.commands.product_remediation import CreateProductCommand, ValidatedProductCategory
+from app.application.commands.product_remediation import (
+    CreateProductCommand,
+    ValidatedProductCategory,
+    ValidatedSupplierLink,
+)
 from app.application.dto.product_remediation import ProductWriteResult, ProductWriteStatus
 from app.application.exceptions.product_remediation import (
     ProductDataIntegrityError,
@@ -36,6 +40,8 @@ PRODUCT_VARIANT_FIELDS = ["id"]
 # and a supplier's own product code must never be written here (see odoo_supplierinfo_writer.py).
 # categ_id stays forbidden too: the single exemption is the exact top-level key carrying
 # a ValidatedProductCategory from the command (P0-PROD-18E-2) -- see _reject_forbidden_tokens.
+# seller_ids likewise: the single exemption is the exact one-row create command built from
+# a ValidatedSupplierLink (PR D), checked against exact key allowlists (see below).
 FORBIDDEN_PRODUCT_TEMPLATE_TOKENS = frozenset(
     {
         "categ_id",
@@ -51,6 +57,13 @@ FORBIDDEN_PRODUCT_TEMPLATE_TOKENS = frozenset(
         "__",
     }
 )
+#: PR D payloads are checked against exact KEY allowlists instead of the token scan: their
+#: values are operator/invoice text (e.g. "Active Directory ..."), which a value scan would
+#: refuse for no reason, while an allowlist is strictly tighter on the field names.
+SUPPLIER_LINKED_TEMPLATE_KEYS = frozenset(
+    {"name", "type", "uom_id", "is_storable", "default_code", "categ_id", "seller_ids"}
+)
+SUPPLIER_LINK_KEYS = frozenset({"partner_id", "product_code", "company_id", "product_name"})
 _MAX_VARIANT_LOOKUP_LIMIT = 5
 
 
@@ -77,6 +90,8 @@ class ProductTemplateRecord:
     default_code: str | None
     categ_id: int | None = None
     is_storable: bool | None = None
+    type: str | None = None
+    uom_id: int | None = None
 
 
 class OdooProductTemplateRepository:
@@ -154,7 +169,7 @@ class OdooProductWriter(ProductWriter):
         )
 
         payload = _product_template_payload(command)
-        _reject_forbidden_tokens(payload, category=command.category)
+        _reject_forbidden_tokens(payload, category=command.category, supplier_link=command.supplier_link)
 
         template_id = await self._repository.create_template(payload)
 
@@ -188,7 +203,21 @@ def _product_template_payload(command: CreateProductCommand) -> dict[str, Any]:
         payload["default_code"] = command.default_code.strip()
     if command.category is not None:
         payload["categ_id"] = command.category.categ_id
+    if command.supplier_link is not None:
+        # One Odoo (0, 0, values) create command: template, variant and supplierinfo commit together.
+        payload["seller_ids"] = [[0, 0, _supplier_link_values(command.supplier_link)]]
     return payload
+
+
+def _supplier_link_values(link: ValidatedSupplierLink) -> dict[str, Any]:
+    values: dict[str, Any] = {
+        "partner_id": link.partner_id,
+        "product_code": link.product_code.strip(),
+        "company_id": link.company_id,
+    }
+    if link.product_name is not None:
+        values["product_name"] = link.product_name.strip()
+    return values
 
 
 def _validate_created_template(
@@ -210,6 +239,12 @@ def _validate_created_template(
             raise ProductDataIntegrityError("Read-back product template category does not match the exact request.")
         if template.is_storable is not command.is_storable:
             raise ProductDataIntegrityError("Read-back product template storability does not match the exact request.")
+    if command.supplier_link is not None:
+        # PR D: the operator chose type and UoM explicitly; Odoo must not have substituted either.
+        if template.type != command.type:
+            raise ProductDataIntegrityError("Read-back product template type does not match the exact request.")
+        if template.uom_id != command.uom_id:
+            raise ProductDataIntegrityError("Read-back product template unit of measure does not match the request.")
 
 
 def _template_record(record: dict[str, Any]) -> ProductTemplateRecord:
@@ -220,10 +255,20 @@ def _template_record(record: dict[str, Any]) -> ProductTemplateRecord:
         default_code=_optional_text(record.get("default_code")),
         categ_id=_optional_many2one_id(record.get("categ_id")),
         is_storable=is_storable if isinstance(is_storable, bool) else None,
+        type=_optional_text(record.get("type")),
+        uom_id=_optional_uom_id(record.get("uom_id")),
     )
 
 
-def _reject_forbidden_tokens(payload: dict[str, Any], *, category: ValidatedProductCategory | None = None) -> None:
+def _reject_forbidden_tokens(
+    payload: dict[str, Any],
+    *,
+    category: ValidatedProductCategory | None = None,
+    supplier_link: ValidatedSupplierLink | None = None,
+) -> None:
+    if supplier_link is not None:
+        _require_supplier_linked_payload(payload, category=category, supplier_link=supplier_link)
+        return
     scanned = dict(payload)
     if category is not None:
         # The one narrow exemption: the exact validated id under the exact top-level key.
@@ -234,6 +279,23 @@ def _reject_forbidden_tokens(payload: dict[str, Any], *, category: ValidatedProd
     for token in FORBIDDEN_PRODUCT_TEMPLATE_TOKENS:
         if token in payload_text:
             raise ProductWriteValidationError("Product template payload contains a forbidden field.")
+
+
+def _require_supplier_linked_payload(
+    payload: dict[str, Any],
+    *,
+    category: ValidatedProductCategory | None,
+    supplier_link: ValidatedSupplierLink,
+) -> None:
+    """PR D: exact key allowlists, the validated category, and exactly one validated seller row."""
+
+    if set(payload) - SUPPLIER_LINKED_TEMPLATE_KEYS:
+        raise ProductWriteValidationError("Product template payload contains a forbidden field.")
+    if category is None or type(payload.get("categ_id")) is not int or payload["categ_id"] != category.categ_id:
+        raise ProductWriteValidationError("Product template payload category does not match the validated one.")
+    expected_row = _supplier_link_values(supplier_link)
+    if payload.get("seller_ids") != [[0, 0, expected_row]] or set(expected_row) - SUPPLIER_LINK_KEYS:
+        raise ProductWriteValidationError("Product template supplier link does not match the validated one.")
 
 
 async def _translate_connector_errors[T](awaitable: Any) -> T:
@@ -267,6 +329,13 @@ def _optional_many2one_id(value: object) -> int | None:
     if type(value) is not int or value <= 0:
         raise ProductDataIntegrityError("Odoo product.template returned an invalid category reference.")
     return value
+
+
+def _optional_uom_id(value: object) -> int | None:
+    # Unlike categ_id, a malformed UoM is reported as unknown; only the PR D read-back compares it.
+    if isinstance(value, (list, tuple)) and value:
+        value = value[0]
+    return value if type(value) is int and value > 0 else None
 
 
 def _optional_text(value: object) -> str | None:

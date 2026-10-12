@@ -119,6 +119,11 @@ product on the line and presses the row's *Eşleştir*. It runs the same use cas
 line identity taken from the Hub-owned child projection. See
 [ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md](ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md).
 
+When no existing product fits, the operator can create a **new** product from the same row
+(PR D, gated by `ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED`): name, kind, category, unit of
+measure and an optional Internal Reference, then *Yeni Ürün Oluştur*. See
+[ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md](ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md).
+
 The mapping is supplier-specific: the deterministic key is *(supplier partner, seller
 product code)*, so the same code from another supplier never reuses it. Future invoices
 from the same supplier with the same seller code match automatically. A double-click or

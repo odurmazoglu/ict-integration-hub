@@ -11,6 +11,7 @@ from app.persistence.review_classification_evidence_reader import SqlAlchemyRevi
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.persistence.vendor_bill_execution_evidence_reader import SqlAlchemyVendorBillExecutionEvidenceReader
+from app.persistence.workbench_product_line_creation_repository import SqlAlchemyProductLineCreationRepository
 from app.persistence.workbench_review_accounting_resolution_repository import (
     SqlAlchemyReviewAccountingResolutionRepository,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "SqlAlchemyReviewClassificationEvidenceReader",
     "SqlAlchemyReviewExecutionEvidenceReader",
     "SqlAlchemyReviewOneOffVendorRetirementRepository",
+    "SqlAlchemyProductLineCreationRepository",
     "SqlAlchemyReviewProductIdentityClaimRepository",
     "SqlAlchemyReviewProductRemediationReservationRepository",
     "SqlAlchemyReviewPurchasePurposeResolutionRepository",

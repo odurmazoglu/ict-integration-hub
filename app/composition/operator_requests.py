@@ -20,6 +20,7 @@ from app.application.workbench.operator_request_handlers import (
     CompletedVendorBillExecutionProbe,
     DecisionRequestHandler,
     ExecuteVendorBillRequestHandler,
+    ProductLineCreateRequestHandler,
     ProductMappingRequestHandler,
     PurchasePurposeRequestHandler,
     SupplierResolutionRequestHandler,
@@ -41,7 +42,7 @@ from app.composition.imports import (
     build_runtime_workbench_projection_synchronizer,
     build_workbench_erp_reference_validator,
 )
-from app.composition.product_remediation import build_map_existing_product_use_case
+from app.composition.product_remediation import build_create_line_product_use_case, build_map_existing_product_use_case
 from app.composition.purchase_purpose_and_accounting_resolution import (
     build_submit_purchase_purpose_use_case,
     build_submit_review_accounting_resolution_use_case,
@@ -58,6 +59,11 @@ from app.erp.odoo.workbench_operator_request_reader import (
     OdooOperatorRequestAcknowledger,
     OdooOperatorRequestFieldMapping,
     OdooOperatorRequestReader,
+)
+from app.erp.odoo.workbench_product_line_create_request_reader import (
+    OdooProductLineCreateRequestAcknowledger,
+    OdooProductLineCreateRequestFieldMapping,
+    OdooProductLineCreateRequestReader,
 )
 from app.erp.odoo.workbench_product_line_request_reader import (
     OdooProductLineRequestAcknowledger,
@@ -76,6 +82,7 @@ logger = logging.getLogger(__name__)
 OPERATOR_REQUEST_ADVISORY_LOCK_KEY = -2752363236075536947
 OPERATOR_REQUEST_JUSTIFICATION = "Odoo Workbench operator request (ADR-0013)"
 PRODUCT_LINE_CHANNEL = "product_line"
+PRODUCT_LINE_CREATE_CHANNEL = "product_line_create"
 PARENT_CHANNEL = "parent"
 
 
@@ -237,6 +244,47 @@ def build_product_line_request_workflow(
     )
 
 
+def build_product_line_create_workflow(
+    *,
+    business_session: Session,
+    ledger_session: Session,
+    settings: Settings,
+    create_request_mapping: OdooProductLineCreateRequestFieldMapping,
+    odoo_client: OdooJson2Client | None = None,
+) -> OperatorRequestIngestionWorkflow:
+    """PR D: the same pipeline for NEW product requests submitted on Workbench child rows.
+
+    Only ``PRODUCT_LINE_CREATE`` is handled; ledger, actor directory, authorization issuer
+    and projection refresh are the parent tick's own components.
+    """
+
+    client = odoo_client or OdooJson2Client.from_settings(settings)
+    projection_adapter = OdooWorkbenchJson2ProjectionAdapter(client=client)
+    return OperatorRequestIngestionWorkflow(
+        reader=OdooProductLineCreateRequestReader(adapter=projection_adapter, mapping=create_request_mapping),
+        acknowledger=OdooProductLineCreateRequestAcknowledger(
+            adapter=projection_adapter, mapping=create_request_mapping
+        ),
+        ledger=SqlAlchemyOperatorRequestLedger(ledger_session),
+        actors=OperatorActorDirectory.from_json(settings.odoo_operator_request_actors),
+        handlers={
+            OperatorRequestAction.PRODUCT_LINE_CREATE: ProductLineCreateRequestHandler(
+                use_case=build_create_line_product_use_case(
+                    session=business_session, settings=settings, odoo_client=client
+                )
+            )
+        },
+        authorization_issuer=ReviewVersionCheckedAuthorizationIssuer(
+            use_case=build_create_write_authorization_use_case(session=business_session),
+            review_reader=SqlAlchemyReviewRepository(business_session),
+        ),
+        projection_refresher=build_runtime_workbench_projection_synchronizer(
+            session=business_session, settings=settings, odoo_client=client
+        ),
+        transient_errors=(ErpRepositoryError, ConnectorError),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class OperatorRequestChannel:
     """One named request source (e.g. Workbench child line rows, parent rows) of a tick."""
@@ -350,6 +398,11 @@ def build_operator_request_tick(
         if settings.odoo_workbench_product_line_requests_enabled
         else None
     )
+    create_mapping = (
+        OdooProductLineCreateRequestFieldMapping.from_environment(line_requests=line_mapping)
+        if settings.odoo_workbench_product_line_create_enabled and line_mapping is not None
+        else None
+    )
     session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     lock: PollLock = (
         PostgresAdvisoryPollLock(engine, key=OPERATOR_REQUEST_ADVISORY_LOCK_KEY)
@@ -367,6 +420,7 @@ def build_operator_request_tick(
             odoo_client=odoo_client,
             request_mapping=mapping,
             line_request_mapping=line_mapping,
+            create_request_mapping=create_mapping,
         ),
     )
 
@@ -379,6 +433,7 @@ def _tick_workflow(
     odoo_client: OdooJson2Client | None,
     request_mapping: OdooOperatorRequestFieldMapping,
     line_request_mapping: OdooProductLineRequestFieldMapping | None,
+    create_request_mapping: OdooProductLineCreateRequestFieldMapping | None = None,
 ) -> OperatorRequestIngestionWorkflow | SequentialOperatorRequestWorkflows:
     parent = build_operator_request_workflow(
         business_session=business_session,
@@ -396,16 +451,25 @@ def _tick_workflow(
         odoo_client=odoo_client,
         line_request_mapping=line_request_mapping,
     )
-    # Fixed order for deterministic results; either order is safe because the optimistic
-    # review-version check serializes two requests for the same review. A child channel
-    # failure never blocks the parent channel (see SequentialOperatorRequestWorkflows).
-    return SequentialOperatorRequestWorkflows(
-        (
-            OperatorRequestChannel(name=PRODUCT_LINE_CHANNEL, workflow=lines),
-            OperatorRequestChannel(name=PARENT_CHANNEL, workflow=parent),
-        ),
-        reset=lambda: _rollback(business_session, ledger_session),
-    )
+    channels = [OperatorRequestChannel(name=PRODUCT_LINE_CHANNEL, workflow=lines)]
+    if create_request_mapping is not None:
+        channels.append(
+            OperatorRequestChannel(
+                name=PRODUCT_LINE_CREATE_CHANNEL,
+                workflow=build_product_line_create_workflow(
+                    business_session=business_session,
+                    ledger_session=ledger_session,
+                    settings=settings,
+                    odoo_client=odoo_client,
+                    create_request_mapping=create_request_mapping,
+                ),
+            )
+        )
+    channels.append(OperatorRequestChannel(name=PARENT_CHANNEL, workflow=parent))
+    # Fixed order for deterministic results; any order is safe because the optimistic
+    # review-version check serializes two requests for the same review. A failing channel
+    # never blocks the others (see SequentialOperatorRequestWorkflows).
+    return SequentialOperatorRequestWorkflows(channels, reset=lambda: _rollback(business_session, ledger_session))
 
 
 def _rollback(*sessions: Session) -> None:

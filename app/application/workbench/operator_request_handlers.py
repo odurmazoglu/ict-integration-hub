@@ -48,6 +48,7 @@ from app.application.workbench.operator_request_ingestion import (
     OperatorRequest,
     OperatorRequestOutcome,
 )
+from app.application.workbench.product_line_creation import CreateLineProductCommand, CreateLineProductResult
 from app.application.workbench.product_mapping import MapExistingProductCommand, MapExistingProductResult
 from app.application.workbench.projection import OdooWorkbenchDecisionCandidate
 from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
@@ -61,6 +62,7 @@ SUPPLIER_AUTHORIZATION_OPERATION = {
 }
 EXECUTE_VENDOR_BILL_OPERATION = "EXECUTE_VENDOR_BILL"
 MAP_EXISTING_PRODUCT_OPERATION = "MAP_EXISTING_PRODUCT"
+CREATE_NEW_PRODUCT_OPERATION = "CREATE_NEW_PRODUCT"
 
 
 def run_coroutine[T](awaitable: Awaitable[T]) -> T:
@@ -159,6 +161,54 @@ def product_mapping_message(result: MapExistingProductResult) -> str:
         else ""
     )
     return f"Ürün eşleştirildi: {mapping}. Bu tedarikçinin sonraki faturalarında otomatik eşleşecek.{tail}"
+
+
+class ProductLineCreateRequestHandler:
+    """-> ``CreateLineProductUseCase`` (PR D): one review line -> one NEW Odoo product."""
+
+    def __init__(self, *, use_case: _AsyncUseCase, runner: Runner = run_coroutine) -> None:
+        self._use_case = use_case
+        self._runner = runner
+
+    def handle(self, request: OperatorRequest, context: OperatorActionContext) -> OperatorActionOutcome:
+        if request.line_number is None or request.new_product is None:
+            raise WorkbenchContractError("Yeni ürün bilgileri eksik.")
+        # The same narrow single-use CREATE_NEW_PRODUCT authorization an API caller would
+        # issue; the use case still enforces the kill switch, eligibility and policy.
+        authorization_id = context.ensure_authorization(CREATE_NEW_PRODUCT_OPERATION)
+        result = self._runner(
+            self._use_case.execute(
+                CreateLineProductCommand(
+                    review_id=request.review_id,
+                    company_id=request.company_id,
+                    expected_version=request.expected_version,
+                    line_number=request.line_number,
+                    intent=request.new_product,
+                    approved_by=context.actor.actor,
+                    authorization_id=authorization_id,
+                )
+            )
+        )
+        if result.already_applied:
+            return OperatorActionOutcome(
+                outcome=OperatorRequestOutcome.ALREADY_COMPLETED, message=ALREADY_COMPLETED_MESSAGE
+            )
+        return OperatorActionOutcome(outcome=OperatorRequestOutcome.COMPLETED, message=product_creation_message(result))
+
+
+def product_creation_message(result: CreateLineProductResult) -> str:
+    created = (
+        f"Yeni ürün oluşturuldu: {result.product_name} (#{result.product_id}); satır {result.line_number} "
+        f"(satıcı kodu {result.seller_item_code}) bu ürüne bağlandı."
+    )
+    if not result.line_resolved:
+        return f"{created} Ancak satır hâlâ eşleşmedi; teknik destek alın."
+    tail = (
+        f" Kalan eşleştirilecek satırlar: {', '.join(result.remaining_product_lines)}."
+        if result.remaining_product_lines
+        else ""
+    )
+    return f"{created} Bu tedarikçinin sonraki faturalarında otomatik eşleşecek.{tail}"
 
 
 class PurchasePurposeRequestHandler:

@@ -37,6 +37,7 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateReadError,
     WorkbenchContractError,
 )
+from app.application.workbench.product_line_creation import NewProductIntent
 from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
 
@@ -74,6 +75,10 @@ class OperatorRequestAction(StrEnum):
     #: line row instead of the parent row. Its ``odoo_record_id`` is the child row id and its
     #: line identity comes from the Hub-owned child projection, never from operator input.
     PRODUCT_LINE_MAPPING = "product_line_mapping"
+    #: PR D: create a NEW Odoo product for one PRODUCT_NOT_FOUND line, requested on its
+    #: Workbench child row ("Yeni Ürün Oluştur"). Line identity as for PRODUCT_LINE_MAPPING;
+    #: the typed product intent is carried in ``new_product``.
+    PRODUCT_LINE_CREATE = "product_line_create"
 
 
 #: Both channels of the one existing-product mapping use case (parent row, child line row).
@@ -91,6 +96,9 @@ ACTION_PERMISSIONS: dict[OperatorRequestAction, frozenset[str]] = {
     # supplierinfo write additionally needs the narrow authorization (workbench_execute).
     OperatorRequestAction.PRODUCT_MAPPING: frozenset({PERMISSION_REVIEW_DECIDE}),
     OperatorRequestAction.PRODUCT_LINE_MAPPING: frozenset({PERMISSION_REVIEW_DECIDE}),
+    # Same posture as mapping: deciding needs workbench_review_decide; the product write
+    # additionally needs the narrow CREATE_NEW_PRODUCT authorization (workbench_execute).
+    OperatorRequestAction.PRODUCT_LINE_CREATE: frozenset({PERMISSION_REVIEW_DECIDE}),
 }
 
 #: Supplier modes that write an Odoo partner: they additionally need the narrow write
@@ -159,6 +167,8 @@ class OperatorRequest(ApplicationDTO):
     line_number: str | None = None
     #: PRODUCT_MAPPING / PRODUCT_LINE_MAPPING: the existing Odoo product.product selected.
     product_id: int | None = None
+    #: PRODUCT_LINE_CREATE: the operator's typed new-product intent.
+    new_product: NewProductIntent | None = None
 
     def __post_init__(self) -> None:
         _require_positive(self.odoo_record_id, "odoo_record_id must be positive.")
@@ -190,6 +200,15 @@ class OperatorRequest(ApplicationDTO):
                 raise WorkbenchContractError("Eşleştirilecek fatura satırı seçilmelidir.")
             if self.product_id is None:
                 raise WorkbenchContractError("Eşleştirilecek Odoo ürünü seçilmelidir.")
+        if self.action is OperatorRequestAction.PRODUCT_LINE_CREATE:
+            if self.line_number is None or not self.line_number.strip():
+                raise WorkbenchContractError("Yeni ürün oluşturulacak fatura satırı belirlenemedi.")
+            if not isinstance(self.new_product, NewProductIntent):
+                raise WorkbenchContractError("Yeni ürün bilgileri eksik.")
+            if self.product_id is not None:
+                raise WorkbenchContractError("Yeni ürün isteği mevcut bir ürün seçimi içeremez.")
+        elif self.new_product is not None:
+            raise WorkbenchContractError("Yeni ürün bilgileri yalnız yeni ürün isteğinde kullanılabilir.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -646,17 +665,21 @@ def operator_request_key(request: OperatorRequest) -> str:
         payload["line_number"] = request.line_number
     if request.product_id is not None:
         payload["product_id"] = request.product_id
+    # Added for PRODUCT_LINE_CREATE only, so every existing request key is unchanged.
+    if request.new_product is not None:
+        payload["new_product"] = request.new_product.digest()
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return f"odoo-operator-request:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
 
 
-#: A completed product mapping (either channel) leaves nothing to resubmit; any other action/outcome
-#: keeps its inputs exactly as before (an operator fixes and resubmits a rejected one).
+#: A completed product mapping (either channel) or new product leaves nothing to resubmit; any other
+#: action/outcome keeps its inputs exactly as before (an operator fixes and resubmits a rejected one).
 _INPUT_CLEARING_OUTCOMES = frozenset({OperatorRequestOutcome.COMPLETED, OperatorRequestOutcome.ALREADY_COMPLETED})
+_INPUT_CLEARING_ACTIONS = PRODUCT_MAPPING_ACTIONS | {OperatorRequestAction.PRODUCT_LINE_CREATE}
 
 
 def _clears_request_inputs(request: OperatorRequest, outcome: OperatorRequestOutcome) -> bool:
-    return request.action in PRODUCT_MAPPING_ACTIONS and outcome in _INPUT_CLEARING_OUTCOMES
+    return request.action in _INPUT_CLEARING_ACTIONS and outcome in _INPUT_CLEARING_OUTCOMES
 
 
 def _outcome_for_terminal(status: OperatorRequestLedgerStatus) -> OperatorRequestOutcome:
