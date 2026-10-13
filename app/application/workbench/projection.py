@@ -19,6 +19,7 @@ from app.application.workbench.dto import (
 from app.application.workbench.exceptions import WorkbenchCandidateReadError, WorkbenchContractError
 from app.application.workbench.operator_guidance import WorkbenchOperatorGuidance
 from app.application.workbench.product_line_projection import WorkbenchProductLineProjection
+from app.application.workbench.product_line_suggestion_view import ProductLineSuggestionView
 from app.application.workflow import ManualReviewReason, WorkflowType
 
 CLASSIFICATION_STATUS_BADGES: dict[str, str] = {
@@ -154,6 +155,9 @@ class WorkbenchProjection(ApplicationDTO):
     #: PR B: the product lines could not be derived from committed Hub facts; the parent
     #: projection is unaffected and no child row is touched.
     product_line_error: str | None = None
+    #: PR F / F3.1: advisory hints for lines that passed the display gate. ``None`` means
+    #: the hint reader is not composed (display off); a mapped hint field is then cleared.
+    product_line_suggestions: tuple[ProductLineSuggestionView, ...] | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.review_id, "review_id is required.")
@@ -183,6 +187,13 @@ class WorkbenchProjection(ApplicationDTO):
             if not all(isinstance(line, WorkbenchProductLineProjection) for line in lines):
                 raise WorkbenchContractError("product_lines must contain product line projections.")
             object.__setattr__(self, "product_lines", lines)
+        if self.product_line_suggestions is not None:
+            hints = tuple(self.product_line_suggestions)
+            if not all(isinstance(hint, ProductLineSuggestionView) for hint in hints):
+                raise WorkbenchContractError("product_line_suggestions must contain product line hint views.")
+            if len({hint.line_key for hint in hints}) != len(hints):
+                raise WorkbenchContractError("product_line_suggestions must hold at most one hint per line.")
+            object.__setattr__(self, "product_line_suggestions", hints)
 
 
 @dataclass(frozen=True, slots=True)

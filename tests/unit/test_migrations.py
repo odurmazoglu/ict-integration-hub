@@ -660,6 +660,25 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # PR F / F3.1 (202607170042) added exactly two nullable advisory display columns: one "-1"
+    # step removes only them and changes no table.
+    assert "product_name" in {
+        column["name"] for column in inspector.get_columns("workbench_product_line_suggestion_candidates")
+    }
+    assert "display_synced_at" in {
+        column["name"] for column in inspector.get_columns("workbench_product_line_suggestion_sets")
+    }
+    tables_before_display_downgrade = set(inspector.get_table_names())
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert set(inspector.get_table_names()) == tables_before_display_downgrade
+    assert "product_name" not in {
+        column["name"] for column in inspector.get_columns("workbench_product_line_suggestion_candidates")
+    }
+    assert "display_synced_at" not in {
+        column["name"] for column in inspector.get_columns("workbench_product_line_suggestion_sets")
+    }
+
     # PR F / F2 (202607170041) added exactly the two advisory suggestion tables (one current set
     # per review/version/line via a partial unique index): one "-1" step removes only them.
     advisory_tables = {"workbench_product_line_suggestion_sets", "workbench_product_line_suggestion_candidates"}

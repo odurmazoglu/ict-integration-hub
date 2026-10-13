@@ -724,12 +724,13 @@ def test_the_engine_module_has_no_io_or_write_dependencies() -> None:
         assert word not in source
 
 
-#: ADR-0014 / F2: the only modules allowed to import ``app.advisory`` -- the advisory worker's own
-#: composition, service, repository, read-only catalog reader and CLI. Never matching, decisions,
-#: execution, billing, Workbench contracts, operator requests or ERP write paths.
+#: ADR-0014 / F2 + F3.1: the only modules allowed to import ``app.advisory`` -- the advisory worker's own
+#: composition, service, repository, read-only catalog reader and CLI, plus the F3.1 display adapter.
+#: Never matching, decisions, execution, billing, Workbench contracts, operator requests or ERP write paths.
 ADVISORY_IMPORTERS = [
     "app/cli/advisory_product_suggestions.py",
     "app/composition/advisory.py",
+    "app/composition/advisory_display.py",
     "app/erp/odoo/advisory_catalog_reader.py",
     "app/persistence/product_line_suggestion_repository.py",
     "app/services/advisory_product_suggestions.py",

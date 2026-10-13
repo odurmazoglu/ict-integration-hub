@@ -42,6 +42,7 @@ from app.application.workbench.product_line_projection import PRODUCT_REVIEW_REA
 from app.application.workbench.product_remediation import normalize_seller_item_code
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.application.workflow import ManualReviewReasonCode
+from app.composition.advisory_display import AdvisorySuggestionDisplayReader
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
@@ -140,6 +141,7 @@ def build_workbench_projection_synchronizer(
     product_mapping_enabled: bool | None = None,
     product_line_mapping: OdooWorkbenchProductLineFieldMapping | None = None,
     product_lines_enabled: bool | None = None,
+    product_line_suggestions_display_enabled: bool | None = None,
 ) -> WorkbenchProjectionSynchronizer:
     """The canonical OPS-UI-01A synchronizer, independent of the runtime publish flag.
 
@@ -204,14 +206,28 @@ def build_workbench_projection_synchronizer(
         if product_lines_enabled is None
         else product_lines_enabled
     )
-    product_line_publisher = (
-        OdooWorkbenchProductLinePublisher(
-            adapter=adapter,
-            mapping=product_line_mapping or OdooWorkbenchProductLineFieldMapping.from_environment(),
-        )
-        if lines_enabled
-        else None
+    line_mapping = (
+        (product_line_mapping or OdooWorkbenchProductLineFieldMapping.from_environment()) if lines_enabled else None
     )
+    product_line_publisher = (
+        OdooWorkbenchProductLinePublisher(adapter=adapter, mapping=line_mapping) if line_mapping is not None else None
+    )
+
+    # PR F / F3.1: advisory hints only with their own display flag, on composed child lines,
+    # with both Studio hint fields mapped. Off (the default) means no advisory row is read;
+    # mapped-but-off clears the hint fields. Persisted advisory evidence only, never Odoo.
+    hints_enabled = (
+        settings.odoo_workbench_product_line_suggestions_display_enabled
+        if product_line_suggestions_display_enabled is None
+        else product_line_suggestions_display_enabled
+    )
+    if hints_enabled and line_mapping is not None and not line_mapping.suggestions_mapped:
+        raise WorkbenchContractError(
+            "ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_DISPLAY_ENABLED=true requires "
+            "ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTED_PRODUCTS_FIELD and "
+            "ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTION_SUMMARY_FIELD."
+        )
+    hints_composed = hints_enabled and line_mapping is not None
 
     @contextmanager
     def read_scope() -> Iterator[WorkbenchProjectionSources]:
@@ -226,6 +242,9 @@ def build_workbench_projection_synchronizer(
                     )
                     if product_line_publisher is not None
                     else None
+                ),
+                product_line_suggestion_reader=(
+                    AdvisorySuggestionDisplayReader(read_session) if hints_composed else None
                 ),
                 guidance_facts_reader=(
                     partial(

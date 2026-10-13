@@ -4,6 +4,10 @@ Wires Hub-only line and history sources, the bounded read-only Odoo catalog read
 advisory repository and a database single-flight lock around one tick. Imported only by
 the Hub worker and the advisory CLI -- never by classification, matching, decisions,
 execution, operator requests or accounting.
+
+F3.1: with the display flag on, every tick ends with the database-only display refresh
+(post-tick refresh), and an independent 60 s sweep task runs the same refresh under the
+same lock; see :mod:`app.composition.advisory_display`.
 """
 
 from __future__ import annotations
@@ -26,7 +30,8 @@ from app.application.workbench.product_line_projection import (
     build_product_line_projections,
 )
 from app.application.workbench.queries import MAX_REVIEW_QUEUE_LIMIT, ReviewQueueQuery
-from app.composition.imports import _product_line_read_facts
+from app.composition.advisory_display import AdvisoryDisplayRefresher, DisplaySweepResult
+from app.composition.imports import _product_line_read_facts, build_workbench_projection_synchronizer
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -241,12 +246,14 @@ class AdvisoryTick:
         company_id: int,
         catalog_reader_factory: Callable[[], AdvisoryCatalogReader],
         policy: SuggestionPolicy | None = None,
+        display_refresher: AdvisoryDisplayRefresher | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lock = lock
         self._company_id = company_id
         self._catalog_reader_factory = catalog_reader_factory
         self._policy = policy
+        self._display_refresher = display_refresher
 
     def run(self) -> AdvisoryTickResult | None:
         with self._lock.hold() as acquired:
@@ -254,9 +261,19 @@ class AdvisoryTick:
                 logger.info("advisory.product_suggestions.skipped_locked")
                 return None
             with self._session() as session:
-                return advisory_service(
+                result = advisory_service(
                     session, catalog_reader=self._catalog_reader_factory(), policy=self._policy
                 ).run(company_id=self._company_id)
+            if self._display_refresher is not None:
+                # F3.1 post-tick refresh: publish new sets and clear retired ones right away.
+                try:
+                    self._display_refresher.sweep()
+                except Exception as exc:  # noqa: BLE001 - the 60 s sweep retries; the tick result stands
+                    logger.warning(
+                        "advisory.product_suggestions.display_refresh_crashed",
+                        extra={"error_type": exc.__class__.__name__},
+                    )
+            return result
 
     @contextmanager
     def _session(self) -> Iterator[Session]:
@@ -265,6 +282,21 @@ class AdvisoryTick:
             yield session
         finally:
             session.close()
+
+
+class AdvisoryDisplaySweep:
+    """F3.1: the 60 s database-only display sweep, single-flight with the advisory tick."""
+
+    def __init__(self, *, lock: PollLock, refresher: AdvisoryDisplayRefresher) -> None:
+        self._lock = lock
+        self._refresher = refresher
+
+    def run(self) -> DisplaySweepResult | None:
+        with self._lock.hold() as acquired:
+            if not acquired:
+                logger.info("advisory.product_suggestions.display_sweep_skipped_locked")
+                return None
+            return self._refresher.sweep()
 
 
 def advisory_service(
@@ -315,17 +347,51 @@ def build_advisory_tick(
         company_id=settings.odoo_workbench_operator_requests_company_id,
         catalog_reader_factory=lambda: odoo_catalog_reader(settings, odoo_client),
         policy=advisory_policy(settings),
+        display_refresher=(
+            build_advisory_display_refresher(settings=settings, engine=engine, odoo_client=odoo_client)
+            if settings.odoo_workbench_product_line_suggestions_display_enabled
+            else None
+        ),
+    )
+
+
+def build_advisory_display_refresher(
+    *, settings: Settings, engine: Engine, odoo_client: OdooJson2Client | None = None
+) -> AdvisoryDisplayRefresher:
+    """The canonical projection synchronizer (display on) behind the database-only due check."""
+
+    if settings.odoo_workbench_operator_requests_company_id is None:
+        raise ValueError("ODOO_WORKBENCH_OPERATOR_REQUESTS_COMPANY_ID is required.")
+    if not settings.odoo_workbench_product_line_suggestions_display_enabled:
+        raise ValueError("ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_DISPLAY_ENABLED is off.")
+    synchronizer = build_workbench_projection_synchronizer(engine=engine, settings=settings, odoo_client=odoo_client)
+    return AdvisoryDisplayRefresher(
+        session_factory=sessionmaker(bind=engine, autocommit=False, autoflush=False),
+        company_id=settings.odoo_workbench_operator_requests_company_id,
+        synchronize=synchronizer.sync,
+    )
+
+
+def build_advisory_display_sweep(
+    *, settings: Settings, engine: Engine, odoo_client: OdooJson2Client | None = None
+) -> AdvisoryDisplaySweep:
+    return AdvisoryDisplaySweep(
+        lock=advisory_lock(engine),
+        refresher=build_advisory_display_refresher(settings=settings, engine=engine, odoo_client=odoo_client),
     )
 
 
 __all__ = [
     "ADVISORY_SUGGESTIONS_LOCK_KEY",
+    "AdvisoryDisplaySweep",
     "AdvisoryTick",
     "HubAdvisoryLineSource",
     "HubPriorMappingSource",
     "advisory_lock",
     "advisory_policy",
     "advisory_service",
+    "build_advisory_display_refresher",
+    "build_advisory_display_sweep",
     "build_advisory_tick",
     "odoo_catalog_reader",
 ]

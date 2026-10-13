@@ -34,14 +34,16 @@ NOW = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
 SETS = "workbench_product_line_suggestion_sets"
 CANDIDATES = "workbench_product_line_suggestion_candidates"
 MIGRATION = Path(__file__).resolve().parents[2] / "alembic" / "versions" / "202607170041_product_line_suggestions.py"
+#: PR F / F3.1 adds two nullable display columns on top; the models expect both revisions.
+DISPLAY_MIGRATION = MIGRATION.with_name("202607170042_product_line_suggestion_display.py")
 LINE = AdvisoryLine(
     company_id=1, review_id=REVIEW, review_version=2, line_number="1", line_key="ipp-pl:v1:1:x:1", line_sequence=1,
     supplier_partner_id=24, seller_item_code="TFZP", description="Contoso Backup Agent",
 )  # fmt: skip
 
 
-def _migration():
-    spec = importlib.util.spec_from_file_location("migration_0041", MIGRATION)
+def _migration(path: Path = MIGRATION):
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -49,10 +51,12 @@ def _migration():
 
 
 def _run(engine: Engine, step: str) -> None:
-    module = _migration()
-    with engine.begin() as connection:
-        with Operations.context(MigrationContext.configure(connection)):
-            getattr(module, step)()
+    paths = (MIGRATION, DISPLAY_MIGRATION) if step == "upgrade" else (DISPLAY_MIGRATION, MIGRATION)
+    for path in paths:
+        module = _migration(path)
+        with engine.begin() as connection:
+            with Operations.context(MigrationContext.configure(connection)):
+                getattr(module, step)()
 
 
 @pytest.fixture()

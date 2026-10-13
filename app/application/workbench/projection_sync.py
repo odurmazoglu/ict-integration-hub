@@ -63,6 +63,7 @@ from app.application.workbench.product_line_projection import (
     ProductLineReadFacts,
     build_product_line_projections,
 )
+from app.application.workbench.product_line_suggestion_view import ProductLineSuggestionView
 from app.application.workbench.projection import (
     WorkbenchProjection,
     WorkbenchProjectionDecision,
@@ -90,6 +91,7 @@ logger = logging.getLogger(__name__)
 
 SAFE_PROJECTION_SYNC_ERROR = "Odoo Workbench projection sync failed."
 SAFE_PRODUCT_LINE_ERROR = "Workbench product lines could not be derived from committed Hub evidence."
+SAFE_PRODUCT_LINE_HINT_ERROR = "Advisory product line hints could not be read; none are shown."
 
 
 class _ReviewReader(Protocol):
@@ -130,6 +132,9 @@ class WorkbenchProjectionSources:
     #: evidence version is ``None`` for a decided review. ``None`` (the default) keeps
     #: product line projection disabled: no child row is read or written.
     product_line_reader: Callable[[ReviewItem, int, int | None], ProductLineReadFacts] | None = None
+    #: PR F / F3.1: gated advisory hints for the composed product lines, read from persisted
+    #: advisory evidence only. ``None`` (the default) keeps hints off: none are read.
+    product_line_suggestion_reader: Callable[[WorkbenchProjection], tuple[ProductLineSuggestionView, ...]] | None = None
 
 
 #: Opens one private, read-only scope over *committed* Hub state and closes it on exit.
@@ -244,6 +249,10 @@ def _build_projection(sources: WorkbenchProjectionSources, *, review_id: str, co
         projection = dataclasses.replace(
             projection, **_product_lines(sources.product_line_reader, review, source, company_id=company_id)
         )
+    if sources.product_line_suggestion_reader is not None and projection.product_lines is not None:
+        projection = dataclasses.replace(
+            projection, product_line_suggestions=_line_hints(sources.product_line_suggestion_reader, projection)
+        )
     if sources.guidance_facts_reader is None:
         return projection
     facts = sources.guidance_facts_reader(review, company_id)
@@ -298,6 +307,26 @@ def _product_lines(
             exc_info=not _is_classified(exc),
         )
         return {"product_lines": None, "product_line_error": error}
+
+
+def _line_hints(
+    reader: Callable[[WorkbenchProjection], tuple[ProductLineSuggestionView, ...]], projection: WorkbenchProjection
+) -> tuple[ProductLineSuggestionView, ...]:
+    """PR F / F3.1: a hint read failure shows no hints (fail closed), never fails the lines."""
+
+    try:
+        return tuple(reader(projection))
+    except Exception as exc:  # noqa: BLE001 - advisory hints never affect the projection itself
+        logger.warning(
+            "workbench.projection.product_line_hints_unavailable",
+            extra={
+                "review_id": projection.review_id,
+                "company_id": projection.company_id,
+                "error": SAFE_PRODUCT_LINE_HINT_ERROR,
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        return ()
 
 
 def _guidance(projection: WorkbenchProjection, facts: OperatorGuidanceFacts) -> WorkbenchOperatorGuidance:

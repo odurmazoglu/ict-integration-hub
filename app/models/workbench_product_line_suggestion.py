@@ -96,6 +96,9 @@ class WorkbenchProductLineSuggestionSet(Base):
     generated_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
     validated_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
     status_changed_at: Mapped[datetime | None] = mapped_column(AwareDateTime(), nullable=True)
+    #: F3.1: start of the last successful Odoo Workbench refresh that reflected this set's
+    #: display state (NULL: never, or its display state changed since). Never extends validity.
+    display_synced_at: Mapped[datetime | None] = mapped_column(AwareDateTime(), nullable=True)
 
 
 class WorkbenchProductLineSuggestionCandidate(Base):
@@ -123,3 +126,5 @@ class WorkbenchProductLineSuggestionCandidate(Base):
     score: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False)
     reasons: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
     warnings: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    #: F3.1: the candidate's Odoo ``display_name`` from the generating catalog snapshot (NULL before 0042).
+    product_name: Mapped[str | None] = mapped_column(String(512), nullable=True)

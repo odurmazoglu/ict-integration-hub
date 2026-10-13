@@ -128,6 +128,10 @@ class Settings(BaseSettings):
     odoo_workbench_product_line_suggestions_enabled: bool = False
     #: PR F / F2: advisory task interval (approved: 15 minutes).
     odoo_workbench_product_line_suggestions_interval_seconds: int = Field(default=900, gt=0)
+    #: PR F / F3.1: show persisted advisory suggestions on the Workbench child lines and run the
+    #: 60 s database-only display sweep. Off by default: no advisory row is read by the
+    #: projection, mapped hint fields are cleared, and no sweep task is registered.
+    odoo_workbench_product_line_suggestions_display_enabled: bool = False
 
     @property
     def uyumsoft_wsdl_url(self) -> str:

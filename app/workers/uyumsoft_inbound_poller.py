@@ -42,6 +42,9 @@ from app.services.uyumsoft_inbound_poll import (
 )
 
 EXIT_PREVIEW_FAILED = 2
+#: PR F / F3.1: equals ``app.advisory.suggestion_sets.DISPLAY_SWEEP_INTERVAL`` (guarded by a test; the
+#: worker itself never imports the advisory package).
+DISPLAY_SWEEP_INTERVAL_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +150,7 @@ def main(
     preview_builder: Callable[[Settings], Callable[[], InboundPollPreview]] | None = None,
     operator_request_tick_builder: Callable[[Settings], Callable[[], Any]] | None = None,
     advisory_tick_builder: Callable[[Settings], Callable[[], Any]] | None = None,
+    advisory_display_sweep_builder: Callable[[Settings], Callable[[], Any]] | None = None,
     out: TextIO | None = None,
 ) -> int:
     args = _parse_args(argv)
@@ -166,6 +170,7 @@ def main(
             cycle_builder=cycle_builder or _default_cycle_builder,
             operator_request_tick_builder=operator_request_tick_builder or _default_operator_request_tick_builder,
             advisory_tick_builder=advisory_tick_builder or _default_advisory_tick_builder,
+            advisory_display_sweep_builder=advisory_display_sweep_builder or _default_advisory_display_sweep_builder,
         )
 
     if not resolved_settings.uyumsoft_inbound_poll_enabled:
@@ -198,6 +203,7 @@ def _run_with_operator_requests(
     cycle_builder: Callable[[Settings], Callable[[], Any]],
     operator_request_tick_builder: Callable[[Settings], Callable[[], Any]],
     advisory_tick_builder: Callable[[Settings], Callable[[], Any]] | None = None,
+    advisory_display_sweep_builder: Callable[[Settings], Callable[[], Any]] | None = None,
 ) -> int:
     tasks = [
         PeriodicTask(
@@ -226,6 +232,15 @@ def _run_with_operator_requests(
                 interval_seconds=settings.odoo_workbench_product_line_suggestions_interval_seconds,
             )
         )
+        if settings.odoo_workbench_product_line_suggestions_display_enabled and advisory_display_sweep_builder:
+            # PR F / F3.1: database-only display sweep; Odoo is called only for due reviews.
+            tasks.append(
+                PeriodicTask(
+                    name="advisory_suggestion_display_sweep",
+                    run=advisory_display_sweep_builder(settings),
+                    interval_seconds=DISPLAY_SWEEP_INTERVAL_SECONDS,
+                )
+            )
     logger.info(
         "hub_worker_started tasks=%s",
         ",".join(f"{task.name}:{task.interval_seconds}s" for task in tasks),
@@ -307,6 +322,13 @@ def _default_advisory_tick_builder(settings: Settings) -> Callable[[], Any]:
     from app.db.session import engine
 
     return build_advisory_tick(settings=settings, engine=engine).run
+
+
+def _default_advisory_display_sweep_builder(settings: Settings) -> Callable[[], Any]:
+    from app.composition.advisory import build_advisory_display_sweep
+    from app.db.session import engine
+
+    return build_advisory_display_sweep(settings=settings, engine=engine).run
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
