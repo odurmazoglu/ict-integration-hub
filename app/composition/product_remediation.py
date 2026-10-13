@@ -170,6 +170,8 @@ def build_create_line_product_use_case(
             manual_only_category_ids=settings.product_creation_manual_only_category_ids,
             extra_manual_only_sku_patterns=settings.product_creation_manual_only_sku_patterns,
             uom_unit_codes=settings.product_creation_uom_unit_codes,
+            manual_only_supplier_ids=settings.product_creation_manual_only_supplier_ids,
+            supplier_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
         ),
         category_verifier=category_policy,
         creation_repository=SqlAlchemyProductLineCreationRepository(session),

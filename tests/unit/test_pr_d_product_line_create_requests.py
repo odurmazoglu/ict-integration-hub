@@ -506,6 +506,7 @@ def _ready_settings(**overrides: Any) -> Settings:
         odoo_workbench_product_line_projection_enabled=True,
         product_creation_uom_ids=frozenset({1}),
         product_creation_manual_only_category_ids=frozenset({51}),
+        product_creation_manual_only_supplier_ids=frozenset({434}),
     )
     values.update(overrides)
     return Settings(**values)
@@ -520,6 +521,7 @@ def test_create_gate_defaults_off_and_requires_its_prerequisites() -> None:
     assert any("requires ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS_ENABLED=true" in e for e in errors)
     assert any("PRODUCT_CREATION_UOM_IDS" in e for e in errors)
     assert any("PRODUCT_CREATION_MANUAL_ONLY_CATEGORY_IDS" in e for e in errors)
+    assert any("PRODUCT_CREATION_MANUAL_ONLY_SUPPLIER_IDS" in e for e in errors)
     bad = runtime_configuration_errors(_ready_settings(product_creation_manual_only_sku_patterns=("([",)))
     assert any("PRODUCT_CREATION_MANUAL_ONLY_SKU_PATTERNS" in e for e in bad)
 
