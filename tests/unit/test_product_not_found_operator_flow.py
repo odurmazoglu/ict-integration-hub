@@ -51,6 +51,7 @@ from app.application.workbench.product_mapping import (
     ProductMappingSellerCodeMissingError,
 )
 from app.application.workbench.product_mapping_use_cases import MapExistingProductUseCase
+from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.reclassification import ReviewReclassificationResult
 from app.application.workbench.selected_product_resolution import ResolutionProductRecord
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
@@ -703,7 +704,97 @@ def test_guidance_lists_each_unmatched_line_for_the_operator() -> None:
         guidance.todo_html
     )
     assert "Satır 3 — satıcı ürün kodu yok" in guidance.todo_html
-    assert "Ürün Eşleştir" in guidance.todo_html and "✓ Tedarikçi: ICT BULUT" in guidance.completed_html
+    assert "Ürün Satırları sekmesinden" in guidance.todo_html and "✓ Tedarikçi: ICT BULUT" in guidance.completed_html
+
+
+# PR E: the parent "Ürün Eşleştir" inputs are retired from the Workbench form (Studio view 4214);
+# the guidance points operators to the child-line "Eşleştir" / "Yeni Ürün Oluştur" buttons instead.
+PRODUCT_LINE_INSTRUCTION = (
+    "Ürün eşleştirmesi Ürün Satırları sekmesinden yapılır. Mevcut ürün için ilgili satırda Odoo ürününü "
+    "seçip Eşleştir'e basın. Yeni ürün için gerekli bilgileri doldurup Yeni Ürün Oluştur'a basın. "
+    "Eşleştirme bu tedarikçinin sonraki faturalarında otomatik kullanılır."
+)
+
+
+def test_product_guidance_points_to_the_product_lines_tab() -> None:
+    guidance = _guidance(UnmatchedProductLine("1", "TFZP", TFZP_DESCRIPTION, "2", "C62"))
+
+    assert guidance.next_action is OperatorNextAction.PRODUCT
+    assert f"<strong>{PRODUCT_LINE_INSTRUCTION}</strong>" in guidance.todo_html
+    assert "Satır 1 — Satıcı Ürün Kodu: TFZP" in guidance.todo_html
+
+
+@pytest.mark.parametrize(
+    "legacy", ["İşlem = 'Ürün Eşleştir'", "Fatura Satırı", "Odoo Ürünü =", "İşleme Gönder", "'Ürün Eşleştir'"]
+)
+def test_product_guidance_no_longer_mentions_the_parent_mapping_inputs(legacy: str) -> None:
+    guidance = _guidance(UnmatchedProductLine("1", "TFZP", TFZP_DESCRIPTION, "2", "C62"))
+    assert legacy not in guidance.todo_html
+
+
+@pytest.mark.parametrize(
+    ("codes", "purpose", "lines", "action", "instruction"),
+    [
+        (
+            (ManualReviewReasonCode.SUPPLIER_NOT_FOUND, ManualReviewReasonCode.PRODUCT_NOT_FOUND),
+            None,
+            (UnmatchedProductLine("1", "TFZP"),),
+            OperatorNextAction.SUPPLIER,
+            "Tedarikçiyi doğrulayın: mevcut bir tedarikçiyi seçin veya yeni tedarikçi oluşturun.",
+        ),
+        (
+            (ManualReviewReasonCode.SUPPLIER_AMBIGUOUS,),
+            None,
+            (),
+            OperatorNextAction.SUPPLIER,
+            "Birden fazla eşleşen tedarikçi var: doğru mevcut tedarikçiyi seçin.",
+        ),
+        (
+            (ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_REQUIRED,),
+            None,
+            (),
+            OperatorNextAction.PURPOSE,
+            "Bu alımın amacını seçin.",
+        ),
+        (
+            (ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_REQUIRED,),
+            PurchasePurpose.INTERNAL_USE,
+            (),
+            OperatorNextAction.ACCOUNTING,
+            "Muhasebe işlemini seçin: gider hesabı veya sabit kıymet (demirbaş).",
+        ),
+        (
+            (ManualReviewReasonCode.PRODUCT_NOT_FOUND,),
+            None,
+            (UnmatchedProductLine("1", None, "İADE"),),
+            OperatorNextAction.TECHNICAL,
+            "Bu engel henüz Odoo'dan çözülemiyor (ürün/vergi/fatura içeriği); teknik destek alın.",
+        ),
+        ((), None, (), OperatorNextAction.DECISION, "Engel kalmadı: iş akışını seçip kararı gönderin."),
+    ],
+)
+def test_other_steps_keep_their_guidance_text_with_product_mapping_enabled(
+    codes, purpose, lines, action, instruction
+) -> None:
+    source = GuidanceInput(
+        status=ReviewStatus.PENDING_REVIEW,
+        reason_codes=codes,
+        supplier_name="ICT BULUT",
+        decision_type=None,
+        decision_workflow=None,
+        decision_version=None,
+        execution_state=None,
+        vendor_bill_id=None,
+    )
+    facts = OperatorGuidanceFacts(
+        product_mapping_enabled=True, unmatched_product_lines=lines, current_purchase_purpose=purpose
+    )
+
+    guidance = build_operator_guidance(source, facts)
+
+    assert guidance.next_action is action
+    assert f"<p><strong>{instruction}</strong></p>" in guidance.todo_html
+    assert "Ürün Satırları sekmesinden" not in guidance.todo_html
 
 
 def test_guidance_is_unchanged_until_the_request_fields_are_provisioned() -> None:

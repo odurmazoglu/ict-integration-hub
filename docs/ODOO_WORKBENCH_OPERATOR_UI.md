@@ -78,10 +78,14 @@ quotation execution.
 
 When a line carries PRODUCT_NOT_FOUND and has a seller product code, the guidance shows
 **Ürün Eşleştirmesi Yapılmalı** and lists each unmatched line from the immutable source
-invoice (line number, seller product code, description, quantity/UoM). The operator picks
-*İşlem = Ürün Eşleştir*, the *Fatura Satırı* (line number) and the *Odoo Ürünü*, then
-*İşleme Gönder*. One request resolves exactly one line; a review with several unmatched
-lines needs one request per line (each refreshes the guidance and the review version).
+invoice (line number, seller product code, description, quantity/UoM). Since PR E the
+guidance sends the operator to the *Ürün Satırları* tab: *Eşleştir* on the line for an
+existing product ([ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md](ODOO_WORKBENCH_PRODUCT_LINE_REQUESTS.md)),
+*Yeni Ürün Oluştur* for a new one ([ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md](ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md)).
+PR E retired the parent inputs below from the form in Studio (view 4208 inactive; view 4214
+hides *İşlem* and *İşleme Gönder* at this step); the parent request channel itself is
+unchanged. One request resolves exactly one line; a review with several unmatched lines needs
+one request per line (each refreshes the guidance and the review version).
 
 What the Hub does (`app/application/workbench/product_mapping_use_cases.py`):
 
