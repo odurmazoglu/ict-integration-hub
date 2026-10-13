@@ -510,5 +510,6 @@ deleted automatically.
 * Only `product_not_found` lines with a seller code can be mapped. Lines without a code and
   ambiguous lines stay technical support (PR F). New products: PR D,
   [ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md](ODOO_WORKBENCH_PRODUCT_LINE_CREATE.md).
-* The parent "Ürün Eşleştir" remains until PR E. Both channels share one use case and one
-  authorization type; the version check serializes them.
+* PR E retired the parent "Ürün Eşleştir" inputs from the Workbench form (Studio only) and
+  points the guidance to this tab; the parent request channel is unchanged. Both channels
+  share one use case and one authorization type; the version check serializes them.

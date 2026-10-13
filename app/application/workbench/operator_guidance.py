@@ -309,9 +309,9 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
 
 def _product_todo(lines: tuple[UnmatchedProductLine, ...], findings: list[str]) -> str:
     instruction = (
-        "Eşleşmeyen satır için mevcut bir Odoo ürünü seçin: İşlem = 'Ürün Eşleştir', Fatura Satırı = satır "
-        "numarası, Odoo Ürünü = doğru ürün; ardından 'İşleme Gönder'. Eşleştirme bu tedarikçinin sonraki "
-        "faturalarında otomatik kullanılır."
+        "Ürün eşleştirmesi Ürün Satırları sekmesinden yapılır. Mevcut ürün için ilgili satırda Odoo ürününü "
+        "seçip Eşleştir'e basın. Yeni ürün için gerekli bilgileri doldurup Yeni Ürün Oluştur'a basın. "
+        "Eşleştirme bu tedarikçinin sonraki faturalarında otomatik kullanılır."
     )
     items = "".join(f"<li>{html.escape(_product_line_text(line), quote=False)}</li>" for line in lines)
     return _todo(instruction, findings) + f'<ul class="o_ipp_product_lines">{items}</ul>'
