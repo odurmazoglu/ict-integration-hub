@@ -58,6 +58,9 @@ from app.application.workbench.product_line_creation_policy import (
     compile_manual_only_sku_patterns,
 )
 
+#: Bumped whenever tiers, guards or scoring change: every persisted suggestion set of an
+#: older engine version is regenerated.
+ENGINE_VERSION = "f1.1"
 DEFAULT_THRESHOLD = Decimal("0.55")
 DEFAULT_TIE_MARGIN = Decimal("0.05")
 DEFAULT_MAX_SUGGESTIONS = 3
@@ -190,21 +193,46 @@ class ProductSuggestionResult(ApplicationDTO):
 # ------------------------------------------------------------------------------ public API
 
 
-def catalog_fingerprint(catalog: CatalogSnapshot) -> str:
-    """Order-independent SHA-256 of every catalog fact the engine reads."""
+def variant_catalog_fingerprint(catalog: CatalogSnapshot) -> str:
+    """Order-independent SHA-256 of the variants and categories the engine reads.
 
-    payload = {
-        "variants": sorted(
-            [v.product_id, v.template_id, v.name, v.default_code, v.active, v.purchase_ok, v.category_id, v.company_id]
-            for v in catalog.variants
-        ),
-        "supplier_mappings": sorted(
-            [m.supplierinfo_id, m.partner_id, m.product_code, m.template_id, m.product_id, m.company_id]
-            for m in catalog.supplier_mappings
-        ),
-        "category_paths": sorted([category_id, path] for category_id, path in catalog.category_paths),
-    }
-    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+    Per variant: id, template, display name (variant attributes included), Internal
+    Reference, category, active state, purchase eligibility and company.
+    """
+
+    return _digest(
+        "variants",
+        [[v.product_id, v.template_id, v.name, v.default_code, v.category_id, v.active, v.purchase_ok, v.company_id]
+         for v in catalog.variants],
+        [[category_id, path] for category_id, path in catalog.category_paths],
+    )  # fmt: skip
+
+
+def supplierinfo_fingerprint(catalog: CatalogSnapshot) -> str:
+    """Order-independent SHA-256 of the supplier mappings (id, supplier, template, variant, code, company)."""
+
+    return _digest(
+        "supplierinfo",
+        [[m.supplierinfo_id, m.partner_id, m.template_id, m.product_id, m.product_code, m.company_id]
+         for m in catalog.supplier_mappings],
+    )  # fmt: skip
+
+
+def catalog_fingerprint(catalog: CatalogSnapshot) -> str:
+    """Both fingerprints combined: the exact catalog state one suggestion was generated from."""
+
+    return combine_fingerprints(variant_catalog_fingerprint(catalog), supplierinfo_fingerprint(catalog))
+
+
+def combine_fingerprints(variant_catalog: str, supplierinfo: str) -> str:
+    """The combined fingerprint from its two parts (persisted sets store the parts)."""
+
+    return _digest("catalog", [[variant_catalog, supplierinfo]])
+
+
+def _digest(kind: str, *row_groups: list[list[object]]) -> str:
+    groups = [sorted(json.dumps(row, ensure_ascii=False, default=str) for row in rows) for rows in row_groups]
+    encoded = json.dumps([kind, groups], ensure_ascii=False, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -708,6 +736,7 @@ __all__ = [
     "CatalogSupplierMapping",
     "CatalogVariant",
     "DEFAULT_POLICY",
+    "ENGINE_VERSION",
     "GENERIC_TOKENS",
     "PriorMapping",
     "ProductSuggestion",
@@ -716,5 +745,8 @@ __all__ = [
     "SuggestionPolicy",
     "SuggestionTier",
     "catalog_fingerprint",
+    "combine_fingerprints",
+    "supplierinfo_fingerprint",
+    "variant_catalog_fingerprint",
     "suggest_products",
 ]

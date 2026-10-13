@@ -34,3 +34,18 @@ that cannot leak into any deciding code path.
   Studio UI are later, separately approved stages (F2–F4) behind a default-off flag.
 - A T0 result means existing evidence is stale; a controlled reclassification is a separate,
   explicitly approved action and is never triggered by the engine.
+
+## F2 (persistence and worker)
+
+- Tables `workbench_product_line_suggestion_sets` / `_candidates` (Alembic `202607170041`); a partial
+  unique index allows one `current` set per (company, review, version, line); superseded and
+  invalidated sets are history, removed after 90 days only by the dry-run-first CLI.
+- An independent worker task (`advisory_product_suggestions`, every 15 minutes, behind
+  `ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_ENABLED`, default off) with a PostgreSQL advisory lock.
+  It selects lines from committed Hub evidence exactly as the child projection does (effective
+  commercial supplier of the persisted matching), reads the Odoo catalog in three bounded read-only
+  calls, and never runs inside any other workflow.
+- A set is displayable only while its last successful catalog validation is at most 20 minutes old;
+  a failed catalog read regenerates and revalidates nothing.
+- The import boundary allows exactly the advisory composition, service, repository, catalog reader
+  and CLI to import `app.advisory`, and only the Hub worker and the CLI to wire it.

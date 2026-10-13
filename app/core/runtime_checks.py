@@ -137,6 +137,15 @@ def _validate_operator_request_settings(settings: Settings, errors: list[str]) -
             )
     if settings.odoo_workbench_product_line_create_enabled:
         _validate_product_line_create_settings(settings, errors)
+    if settings.odoo_workbench_product_line_suggestions_enabled:
+        # PR F / F2: the advisory task runs on the Hub worker next to the request tick (same
+        # company) and only ever describes lines the child projection shows.
+        for required, name in (
+            (settings.odoo_workbench_operator_requests_enabled, "ODOO_WORKBENCH_OPERATOR_REQUESTS_ENABLED"),
+            (settings.odoo_workbench_product_line_projection_enabled, "ODOO_WORKBENCH_PRODUCT_LINE_PROJECTION_ENABLED"),
+        ):
+            if not required:
+                errors.append(f"ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_ENABLED=true requires {name}=true.")
     if not settings.odoo_workbench_operator_requests_enabled:
         return
     if settings.odoo_workbench_operator_requests_company_id is None:

@@ -660,6 +660,18 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # PR F / F2 (202607170041) added exactly the two advisory suggestion tables (one current set
+    # per review/version/line via a partial unique index): one "-1" step removes only them.
+    advisory_tables = {"workbench_product_line_suggestion_sets", "workbench_product_line_suggestion_candidates"}
+    assert advisory_tables.issubset(inspector.get_table_names())
+    assert "ux_wpls_current_line" in {
+        index["name"] for index in inspector.get_indexes("workbench_product_line_suggestion_sets") if index["unique"]
+    }
+    tables_before_advisory_downgrade = set(inspector.get_table_names())
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert set(inspector.get_table_names()) == tables_before_advisory_downgrade - advisory_tables
+
     # PR D (202607170040) widened the same ledger action CHECK constraint and added exactly
     # one table, workbench_product_line_creations: one "-1" step removes only that table.
     assert "workbench_product_line_creations" in inspector.get_table_names()

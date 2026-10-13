@@ -533,23 +533,56 @@ def test_the_engine_module_has_no_io_or_write_dependencies() -> None:
         assert word not in source
 
 
-def test_no_deciding_or_writing_code_path_imports_the_advisory_package() -> None:
-    """ADR-0014: advisory output may only ever be displayed, never feed a decision or a write.
+#: ADR-0014 / F2: the only modules allowed to import ``app.advisory`` -- the advisory worker's own
+#: composition, service, repository, read-only catalog reader and CLI. Never matching, decisions,
+#: execution, billing, Workbench contracts, operator requests or ERP write paths.
+ADVISORY_IMPORTERS = [
+    "app/cli/advisory_product_suggestions.py",
+    "app/composition/advisory.py",
+    "app/erp/odoo/advisory_catalog_reader.py",
+    "app/persistence/product_line_suggestion_repository.py",
+    "app/services/advisory_product_suggestions.py",
+]
+#: ... and only the Hub worker and the advisory CLI may reach the advisory composition/service.
+ADVISORY_WIRING_IMPORTERS = [
+    "app/cli/advisory_product_suggestions.py",
+    "app/composition/advisory.py",
+    "app/workers/uyumsoft_inbound_poller.py",
+]
 
-    No module outside ``app/advisory`` imports it yet (F1). Later stages may add exactly the
-    composition/projection modules that display suggestions -- never matching, decisions,
-    execution, billing, Workbench contracts or ERP write paths.
-    """
+
+def _imported_modules(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def _importers(module: str) -> list[str]:
+    """Modules outside ``app/advisory`` whose import statements (lazy ones included) name ``module``."""
 
     app_root = Path(product_suggestions.__file__).resolve().parents[1]
-    importers = sorted(
+    return sorted(
         path.relative_to(app_root.parent).as_posix()
         for path in app_root.rglob("*.py")
         if "advisory" not in path.relative_to(app_root).parts
         and "__pycache__" not in path.parts
-        and "app.advisory" in path.read_text(encoding="utf-8")
+        and any(name == module or name.startswith(module + ".") for name in _imported_modules(path))
     )
-    assert importers == []
+
+
+def test_no_deciding_or_writing_code_path_imports_the_advisory_package() -> None:
+    """ADR-0014: advisory output may only ever be displayed, never feed a decision or a write."""
+
+    assert _importers("app.advisory") == ADVISORY_IMPORTERS
+    wiring = sorted(
+        set(_importers("app.composition.advisory")) | set(_importers("app.services.advisory_product_suggestions"))
+    )
+    assert wiring == ADVISORY_WIRING_IMPORTERS
 
 
 def test_results_carry_structured_evidence_fields() -> None:

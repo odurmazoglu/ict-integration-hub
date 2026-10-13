@@ -11,6 +11,10 @@ from app.models.uyumsoft_invoice import UyumsoftInvoiceMetadata
 from app.models.uyumsoft_sync_run import UyumsoftSyncRun
 from app.models.workbench_operator_request import WorkbenchOperatorRequest
 from app.models.workbench_product_line_creation import WorkbenchProductLineCreation
+from app.models.workbench_product_line_suggestion import (
+    WorkbenchProductLineSuggestionCandidate,
+    WorkbenchProductLineSuggestionSet,
+)
 from app.models.workbench_review_accounting_resolution import WorkbenchReviewAccountingResolution
 from app.models.workbench_review_billing_evidence import WorkbenchReviewBillingEvidence
 from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
@@ -54,6 +58,8 @@ __all__ = [
     "WorkbenchReviewItem",
     "WorkbenchReviewOneOffVendorRetirement",
     "WorkbenchProductLineCreation",
+    "WorkbenchProductLineSuggestionCandidate",
+    "WorkbenchProductLineSuggestionSet",
     "WorkbenchReviewProductIdentityClaim",
     "WorkbenchReviewProductRemediationReservation",
     "WorkbenchReviewPurchasePurposeResolution",
