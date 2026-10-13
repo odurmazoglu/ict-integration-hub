@@ -60,7 +60,7 @@ from app.application.workbench.product_line_creation_policy import (
 
 #: Bumped whenever tiers, guards or scoring change: every persisted suggestion set of an
 #: older engine version is regenerated.
-ENGINE_VERSION = "f1.1"
+ENGINE_VERSION = "f1.2"
 DEFAULT_THRESHOLD = Decimal("0.55")
 DEFAULT_TIE_MARGIN = Decimal("0.05")
 DEFAULT_MAX_SUGGESTIONS = 3
@@ -82,6 +82,10 @@ CSP_PRODUCT_ONLY_NOTE = "Microsoft ürün kimliği (ProductId) eşleşti ancak S
 VARIANT_CATALOG_NOTE = "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
 AMBIGUOUS_SUPPLIERINFO_NOTE = (
     "Bu tedarikçi kodu için tek ve kesin bir tedarikçi ürün kaydı yok; deterministik öneri yok."
+)
+NEAR_MISS_SUPPLIERINFO_NOTE = (
+    "Bu tedarikçinin ürün kaydındaki kod yalnız büyük/küçük harf veya boşlukla farklı; kesin kod eşleşmesi "
+    "değil, yeniden sınıflandırma bu satırı eşleştirmez."
 )
 
 
@@ -372,19 +376,28 @@ class _Stale:
 
 
 def _stale_supplierinfo(context: _Context, notes: list[str]) -> _Stale | None:
+    """T0 sees exactly the rows the deterministic matcher's supplierinfo lookup would see.
+
+    The matcher only strips the invoice code and asks Odoo for ``product_code = <code>``,
+    which is exact and case-sensitive. A row whose code differs only by letter case or
+    whitespace is never T0 and never a reclassification recommendation.
+    """
+
     line = context.line
     seller = _clean(line.seller_item_code)
     if seller is None or line.supplier_partner_id is None:
         return None
-    rows = [
+    supplier_rows = [
         mapping
         for mapping in context.mappings
         if mapping.partner_id == line.supplier_partner_id
         and mapping.product_code is not None
-        and code_key(mapping.product_code) == code_key(seller)
         and mapping.company_id in (None, line.company_id)
     ]
+    rows = [mapping for mapping in supplier_rows if mapping.product_code == seller]
     if not rows:
+        if any(code_key(mapping.product_code or "") == code_key(seller) for mapping in supplier_rows):
+            notes.append(NEAR_MISS_SUPPLIERINFO_NOTE)
         return None
     variant = _single_variant(context, rows[0]) if len(rows) == 1 else None
     if variant is None:

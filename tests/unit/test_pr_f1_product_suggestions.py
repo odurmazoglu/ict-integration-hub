@@ -29,6 +29,10 @@ from app.advisory.product_suggestions import (
     catalog_fingerprint,
     suggest_products,
 )
+from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party
+from app.erp.models import ProductVariant, SupplierProductCode
+from app.matching import PartnerMatchResult, PartnerMatchStatus, ProductMatchingEngine, ProductMatchStatus
+from app.matching.product import MATCHED_BY_SUPPLIER_PRODUCT_CODE
 
 ICT_BULUT, VITEL, LOGOSOFT, OTHER = 24, 434, 448, 77
 POLICY = SuggestionPolicy(manual_only_supplier_ids=frozenset({VITEL}), manual_only_category_ids=frozenset({5}))
@@ -198,7 +202,7 @@ def test_t0_is_supplier_scoped_and_never_borrows_another_suppliers_mapping() -> 
 
 
 def test_t0_needs_exactly_one_resolvable_supplierinfo_row() -> None:
-    duplicate = CatalogSupplierMapping(supplierinfo_id=11, partner_id=ICT_BULUT, product_code="tfzp ", template_id=164)
+    duplicate = CatalogSupplierMapping(supplierinfo_id=11, partner_id=ICT_BULUT, product_code="TFZP", template_id=164)
     result = _suggest(_line("Unrelated text", code="TFZP"), _catalog(mappings=(SUPPLIERINFO_TFZP, duplicate)))
 
     assert result.suggestions == () and result.reclassification_recommended is False
@@ -212,6 +216,193 @@ def test_t0_template_level_row_on_a_multi_variant_template_is_not_a_guess() -> N
     result = _suggest(_line("85710.1SS3", supplier=VITEL, code="1531016053"), _catalog(mappings=(mapping,)))
 
     assert result.suggestions == () and result.reclassification_recommended is False
+
+
+# ------------------------------------------------------------------------------ T0 exact code (Odoo ``=``)
+
+
+def _tfzp_mapping(code: str, *, supplierinfo_id: int = 10) -> CatalogSupplierMapping:
+    return CatalogSupplierMapping(
+        supplierinfo_id=supplierinfo_id, partner_id=ICT_BULUT, product_code=code, template_id=164
+    )
+
+
+def _t0(result: ProductSuggestionResult) -> list[int]:
+    return [s.product_id for s in result.suggestions if s.tier is SuggestionTier.T0_STALE_SUPPLIERINFO]
+
+
+@pytest.mark.parametrize(
+    ("line_code", "supplierinfo_code"),
+    [
+        ("TFZP", "TFZP"),
+        (" TFZP", "TFZP"),  # the matcher strips the invoice code only
+        ("TFZP  ", "TFZP"),
+        ("\tTFZP\n", "TFZP"),
+    ],
+)
+def test_t0_accepts_exactly_the_code_the_deterministic_matcher_would_look_up(line_code, supplierinfo_code) -> None:
+    result = _suggest(_line("Unrelated text", code=line_code), _catalog(mappings=(_tfzp_mapping(supplierinfo_code),)))
+
+    assert _t0(result) == [395]
+    assert result.reclassification_recommended is True
+    assert product_suggestions.NEAR_MISS_SUPPLIERINFO_NOTE not in result.notes
+
+
+@pytest.mark.parametrize(
+    ("line_code", "supplierinfo_code"),
+    [
+        ("TFZP", "tfzp"),  # letter case
+        ("tfzp", "TFZP"),
+        ("TF ZP", "TFZP"),  # internal whitespace on the invoice
+        ("TFZP", "TF ZP"),  # internal whitespace on the supplierinfo row
+        ("TFZP", "TFZP "),  # Odoo ``=`` does not strip the stored code
+        ("TFZP", " TFZP"),
+    ],
+)
+def test_t0_never_fires_on_a_case_or_whitespace_only_difference(line_code, supplierinfo_code) -> None:
+    result = _suggest(_line("Unrelated text", code=line_code), _catalog(mappings=(_tfzp_mapping(supplierinfo_code),)))
+
+    assert result.suggestions == ()
+    assert result.reclassification_recommended is False
+    assert result.notes == (product_suggestions.NEAR_MISS_SUPPLIERINFO_NOTE,)
+    assert "deterministik" not in product_suggestions.NEAR_MISS_SUPPLIERINFO_NOTE
+    assert "eşleştirmez" in product_suggestions.NEAR_MISS_SUPPLIERINFO_NOTE
+
+
+def test_a_case_only_difference_leaves_the_lower_tiers_unchanged() -> None:
+    description = "MS Windows Server Standart Edition Lisans per VM"
+    exact_free = _suggest(_line(description, code="TFZP"), _catalog(mappings=()))
+    near_miss = _suggest(_line(description, code="TFZP"), _catalog(mappings=(_tfzp_mapping("tfzp"),)))
+
+    assert _t0(near_miss) == [] and near_miss.reclassification_recommended is False
+    assert [(s.product_id, s.tier, s.score) for s in near_miss.suggestions] == [
+        (s.product_id, s.tier, s.score) for s in exact_free.suggestions
+    ]
+
+
+def test_a_near_miss_row_does_not_hide_an_exact_row_the_matcher_would_use() -> None:
+    result = _suggest(
+        _line("Unrelated text", code="TFZP"),
+        _catalog(mappings=(_tfzp_mapping("TFZP"), _tfzp_mapping("tfzp", supplierinfo_id=11))),
+    )
+
+    assert _t0(result) == [395] and result.reclassification_recommended is True
+
+
+def test_t0_exact_code_keeps_the_supplier_scope() -> None:
+    result = _suggest(_line("Unrelated text", supplier=OTHER, code="TFZP"), _catalog(mappings=(_tfzp_mapping("TFZP"),)))
+
+    assert _t0(result) == [] and result.reclassification_recommended is False
+
+
+def test_two_exact_supplierinfo_rows_remain_ambiguous() -> None:
+    result = _suggest(
+        _line("Unrelated text", code="TFZP"),
+        _catalog(mappings=(_tfzp_mapping("TFZP"), _tfzp_mapping("TFZP", supplierinfo_id=11))),
+    )
+
+    assert result.suggestions == () and result.reclassification_recommended is False
+    assert result.notes == (product_suggestions.AMBIGUOUS_SUPPLIERINFO_NOTE,)
+
+
+def test_an_exact_template_level_row_on_a_multi_variant_template_remains_ambiguous() -> None:
+    mapping = CatalogSupplierMapping(
+        supplierinfo_id=12, partner_id=ICT_BULUT, product_code="FAB", template_id=FABRIC_TEMPLATE
+    )
+    result = _suggest(_line("Unrelated text", code="FAB"), _catalog(mappings=(mapping,)))
+
+    assert _t0(result) == [] and result.reclassification_recommended is False
+    assert product_suggestions.AMBIGUOUS_SUPPLIERINFO_NOTE in result.notes
+
+
+# The real deterministic matcher, fed by a supplierinfo fake with Odoo ``=`` semantics.
+
+
+class _OdooEqualsSupplierProducts:
+    def __init__(self, catalog: CatalogSnapshot) -> None:
+        self._catalog = catalog
+
+    def find_supplier_product_codes(self, *, partner_id, product_code, company_id, limit):
+        return tuple(
+            SupplierProductCode(
+                id=m.supplierinfo_id,
+                partner_id=m.partner_id,
+                product_code=m.product_code,
+                product_tmpl_id=m.template_id,
+                product_id=m.product_id,
+                company_id=m.company_id,
+            )
+            for m in self._catalog.supplier_mappings
+            if m.partner_id == partner_id and m.product_code == product_code and m.company_id in (None, company_id)
+        )[:limit]
+
+    def find_template_variants(self, *, product_tmpl_id, company_id, variant_id, limit):
+        return tuple(
+            ProductVariant(id=v.product_id, product_tmpl_id=v.template_id, active=v.active, company_id=v.company_id)
+            for v in self._catalog.variants
+            if v.template_id == product_tmpl_id and (variant_id is None or v.product_id == variant_id)
+        )[:limit]
+
+
+class _NoProducts:
+    def find_by_default_code(self, default_code, *, company_id=None):
+        return ()
+
+    def find_by_barcode(self, barcode, *, company_id=None):
+        return ()
+
+    def find_by_ids(self, ids):
+        return ()
+
+
+class _Provider:
+    product_repository = _NoProducts()
+
+
+def _deterministic_product(line_code: str, catalog: CatalogSnapshot) -> int | None:
+    engine = ProductMatchingEngine(_Provider(), supplier_product_repository=_OdooEqualsSupplierProducts(catalog))
+    invoice = InternalInvoice(
+        header=Header(invoice_number="INV-T0", invoice_uuid="uuid-t0"),
+        supplier=Party(tax_number="1234567890"),
+        customer=Party(),
+        totals=MonetaryTotals(),
+        lines=(InvoiceLine(line_number="1", seller_item_code=line_code, description="Unrelated text"),),
+    )
+    partner = PartnerMatchResult(
+        status=PartnerMatchStatus.MATCHED,
+        partner_id=ICT_BULUT,
+        matched_by="tax_number",
+        reason="test",
+        candidate_count=1,
+        confidence=Decimal("1.00"),
+    )
+    result = engine.match_invoice(invoice, company_id=1, partner_match=partner).line_results[0].result
+    if result.status is ProductMatchStatus.MATCHED and result.matched_by == MATCHED_BY_SUPPLIER_PRODUCT_CODE:
+        return result.product_id
+    return None
+
+
+@pytest.mark.parametrize(
+    ("line_code", "mappings"),
+    [
+        ("TFZP", ("TFZP",)),
+        (" TFZP ", ("TFZP",)),
+        ("TFZP", ("tfzp",)),
+        ("TF ZP", ("TFZP",)),
+        ("TFZP", ("TF ZP",)),
+        ("TFZP", ("TFZP ",)),
+        ("TFZP", ("TFZP", "TFZP")),
+        ("TFZP", ("TFZP", "tfzp")),
+        ("tfzp", ("TFZP", "TFZP")),
+    ],
+)
+def test_t0_recommends_reclassification_only_when_the_deterministic_matcher_would_match(line_code, mappings) -> None:
+    catalog = _catalog(mappings=tuple(_tfzp_mapping(code, supplierinfo_id=10 + i) for i, code in enumerate(mappings)))
+    result = _suggest(_line("Unrelated text", code=line_code), catalog)
+    expected = _deterministic_product(line_code, catalog)
+
+    assert _t0(result) == ([expected] if expected is not None else [])
+    assert result.reclassification_recommended is (expected is not None)
 
 
 # ------------------------------------------------------------------------------ hard discriminators
