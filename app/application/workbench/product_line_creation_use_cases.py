@@ -192,6 +192,9 @@ class CreateLineProductUseCase:
             intent=command.intent,
             source_unit_code=line.unit_code,
             invoice_seller_codes=_invoice_seller_codes(source),
+            supplier_partner_id=supplier.partner_id,
+            source_supplier_tax_number=source.invoice.supplier.tax_number,
+            source_description=line.description,
         )
         await self._require_no_supplier_mapping(command, supplier.partner_id, seller_item_code)
         self._require_identity_unclaimed(command, supplier.partner_id, seller_item_code, line_number)

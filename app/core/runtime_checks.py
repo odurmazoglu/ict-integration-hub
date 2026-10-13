@@ -165,6 +165,10 @@ def _validate_product_line_create_settings(settings: Settings, errors: list[str]
         errors.append("PRODUCT_CREATION_UOM_UNIT_CODES may only list uom ids that are in PRODUCT_CREATION_UOM_IDS.")
     if any(not codes for codes in settings.product_creation_uom_unit_codes.values()):
         errors.append("PRODUCT_CREATION_UOM_UNIT_CODES entries must list at least one unit code.")
+    if not settings.product_creation_manual_only_supplier_ids:
+        errors.append(
+            "ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED=true requires PRODUCT_CREATION_MANUAL_ONLY_SUPPLIER_IDS."
+        )
     if not settings.product_creation_manual_only_category_ids:
         errors.append(
             "ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED=true requires PRODUCT_CREATION_MANUAL_ONLY_CATEGORY_IDS."

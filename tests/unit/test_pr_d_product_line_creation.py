@@ -73,6 +73,7 @@ from app.application.workbench.write_authorization import (
 )
 from app.connectors.exceptions import ConnectorAuthorizationError, ConnectorTimeoutError, ConnectorValidationError
 from app.db.base import Base
+from app.erp.models import Partner
 from app.erp.odoo.existing_supplier_info_reader import OdooExistingSupplierInfoReader
 from app.erp.write.odoo_product_write_policy import OdooProductWritePolicy
 from app.erp.write.odoo_product_writer import (
@@ -278,6 +279,32 @@ def _category_record(category_id: int, *, complete: bool = True) -> CategoryPurc
     )
 
 
+class PartnerDirectory:
+    """``find_by_ids_including_archived`` over a few production-shaped partners."""
+
+    def __init__(self, partners: dict[int, Partner] | None = None) -> None:
+        self.partners = dict(
+            partners
+            or {
+                ICT_BULUT: Partner(
+                    id=ICT_BULUT,
+                    name="ICT Bulut",
+                    tax_number="4650459971",
+                    active=True,
+                    commercial_partner_id=ICT_BULUT,
+                ),
+            }
+        )
+        self.calls: list[tuple[int, ...]] = []
+        self.fail: Exception | None = None
+
+    def find_by_ids_including_archived(self, ids):
+        self.calls.append(tuple(ids))
+        if self.fail is not None:
+            raise self.fail
+        return tuple(self.partners[i] for i in ids if i in self.partners)
+
+
 class CategoryLister:
     def __init__(self, *, complete: bool = True, missing: frozenset[int] = frozenset()) -> None:
         self.complete = complete
@@ -397,9 +424,14 @@ class World:
         uoms: tuple[int, ...] = (UNITS,),
         lister: CategoryLister | None = None,
         uom_unit_codes: dict[int, tuple[str, ...]] | None = None,
+        manual_only_suppliers: tuple[int, ...] = (),
+        partners: PartnerDirectory | None = None,
+        invoice: Any = None,
+        partner_id: int = ICT_BULUT,
     ) -> None:
         self.odoo = CatalogOdoo()
-        self.harness = Harness(_pr_d_invoice(), odoo=self.odoo)
+        self.harness = Harness(invoice or _pr_d_invoice(), odoo=self.odoo, partner_match=_matched(partner_id))
+        self.partners = partners or PartnerDirectory()
         self.session = _session()
         self.now = T0
         self.catalog = CatalogPort(self.odoo)
@@ -417,6 +449,8 @@ class World:
             catalog_reader=self.catalog,
             allowed_uom_ids=uoms,
             uom_unit_codes=uom_unit_codes,
+            manual_only_supplier_ids=manual_only_suppliers,
+            supplier_reader=self.partners,
             manual_only_category_ids=manual_roots,
         )
         self.use_case = CreateLineProductUseCase(

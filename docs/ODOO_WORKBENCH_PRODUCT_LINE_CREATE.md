@@ -86,7 +86,9 @@ Grounded in the ICT Product Master Data Policy draft (2026-09-16 read-only produ
 | Rule | Check | Result |
 | --- | --- | --- |
 | Supplier code is never Internal Reference | `İç Referans` equal (ignoring case and whitespace) to the line's seller code, to any other seller code on the same invoice, or to any vendor code stored on an Odoo `product.supplierinfo` (any vendor) | *Reddedildi* |
-| Variant/license catalogs are manual-only | seller code matches the built-in ManageEngine license SKU shape `^\d{4,6}\.\d[0-9A-Z]{2,8}$` (e.g. `85710.1SS3`, `67005.6MPMFA4`, `702012.0SUP6`) or a configured extra pattern | *Reddedildi* (manual Odoo creation with variants, then *Eşleştir*) |
+| Variant/license catalogs are manual-only | the effective supplier is, belongs to (child contact / invoice address via `parent_id` / `commercial_partner_id`), or shares the VAT of a `PRODUCT_CREATION_MANUAL_ONLY_SUPPLIER_IDS` partner; the source invoice's supplier VAT equals such a partner's VAT (PR D.1; production VİTEL 434) | *Reddedildi* (manual Odoo creation with variants, then *Eşleştir*) |
+| | the line **description** contains a standalone ManageEngine SKU token (`<4-6 digits>.<digit><1-8 alphanumerics incl. a letter>`, e.g. `85710.1SS3`, `67225.5M`) (PR D.1) | *Reddedildi* |
+| | seller code matches a built-in ManageEngine license SKU shape (`^\d{4,6}\.\d[0-9A-Z]{2,8}$`, and since D.1 the single-suffix form with a letter, e.g. `67225.5M`) or a configured extra pattern | *Reddedildi* |
 | | `İç Referans` has that SKU shape | *Reddedildi* |
 | | category is, or is under, a `PRODUCT_CREATION_MANUAL_ONLY_CATEGORY_IDS` root (by Odoo `complete_name`; an unprovable hierarchy fails closed) | *Reddedildi* |
 | Category is an explicit operator choice | must exist; under a current-version RESALE purpose: exact `RESALE_PRODUCT_CATEGORY_IDS` member, non-storable, valid purchase account (existing 18E-2 policy) | *Reddedildi* |
@@ -113,6 +115,25 @@ enforced by the curated allowlist plus Odoo's own FK validation at create (a mis
 refusal, i.e. no write) and the strict read-back.
 
 ### 3.2 ManageEngine / vendor SKUs
+
+**Why D.1 exists** (read-only production assessment 2026-10-12): VİTEL (partner 434, VKN
+9250020961), ICT's ManageEngine distributor, invoices with its own numeric seller codes
+(`1531013277` …) and puts the ManageEngine SKU only in the line description (8 of 13 lines; 0 of
+80 lines of other suppliers). The original seller-code shape therefore never fired on real
+ManageEngine purchases. D.1 adds three independent, fail-closed guards (any one refuses):
+
+1. **Supplier.** Configured manual-only suppliers. The partner is re-read from Odoo (the existing
+   read-only PR A partner reader, archived rows included): the partner, its `parent_id` and its
+   `commercial_partner_id` are compared with the configured ids, and the source invoice VAT, the
+   partner's VAT and its commercial partner's VAT with the configured partners' VATs (`TR`
+   prefix and formatting ignored). Unreadable effective/commercial/configured partner, a missing
+   `commercial_partner_id` or an unexpected reader error → *Reddedildi*; a transient Odoo error
+   → retried later (nothing is created meanwhile).
+2. **Description.** Standalone SKU token search; a letter after the dot is required (amounts and
+   versions like `12500.00`, `2026.10` never match) and the token may not touch other code
+   characters (`AB85710.1SS3`, `85710.1SS3.2` don't match). An evaluation failure refuses.
+3. **Category.** Unchanged: the configured root and every descendant (by `complete_name`); an
+   unverifiable ancestry refuses.
 
 * Existing rules are preserved: #209 keeps `seller_item_code → default_code` advisory only;
   ManageEngine license SKUs live on product **variants** (policy §14) and are never created here.
@@ -307,7 +328,21 @@ verify in 7.0).
 | `PRODUCT_CREATION_UOM_IDS` | required when on; production starts with `[1]` (Units) only — do not expand without 3.1 |
 | `PRODUCT_CREATION_UOM_UNIT_CODES` | optional; required by 3.1 before a second UoM is allowed |
 | `PRODUCT_CREATION_MANUAL_ONLY_CATEGORY_IDS` | required when on; the id(s) of "Software Licenses / ManageEngine" (and any other variant-catalog root) from the 7.0 read-only check |
-| `PRODUCT_CREATION_MANUAL_ONLY_SKU_PATTERNS` | optional extra regexes; the ManageEngine shape always applies |
+| `PRODUCT_CREATION_MANUAL_ONLY_SKU_PATTERNS` | optional extra regexes; the ManageEngine shapes always apply |
+| `PRODUCT_CREATION_MANUAL_ONLY_SUPPLIER_IDS` | **required when on** (PR D.1); production `[434]` (VİTEL) |
+
+**Exact production configuration before enabling the creation gate** (from the 2026-10-12
+read-only assessment; re-verify in 7.0 immediately before):
+
+```text
+ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED=true
+PRODUCT_CREATION_MANUAL_ONLY_SUPPLIER_IDS=[434]
+PRODUCT_CREATION_MANUAL_ONLY_CATEGORY_IDS=[5]
+PRODUCT_CREATION_UOM_IDS=[1]
+PRODUCT_CREATION_UOM_UNIT_CODES={"1": ["C62", "EA", "NIU"]}
+# PRODUCT_CREATION_MANUAL_ONLY_SKU_PATTERNS stays unset (the single-suffix shape is built in since D.1)
+# PRODUCT_REMEDIATION_WRITE_ENABLED stays unset
+```
 | `RESALE_PRODUCT_CATEGORY_IDS` | unchanged (existing RESALE rules) |
 | `ODOO_WORKBENCH_PRODUCT_LINE_NEW_*_FIELD` | **not set** in production |
 
@@ -338,7 +373,8 @@ flag, never the production kill switch, approval ack or named approver.
 | 2 | `product.supplierinfo` (partner 24, code `TFZP`) | 0 rows |
 | 3 | Identity claims for (1, 24, `TFZP`); `workbench_product_line_creations` | none |
 | 4 | Odoo products with name = intended name, or Internal Reference = `TFZP` / intended reference | none |
-| 5 | `product.category` ids and `complete_name`: target category; "Software Licenses / ManageEngine" root(s) | record ids for 6.5 |
+| 5 | `product.category` ids and `complete_name`: target category; "Software Licenses / ManageEngine" root(s) | 2026-10-12: root **5**, descendants 7–12; re-confirm |
+| 5b | `res.partner` 434 (and any partner with VAT 9250020961): `commercial_partner_id`, `vat`, `active` | 434 is its own commercial partner with VAT 9250020961; list every same-VAT partner |
 | 6 | `uom.uom` 1 | "Units", active |
 | 6b | Field metadata (`ir.model.fields`, read-only): `product.template` `type` (selection incl. `consu`, `service`), `is_storable` (boolean; needs the stock module), `uom_id`, `categ_id`, `default_code`, `seller_ids` (one2many → `product.supplierinfo`); `product.supplierinfo` `partner_id`, `product_code`, `product_name`, `company_id`, `product_tmpl_id`, `product_id` | all present with these types; otherwise STOP |
 | 7 | Purchase purpose of the review at `V` | record it; RESALE requires an allowlisted category |
@@ -366,16 +402,20 @@ change nothing, keep the gate OFF, report (recovery 7.E).
 
 Only after 7.A PASS and a new approval. Pre-enable check: the only ready create row is the 7.A row
 with the same `T`; no ready PR C row on it; review still at `V`. Back up `.env.production`; add
-`ODOO_WORKBENCH_PRODUCT_LINE_CREATE_ENABLED=true`, `PRODUCT_CREATION_UOM_IDS=[1]`,
-`PRODUCT_CREATION_MANUAL_ONLY_CATEGORY_IDS=[<7.0 #5>]`; recreate api, then poller (same image).
+exactly the configuration block in 6.5 (PR D.1 must be deployed first: the startup check refuses
+the gate without `PRODUCT_CREATION_MANUAL_ONLY_SUPPLIER_IDS`); recreate api, then poller (same
+image).
 The first tick processes the 7.A request → continue with 7.D expectations. (If the negative test
 7.C is wanted first, run 7.A on the ManageEngine line instead and the positive line afterwards.)
 
 ### 7.C Negative acceptance (no write expected)
 
-On a VİTEL ManageEngine license line (seller code e.g. `85710.1SS3`): submit a create request.
-Expect within one tick: *Reddedildi* "… varyantlı bir lisans kataloğu SKU'su …", inputs kept,
-ledger row `rejected`, **no** `product.template` / supplierinfo / creation row / claim.
+On a VİTEL line (numeric seller code, ManageEngine SKU in the description), choosing an
+**unrelated** category (e.g. Services / Implementation): submit a create request. Expect within
+one tick: *Reddedildi* "Bu tedarikçinin (#434) ürünleri varyantlı lisans kataloğu ürünleridir …",
+inputs kept, ledger row `rejected`, **no** `product.template` / supplierinfo / creation row /
+claim. Optionally repeat on a non-VİTEL line whose description carries an SKU token (expect the
+description refusal) — only if such a real line exists; never fabricate one.
 
 ### 7.D Positive acceptance — expected end state
 
@@ -418,6 +458,10 @@ ledger row `rejected`, **no** `product.template` / supplierinfo / creation row /
 ## 9. Known limits
 
 * Simple single-variant products only. Variant/license catalogs (ManageEngine) stay manual.
+* ManageEngine detection is by supplier, description token and category. A ManageEngine product
+  bought from a *different* distributor, with no SKU in the description, filed under a
+  non-ManageEngine category, is not detected; add that distributor to
+  `PRODUCT_CREATION_MANUAL_ONLY_SUPPLIER_IDS` when it appears.
 * One line per request; two lines of one review in one tick → the second is *Güncel Değil*.
 * Lines without a seller code cannot create a product (no supplier-specific key).
 * Name-duplicate detection is exact (case-insensitive), not fuzzy (PR F).

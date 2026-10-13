@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     #: PR D: extra manual-only SKU regular expressions, added to the built-in ManageEngine
     #: license SKU shape (which cannot be disabled).
     product_creation_manual_only_sku_patterns: tuple[str, ...] = ()
+    #: PR D.1: Odoo ``res.partner`` ids whose every invoice line is manual-only (production:
+    #: VİTEL, the ManageEngine distributor). Child contacts / invoice addresses and partners
+    #: sharing the VAT are covered. Required when the create gate is on.
+    product_creation_manual_only_supplier_ids: frozenset[OdooRecordId] = frozenset()
 
     @property
     def uyumsoft_wsdl_url(self) -> str:
