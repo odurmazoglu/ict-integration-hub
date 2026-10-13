@@ -41,8 +41,9 @@ def test_write_authorization_upgrade_downgrade_and_metadata_contract(tmp_path: P
             # MAP_EXISTING_PRODUCT operation type (202607170037) is one more on top, and the
             # operator request ledger product_mapping action (202607170038) another, and
             # PR C's product_line_mapping ledger action (202607170039) one more, and PR D's
-            # product line creation (202607170040) one more.
-            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170040"
+            # product line creation (202607170040) one more, and PR F / F2's advisory
+            # suggestion tables (202607170041) one more.
+            assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "202607170041"
         _assert_operation_type_check_constraint(engine, name)
         _delete_rows_with_operation_type(engine, name, "MAP_EXISTING_PRODUCT")
         command.downgrade(config, "202607170036")

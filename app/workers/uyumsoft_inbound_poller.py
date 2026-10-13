@@ -146,6 +146,7 @@ def main(
     cycle_builder: Callable[[Settings], Callable[[], Any]] | None = None,
     preview_builder: Callable[[Settings], Callable[[], InboundPollPreview]] | None = None,
     operator_request_tick_builder: Callable[[Settings], Callable[[], Any]] | None = None,
+    advisory_tick_builder: Callable[[Settings], Callable[[], Any]] | None = None,
     out: TextIO | None = None,
 ) -> int:
     args = _parse_args(argv)
@@ -164,6 +165,7 @@ def main(
             once=args.once,
             cycle_builder=cycle_builder or _default_cycle_builder,
             operator_request_tick_builder=operator_request_tick_builder or _default_operator_request_tick_builder,
+            advisory_tick_builder=advisory_tick_builder or _default_advisory_tick_builder,
         )
 
     if not resolved_settings.uyumsoft_inbound_poll_enabled:
@@ -195,6 +197,7 @@ def _run_with_operator_requests(
     once: bool,
     cycle_builder: Callable[[Settings], Callable[[], Any]],
     operator_request_tick_builder: Callable[[Settings], Callable[[], Any]],
+    advisory_tick_builder: Callable[[Settings], Callable[[], Any]] | None = None,
 ) -> int:
     tasks = [
         PeriodicTask(
@@ -214,6 +217,15 @@ def _run_with_operator_requests(
         )
     else:
         logger.info("uyumsoft_inbound_poller_disabled: UYUMSOFT_INBOUND_POLL_ENABLED is false")
+    if settings.odoo_workbench_product_line_suggestions_enabled and advisory_tick_builder is not None:
+        # PR F / F2 (ADR-0014): independent advisory task; off by default, never registered otherwise.
+        tasks.append(
+            PeriodicTask(
+                name="advisory_product_suggestions",
+                run=advisory_tick_builder(settings),
+                interval_seconds=settings.odoo_workbench_product_line_suggestions_interval_seconds,
+            )
+        )
     logger.info(
         "hub_worker_started tasks=%s",
         ",".join(f"{task.name}:{task.interval_seconds}s" for task in tasks),
@@ -288,6 +300,13 @@ def _default_operator_request_tick_builder(settings: Settings) -> Callable[[], A
     from app.db.session import engine
 
     return build_operator_request_tick(settings=settings, engine=engine).run
+
+
+def _default_advisory_tick_builder(settings: Settings) -> Callable[[], Any]:
+    from app.composition.advisory import build_advisory_tick
+    from app.db.session import engine
+
+    return build_advisory_tick(settings=settings, engine=engine).run
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

@@ -189,10 +189,11 @@ def test_202607170039_adds_product_line_mapping(migrated) -> None:
         _insert(engine, "product_line_create", "k-create-before")
 
 
-def test_head_is_202607170040_which_adds_product_line_create(migrated) -> None:
+def test_head_includes_202607170040_which_adds_product_line_create(migrated) -> None:
     config, engine = migrated
     command.upgrade(config, "head")
-    assert _version(engine) == "202607170040"
+    # PR F / F2's advisory suggestion tables (202607170041) sit on top; they do not touch the ledger.
+    assert _version(engine) == "202607170041"
     _insert(engine, "product_line_create", "k-create-after")
 
 
@@ -251,7 +252,7 @@ def test_upgrade_downgrade_upgrade_round_trip_without_product_mapping_rows(migra
         _insert(engine, "product_mapping", "k-pm")
 
     command.upgrade(config, "head")
-    assert _version(engine) == "202607170040"
+    assert _version(engine) == "202607170041"
     _insert(engine, "product_mapping", "k-pm")
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM workbench_operator_requests")) == 2

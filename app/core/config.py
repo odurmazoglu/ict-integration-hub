@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     #: VİTEL, the ManageEngine distributor). Child contacts / invoice addresses and partners
     #: sharing the VAT are covered. Required when the create gate is on.
     product_creation_manual_only_supplier_ids: frozenset[OdooRecordId] = frozenset()
+    #: PR F / F2: run the independent advisory product-suggestion worker task (ADR-0014).
+    #: Off by default: no task is registered, no advisory row is written and no Odoo call
+    #: is made. Suggestions are advisory only and never block or change any workflow.
+    odoo_workbench_product_line_suggestions_enabled: bool = False
+    #: PR F / F2: advisory task interval (approved: 15 minutes).
+    odoo_workbench_product_line_suggestions_interval_seconds: int = Field(default=900, gt=0)
 
     @property
     def uyumsoft_wsdl_url(self) -> str:
