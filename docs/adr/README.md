@@ -56,6 +56,7 @@ The `ADR-....md` files are the canonical architecture foundation for ICT IPP. Ea
 | [ADR-0011](ADR-0011-odoo-online-import-workbench-projection.md) | Odoo Online Import Workbench Projection | Accepted | Use an Odoo Studio projection model for Odoo Online Workbench review display and candidate decision capture while Hub remains authoritative. |
 | [ADR-0012](ADR-0012-business-context-allocation-and-cost-traceability.md) | Business Context Allocation and Cost Traceability | Accepted | Model supplier-invoice business context as immutable allocation lines for multi-sale, recharge, affiliate, project, and internal cost traceability. |
 | [ADR-0013](ADR-0013-odoo-online-workbench-operator-requests.md) | Odoo Online Workbench Operator Requests | Proposed | Extend ADR-0011's Hub-pull pattern from decision candidates to typed operator requests consumed by existing Hub use cases on a Hub-owned tick. |
+| [ADR-0014](ADR-0014-advisory-product-suggestions.md) | Advisory Product Suggestions | Proposed | Keep operator-facing product suggestions in a pure, isolated `app/advisory` package that no matching, decision, execution or write path may import. |
 
 ## Existing Implementation ADR Index
 
