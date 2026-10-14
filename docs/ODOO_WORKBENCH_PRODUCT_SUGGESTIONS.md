@@ -26,15 +26,38 @@ exactly as before.
 
 A suggestion is shown only when **all** hold: review pending; set `current`; same review version;
 line state `product_not_found`; same line key and line number; same effective supplier; same seller
-code; at least one candidate; validated within the 19-minute cutoff. Anything else clears both fields.
-Deactivated (non-current) rows are always cleared.
+code; at least one candidate **or** advisory note; validated within the 19-minute cutoff. Anything
+else clears both fields. Deactivated (non-current) rows are always cleared.
 
-The summary is plain text, one ranked candidate per line, then de-duplicated warnings, e.g.:
+The summary is plain text. Per candidate: rank, product name (variant included), tier and score,
+then the engine's persisted reasons (`Gerekçe:`) and the candidate's warnings (`Uyarı:`), verbatim.
+After the candidates, the set's advisory notes (`Uyarı:`). For example:
 
 ```text
-1. [85710.1S1] ManageEngine Endpoint Central (50 Endpoints) — kesin tanımlayıcı eşleşmesi (skor 1.00)
-Uyarı: Benzer skorlu birden fazla aday var; doğru ürünü operatör seçmelidir.
+1. Microsoft Windows Server Standard (per VM) — ürün adı benzerliği (skor 0.90)
+   Gerekçe: Ad benzerliği 0.90
+   Gerekçe: Ortak anlamlı sözcükler: windows
 ```
+
+A T0 result (always returned alone):
+
+```text
+1. Microsoft Windows Server Standard (per VM) — tedarikçi ürün kaydı artık mevcut; kontrollü yeniden sınıflandırma gerekir (skor 1.00)
+   Gerekçe: Tedarikçi ürün kaydı #10: tedarikçi #24, kod TFZP
+   Uyarı: Kayıtlı inceleme kanıtı eski: bu tedarikçi kodu artık bu ürüne bağlı. …
+```
+
+**Notes-only.** When no candidate passed the engine's guards but the set has an advisory note, the
+row gets an **empty** Many2many and a warning-only summary (no candidate is invented), e.g.:
+
+```text
+Güvenli ürün önerisi yok.
+Uyarı: Bu tedarikçinin ürün kaydındaki kod yalnız büyük/küçük harf veya boşlukla farklı; kesin kod eşleşmesi değil, yeniden sınıflandırma bu satırı eşleştirmez.
+```
+
+Notes-only covers the near-miss supplier code, ambiguous supplierinfo, CSP ProductId-only (other
+SKU) and multi-variant (ManageEngine) catalog cases, and passes exactly the same gate. A set with
+neither a candidate nor a note shows nothing.
 
 Names come from the candidate's `product_name` snapshot (the `display_name` read by the catalog
 snapshot that generated the set); a pre-0042 row without one shows `Ürün #<id>`.
@@ -77,6 +100,7 @@ read-only child form in a dialog, and extend the child form with a suggestions g
 
 ```xml
 <data>
+  <!-- Visibility follows the SUMMARY only, never the Many2many: a notes-only row has no products. -->
   <xpath expr="//sheet" position="inside">
     <group string="Ürün Önerileri"
            invisible="x_studio_ipp_match_state != 'product_not_found' or not x_studio_ipp_suggestion_summary">
@@ -84,7 +108,8 @@ read-only child form in a dialog, and extend the child form with a suggestions g
         Öneriler bilgilendirme amaçlıdır. Güncellikleri değişebilir; eşleştirme öncesinde ürünü doğrulayın.
       </div>
       <field name="x_studio_ipp_suggestion_summary" readonly="1" nolabel="1" colspan="2"/>
-      <field name="x_studio_ipp_suggested_product_ids" readonly="1" widget="many2many_tags"/>
+      <field name="x_studio_ipp_suggested_product_ids" readonly="1" widget="many2many_tags"
+             invisible="not x_studio_ipp_suggested_product_ids"/>
     </group>
   </xpath>
 </data>
@@ -100,7 +125,8 @@ If the dialog does not work, add a second parent tab *Ürün Önerileri* with a 
 `x_ipp_import_workbench` (`relation_field` `x_studio_ipp_workbench_id`, domain
 `[('x_studio_ipp_is_current', '=', True), ('x_studio_ipp_match_state', '=', 'product_not_found')]`),
 the same warning as an `alert-warning` div above the list, and the columns line, seller code,
-description, summary and suggested products — all read-only, `create="0" edit="0" delete="0"`.
+description, summary and suggested products — all read-only, `create="0" edit="0" delete="0"`. Do not
+filter that list on the Many2many: notes-only rows have no products but must still show their summary.
 
 ## 4. Enablement order (each step separately approved)
 

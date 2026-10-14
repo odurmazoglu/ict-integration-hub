@@ -60,7 +60,8 @@ class DisplayBlock(StrEnum):
     SUPPLIER_MISMATCH = "supplier_mismatch"
     SELLER_CODE_MISMATCH = "seller_code_mismatch"
     VALIDATION_EXPIRED = "validation_expired"
-    NO_CANDIDATES = "no_candidates"
+    #: Neither a candidate nor an advisory note: nothing worth showing.
+    NOTHING_TO_SHOW = "nothing_to_show"
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,9 +220,25 @@ def display_block(stored: StoredSuggestionSet, line: DisplayedLine, *, now: date
         return DisplayBlock.SELLER_CODE_MISMATCH
     if not is_projectable(stored, now=now):
         return DisplayBlock.VALIDATION_EXPIRED
-    if not stored.result.suggestions:
-        return DisplayBlock.NO_CANDIDATES
+    if not has_display_content(stored.result):
+        return DisplayBlock.NOTHING_TO_SHOW
     return None
+
+
+def advisory_notes(result: ProductSuggestionResult) -> tuple[str, ...]:
+    """The set's non-blank advisory notes, in engine order, without repeats."""
+
+    notes: list[str] = []
+    for note in result.notes:
+        if isinstance(note, str) and note.strip() and note.strip() not in notes:
+            notes.append(note.strip())
+    return tuple(notes)
+
+
+def has_display_content(result: ProductSuggestionResult) -> bool:
+    """A candidate, or -- notes-only -- at least one advisory note (near-miss code, ambiguity, ...)."""
+
+    return bool(result.suggestions) or bool(advisory_notes(result))
 
 
 def display_cleared(validated_at: datetime, display_synced_at: datetime | None) -> bool:
@@ -268,7 +285,9 @@ __all__ = [
     "SuggestionSetReason",
     "SuggestionSetStatus",
     "display_block",
+    "advisory_notes",
     "display_cleared",
+    "has_display_content",
     "is_displayable",
     "is_projectable",
     "needs_display_refresh",

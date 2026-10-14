@@ -42,6 +42,7 @@ from app.advisory.suggestion_sets import (
     DISPLAY_SWEEP_INTERVAL,
     DisplayedLine,
     StoredSuggestionSet,
+    advisory_notes,
     display_block,
 )
 from app.application.workbench.dto import ReviewStatus
@@ -65,6 +66,9 @@ TIER_LABELS: dict[SuggestionTier, str] = {
 }
 #: Plain-text field; a longer summary is cut (the ranked lines always come first).
 MAX_SUMMARY_LENGTH = 2000
+#: First line of a notes-only summary (no candidate passed the engine's guards).
+NO_CANDIDATE_LINE = "Güvenli ürün önerisi yok."
+_DETAIL_INDENT = "   "
 #: At most this many reviews are refreshed per sweep; the rest wait for the next sweep.
 MAX_REVIEWS_PER_SWEEP = 25
 #: A failing review is retried after 60 s, doubling up to this cap (it is never dropped).
@@ -136,22 +140,33 @@ def suggestion_view(stored: StoredSuggestionSet) -> ProductLineSuggestionView:
 
 
 def render_summary(stored: StoredSuggestionSet) -> str:
-    """Deterministic plain text (no timestamps): ranked candidates, then de-duplicated warnings."""
+    """Deterministic plain text (no timestamps).
 
-    rows = [
-        f"{suggestion.rank}. {stored.product_name(suggestion.product_id) or f'Ürün #{suggestion.product_id}'}"
-        f" — {TIER_LABELS[suggestion.tier]} (skor {_score(suggestion.score)})"
-        for suggestion in stored.result.suggestions
-    ]
-    warnings: list[str] = []
-    for text in (
-        *(warning for suggestion in stored.result.suggestions for warning in suggestion.warnings),
-        *stored.result.notes,
-    ):
-        if isinstance(text, str) and text.strip() and text.strip() not in warnings:
-            warnings.append(text.strip())
-    summary = "\n".join([*rows, *(f"Uyarı: {warning}" for warning in warnings)])
+    Per candidate: rank, product name (variant included), tier, score, then each persisted
+    reason (``Gerekçe:``) and each candidate warning (``Uyarı:``) verbatim. Then the set's
+    advisory notes (``Uyarı:``). A notes-only set starts with :data:`NO_CANDIDATE_LINE`.
+    Nothing is paraphrased: reasons and warnings are the engine's own persisted text.
+    """
+
+    rows: list[str] = []
+    for suggestion in stored.result.suggestions:
+        name = stored.product_name(suggestion.product_id) or f"Ürün #{suggestion.product_id}"
+        rows.append(f"{suggestion.rank}. {name} — {TIER_LABELS[suggestion.tier]} (skor {_score(suggestion.score)})")
+        rows.extend(f"{_DETAIL_INDENT}Gerekçe: {reason}" for reason in _texts(suggestion.reasons))
+        rows.extend(f"{_DETAIL_INDENT}Uyarı: {warning}" for warning in _texts(suggestion.warnings))
+    if not rows:
+        rows.append(NO_CANDIDATE_LINE)
+    rows.extend(f"Uyarı: {note}" for note in advisory_notes(stored.result))
+    summary = "\n".join(rows)
     return summary if len(summary) <= MAX_SUMMARY_LENGTH else summary[: MAX_SUMMARY_LENGTH - 1] + "…"
+
+
+def _texts(values: tuple[object, ...]) -> list[str]:
+    texts: list[str] = []
+    for value in values:
+        if isinstance(value, str) and value.strip() and value.strip() not in texts:
+            texts.append(value.strip())
+    return texts
 
 
 def _score(value: Decimal) -> str:
@@ -293,6 +308,7 @@ class AdvisoryDisplayRefresher:
 __all__ = [
     "ADVISORY_UI_WARNING",
     "MAX_REVIEWS_PER_SWEEP",
+    "NO_CANDIDATE_LINE",
     "TIER_LABELS",
     "AdvisoryDisplayRefresher",
     "AdvisorySuggestionDisplayReader",

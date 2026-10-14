@@ -62,11 +62,13 @@ Studio plan, staleness contract, enablement order and rollback: [ODOO_WORKBENCH_
   F2 worker flag and child line projection). Off: no advisory row is read by the projection.
 - Display gate (every projection, from every flow): review pending, set `current`, same review
   version, line is `product_not_found`, same line key and number, same effective supplier and seller
-  code, at least one candidate, and validated within the **19-minute projection cutoff** (20-minute
+  code, at least one candidate or advisory note, and validated within the **19-minute projection cutoff** (20-minute
   validity minus one 60 s sweep interval). Validity policy itself is unchanged.
 - Two optional child fields, mapped together or not at all: a Many2many of `product.product`
   (written as one `[[6, 0, ids]]` command, compared as an id set — the parent publisher's proven
-  path) and a plain-text ranked summary. Unmapped, the publisher's reads and writes are byte-identical
+  path) and a plain-text ranked summary carrying each candidate's persisted reasons and warnings plus
+  the set's notes. A notes-only set (near-miss code, ambiguous supplierinfo, CSP ProductId-only,
+  multi-variant catalog) shows an empty Many2many and a warning-only summary. Unmapped, the publisher's reads and writes are byte-identical
   to PR B. Mapped with display off, or outside the gate, or on a deactivated row, both are cleared.
   Operator input fields (`x_studio_ipp_req_*`, `x_studio_ipp_new_*`) are never mapped or written.
 - Alembic `202607170042`: nullable `candidates.product_name` (the candidate's `display_name` from the

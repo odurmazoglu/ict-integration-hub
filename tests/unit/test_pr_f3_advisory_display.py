@@ -21,7 +21,19 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 import app.models  # noqa: F401 - registers every table on Base.metadata
-from app.advisory.product_suggestions import ProductSuggestion, ProductSuggestionResult, SuggestionTier
+from app.advisory.product_suggestions import (
+    AMBIGUOUS_SUPPLIERINFO_NOTE,
+    CSP_PRODUCT_ONLY_NOTE,
+    NEAR_MISS_SUPPLIERINFO_NOTE,
+    STALE_MAPPING_WARNING,
+    VARIANT_CATALOG_NOTE,
+    CatalogSnapshot,
+    ProductSuggestion,
+    ProductSuggestionResult,
+    SuggestionPolicy,
+    SuggestionTier,
+    suggest_products,
+)
 from app.advisory.suggestion_sets import (
     DISPLAY_SWEEP_INTERVAL,
     DISPLAY_VALIDITY,
@@ -52,6 +64,7 @@ from app.composition import advisory as composition
 from app.composition import advisory_display
 from app.composition.advisory_display import (
     ADVISORY_UI_WARNING,
+    NO_CANDIDATE_LINE,
     AdvisoryDisplayRefresher,
     AdvisorySuggestionDisplayReader,
     render_summary,
@@ -84,8 +97,13 @@ from tests.unit.test_p0_prod_19f_review_lifecycle_effective_state import (
 from tests.unit.test_pr_b_product_line_projection import LINE, TwoModelStudio, _projection
 from tests.unit.test_pr_f2_advisory_suggestion_worker import (
     COMPANY,
+    ICT_BULUT,
     ME,
+    NOISE,
+    POLICY,
+    SI_TFZP,
     TFZP,
+    VITEL,
     WINDOWS_VM,
     _Catalog,
     _catalog,
@@ -109,7 +127,18 @@ OPERATOR_INPUT_PREFIXES = ("x_studio_ipp_req_", "x_studio_ipp_new_")
 # ------------------------------------------------------------------------------ builders
 
 
+#: The engine's own reason text for the VİTEL T1 candidate (``_exact_identifiers``).
+T1_REASON = f"Kesin kod eşleşmesi (üretici kimliği biçimli satıcı kodu): {VITEL_SKU}"
+
+
 def _result(review_id: str, version: int, line: str, *candidates: tuple[Any, ...], notes=()) -> ProductSuggestionResult:
+    """Candidates are ``(rank, product id, tier, score[, reasons tuple], *warnings)``."""
+
+    def split(rest):
+        if rest and isinstance(rest[0], tuple):
+            return rest[0], tuple(rest[1:])
+        return (T1_REASON,), tuple(rest)
+
     return ProductSuggestionResult(
         review_id=review_id,
         line_number=line,
@@ -121,12 +150,12 @@ def _result(review_id: str, version: int, line: str, *candidates: tuple[Any, ...
                 product_id=product_id,
                 tier=tier,
                 score=Decimal(score),
-                reasons=("r",),
-                warnings=tuple(warnings),
+                reasons=split(rest)[0],
+                warnings=split(rest)[1],
                 review_version=version,
                 catalog_fingerprint="sha256:x",
             )
-            for rank, product_id, tier, score, *warnings in candidates
+            for rank, product_id, tier, score, *rest in candidates
         ),
         ambiguous=len({candidate[0] for candidate in candidates}) < len(candidates),
         notes=tuple(notes),
@@ -286,7 +315,7 @@ def test_gate_rejects_expired_retired_and_empty_sets(db) -> None:
     retired = replace(stored, status=SuggestionSetStatus.SUPERSEDED)
     assert display_block(retired, _shown(), now=NOW) is DisplayBlock.SET_NOT_CURRENT
     assert display_block(empty, _shown(line_key=empty.line_key, line_number="2"), now=NOW) is (
-        DisplayBlock.NO_CANDIDATES
+        DisplayBlock.NOTHING_TO_SHOW
     )
     with pytest.raises(ValueError):
         display_block(stored, _shown(), now=NOW.replace(tzinfo=None))
@@ -381,7 +410,14 @@ def test_marking_is_compare_and_set_and_never_moves_validity(db) -> None:
 # ------------------------------------------------------------------------------ 3. reader (gate at projection time)
 
 
-def _vitel_projection(*, version=1, status=ReviewStatus.PENDING_REVIEW, state=ProductLineMatchState.PRODUCT_NOT_FOUND):
+def _vitel_projection(
+    *,
+    version=1,
+    status=ReviewStatus.PENDING_REVIEW,
+    state=ProductLineMatchState.PRODUCT_NOT_FOUND,
+    supplier=EVIDENCE_PARTNER,
+    code=VITEL_SKU,
+):
     line = WorkbenchProductLineProjection(
         line_key=VITEL_LINE_KEY,
         review_id=REVIEW_ID,
@@ -389,8 +425,8 @@ def _vitel_projection(*, version=1, status=ReviewStatus.PENDING_REVIEW, state=Pr
         review_version=version,
         line_number="1",
         line_sequence=1,
-        supplier_partner_id=EVIDENCE_PARTNER,
-        seller_item_code=VITEL_SKU,
+        supplier_partner_id=supplier,
+        seller_item_code=code,
         description="ManageEngine Endpoint Central",
         quantity=Decimal("1"),
         unit_code="C62",
@@ -409,7 +445,7 @@ def test_reader_returns_a_view_only_for_the_current_gated_line(db) -> None:
         reader = AdvisorySuggestionDisplayReader(session, clock=lambda: NOW + timedelta(minutes=5))
         (view,) = reader(_vitel_projection())
     assert view.line_key == VITEL_LINE_KEY and view.product_ids == (392,)
-    assert view.summary == f"1. {ME.name} — kesin tanımlayıcı eşleşmesi (skor 1.00)"
+    assert view.summary == f"1. {ME.name} — kesin tanımlayıcı eşleşmesi (skor 1.00)\n   Gerekçe: {T1_REASON}"
 
 
 @pytest.mark.parametrize(
@@ -451,15 +487,16 @@ def test_reader_hides_a_set_past_the_projection_cutoff(db) -> None:
         assert past(_vitel_projection()) == ()
 
 
-def test_summary_ranks_ties_and_lists_each_warning_once(db) -> None:
+def test_summary_ranks_ties_with_each_candidates_reasons_warnings_and_the_set_notes(db) -> None:
     _engine, factory = db
     tie = "Benzer skorlu birden fazla aday var; doğru ürünü operatör seçmelidir."
+    similarity = ("Ad benzerliği 0.62", "Ortak anlamlı sözcükler: server, standard, windows")
     result = _result(
         REVIEW_ID,
         1,
         "1",
-        (1, 395, SuggestionTier.T3_NAME_SIMILARITY, "0.62", tie),
-        (1, 396, SuggestionTier.T3_NAME_SIMILARITY, "0.60", tie),
+        (1, 395, SuggestionTier.T3_NAME_SIMILARITY, "0.62", similarity, tie),
+        (1, 396, SuggestionTier.T3_NAME_SIMILARITY, "0.60", ("Ad benzerliği 0.60",), tie),
         notes=("Not A",),
     )
     with factory() as session:
@@ -468,8 +505,12 @@ def test_summary_ranks_ties_and_lists_each_warning_once(db) -> None:
         )
     assert render_summary(stored).splitlines() == [
         f"1. {WINDOWS_VM.name} — ürün adı benzerliği (skor 0.62)",
+        "   Gerekçe: Ad benzerliği 0.62",
+        "   Gerekçe: Ortak anlamlı sözcükler: server, standard, windows",
+        f"   Uyarı: {tie}",
         f"1. {WINDOWS_VM.name} (8 Core) — ürün adı benzerliği (skor 0.60)",
-        f"Uyarı: {tie}",
+        "   Gerekçe: Ad benzerliği 0.60",
+        f"   Uyarı: {tie}",
         "Uyarı: Not A",
     ]
     assert "Öneriler bilgilendirme amaçlıdır" in ADVISORY_UI_WARNING
@@ -663,7 +704,7 @@ def test_end_to_end_current_set_is_projected_then_cleared_after_reclassification
     assert result.outcome is ProjectionSyncOutcome.CREATED and not result.line_failed
     (row,) = studio.line_rows()
     assert row[M2M] == [392]
-    assert row[SUMMARY] == f"1. {ME.name} — kesin tanımlayıcı eşleşmesi (skor 1.00)"
+    assert row[SUMMARY] == f"1. {ME.name} — kesin tanımlayıcı eşleşmesi (skor 1.00)\n   Gerekçe: {T1_REASON}"
 
     # The set no longer matches the line identity -> the next sync of any flow clears it.
     with factory() as session:
@@ -984,3 +1025,246 @@ def test_the_workbench_package_never_imports_the_advisory_package() -> None:
         path.name for path in root.rglob("*.py") if any(name.startswith("app.advisory") for name in _imports(path))
     ]
     assert offenders == []
+
+
+# ------------------------------------------------------------------------------ 8. explanations + notes-only
+
+
+M365_BASIC = _variant(393, "Microsoft 365 Business Basic", template_id=162, code="CFQ7TTC0LH18:0001", category=41)
+#: Each scenario: (supplier, seller code, description, catalog, policy, the engine's one note).
+NOTES_ONLY = {
+    "near_miss_supplier_code": (ICT_BULUT, "tfzp", "Unrelated text", _catalog(), POLICY, NEAR_MISS_SUPPLIERINFO_NOTE),
+    "ambiguous_supplierinfo": (
+        ICT_BULUT, "TFZP", "Unrelated text", _catalog(mappings=(SI_TFZP, replace(SI_TFZP, supplierinfo_id=11))),
+        POLICY, AMBIGUOUS_SUPPLIERINFO_NOTE,
+    ),
+    "csp_product_id_only": (
+        ICT_BULUT, "CFQ7TTC0LH18:0002", "Unrelated text", _catalog(M365_BASIC), POLICY, CSP_PRODUCT_ONLY_NOTE,
+    ),
+    "multi_variant_catalog": (VITEL, "1531016053", "85710.1SS3", _catalog(), POLICY, VARIANT_CATALOG_NOTE),
+}  # fmt: skip
+
+
+def _engine_set(session, *, supplier, code, description, catalog, policy, names=None, now=NOW):
+    """Persist exactly what the real engine returns for the VİTEL review line identity."""
+
+    line = replace(_advisory_line(supplier=supplier, code=code), description=description)
+    result = suggest_products(line.suggestion_line(), catalog, policy=policy)
+    names = names if names is not None else {variant.product_id: variant.name for variant in catalog.variants}
+    return _insert(session, line, result, now=now, names=names), result
+
+
+@pytest.mark.parametrize("scenario", sorted(NOTES_ONLY))
+def test_notes_only_sets_are_shown_without_any_product(db, scenario) -> None:
+    supplier, code, description, catalog, policy, note = NOTES_ONLY[scenario]
+    _engine, factory = db
+    with factory() as session:
+        _set_id, result = _engine_set(
+            session, supplier=supplier, code=code, description=description, catalog=catalog, policy=policy
+        )
+        assert result.suggestions == () and result.notes == (note,)  # real engine output, no fake candidate
+        (view,) = AdvisorySuggestionDisplayReader(session, clock=lambda: NOW)(
+            _vitel_projection(supplier=supplier, code=code)
+        )
+    assert view.product_ids == ()
+    assert view.summary == f"{NO_CANDIDATE_LINE}\nUyarı: {note}"
+
+
+def test_notes_only_view_publishes_an_empty_many2many_and_the_warning_summary() -> None:
+    studio = M2MStudio()
+    notes_only = _hint(ids=(), summary=f"{NO_CANDIDATE_LINE}\nUyarı: {NEAR_MISS_SUPPLIERINFO_NOTE}")
+
+    _publisher(studio).sync_projection(_projection(product_line_suggestions=(notes_only,)), apply=True)
+
+    row = _line_row(studio, "2")
+    assert row[M2M] == []
+    assert row[SUMMARY] == f"{NO_CANDIDATE_LINE}\nUyarı: {NEAR_MISS_SUPPLIERINFO_NOTE}"
+    assert _line_row(studio, "1")[SUMMARY] is None  # the matched line stays empty
+
+
+def test_engine_reasons_are_rendered_verbatim_including_several_per_candidate(db) -> None:
+    _engine, factory = db
+    description = "MS Windows Server Standart Edition Lisans per VM"
+    with factory() as session:
+        set_id, result = _engine_set(
+            session, supplier=ICT_BULUT, code="TGDR", description=description, catalog=_catalog(), policy=POLICY
+        )
+        stored = _stored(session, set_id)
+    (suggestion,) = result.suggestions
+    assert len(suggestion.reasons) >= 2  # "Ad benzerliği …" and "Ortak anlamlı sözcükler: …"
+    assert render_summary(stored).splitlines() == [
+        f"1. {WINDOWS_VM.name} — ürün adı benzerliği (skor {suggestion.score})",
+        *(f"   Gerekçe: {reason}" for reason in suggestion.reasons),
+    ]
+
+
+def test_t0_candidate_shows_its_reason_and_the_reclassification_warning(db) -> None:
+    _engine, factory = db
+    with factory() as session:
+        set_id, result = _engine_set(
+            session, supplier=ICT_BULUT, code="TFZP", description="Unrelated text", catalog=_catalog(), policy=POLICY
+        )
+        stored = _stored(session, set_id)
+    assert result.reclassification_recommended is True
+    (suggestion,) = result.suggestions
+    assert render_summary(stored).splitlines() == [
+        f"1. {WINDOWS_VM.name} — tedarikçi ürün kaydı artık mevcut; kontrollü yeniden sınıflandırma gerekir "
+        "(skor 1.00)",
+        *(f"   Gerekçe: {reason}" for reason in suggestion.reasons),
+        f"   Uyarı: {STALE_MAPPING_WARNING}",
+    ]
+
+
+def test_no_candidate_and_no_note_shows_nothing_and_clears_the_fields(db) -> None:
+    _engine, factory = db
+    with factory() as session:
+        _set_id, result = _engine_set(
+            session, supplier=ICT_BULUT, code="ZZZ", description="Unrelated text", catalog=_catalog(), policy=POLICY
+        )
+        assert (result.suggestions, result.notes) == ((), ())
+        assert (
+            AdvisorySuggestionDisplayReader(session, clock=lambda: NOW)(
+                _vitel_projection(supplier=ICT_BULUT, code="ZZZ")
+            )
+            == ()
+        )
+        blank = _stored(session, _insert(session, _advisory_line(number="2"), _result(REVIEW_ID, 1, "2", notes=(" ",))))
+    assert (
+        display_block(blank, _shown(line_key=blank.line_key, line_number="2"), now=NOW) is DisplayBlock.NOTHING_TO_SHOW
+    )
+    with pytest.raises(WorkbenchContractError):
+        ProductLineSuggestionView(line_key=DFCCD66E_LINE_2, product_ids=(), summary=" ")
+
+
+@pytest.mark.parametrize(
+    ("shown", "block"),
+    [
+        (_shown(review_pending=False), DisplayBlock.REVIEW_NOT_PENDING),
+        (_shown(review_version=2), DisplayBlock.VERSION_MISMATCH),
+        (_shown(product_not_found=False), DisplayBlock.LINE_NOT_PRODUCT_NOT_FOUND),
+        (_shown(line_key=f"{VITEL_LINE_KEY}x"), DisplayBlock.LINE_IDENTITY_MISMATCH),
+        (_shown(line_number="2"), DisplayBlock.LINE_IDENTITY_MISMATCH),
+        (_shown(supplier_partner_id=ICT_BULUT), DisplayBlock.SUPPLIER_MISMATCH),
+        (_shown(supplier_partner_id=None), DisplayBlock.SUPPLIER_MISMATCH),
+        (_shown(seller_item_code="85710.1S3"), DisplayBlock.SELLER_CODE_MISMATCH),
+    ],
+)
+def test_notes_only_sets_obey_every_display_gate(db, shown, block) -> None:
+    _engine, factory = db
+    notes_only = _result(REVIEW_ID, 1, "1", notes=(NEAR_MISS_SUPPLIERINFO_NOTE,))
+    with factory() as session:
+        stored = _stored(session, _insert(session, result=notes_only))
+    assert display_block(stored, _shown(), now=NOW) is None
+    assert display_block(stored, shown, now=NOW) is block
+    assert display_block(replace(stored, status=SuggestionSetStatus.INVALIDATED), _shown(), now=NOW) is (
+        DisplayBlock.SET_NOT_CURRENT
+    )
+    assert display_block(stored, _shown(), now=NOW + PROJECTION_CUTOFF + timedelta(seconds=1)) is (
+        DisplayBlock.VALIDATION_EXPIRED
+    )
+
+
+@pytest.mark.parametrize(
+    "projection_kwargs",
+    [{"version": 2}, {"status": ReviewStatus.RESOLVED}, {"state": ProductLineMatchState.MATCHED}],
+)
+def test_notes_only_reader_shows_nothing_for_other_versions_decided_reviews_or_states(db, projection_kwargs) -> None:
+    _engine, factory = db
+    with factory() as session:
+        _insert(session, result=_result(REVIEW_ID, 1, "1", notes=(NEAR_MISS_SUPPLIERINFO_NOTE,)))
+        assert AdvisorySuggestionDisplayReader(session, clock=lambda: NOW)(_vitel_projection(**projection_kwargs)) == ()
+
+
+#: The 19F seed line is VİTEL partner 101 / ``85710.1S1``; without that variant in the catalog,
+#: the real engine returns only the multi-variant catalog note for it.
+SEED_POLICY = SuggestionPolicy(manual_only_supplier_ids=frozenset({EVIDENCE_PARTNER}))
+SEED_CATALOG = CatalogSnapshot(variants=(WINDOWS_VM, NOISE))
+
+
+def test_end_to_end_notes_only_warning_is_published_then_cleared_on_expiry(hub) -> None:
+    engine, factory = hub
+    with factory() as session:
+        set_id, result = _engine_set(
+            session, supplier=EVIDENCE_PARTNER, code=VITEL_SKU, description="85710.1SS3 lisans",
+            catalog=SEED_CATALOG, policy=SEED_POLICY, now=datetime.now(UTC),
+        )  # fmt: skip
+    assert result.suggestions == () and result.notes == (VARIANT_CATALOG_NOTE,)
+    studio = M2MStudio()
+
+    _synchronizer(engine, studio, display=True).sync(review_id=REVIEW_ID, company_id=COMPANY)
+    (row,) = studio.line_rows()
+    assert (row[M2M], row[SUMMARY]) == ([], f"{NO_CANDIDATE_LINE}\nUyarı: {VARIANT_CATALOG_NOTE}")
+
+    with factory() as session:  # the last successful validation is now past the 19-minute cutoff
+        session.get(WorkbenchProductLineSuggestionSet, set_id).validated_at = datetime.now(UTC) - timedelta(
+            minutes=19, seconds=5
+        )
+        session.commit()
+    _synchronizer(engine, studio, display=True).sync(review_id=REVIEW_ID, company_id=COMPANY)
+    (row,) = studio.line_rows()
+    assert (row[M2M], row[SUMMARY]) == ([], None)
+
+
+def test_end_to_end_notes_only_warning_clears_after_resolution_and_is_swept_once(hub) -> None:
+    engine, factory = hub
+    now = datetime.now(UTC)
+    with factory() as session:
+        set_id, _result_ = _engine_set(
+            session, supplier=EVIDENCE_PARTNER, code=VITEL_SKU, description="85710.1SS3 lisans",
+            catalog=SEED_CATALOG, policy=SEED_POLICY, now=now,
+        )  # fmt: skip
+    studio = M2MStudio()
+    synchronizer = _synchronizer(engine, studio, display=True)
+    refresher = _refresher(factory, synchronizer.sync, _Clock(now + timedelta(seconds=5)))
+
+    assert refresher.sweep().refreshed == 1  # published
+    assert _line_row(studio, "1")[SUMMARY].endswith(VARIANT_CATALOG_NOTE)
+    with factory() as session:  # the line was resolved: the F2 tick invalidates the set
+        SqlAlchemyProductLineSuggestionRepository(session).retire(
+            set_id, status=SuggestionSetStatus.INVALIDATED, reason=SuggestionSetReason.LINE_RESOLVED, now=now
+        )
+        session.commit()
+
+    assert refresher.sweep().refreshed == 1  # cleared once
+    assert (_line_row(studio, "1")[M2M], _line_row(studio, "1")[SUMMARY]) == ([], None)
+    assert refresher.sweep().due_sets == 0  # never again
+
+
+def test_flags_off_keep_notes_only_sets_invisible_and_unmapped_publisher_unchanged(hub, monkeypatch) -> None:
+    engine, factory = hub
+    with factory() as session:
+        _engine_set(
+            session, supplier=EVIDENCE_PARTNER, code=VITEL_SKU, description="85710.1SS3 lisans",
+            catalog=SEED_CATALOG, policy=SEED_POLICY, now=datetime.now(UTC),
+        )  # fmt: skip
+    assert Settings().odoo_workbench_product_line_suggestions_display_enabled is False
+    assert Settings().odoo_workbench_product_line_suggestions_enabled is False
+    unmapped = TwoModelStudio()
+    _synchronizer(engine, unmapped, display=False, mapping=LINE).sync(review_id=REVIEW_ID, company_id=COMPANY)
+    monkeypatch.setattr(
+        SqlAlchemyProductLineSuggestionRepository,
+        "list_current_for_review",
+        lambda *args, **kwargs: pytest.fail("display off must not read advisory rows"),
+    )
+    mapped_off = M2MStudio()
+    _synchronizer(engine, mapped_off, display=False).sync(review_id=REVIEW_ID, company_id=COMPANY)
+
+    (row,) = unmapped.line_rows()
+    assert not {M2M, SUMMARY} & set(row)  # unmapped: the hint fields are never sent
+    (mapped_row,) = mapped_off.line_rows()
+    assert (mapped_row[M2M], mapped_row[SUMMARY]) == ([], None)
+
+
+def test_unmapped_publisher_stays_byte_equivalent_with_a_notes_only_hint() -> None:
+    def run(hints) -> TwoModelStudio:
+        studio = TwoModelStudio()
+        _publisher(studio, mapping=LINE).sync_projection(_projection(product_line_suggestions=hints), apply=True)
+        return studio
+
+    notes_only = (_hint(ids=(), summary=f"{NO_CANDIDATE_LINE}\nUyarı: {NEAR_MISS_SUPPLIERINFO_NOTE}"),)
+    strip = {"x_studio_last_sync_at"}
+
+    def creates(studio):
+        return [(model, {k: v for k, v in values.items() if k not in strip}) for model, values in studio.creates]
+
+    assert creates(run(notes_only)) == creates(run(None))
