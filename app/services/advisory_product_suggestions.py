@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -83,6 +83,7 @@ class SuggestionSetRepository(Protocol):
         supplierinfo_fingerprint: str,
         engine_version: str,
         now: datetime,
+        product_names: Mapping[int, str] | None = None,
     ) -> int: ...
 
     def retire(
@@ -252,6 +253,9 @@ class AdvisoryProductSuggestionService:
 
         priors = self._priors(company_id)
         variant_fp, supplierinfo_fp = variant_catalog_fingerprint(catalog), supplierinfo_fingerprint(catalog)
+        # F3.1: the display name snapshot comes from the same read the fingerprint covers, so a
+        # renamed product changes the fingerprint and regenerates the set (never a stale name).
+        product_names = {variant.product_id: variant.name for variant in catalog.variants}
         work = snapshot.lines[: self._max_lines]
         truncated = len(snapshot.lines) - len(work)
         generated = failed = 0
@@ -283,6 +287,7 @@ class AdvisoryProductSuggestionService:
                     supplierinfo_fingerprint=supplierinfo_fp,
                     engine_version=ENGINE_VERSION,
                     now=now,
+                    product_names=product_names,
                 )
                 self._commit()
                 generated += 1

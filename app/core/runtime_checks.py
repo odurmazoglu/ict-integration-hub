@@ -146,6 +146,17 @@ def _validate_operator_request_settings(settings: Settings, errors: list[str]) -
         ):
             if not required:
                 errors.append(f"ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_ENABLED=true requires {name}=true.")
+    if settings.odoo_workbench_product_line_suggestions_display_enabled:
+        # PR F / F3.1: displayed sets must keep being revalidated, and expired ones swept, by the worker.
+        for required, name in (
+            (
+                settings.odoo_workbench_product_line_suggestions_enabled,
+                "ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_ENABLED",
+            ),
+            (settings.odoo_workbench_product_line_projection_enabled, "ODOO_WORKBENCH_PRODUCT_LINE_PROJECTION_ENABLED"),
+        ):
+            if not required:
+                errors.append(f"ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_DISPLAY_ENABLED=true requires {name}=true.")
     if not settings.odoo_workbench_operator_requests_enabled:
         return
     if settings.odoo_workbench_operator_requests_company_id is None:

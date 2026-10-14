@@ -49,3 +49,47 @@ that cannot leak into any deciding code path.
   a failed catalog read regenerates and revalidates nothing.
 - The import boundary allows exactly the advisory composition, service, repository, catalog reader
   and CLI to import `app.advisory`, and only the Hub worker and the CLI to wire it.
+
+## F3.1 (display adapter, code only)
+
+Studio plan, staleness contract, enablement order and rollback: [ODOO_WORKBENCH_PRODUCT_SUGGESTIONS.md](../ODOO_WORKBENCH_PRODUCT_SUGGESTIONS.md).
+
+- Persisted suggestions reach the Workbench child lines only through
+  `app/composition/advisory_display.py` (allowlisted, imports no other `app.composition` module so
+  `app.composition.imports` can compose it without a cycle). The Workbench projection stays pure: it
+  receives ERP-neutral `ProductLineSuggestionView`s and never ranks, gates or reads advisory data.
+- Separate flag `ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_DISPLAY_ENABLED` (default off; requires the
+  F2 worker flag and child line projection). Off: no advisory row is read by the projection.
+- Display gate (every projection, from every flow): review pending, set `current`, same review
+  version, line is `product_not_found`, same line key and number, same effective supplier and seller
+  code, at least one candidate or advisory note, and validated within the **19-minute projection cutoff** (20-minute
+  validity minus one 60 s sweep interval). Validity policy itself is unchanged.
+- Two optional child fields, mapped together or not at all: a Many2many of `product.product`
+  (written as one `[[6, 0, ids]]` command, compared as an id set — the parent publisher's proven
+  path) and a plain-text ranked summary carrying each candidate's persisted reasons and warnings plus
+  the set's notes. A notes-only set (near-miss code, ambiguous supplierinfo, CSP ProductId-only,
+  multi-variant catalog) shows an empty Many2many and a warning-only summary. Unmapped, the publisher's reads and writes are byte-identical
+  to PR B. Mapped with display off, or outside the gate, or on a deactivated row, both are cleared.
+  Operator input fields (`x_studio_ipp_req_*`, `x_studio_ipp_new_*`) are never mapped or written.
+- Alembic `202607170042`: nullable `candidates.product_name` (the candidate's `display_name` from the
+  generating catalog read — a rename changes the catalog fingerprint and regenerates the set) and
+  nullable `sets.display_synced_at` (start of the last successful Odoo refresh reflecting the set's
+  display state).
+- Refresh: after every advisory tick (post-tick refresh) and every 60 s (sweep task
+  `advisory_suggestion_display_sweep`, same advisory lock), the Hub asks the advisory tables which
+  sets may be shown differently in Odoo than the gate allows — never refreshed since a display-state
+  change (created, retired while possibly shown, revalidated after being cleared), or past the cutoff
+  and not refreshed since. No due set means no Odoo call. Due reviews (at most 25 per sweep) are
+  re-synced through the canonical projection synchronizer; success sets `display_synced_at`
+  (compare-and-set on status and `validated_at`); an already-cleared set is never refreshed again.
+  A failed refresh is not marked and is retried (60 s backoff doubling to 5 min); it never touches
+  `validated_at`.
+
+### Staleness contract
+
+The Hub never *publishes* an expired suggestion and clears expired ones from Odoo while the worker
+and Odoo are operational. **It does not guarantee Odoo UI expiry during an outage**: if the worker
+is down, saturated, or Odoo writes fail, the Odoo UI may keep the last published suggestions until
+the next successful refresh. The F3 Studio UI therefore always shows the static warning:
+
+> Öneriler bilgilendirme amaçlıdır. Güncellikleri değişebilir; eşleştirme öncesinde ürünü doğrulayın.

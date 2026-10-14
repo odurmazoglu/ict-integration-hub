@@ -17,6 +17,15 @@ Upsert rules (one review at a time):
   the same record set back to ``True``;
 * two rows with the same key, or more rows than the safety cap, fail this review's
   lines closed before any write.
+
+PR F / F3.1 advisory hint fields (optional, all-or-nothing): a Many2many of suggested
+``product.product`` ids and a plain-text ranked summary. Unmapped (the default), the
+publisher reads and writes exactly what it did before. Mapped, a line shows the hint the
+projection carries only for a pending review's current PRODUCT_NOT_FOUND line; every other
+line -- and every deactivated row -- gets both fields cleared. The Many2many is compared
+as an id set and written as one replace command, exactly like the parent publisher's
+eligible asset accounts. Operator input fields (``x_studio_ipp_req_*`` / ``x_studio_ipp_new_*``)
+are never mapped or written here.
 """
 
 from __future__ import annotations
@@ -27,6 +36,7 @@ from dataclasses import dataclass, fields
 from decimal import Decimal
 from typing import Any
 
+from app.application.workbench.dto import ReviewStatus
 from app.application.workbench.exceptions import WorkbenchContractError, WorkbenchProjectionPublishError
 from app.application.workbench.product_line_projection import (
     ProductLineMatchState,
@@ -49,6 +59,10 @@ ENV_PREFIX = "ODOO_WORKBENCH_PRODUCT_LINE_"
 MAX_LINES_PER_REVIEW = 500
 SAFE_PRODUCT_LINE_READ_ERROR = "Odoo Workbench product line lookup failed."
 SAFE_PRODUCT_LINE_WRITE_ERROR = "Odoo Workbench product line publish failed."
+#: PR F / F3.1: optional advisory hint fields; mapped together or not at all.
+SUGGESTION_FIELDS = ("suggested_products", "suggestion_summary")
+#: Operator input prefixes owned by the PR C/D request readers; a projection never writes them.
+OPERATOR_INPUT_PREFIXES = ("x_studio_ipp_req_", "x_studio_ipp_new_")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,17 +88,34 @@ class OdooWorkbenchProductLineFieldMapping:
     product: str = "x_studio_ipp_product_id"
     matched_by: str = "x_studio_ipp_matched_by"
     message: str = "x_studio_ipp_line_message"
+    #: PR F / F3.1 (optional, all-or-nothing): Many2many ``product.product`` + plain text.
+    suggested_products: str | None = None
+    suggestion_summary: str | None = None
 
     def __post_init__(self) -> None:
         names = [getattr(self, item.name) for item in fields(self)]
         for item, value in zip(fields(self), names, strict=True):
+            if item.name in SUGGESTION_FIELDS and value is None:
+                continue
             if not isinstance(value, str) or not value.strip() or value != value.strip():
                 raise WorkbenchContractError(f"Product line {item.name} mapping must be a non-empty field name.")
         if not self.model.startswith("x_"):
             raise WorkbenchContractError("Product line model must be an Odoo Studio (x_) model.")
-        field_names = names[1:]
+        field_names = [name for name in names[1:] if name is not None]
         if len(set(field_names)) != len(field_names):
             raise WorkbenchContractError("Product line field mappings must be distinct.")
+        hint_fields = [getattr(self, name) for name in SUGGESTION_FIELDS]
+        if any(name is None for name in hint_fields) and any(name is not None for name in hint_fields):
+            raise WorkbenchContractError(
+                "Product line suggestion fields (SUGGESTED_PRODUCTS_FIELD, SUGGESTION_SUMMARY_FIELD) "
+                "must be mapped together or not at all."
+            )
+        if any(name.startswith(OPERATOR_INPUT_PREFIXES) for name in field_names):
+            raise WorkbenchContractError("Product line projection fields may not be operator input fields.")
+
+    @property
+    def suggestions_mapped(self) -> bool:
+        return self.suggested_products is not None and self.suggestion_summary is not None
 
     @classmethod
     def from_environment(cls, *, prefix: str = ENV_PREFIX) -> OdooWorkbenchProductLineFieldMapping:
@@ -106,7 +137,13 @@ class OdooWorkbenchProductLineFieldMapping:
         return cls(**overrides)
 
     def read_fields(self) -> list[str]:
-        return ["id", *(getattr(self, item.name) for item in fields(self) if item.name != "model")]
+        return [
+            "id",
+            *(getattr(self, item.name) for item in fields(self) if item.name != "model" and getattr(self, item.name)),
+        ]
+
+    def m2m_fields(self) -> frozenset[str]:
+        return frozenset({self.suggested_products} - {None})
 
 
 class OdooWorkbenchProductLinePublisher:
@@ -160,11 +197,11 @@ class OdooWorkbenchProductLinePublisher:
             values = desired[line.line_key]
             rows = existing.get(line.line_key, [])
             if not rows:
-                changes = _field_changes({}, values, html_fields=frozenset())
+                changes = _field_changes({}, values, html_fields=frozenset(), m2m_fields=self._mapping.m2m_fields())
                 plan.append(_Step(line.line_key, line.line_number, ProductLineSyncOutcome.CREATED, None, changes))
                 continue
             row = rows[0]
-            changes = _field_changes(row, values, html_fields=frozenset())
+            changes = _field_changes(row, values, html_fields=frozenset(), m2m_fields=self._mapping.m2m_fields())
             outcome = ProductLineSyncOutcome.UPDATED if changes else ProductLineSyncOutcome.NO_CHANGE
             plan.append(_Step(line.line_key, line.line_number, outcome, _record_id(row), changes))
         for key, rows in existing.items():
@@ -179,7 +216,12 @@ class OdooWorkbenchProductLinePublisher:
                         _text(row.get(self._mapping.line_number)),
                         ProductLineSyncOutcome.DEACTIVATED,
                         _record_id(row),
-                        _field_changes(row, {self._mapping.is_current: False}, html_fields=frozenset()),
+                        _field_changes(
+                            row,
+                            self._deactivation_values(),
+                            html_fields=frozenset(),
+                            m2m_fields=self._mapping.m2m_fields(),
+                        ),
                     )
                 )
         return plan
@@ -188,14 +230,23 @@ class OdooWorkbenchProductLinePublisher:
         for step in plan:
             try:
                 if step.outcome is ProductLineSyncOutcome.CREATED:
-                    record_id = self._adapter.create(model=self._mapping.model, values=desired[step.line_key])
+                    record_id = self._adapter.create(
+                        model=self._mapping.model, values=self._write_values(desired[step.line_key])
+                    )
                     step.record_id = record_id
                 elif step.outcome is ProductLineSyncOutcome.UPDATED and step.record_id is not None:
                     values = {change.field: desired[step.line_key][change.field] for change in step.changes}
-                    self._adapter.write(model=self._mapping.model, record_id=step.record_id, values=values)
-                elif step.outcome is ProductLineSyncOutcome.DEACTIVATED and step.record_id is not None:
                     self._adapter.write(
-                        model=self._mapping.model, record_id=step.record_id, values={self._mapping.is_current: False}
+                        model=self._mapping.model, record_id=step.record_id, values=self._write_values(values)
+                    )
+                elif step.outcome is ProductLineSyncOutcome.DEACTIVATED and step.record_id is not None:
+                    deactivation = self._deactivation_values()
+                    values = {
+                        self._mapping.is_current: False,
+                        **{change.field: deactivation[change.field] for change in step.changes},
+                    }
+                    self._adapter.write(
+                        model=self._mapping.model, record_id=step.record_id, values=self._write_values(values)
                     )
             except ErpRepositoryError as exc:
                 raise _publish_error(exc) from exc
@@ -274,7 +325,42 @@ class OdooWorkbenchProductLinePublisher:
             mapping.product: line.product_id,
             mapping.matched_by: line.matched_by,
             mapping.message: line.message,
+            **self._hint_values(projection, line),
         }
+
+    # ------------------------------------------------------------------ PR F / F3.1 hints
+
+    def _hint_values(self, projection: WorkbenchProjection, line: WorkbenchProductLineProjection) -> dict[str, Any]:
+        """Hint fields only when mapped; a line outside the display contract is always cleared."""
+
+        mapping = self._mapping
+        if not mapping.suggestions_mapped:
+            return {}
+        hint = None
+        if (
+            projection.status is ReviewStatus.PENDING_REVIEW
+            and line.match_state is ProductLineMatchState.PRODUCT_NOT_FOUND
+            and line.review_version == projection.version
+        ):
+            hint = {item.line_key: item for item in projection.product_line_suggestions or ()}.get(line.line_key)
+        return {
+            mapping.suggested_products: list(hint.product_ids) if hint is not None else [],
+            mapping.suggestion_summary: hint.summary if hint is not None else None,
+        }
+
+    def _deactivation_values(self) -> dict[str, Any]:
+        mapping = self._mapping
+        values: dict[str, Any] = {mapping.is_current: False}
+        if mapping.suggestions_mapped:
+            values[mapping.suggested_products] = []
+            values[mapping.suggestion_summary] = None
+        return values
+
+    def _write_values(self, values: dict[str, Any]) -> dict[str, Any]:
+        """Many2many values are compared as id sets but written as one replace command."""
+
+        m2m = self._mapping.m2m_fields()
+        return {name: ([[6, 0, sorted(value)]] if name in m2m else value) for name, value in values.items()}
 
 
 @dataclass(slots=True)
@@ -320,6 +406,7 @@ def _publish_error(exc: ErpRepositoryError) -> WorkbenchProjectionPublishError:
 
 __all__ = [
     "MAX_LINES_PER_REVIEW",
+    "SUGGESTION_FIELDS",
     "OdooWorkbenchProductLineFieldMapping",
     "OdooWorkbenchProductLinePublisher",
 ]
