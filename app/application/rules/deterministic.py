@@ -11,6 +11,7 @@ from app.application.expense_mapping import (
     OperatingExpenseMatcher,
     OperatingExpenseMatchResult,
     OperatingExpenseMatchStatus,
+    invoice_is_ambiguous_commercial_purchase,
     invoice_is_product_identifier_free,
 )
 from app.application.workflow import (
@@ -21,6 +22,7 @@ from app.application.workflow import (
     WorkflowType,
 )
 from app.domain.invoice import InternalInvoice
+from app.domain.invoice.document_types import return_invoice_type_code
 from app.matching import (
     InvoiceProductMatchResult,
     PartnerMatchResult,
@@ -40,6 +42,12 @@ OPERATING_EXPENSE_VENDOR_BILL_EXPLANATION = (
     "the Vendor Bill workflow."
 )
 MANUAL_REVIEW_EXPLANATION = "Deterministic business mismatch requires Manual Review."
+#: PR S. Supplier-wide mappings are never consulted for a product-source supplier's
+#: identifier-free invoice; this NOT_FOUND result keeps the operating-expense reason.
+_PRODUCT_SOURCE_SUPPLIER_EXPENSE_MATCH = OperatingExpenseMatchResult(
+    status=OperatingExpenseMatchStatus.NOT_FOUND,
+    reason="Supplier-wide operating-expense mappings never apply to a registered product-source supplier.",
+)
 
 
 class RuleEvaluationError(ApplicationError):
@@ -90,6 +98,14 @@ class DeterministicRuleEngine:
     free of deterministic product identifiers and an explicit operating-expense
     mapping resolves for the matched supplier, the operating-expense Vendor Bill
     rule applies instead. Anything else remains Manual Review.
+
+    PR S safety guards, evaluated after matching so every match fact is still recorded:
+    a return invoice (``InvoiceTypeCode`` IADE family) is Manual Review with only the
+    RETURN_INVOICE_NOT_SUPPORTED reason. An identifier-free invoice from a registered
+    product-source supplier never uses a supplier-wide operating-expense mapping (that
+    would infer the purpose from supplier identity); it stays Manual Review with
+    AMBIGUOUS_COMMERCIAL_PURCHASE plus the operating-expense reason, which only an
+    explicit, review-scoped purchase purpose + accounting resolution can resolve.
     """
 
     def __init__(
@@ -114,17 +130,33 @@ class DeterministicRuleEngine:
         product_partner_match = supplier_match_for_product_matching(partner_match, command.accepted_supplier)
         product_match = _evaluate_products(self._product_matcher, invoice, command.company_id, product_partner_match)
         tax_match = _evaluate_taxes(self._tax_mapper, invoice, command.company_id)
-        operating_expense_match = _evaluate_operating_expense(
-            self._operating_expense_matcher,
-            invoice,
-            command.company_id,
-            partner_match,
+        ambiguous_commercial = invoice_is_ambiguous_commercial_purchase(invoice)
+        operating_expense_match = (
+            _PRODUCT_SOURCE_SUPPLIER_EXPENSE_MATCH
+            if ambiguous_commercial
+            else _evaluate_operating_expense(
+                self._operating_expense_matcher,
+                invoice,
+                command.company_id,
+                partner_match,
+            )
         )
 
         warnings = product_match.warnings + tax_match.warnings
         partner_reasons = _partner_review_reasons(partner_match)
         product_reasons = _product_review_reasons(invoice, product_match)
         tax_reasons = _tax_review_reasons(invoice, tax_match)
+
+        return_type_code = return_invoice_type_code(invoice)
+        if return_type_code is not None:
+            return RuleEvaluationResult(
+                workflow_decision=_manual_review_decision((_return_invoice_reason(return_type_code),)),
+                partner_match=partner_match,
+                product_match=product_match,
+                tax_match=tax_match,
+                operating_expense_match=operating_expense_match,
+                warnings=warnings,
+            )
 
         partner_ok = not partner_reasons
         product_ok = not product_reasons
@@ -142,7 +174,7 @@ class DeterministicRuleEngine:
                 operating_expense_match=operating_expense_match,
                 warnings=warnings,
             )
-        if partner_ok and tax_ok and identifier_free and expense_matched:
+        if partner_ok and tax_ok and identifier_free and expense_matched and not ambiguous_commercial:
             return _vendor_bill_result(
                 OPERATING_EXPENSE_VENDOR_BILL_RULE_ID,
                 OPERATING_EXPENSE_VENDOR_BILL_EXPLANATION,
@@ -161,6 +193,8 @@ class DeterministicRuleEngine:
             tax_ok=tax_ok,
             operating_expense_match=operating_expense_match,
         )
+        if ambiguous_commercial:
+            review_reasons = (_ambiguous_commercial_purchase_reason(),) + review_reasons
         return RuleEvaluationResult(
             workflow_decision=_manual_review_decision(review_reasons),
             partner_match=partner_match,
@@ -283,6 +317,26 @@ def _manual_review_reasons(
         )
         return partner_reasons + expense_reasons + tax_reasons
     return partner_reasons + product_reasons + tax_reasons
+
+
+def _return_invoice_reason(invoice_type_code: str) -> ManualReviewReason:
+    return _reason(
+        code=ManualReviewReasonCode.RETURN_INVOICE_NOT_SUPPORTED,
+        message="Return invoice (InvoiceTypeCode IADE) is not a purchase; a Vendor Bill is never created for it.",
+        source="document_type",
+        details=(("invoice_type_code", invoice_type_code),),
+    )
+
+
+def _ambiguous_commercial_purchase_reason() -> ManualReviewReason:
+    return _reason(
+        code=ManualReviewReasonCode.AMBIGUOUS_COMMERCIAL_PURCHASE,
+        message=(
+            "Supplier is a registered product source and no line carries a product identifier; "
+            "it is never treated as an operating expense automatically."
+        ),
+        source="product_source_supplier",
+    )
 
 
 def _operating_expense_review_reason(match: OperatingExpenseMatchResult) -> ManualReviewReason:

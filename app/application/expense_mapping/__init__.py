@@ -22,6 +22,7 @@ from app.application.expense_mapping.matcher import (
 from app.application.expense_mapping.matching import (
     EXACT_MATCH_CONFIDENCE,
     MATCHED_BY_COMPANY_PARTNER,
+    MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION,
     OperatingExpenseMatchingEngine,
     OperatingExpenseMatchResult,
     OperatingExpenseMatchStatus,
@@ -34,13 +35,17 @@ from app.application.expense_mapping.onboarding import (
     OperatingExpenseMappingOnboardingRepository,
     OperatingExpenseMappingOnboardingResult,
 )
-from app.application.expense_mapping.predicates import invoice_is_product_identifier_free
+from app.application.expense_mapping.predicates import (
+    invoice_is_ambiguous_commercial_purchase,
+    invoice_is_product_identifier_free,
+)
 from app.application.expense_mapping.repository import OperatingExpenseMappingRepository
 
 __all__ = [
     "EXACT_MATCH_CONFIDENCE",
     "EXACT_OPERATING_EXPENSE_CONFIDENCE",
     "MATCHED_BY_COMPANY_PARTNER",
+    "MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION",
     "NullOperatingExpenseMatcher",
     "OnboardOperatingExpenseMappingCommand",
     "OnboardOperatingExpenseMappingUseCase",
@@ -57,6 +62,7 @@ __all__ = [
     "OperatingExpenseMatchingEngine",
     "OperatingExpenseMatchResult",
     "OperatingExpenseMatchStatus",
+    "invoice_is_ambiguous_commercial_purchase",
     "invoice_is_product_identifier_free",
     "operating_expense_evidence_errors",
 ]

@@ -16,6 +16,9 @@ from app.matching import PartnerMatchResult, PartnerMatchStatus
 
 EXACT_MATCH_CONFIDENCE = Decimal("1.00")
 MATCHED_BY_COMPANY_PARTNER = "company_partner"
+#: ``matched_by`` of a match synthesized from an accepted review-scoped accounting
+#: resolution (explicit purpose + accounting decision for exactly one review).
+MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION = "review_accounting_resolution"
 
 
 class OperatingExpenseMatchStatus(StrEnum):

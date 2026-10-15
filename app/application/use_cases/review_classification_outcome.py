@@ -19,6 +19,7 @@ from app.application.workbench.evidence import ReviewClassificationEvidence, Rev
 from app.application.workflow import WorkflowType
 from app.billing.builder import tax_lines_fully_matched, validate_vendor_bill_inputs
 from app.domain.invoice import InternalInvoice
+from app.domain.invoice.document_types import is_return_invoice
 from app.matching import PartnerMatchStatus
 
 
@@ -57,6 +58,10 @@ def build_review_execution_evidence(
     """
 
     if decision_result.workflow not in {WorkflowType.VENDOR_BILL, WorkflowType.MANUAL_REVIEW}:
+        return None
+    # PR S: a return invoice never gets Stage-1 evidence, so no Vendor Bill decision can be
+    # accepted for it (the mixed-invoice branch below does not run the bill validation).
+    if is_return_invoice(invoice):
         return None
     partner_match = decision_result.partner_match
     product_match = decision_result.product_match

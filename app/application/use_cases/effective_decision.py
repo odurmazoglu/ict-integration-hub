@@ -34,7 +34,12 @@ from app.application.effective_supplier import (
 )
 from app.application.exceptions import ApplicationError
 from app.application.expense_mapping.matcher import OperatingExpenseMatcher
-from app.application.expense_mapping.matching import OperatingExpenseMatchResult, OperatingExpenseMatchStatus
+from app.application.expense_mapping.matching import (
+    MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION,
+    OperatingExpenseMatchResult,
+    OperatingExpenseMatchStatus,
+)
+from app.application.expense_mapping.predicates import invoice_is_ambiguous_commercial_purchase
 from app.application.fixed_asset_accounting import FixedAssetAccounting
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import ReviewPersistenceError, WorkbenchContractError
@@ -65,7 +70,7 @@ _EXPENSE_ACCOUNT_TREATMENT = "expense_account"
 #: as a plain string for the same import-isolation reason.
 _CAPITALIZE_FIXED_ASSET_TREATMENT = "capitalize_fixed_asset"
 
-REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY = "review_accounting_resolution"
+REVIEW_ACCOUNTING_RESOLUTION_MATCHED_BY = MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION
 
 #: Reason codes an accepted MATCH_EXISTING effect or a resolved operating-expense
 #: match may ever strip from the review's own effective reasons -- SUPPLIER_AMBIGUOUS
@@ -331,6 +336,10 @@ class EffectiveDecisionResolver:
             or effect.origin is not EffectiveSupplierOrigin.MATCH_EXISTING
         ):
             return None
+        # PR S: a supplier-wide mapping never resolves a product-source supplier's
+        # identifier-free invoice; only a review-scoped accounting resolution may.
+        if invoice_is_ambiguous_commercial_purchase(invoice):
+            return None
         partner_match = decision_result.partner_match
         if partner_match is not None and partner_match.status is PartnerMatchStatus.MATCHED:
             return None
@@ -479,9 +488,21 @@ def _effective_manual_review_reasons(
     # OPERATING_EXPENSE_MAPPING_*; renaming them would break historical/API data.)
     if fixed_asset_resolved:
         strip_codes |= _OPERATING_EXPENSE_REASON_CODES
+    # PR S: AMBIGUOUS_COMMERCIAL_PURCHASE yields only to the operator's explicit,
+    # review-scoped accounting decision (purpose + treatment for this exact review).
+    if fixed_asset_resolved or _is_review_scoped_resolution(recomputed_operating_expense_match):
+        strip_codes.add(ManualReviewReasonCode.AMBIGUOUS_COMMERCIAL_PURCHASE)
     if not strip_codes or not any(reason.code in strip_codes for reason in raw_reasons):
         return raw_reasons
     return tuple(reason for reason in raw_reasons if reason.code not in strip_codes)
+
+
+def _is_review_scoped_resolution(match: OperatingExpenseMatchResult | None) -> bool:
+    return (
+        match is not None
+        and match.status is OperatingExpenseMatchStatus.MATCHED
+        and match.matched_by == MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION
+    )
 
 
 def _effective_workflow(
