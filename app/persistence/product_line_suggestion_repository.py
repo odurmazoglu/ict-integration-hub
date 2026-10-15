@@ -255,6 +255,43 @@ class SqlAlchemyProductLineSuggestionRepository:
             marked += int(result.rowcount or 0)
         return marked
 
+    def reset_display_markers(self, *, company_id: int) -> int:
+        """F3.6b: forget the recorded Odoo refresh of every *current* set of ``company_id``.
+
+        Run by ``clear-display`` only after Odoo was verified empty: every current set becomes
+        due again, so re-enabling display republishes it once. Compare-and-set on
+        ``status='current'`` and a non-null marker; superseded/invalidated history and
+        ``validated_at`` are never touched.
+        """
+
+        result = self._session.execute(
+            update(WorkbenchProductLineSuggestionSet)
+            .where(
+                WorkbenchProductLineSuggestionSet.company_id == company_id,
+                WorkbenchProductLineSuggestionSet.status == _CURRENT,
+                WorkbenchProductLineSuggestionSet.display_synced_at.is_not(None),
+            )
+            .values(display_synced_at=None)
+        )
+        self._session.flush()
+        return int(result.rowcount or 0)
+
+    def count_display_marked_current(self, *, company_id: int) -> int:
+        """F3.6b: current sets carrying a display marker (only a display-enabled refresh sets one)."""
+
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(WorkbenchProductLineSuggestionSet)
+                .where(
+                    WorkbenchProductLineSuggestionSet.company_id == company_id,
+                    WorkbenchProductLineSuggestionSet.status == _CURRENT,
+                    WorkbenchProductLineSuggestionSet.display_synced_at.is_not(None),
+                )
+            )
+            or 0
+        )
+
     def delete_history_older_than(self, *, company_id: int, cutoff: datetime) -> int:
         ids = self._session.scalars(select(WorkbenchProductLineSuggestionSet.id).where(*_history(company_id, cutoff)))
         id_list = list(ids)

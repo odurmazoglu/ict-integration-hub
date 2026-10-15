@@ -153,8 +153,44 @@ filter that list on the Many2many: notes-only rows have no products but must sti
 
 ## 5. Rollback
 
-* Hub: `ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_DISPLAY_ENABLED=false` and recreate the API and worker.
-  With the field envs still set, the next sync of each review clears both fields; reconcile
-  `--apply` clears them everywhere at once. Unset the field envs only after that.
+### 5.1 Display off: `clear-display` (F3.6b)
+
+Turning display off unregisters the 60 s sweep, so already published suggestions would stay in
+Odoo until something else syncs each review. Clear them explicitly — never with a broad reconcile
+`--apply`, and never by unmapping first (unmapped fields are no longer touched at all):
+
+1. Set `ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_DISPLAY_ENABLED=false` (keep **both** field envs) and
+   recreate the API **and** the worker. Confirm display is off in both containers.
+2. Dry-run, inside the API container (its environment is the API process's own):
+   `python -m app.cli.advisory_product_suggestions clear-display --company 1`
+   — lists every row (current and non-current) still showing a suggestion: record id, review id,
+   line key, product ids, summary length and digest (never the summary text).
+3. Apply: `... clear-display --company 1 --apply --confirm-apply`, saving the output as evidence.
+4. Unset the two field envs only after step 3 exited `0` with `outcome=cleared`.
+
+What `--apply` does, under the advisory lock shared with the generation tick and the display sweep:
+
+* writes exactly `x_studio_ipp_suggested_product_ids = [[6, 0, []]]` and
+  `x_studio_ipp_suggestion_summary = False` on each populated row — never `product_id`, `req_*`,
+  `new_*`, parent fields, products, supplierinfo or accounting (checked before every write);
+* retries each Odoo read/write 3 times (5 s, 10 s backoff), re-reads Odoo, and stops without
+  touching anything else if a row is still populated;
+* only then resets `display_synced_at` of the company's **current** sets (compare-and-set), so a
+  later display re-enable republishes them once;
+* waits the settle window (default 150 s, minimum 120 s) outside the lock and re-checks under the
+  lock: Odoo still empty and no set re-marked. Only a display-enabled refresh marks a set, so a
+  worker still running with display on makes the run fail instead of report success.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | dry-run done, or cleared, verified and settled |
+| `1` | not complete (`incomplete`, `read_failed`, `lock_busy`, `repopulated`): keep the mappings, fix the cause, re-run (idempotent) |
+| `2` | `--apply` without `--confirm-apply` |
+| `3` | refused: display is on or the suggestion fields are not both mapped; nothing read or written |
+
+After a clear, a display-off reconcile dry-run plans `NO_CHANGE` for every child row.
+
+### 5.2 Other layers
+
 * Studio: deactivate the views; the fields can stay (unmapped fields are never read or written).
 * Database: `alembic downgrade 202607170041` drops only the two display columns.
