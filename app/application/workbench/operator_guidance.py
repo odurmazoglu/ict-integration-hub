@@ -68,6 +68,10 @@ REASON_TITLES: dict[ManualReviewReasonCode, str] = {
     ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_REQUIRED: "Muhasebe işlemi seçilmeli",
     ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_AMBIGUOUS: "Muhasebe işlemi netleştirilmeli",
     ManualReviewReasonCode.UNSUPPORTED_INVOICE_CONTENT: "Fatura içeriği desteklenmiyor",
+    ManualReviewReasonCode.RETURN_INVOICE_NOT_SUPPORTED: "İade faturası — tedarikçi faturası oluşturulmaz",
+    ManualReviewReasonCode.AMBIGUOUS_COMMERCIAL_PURCHASE: (
+        "Ürün tedarikçisi faturasında ürün kodu yok — otomatik gider uygulanmaz"
+    ),
 }
 
 PURPOSE_LABELS: dict[PurchasePurpose, str] = {

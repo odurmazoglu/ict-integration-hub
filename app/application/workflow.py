@@ -34,6 +34,10 @@ class ManualReviewReasonCode(StrEnum):
     OPERATING_EXPENSE_MAPPING_REQUIRED = "OPERATING_EXPENSE_MAPPING_REQUIRED"
     OPERATING_EXPENSE_MAPPING_AMBIGUOUS = "OPERATING_EXPENSE_MAPPING_AMBIGUOUS"
     UNSUPPORTED_INVOICE_CONTENT = "UNSUPPORTED_INVOICE_CONTENT"
+    #: PR S0 (rollback compatibility only). Defined so this image can read reviews that
+    #: PR S classified; nothing in this image emits, strips or acts on them.
+    RETURN_INVOICE_NOT_SUPPORTED = "RETURN_INVOICE_NOT_SUPPORTED"
+    AMBIGUOUS_COMMERCIAL_PURCHASE = "AMBIGUOUS_COMMERCIAL_PURCHASE"
 
 
 @dataclass(frozen=True, slots=True)
