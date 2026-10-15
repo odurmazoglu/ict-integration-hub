@@ -68,10 +68,15 @@ def test_every_reason_code_has_a_workbench_title() -> None:
     assert set(REASON_TITLES) == set(ManualReviewReasonCode)
 
 
-def test_new_codes_are_referenced_only_by_their_definition_and_titles() -> None:
-    """S0 adds no behavior: no rule, decision, builder or execution path names them."""
+def test_new_codes_are_referenced_only_by_their_owning_modules() -> None:
+    """Definition and titles (S0), emission (rule engine) and resolution (effective decision, PR S)."""
 
-    allowed = {Path("app/application/workflow.py"), Path("app/application/workbench/operator_guidance.py")}
+    allowed = {
+        Path("app/application/workflow.py"),
+        Path("app/application/workbench/operator_guidance.py"),
+        Path("app/application/rules/deterministic.py"),
+        Path("app/application/use_cases/effective_decision.py"),
+    }
     for path in Path("app").rglob("*.py"):
         if path in allowed:
             continue
@@ -122,11 +127,21 @@ def test_workbench_shows_new_code_as_technical_blocker(code: ManualReviewReasonC
     assert REASON_TITLES[code] in guidance.todo_html
 
 
-@pytest.mark.parametrize("code", NEW_CODES)
-def test_new_code_is_never_stripped_so_review_stays_manual(code: ManualReviewReasonCode) -> None:
-    reasons = (ManualReviewReason(code=code, message=code.value),)
+def test_return_code_is_never_stripped_so_review_stays_manual() -> None:
+    reasons = (ManualReviewReason(code=RETURN, message=RETURN.value),)
 
     effective = _effective_manual_review_reasons(reasons, None, None, fixed_asset_resolved=True)
+
+    assert effective == reasons
+    assert _effective_workflow(WorkflowType.MANUAL_REVIEW, effective) is WorkflowType.MANUAL_REVIEW
+
+
+def test_ambiguous_code_stays_without_an_explicit_resolution() -> None:
+    """PR S: only an explicit review-scoped accounting resolution clears it (tested in PR S)."""
+
+    reasons = (ManualReviewReason(code=AMBIGUOUS, message=AMBIGUOUS.value),)
+
+    effective = _effective_manual_review_reasons(reasons, None, None)
 
     assert effective == reasons
     assert _effective_workflow(WorkflowType.MANUAL_REVIEW, effective) is WorkflowType.MANUAL_REVIEW

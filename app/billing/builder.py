@@ -18,6 +18,8 @@ from app.billing.money import MonetaryPrecision, currency_round, monetary_equal
 from app.billing.reconciliation import line_currency_subtotal, monetary_mismatches, source_monetary_totals
 from app.billing.validation import VendorBillValidationResult, validation_result
 from app.domain.invoice import Discount, InternalInvoice, InvoiceLine
+from app.domain.invoice.document_types import return_invoice_type_code
+from app.domain.invoice.source_profiles import is_product_source_supplier
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus, ProductMatchStatus
 from app.tax_mapping import InvoiceTaxMappingResult, TaxMatchStatus
 
@@ -276,6 +278,13 @@ def validate_vendor_bill_inputs(
     if not isinstance(tax_match, InvoiceTaxMappingResult):
         return validation_result(["InvoiceTaxMappingResult DTO is required."])
 
+    # PR S: a return document is never a purchase, in any mode (product, expense,
+    # account-only, fixed asset, RESALE). Shared by Stage-1 evidence, decision
+    # acceptance, preview and execution, so no path can bypass it.
+    return_type_code = return_invoice_type_code(invoice)
+    if return_type_code is not None:
+        return validation_result([f"Return invoice (InvoiceTypeCode {return_type_code}) cannot become a vendor bill."])
+
     if fixed_asset_accounting is not None:
         return validation_result(
             _fixed_asset_mode_errors(
@@ -291,6 +300,26 @@ def validate_vendor_bill_inputs(
                 validated_resale_accounts=validated_resale_accounts,
                 monetary_precision=monetary_precision,
             )
+        )
+
+    # PR S: a product-source supplier's purchase is never expensed implicitly. Per-line
+    # account-only overrides are refused for it (mixed or identifier-free), and an
+    # identifier-free invoice from it is expensed only through an explicit review-scoped
+    # accounting resolution -- never a supplier-wide mapping.
+    from app.application.expense_mapping import (
+        MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION,
+        invoice_is_ambiguous_commercial_purchase,
+    )
+
+    if is_product_source_supplier(invoice) and (account_only_line_numbers or explicit_account_only_accounts):
+        errors.append("Account-only line overrides are not allowed for a product-source supplier.")
+    if (
+        invoice_is_ambiguous_commercial_purchase(invoice)
+        and getattr(operating_expense_match, "matched_by", None) != MATCHED_BY_REVIEW_ACCOUNTING_RESOLUTION
+    ):
+        errors.append(
+            "Identifier-free invoice from a product-source supplier needs an explicit review-scoped "
+            "accounting resolution to be billed as an operating expense."
         )
 
     expense_mode = _operating_expense_mode(invoice, operating_expense_match)

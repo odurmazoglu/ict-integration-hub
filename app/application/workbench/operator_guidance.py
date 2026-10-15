@@ -232,6 +232,13 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
 
     codes = set(source.reason_codes)
     findings = [REASON_TITLES[code] for code in dict.fromkeys(source.reason_codes)]
+    # PR S: a return document is blocked before any supplier/product step is offered.
+    if ManualReviewReasonCode.RETURN_INVOICE_NOT_SUPPORTED in codes:
+        return OperatorNextAction.TECHNICAL, _todo(
+            "Bu belge bir iade faturasıdır; Hub tedarikçi faturası oluşturmaz. İadeyi muhasebe ile "
+            "Odoo'da değerlendirin; gerekirse incelemeyi reddedin.",
+            findings,
+        )
     if ManualReviewReasonCode.SUPPLIER_NOT_FOUND in codes:
         return OperatorNextAction.SUPPLIER, _todo(
             "Tedarikçiyi doğrulayın: mevcut bir tedarikçiyi seçin veya yeni tedarikçi oluşturun.", findings
@@ -249,6 +256,13 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
     if codes & _OPERATING_EXPENSE_CODES:
         purpose = facts.current_purchase_purpose
         if purpose is None:
+            if ManualReviewReasonCode.AMBIGUOUS_COMMERCIAL_PURCHASE in codes:
+                return OperatorNextAction.PURPOSE, _todo(
+                    "Bu tedarikçi ürün tedarikçisi olarak tanımlı ve faturada ürün kodu yok. Yeniden satış "
+                    "ise ürün kimliği gerekir (teknik destek). Yalnızca gerçek bir işletme gideri ise amacı "
+                    "açıkça seçin; gider otomatik uygulanmaz.",
+                    findings,
+                )
             return OperatorNextAction.PURPOSE, _todo("Bu alımın amacını seçin.", findings)
         if purpose in _ACCOUNTING_PURPOSES:
             return OperatorNextAction.ACCOUNTING, _todo(

@@ -26,6 +26,12 @@ from app.domain.invoice.dto import DESCRIPTION_SOURCE_DESCRIPTION, InternalInvoi
 
 VITEL_SUPPLIER_VKN = "9250020961"
 
+#: PR S. Suppliers whose invoices are commercial product purchases (ICT resale stock),
+#: keyed on exact VKN -- never names or descriptions. For these suppliers a line without
+#: any product identifier is a *missing product identity*, not evidence of an operating
+#: expense. Adding a VKN here is an explicit business decision.
+PRODUCT_SOURCE_SUPPLIER_VKNS = frozenset({VITEL_SUPPLIER_VKN})
+
 # ManageEngine variant SKUs observed in ICT product master data, e.g. 85710.1S1,
 # 85710.0MS5, 6705.5MEE, 67005.6MPMFA4, 702012.0SUP6: a 4-6 digit product number, a dot,
 # then a digit followed by 1-9 uppercase alphanumerics. Always applied with fullmatch.
@@ -34,6 +40,13 @@ MANAGEENGINE_SKU_PATTERN = re.compile(r"[0-9]{4,6}\.[0-9][0-9A-Z]{1,9}")
 
 def is_manageengine_sku(value: str) -> bool:
     return MANAGEENGINE_SKU_PATTERN.fullmatch(value) is not None
+
+
+def is_product_source_supplier(invoice: InternalInvoice) -> bool:
+    """True when the invoice supplier's exact VKN is a registered product source."""
+
+    supplier_vkn = invoice.supplier.tax_number
+    return supplier_vkn is not None and supplier_vkn.strip() in PRODUCT_SOURCE_SUPPLIER_VKNS
 
 
 def profile_manufacturer_sku(invoice: InternalInvoice, line: InvoiceLine) -> str | None:

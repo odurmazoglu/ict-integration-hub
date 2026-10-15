@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.domain.invoice import InternalInvoice, InvoiceLine
-from app.domain.invoice.source_profiles import profile_manufacturer_sku
+from app.domain.invoice.source_profiles import is_product_source_supplier, profile_manufacturer_sku
 
 
 def _is_blank(value: str | None) -> bool:
@@ -58,3 +58,18 @@ def invoice_has_product_identifier(invoice: InternalInvoice) -> bool:
     if not isinstance(invoice, InternalInvoice):
         return False
     return any(not _line_is_identifier_free(invoice, line) for line in invoice.lines)
+
+
+def invoice_is_ambiguous_commercial_purchase(invoice: InternalInvoice) -> bool:
+    """True when a registered product-source supplier sent an identifier-free invoice (PR S).
+
+    Such an invoice is a commercial product purchase whose product identity is missing; it
+    is never operating-expense evidence. Supplier identity is the exact VKN registry in
+    ``source_profiles`` -- no names, no description keywords.
+    """
+
+    return (
+        isinstance(invoice, InternalInvoice)
+        and is_product_source_supplier(invoice)
+        and invoice_is_product_identifier_free(invoice)
+    )
