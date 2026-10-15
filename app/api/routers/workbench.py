@@ -17,6 +17,7 @@ from app.api.dependencies import (
     ListExpenseAccountCandidatesUseCaseDep,
     ListReviewQueueUseCaseDep,
     ListWriteAuthorizationsUseCaseDep,
+    LookupReturnReferenceUseCaseDep,
     OneOffVendorRetirementUseCaseDep,
     RebuildReviewExecutionEvidenceUseCaseDep,
     RequestContextDep,
@@ -73,6 +74,15 @@ from app.application.expense_mapping import (
 )
 from app.application.partner_classification import ATTENTION_OUTCOMES
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceResult
+from app.application.return_reference import (
+    CandidateEvaluation,
+    ReferenceResult,
+    ReturnReferenceError,
+    ReturnReferenceLookupQuery,
+    ReturnReferenceLookupResult,
+    ReturnReferenceLookupUnavailableError,
+    ReturnReferenceNotApplicableError,
+)
 from app.application.workbench import (
     BusinessContextAllocation,
     BusinessContextAllocationSet,
@@ -219,6 +229,12 @@ from app.schemas.workbench import (
     PurchasePurposeRequest,
     PurchasePurposeResponse,
     ResolvedPurchaseAccountResponse,
+    ReturnReferenceCandidateResponse,
+    ReturnReferenceCheckResponse,
+    ReturnReferenceLookupEnvelope,
+    ReturnReferenceLookupResponse,
+    ReturnReferenceResultResponse,
+    ReturnReferenceSearchResponse,
     ReviewDecisionAcknowledgementEnvelope,
     ReviewDecisionAcknowledgementResponse,
     ReviewDecisionRequest,
@@ -611,6 +627,37 @@ def get_vendor_bill_readback(
         _reject_unsupported_query_params(request, frozenset())
         readback = use_case.execute(review_id=review_id, company_id=context.company_id)
         return _success(response, context.trace_id, _vendor_bill_readback_response(readback), warnings=[])
+    except Exception as exc:
+        return _raise_error(exc, trace_id=context.trace_id)
+
+
+@router.post(
+    "/reviews/{review_id}/return-reference-lookup",
+    response_model=ReturnReferenceLookupEnvelope,
+    responses=COMMON_ERROR_RESPONSES,
+    summary="Look up the original outgoing invoice of a return invoice (operator-triggered)",
+    description=(
+        "Requires workbench_review_read and invoice_document_read. Explicit operator action only: no Workbench "
+        "read ever calls this. Extracts the BillingReference entries from the review's stored raw UBL document, "
+        "searches the company's Uyumsoft outbox (active and archived) by exact invoice number through the "
+        "read-only GetOutboxInvoiceList operation, and validates the single candidate. The result is "
+        "informational: nothing is persisted, and the review, its decision and the PR S return-invoice guards "
+        "are unchanged. Accepts no body and no query parameters."
+    ),
+)
+def lookup_return_reference(
+    review_id: str,
+    request: Request,
+    response: Response,
+    context: RequestContextDep,
+    use_case: LookupReturnReferenceUseCaseDep,
+) -> ReturnReferenceLookupEnvelope | JSONResponse:
+    try:
+        context = require_permission(Permission.WORKBENCH_REVIEW_READ)(context)
+        context = require_permission(Permission.INVOICE_DOCUMENT_READ)(context)
+        _reject_unsupported_query_params(request, frozenset())
+        result = use_case.execute(ReturnReferenceLookupQuery(review_id=review_id, company_id=context.company_id))
+        return _success(response, context.trace_id, _return_reference_lookup_response(result), warnings=[])
     except Exception as exc:
         return _raise_error(exc, trace_id=context.trace_id)
 
@@ -1681,6 +1728,57 @@ def _workbench_execution_status_response(status: WorkbenchExecutionStatus) -> Wo
     )
 
 
+def _return_reference_lookup_response(result: ReturnReferenceLookupResult) -> ReturnReferenceLookupResponse:
+    return ReturnReferenceLookupResponse(
+        review_id=result.review_id,
+        review_version=result.review_version,
+        return_invoice_type_code=result.return_invoice_type_code,
+        status=result.status.value,
+        issues=[issue.value for issue in result.issues],
+        references=[_return_reference_result_response(reference) for reference in result.references],
+        provider_calls=result.provider_calls,
+        company_identity_verified=result.company_identity_verified,
+    )
+
+
+def _return_reference_result_response(reference: ReferenceResult) -> ReturnReferenceResultResponse:
+    return ReturnReferenceResultResponse(
+        position=reference.position,
+        invoice_number=reference.invoice_number,
+        issue_date=reference.issue_date,
+        document_type_code=reference.document_type_code,
+        status=reference.status.value,
+        issues=[issue.value for issue in reference.issues],
+        failed_checks=[check.value for check in reference.failed_checks],
+        searches=[
+            ReturnReferenceSearchResponse(
+                archived=search.archived,
+                completed=search.completed,
+                provider_total=search.provider_total,
+                returned=search.returned,
+                exact=search.exact,
+            )
+            for search in reference.searches
+        ],
+        candidates=[_return_reference_candidate_response(evaluation) for evaluation in reference.candidates],
+    )
+
+
+def _return_reference_candidate_response(evaluation: CandidateEvaluation) -> ReturnReferenceCandidateResponse:
+    candidate = evaluation.candidate
+    return ReturnReferenceCandidateResponse(
+        invoice_number=candidate.invoice_number,
+        ettn=candidate.ettn,
+        invoice_type=candidate.invoice_type,
+        scenario=candidate.scenario,
+        status=candidate.status,
+        currency=candidate.currency,
+        issue_date=candidate.issue_date,
+        archived=candidate.archived,
+        checks=[ReturnReferenceCheckResponse(check=item.check.value, passed=item.passed) for item in evaluation.checks],
+    )
+
+
 def _success[DataT](
     response: Response,
     trace_id: str,
@@ -1711,6 +1809,12 @@ def _raise_error(exc: Exception, *, trace_id: str) -> JSONResponse:
 
 
 def _status_code_for_exception(exc: Exception) -> int:
+    if isinstance(exc, ReturnReferenceNotApplicableError):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, ReturnReferenceLookupUnavailableError):
+        return HTTPStatus.SERVICE_UNAVAILABLE
+    if isinstance(exc, ReturnReferenceError):
+        return HTTPStatus.INTERNAL_SERVER_ERROR
     if isinstance(exc, VendorBillReadbackNotFoundError):
         return HTTPStatus.NOT_FOUND
     if isinstance(exc, (VendorBillReadbackUnavailableError, VendorBillReadbackIntegrityError)):

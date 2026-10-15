@@ -23,6 +23,7 @@ from app.application.execution.vendor_bill_preview import (
     VendorBillPreview,
 )
 from app.application.quotation import WorkbenchQuotationScenarioEvidenceWorkflow
+from app.application.return_reference import LookupReturnReferenceUseCase
 from app.application.workbench import (
     CreateNewProductUseCase,
     GetReviewItemUseCase,
@@ -112,6 +113,7 @@ from app.composition.purchase_purpose_and_accounting_resolution import (
     build_submit_review_accounting_resolution_use_case,
 )
 from app.composition.resale_decision_gate import build_resale_decision_gate
+from app.composition.return_reference import build_lookup_return_reference_use_case
 from app.composition.supplier_remediation import (
     build_get_one_off_vendor_retirement_use_case,
 )
@@ -733,6 +735,29 @@ def get_vendor_bill_readback_use_case(session: DbSessionDep, settings: SettingsD
 VendorBillReadbackUseCaseDep = Annotated[
     GetVendorBillReadbackUseCase,
     Depends(get_vendor_bill_readback_use_case),
+]
+
+
+# PR R: operator-triggered, read-only; built per request so no Workbench read ever calls Uyumsoft.
+def get_lookup_return_reference_use_case(
+    session: DbSessionDep,
+    settings: SettingsDep,
+    uyumsoft_client: UyumsoftClientDep,
+    odoo_client: OdooClientDep,
+    storage: DocumentStorageDep,
+) -> LookupReturnReferenceUseCase:
+    return build_lookup_return_reference_use_case(
+        session=session,
+        settings=settings,
+        uyumsoft_client=uyumsoft_client,
+        odoo_client=odoo_client,
+        storage=storage,
+    )
+
+
+LookupReturnReferenceUseCaseDep = Annotated[
+    LookupReturnReferenceUseCase,
+    Depends(get_lookup_return_reference_use_case),
 ]
 
 
