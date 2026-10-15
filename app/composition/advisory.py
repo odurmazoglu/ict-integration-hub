@@ -13,15 +13,20 @@ same lock; see :mod:`app.composition.advisory_display`.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, replace
+from datetime import timedelta
+from enum import StrEnum
+from typing import Any, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.advisory.product_suggestions import PriorMapping, SuggestionPolicy
-from app.advisory.suggestion_sets import AdvisoryLine
+from app.advisory.suggestion_sets import DISPLAY_SWEEP_INTERVAL, AdvisoryLine
 from app.application.workbench.dto import ReviewItem, ReviewStatus, review_reasons_role
 from app.application.workbench.exceptions import ReviewNotFoundError
 from app.application.workbench.product_line_projection import (
@@ -34,8 +39,18 @@ from app.composition.advisory_display import AdvisoryDisplayRefresher, DisplaySw
 from app.composition.imports import _product_line_read_facts, build_workbench_projection_synchronizer
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
+from app.erp.exceptions import ErpRepositoryError
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.advisory_catalog_reader import OdooAdvisoryCatalogReader
+from app.erp.odoo.workbench_product_line_publisher import OdooWorkbenchProductLineFieldMapping
+from app.erp.odoo.workbench_projection_publisher import (
+    OdooWorkbenchJson2ProjectionAdapter,
+    OdooWorkbenchProjectionAdapter,
+)
+from app.erp.odoo.workbench_suggestion_field_cleaner import (
+    OdooWorkbenchSuggestionFieldCleaner,
+    PopulatedSuggestionRow,
+)
 from app.matching import PartnerMatchStatus, ProductMatchStatus
 from app.matching.product import MATCHED_BY_SUPPLIER_PRODUCT_CODE
 from app.models.workbench_operator_request import WorkbenchOperatorRequest
@@ -372,6 +387,287 @@ def build_advisory_display_refresher(
     )
 
 
+# ---------------------------------------------------------------------------------------- clear (F3.6b)
+
+#: Every Odoo read/write of ``clear-display`` is tried this often; the wait doubles from the backoff.
+CLEAR_ATTEMPTS = 3
+CLEAR_RETRY_BACKOFF = timedelta(seconds=5)
+CLEAR_MAX_BACKOFF = timedelta(seconds=60)
+#: Wait outside the lock after the markers are reset: a display-enabled worker would re-mark (and
+#: republish) a due set within one sweep interval, so two intervals plus margin expose it.
+CLEAR_SETTLE = 2 * DISPLAY_SWEEP_INTERVAL + timedelta(seconds=30)
+#: The advisory tick holds the shared lock for one catalog read and is retried this often.
+CLEAR_LOCK_ATTEMPTS = 20
+CLEAR_LOCK_WAIT = timedelta(seconds=3)
+
+
+class DisplayClearOutcome(StrEnum):
+    DRY_RUN = "dry_run"
+    CLEARED = "cleared"
+    LOCK_BUSY = "lock_busy"
+    READ_FAILED = "read_failed"
+    INCOMPLETE = "incomplete"
+    REPOPULATED = "repopulated"
+
+
+@dataclass(frozen=True, slots=True)
+class DisplayClearReport:
+    outcome: DisplayClearOutcome
+    discovered: tuple[PopulatedSuggestionRow, ...] = ()
+    cleared: tuple[int, ...] = ()
+    failed: tuple[int, ...] = ()
+    remaining: tuple[PopulatedSuggestionRow, ...] = ()
+    markers_reset: int = 0
+    markers_after_settle: int = 0
+    error: str | None = None
+
+    @property
+    def complete(self) -> bool:
+        """Only a verified, settled clear: Odoo empty and no display-enabled process re-marked a set."""
+
+        return self.outcome is DisplayClearOutcome.CLEARED
+
+
+class SuggestionFieldCleaner(Protocol):
+    def populated_rows(self, *, company_id: int) -> tuple[PopulatedSuggestionRow, ...]: ...
+
+    def clear(self, row: PopulatedSuggestionRow) -> None: ...
+
+
+class AdvisoryDisplayCleaner:
+    """Explicit display rollback: clear both suggestion fields in Odoo, verify, then re-arm the sweep.
+
+    Runs only with display OFF (checked by the CLI). Inside the advisory lock shared with the
+    generation tick and the display sweep it clears every populated row (bounded retries),
+    re-reads Odoo, and only when nothing is left resets the display markers of the current sets
+    (so re-enabling display republishes them once). It then waits ``settle`` outside the lock and
+    confirms under the lock that Odoo is still empty and no set was re-marked -- only a
+    display-enabled refresh marks a set, so a worker still running with display ON fails the run
+    instead of letting it report success. Nothing is reset when the clear is incomplete.
+    """
+
+    def __init__(
+        self,
+        *,
+        cleaner: SuggestionFieldCleaner,
+        session_factory: Callable[[], Session],
+        lock: PollLock,
+        company_id: int,
+        sleep: Callable[[float], None] = time.sleep,
+        attempts: int = CLEAR_ATTEMPTS,
+        backoff: timedelta = CLEAR_RETRY_BACKOFF,
+        max_backoff: timedelta = CLEAR_MAX_BACKOFF,
+        settle: timedelta = CLEAR_SETTLE,
+        lock_attempts: int = CLEAR_LOCK_ATTEMPTS,
+        lock_wait: timedelta = CLEAR_LOCK_WAIT,
+    ) -> None:
+        if attempts < 1 or lock_attempts < 1:
+            raise ValueError("attempts and lock_attempts must be positive.")
+        self._cleaner = cleaner
+        self._session_factory = session_factory
+        self._lock = lock
+        self._company_id = company_id
+        self._sleep = sleep
+        self._attempts = attempts
+        self._backoff = backoff
+        self._max_backoff = max_backoff
+        self._settle = settle
+        self._lock_attempts = lock_attempts
+        self._lock_wait = lock_wait
+
+    def preview(self) -> DisplayClearReport:
+        """Dry-run: what ``apply`` would clear. No lock, no Odoo or Hub write."""
+
+        try:
+            rows = self._read()
+        except ErpRepositoryError as exc:
+            return DisplayClearReport(outcome=DisplayClearOutcome.READ_FAILED, error=_safe_error(exc))
+        return DisplayClearReport(outcome=DisplayClearOutcome.DRY_RUN, discovered=rows, remaining=rows)
+
+    def apply(self) -> DisplayClearReport:
+        first = self._locked(self._clear_and_reset)
+        if first is None:
+            return self._finish(DisplayClearReport(outcome=DisplayClearOutcome.LOCK_BUSY, error=_LOCK_BUSY))
+        if not first.complete:
+            return self._finish(first)
+        self._sleep(self._settle.total_seconds())
+        confirmed = self._locked(lambda: self._confirm(first))
+        if confirmed is None:
+            return self._finish(replace(first, outcome=DisplayClearOutcome.LOCK_BUSY, error=_LOCK_BUSY_CONFIRM))
+        return self._finish(confirmed)
+
+    # ------------------------------------------------------------------ steps (inside the lock)
+
+    def _clear_and_reset(self) -> DisplayClearReport:
+        try:
+            discovered = self._read()
+        except ErpRepositoryError as exc:
+            return DisplayClearReport(outcome=DisplayClearOutcome.READ_FAILED, error=_safe_error(exc))
+        cleared: list[int] = []
+        failed: list[int] = []
+        for row in discovered:
+            (cleared if self._clear_row(row) else failed).append(row.record_id)
+        report = DisplayClearReport(
+            outcome=DisplayClearOutcome.INCOMPLETE, discovered=discovered, cleared=tuple(cleared), failed=tuple(failed)
+        )
+        try:
+            remaining = self._read()
+        except ErpRepositoryError as exc:
+            return replace(report, error=f"verification read failed: {_safe_error(exc)}")
+        if remaining or failed:
+            return replace(report, remaining=remaining)
+        return replace(report, outcome=DisplayClearOutcome.CLEARED, markers_reset=self._reset_markers())
+
+    def _confirm(self, first: DisplayClearReport) -> DisplayClearReport:
+        marked = self._count_markers()
+        try:
+            remaining = self._read()
+        except ErpRepositoryError as exc:
+            error = f"confirmation read failed: {_safe_error(exc)}"
+            return replace(first, outcome=DisplayClearOutcome.INCOMPLETE, error=error)
+        if marked or remaining:
+            return replace(
+                first,
+                outcome=DisplayClearOutcome.REPOPULATED,
+                remaining=remaining,
+                markers_after_settle=marked,
+                error="a display-enabled process re-synchronized suggestions during the settle window",
+            )
+        return first
+
+    # ------------------------------------------------------------------ Odoo (bounded retries)
+
+    def _read(self) -> tuple[PopulatedSuggestionRow, ...]:
+        for attempt in range(1, self._attempts + 1):
+            try:
+                return self._cleaner.populated_rows(company_id=self._company_id)
+            except ErpRepositoryError as exc:
+                logger.warning(
+                    "advisory.product_suggestions.display_clear_read_failed",
+                    extra={"company_id": self._company_id, "attempt": attempt, "error": _safe_error(exc)},
+                )
+                if attempt == self._attempts:
+                    raise
+                self._sleep(self._delay(attempt))
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _clear_row(self, row: PopulatedSuggestionRow) -> bool:
+        for attempt in range(1, self._attempts + 1):
+            try:
+                self._cleaner.clear(row)
+            except ErpRepositoryError as exc:
+                logger.warning(
+                    "advisory.product_suggestions.display_clear_write_failed",
+                    extra={"record_id": row.record_id, "review_id": row.review_id, "attempt": attempt,
+                           "error": _safe_error(exc)},
+                )  # fmt: skip
+                if attempt < self._attempts:
+                    self._sleep(self._delay(attempt))
+                continue
+            logger.info(
+                "advisory.product_suggestions.display_cleared_row",
+                extra={"record_id": row.record_id, "review_id": row.review_id, "line_key": row.line_key,
+                       "products": list(row.product_ids), "summary_digest": row.summary_digest, "attempt": attempt},
+            )  # fmt: skip
+            return True
+        return False
+
+    def _delay(self, attempt: int) -> float:
+        return min(self._backoff.total_seconds() * 2 ** (attempt - 1), self._max_backoff.total_seconds())
+
+    # ------------------------------------------------------------------ Hub (compare-and-set markers)
+
+    def _reset_markers(self) -> int:
+        with self._session() as session:
+            repository = SqlAlchemyProductLineSuggestionRepository(session)
+            reset = repository.reset_display_markers(company_id=self._company_id)
+            session.commit()
+            return reset
+
+    def _count_markers(self) -> int:
+        with self._session() as session:
+            return SqlAlchemyProductLineSuggestionRepository(session).count_display_marked_current(
+                company_id=self._company_id
+            )
+
+    # ------------------------------------------------------------------ plumbing
+
+    def _locked(self, step: Callable[[], DisplayClearReport]) -> DisplayClearReport | None:
+        for attempt in range(1, self._lock_attempts + 1):
+            with self._lock.hold() as acquired:
+                if acquired:
+                    return step()
+            logger.info(
+                "advisory.product_suggestions.display_clear_lock_busy",
+                extra={"company_id": self._company_id, "attempt": attempt},
+            )
+            if attempt < self._lock_attempts:
+                self._sleep(self._lock_wait.total_seconds())
+        return None
+
+    def _finish(self, report: DisplayClearReport) -> DisplayClearReport:
+        log = logger.info if report.complete else logger.warning
+        log(
+            "advisory.product_suggestions.display_clear_finished",
+            extra={
+                "company_id": self._company_id,
+                "outcome": report.outcome.value,
+                "discovered": len(report.discovered),
+                "cleared": len(report.cleared),
+                "failed": len(report.failed),
+                "remaining": len(report.remaining),
+                "markers_reset": report.markers_reset,
+                "markers_after_settle": report.markers_after_settle,
+            },
+        )
+        return report
+
+    @contextmanager
+    def _session(self) -> Iterator[Session]:
+        session = self._session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+
+_LOCK_BUSY = "the advisory lock stayed busy (tick or display sweep); nothing was written"
+_LOCK_BUSY_CONFIRM = "Odoo was cleared but the advisory lock stayed busy, so the settle check could not confirm it"
+
+
+def _safe_error(exc: Exception) -> str:
+    return getattr(exc, "safe_message", None) or exc.__class__.__name__
+
+
+def build_advisory_display_cleaner(
+    *,
+    settings: Settings,
+    engine: Engine,
+    company_id: int,
+    adapter: OdooWorkbenchProjectionAdapter | None = None,
+    mapping: OdooWorkbenchProductLineFieldMapping | None = None,
+    **options: Any,
+) -> AdvisoryDisplayCleaner:
+    """F3.6b ``clear-display``: only with display OFF and both suggestion fields mapped."""
+
+    if settings.odoo_workbench_product_line_suggestions_display_enabled:
+        raise ValueError(
+            "ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTIONS_DISPLAY_ENABLED is on: turn display off (and recreate "
+            "the API and worker) before clearing, or the display sweep republishes the suggestions."
+        )
+    resolved_mapping = mapping or OdooWorkbenchProductLineFieldMapping.from_environment()
+    cleaner = OdooWorkbenchSuggestionFieldCleaner(
+        adapter=adapter or OdooWorkbenchJson2ProjectionAdapter.from_settings(settings), mapping=resolved_mapping
+    )
+    return AdvisoryDisplayCleaner(
+        cleaner=cleaner,
+        session_factory=sessionmaker(bind=engine, autocommit=False, autoflush=False),
+        lock=advisory_lock(engine),
+        company_id=company_id,
+        **options,
+    )
+
+
 def build_advisory_display_sweep(
     *, settings: Settings, engine: Engine, odoo_client: OdooJson2Client | None = None
 ) -> AdvisoryDisplaySweep:
@@ -383,13 +679,18 @@ def build_advisory_display_sweep(
 
 __all__ = [
     "ADVISORY_SUGGESTIONS_LOCK_KEY",
+    "CLEAR_SETTLE",
+    "AdvisoryDisplayCleaner",
     "AdvisoryDisplaySweep",
     "AdvisoryTick",
+    "DisplayClearOutcome",
+    "DisplayClearReport",
     "HubAdvisoryLineSource",
     "HubPriorMappingSource",
     "advisory_lock",
     "advisory_policy",
     "advisory_service",
+    "build_advisory_display_cleaner",
     "build_advisory_display_refresher",
     "build_advisory_display_sweep",
     "build_advisory_tick",

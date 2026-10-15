@@ -58,9 +58,10 @@ from app.application.workbench.product_line_creation_policy import (
     compile_manual_only_sku_patterns,
 )
 
-#: Bumped whenever tiers, guards or scoring change: every persisted suggestion set of an
-#: older engine version is regenerated.
-ENGINE_VERSION = "f1.2"
+#: Bumped whenever tiers, guards, scoring or persisted engine text (reasons, warnings, notes)
+#: change: every persisted suggestion set of an older engine version is regenerated, which is
+#: also how already published Odoo summaries pick up new wording (F3.6a: f1.2 -> f1.3).
+ENGINE_VERSION = "f1.3"
 DEFAULT_THRESHOLD = Decimal("0.55")
 DEFAULT_TIE_MARGIN = Decimal("0.05")
 DEFAULT_MAX_SUGGESTIONS = 3
@@ -79,7 +80,12 @@ STALE_MAPPING_WARNING = (
 )
 TIE_WARNING = "Benzer skorlu birden fazla aday var; doğru ürünü operatör seçmelidir."
 CSP_PRODUCT_ONLY_NOTE = "Microsoft ürün kimliği (ProductId) eşleşti ancak SKU farklı; öneri yapılmadı."
-VARIANT_CATALOG_NOTE = "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+#: Shared by every exact-code-only guard trigger (manual-only supplier, SKU token in the description,
+#: SKU-shaped seller code), so it must stay neutral: the supplier may sell hardware (F3.6a).
+VARIANT_CATALOG_NOTE = (
+    "Bu tedarikçi veya ürün grubu için benzerlik tabanlı öneri yapılmaz. "
+    "Yalnızca kesin ürün kodu eşleşmeleri değerlendirilir."
+)
 AMBIGUOUS_SUPPLIERINFO_NOTE = (
     "Bu tedarikçi kodu için tek ve kesin bir tedarikçi ürün kaydı yok; deterministik öneri yok."
 )
