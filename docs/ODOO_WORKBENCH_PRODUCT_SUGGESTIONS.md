@@ -59,6 +59,19 @@ Notes-only covers the near-miss supplier code, ambiguous supplierinfo, CSP Produ
 SKU) and multi-variant (ManageEngine) catalog cases, and passes exactly the same gate. A set with
 neither a candidate nor a note shows nothing.
 
+The exact-code-only note is shared by three guard triggers — a manual-only supplier (e.g. VİTEL,
+which also sells Ruijie hardware), an SKU token in the description, and an SKU-shaped seller code —
+so its wording is neutral (engine `f1.3`, F3.6a):
+
+```text
+Güvenli ürün önerisi yok.
+Uyarı: Bu tedarikçi veya ürün grubu için benzerlik tabanlı öneri yapılmaz. Yalnızca kesin ürün kodu eşleşmeleri değerlendirilir.
+```
+
+Persisted notes are rendered verbatim, so wording changes ship with an `ENGINE_VERSION` bump: the
+next advisory tick supersedes every older set (`engine_changed`) and the display refresh republishes
+the new summaries once.
+
 Names come from the candidate's `product_name` snapshot (the `display_name` read by the catalog
 snapshot that generated the set); a pre-0042 row without one shows `Ürün #<id>`.
 

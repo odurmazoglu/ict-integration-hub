@@ -24,6 +24,7 @@ import app.models  # noqa: F401 - registers every table on Base.metadata
 from app.advisory.product_suggestions import (
     AMBIGUOUS_SUPPLIERINFO_NOTE,
     CSP_PRODUCT_ONLY_NOTE,
+    ENGINE_VERSION,
     NEAR_MISS_SUPPLIERINFO_NOTE,
     STALE_MAPPING_WARNING,
     VARIANT_CATALOG_NOTE,
@@ -186,7 +187,7 @@ def _insert(session, line=None, result=None, *, now=NOW, names=None) -> int:
         result,
         catalog_fingerprint="sha256:c",
         supplierinfo_fingerprint="sha256:s",
-        engine_version="f1.2",
+        engine_version=ENGINE_VERSION,
         now=now,
         product_names=names if names is not None else {392: ME.name, 395: WINDOWS_VM.name},
     )

@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from app.advisory.product_suggestions import ProductSuggestion, ProductSuggestionResult, SuggestionTier
+from app.advisory.product_suggestions import ENGINE_VERSION, ProductSuggestion, ProductSuggestionResult, SuggestionTier
 from app.advisory.suggestion_sets import (
     PROJECTION_CUTOFF,
     AdvisoryLine,
@@ -119,7 +119,7 @@ def test_snapshot_marker_and_due_query_on_postgres(engine) -> None:
         repository = SqlAlchemyProductLineSuggestionRepository(session)
         set_id = repository.insert_current(
             LINE, RESULT, catalog_fingerprint="sha256:c", supplierinfo_fingerprint="sha256:s",
-            engine_version="f1.2", now=NOW, product_names={395: "Microsoft Windows Server Standard (per VM)"},
+            engine_version=ENGINE_VERSION, now=NOW, product_names={395: "Microsoft Windows Server Standard (per VM)"},
         )  # fmt: skip
         session.commit()
         (due,) = repository.display_refresh_due(company_id=1, now=NOW)

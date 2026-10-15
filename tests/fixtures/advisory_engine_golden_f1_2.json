@@ -1,0 +1,245 @@
+{
+ "csp_exact_t1": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": [
+   {
+    "product_id": 393,
+    "rank": 1,
+    "reasons": [
+     "Kesin kod eşleşmesi (üretici kimliği biçimli satıcı kodu): CFQ7TTC0LH18:0001"
+    ],
+    "score": "1.00",
+    "tier": "t1_exact_identifier",
+    "warnings": []
+   }
+  ]
+ },
+ "csp_product_id_only": {
+  "ambiguous": false,
+  "notes": [
+   "Microsoft ürün kimliği (ProductId) eşleşti ancak SKU farklı; öneri yapılmadı."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "fabric_payg_t3": {
+  "ambiguous": false,
+  "notes": [
+   "4 aday ayırt edici bir özellik çakışması (aile/sürüm/süre/kapasite/lisans/kimlik) nedeniyle elendi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": [
+   {
+    "product_id": 145,
+    "rank": 1,
+    "reasons": [
+     "Ad benzerliği 1.00",
+     "Ortak anlamlı sözcükler: fabric"
+    ],
+    "score": "1.00",
+    "tier": "t3_name_similarity",
+    "warnings": []
+   }
+  ]
+ },
+ "me_exact_sku_t1": {
+  "ambiguous": false,
+  "notes": [
+   "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": [
+   {
+    "product_id": 392,
+    "rank": 1,
+    "reasons": [
+     "Kesin kod eşleşmesi (üretici kimliği biçimli satıcı kodu): 85710.1S1"
+    ],
+    "score": "1.00",
+    "tier": "t1_exact_identifier",
+    "warnings": []
+   }
+  ]
+ },
+ "me_other_sku_conflict": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "t2_prior_mapping": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": [
+   {
+    "product_id": 394,
+    "rank": 1,
+    "reasons": [
+     "Aynı tedarikçide daha önce eşleştirildi (aynı açıklama; kaynak: ledger 23)"
+    ],
+    "score": "0.90",
+    "tier": "t2_prior_mapping",
+    "warnings": []
+   }
+  ]
+ },
+ "t3_name_similarity": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": [
+   {
+    "product_id": 395,
+    "rank": 1,
+    "reasons": [
+     "Ad benzerliği 0.91",
+     "Ortak anlamlı sözcükler: windows"
+    ],
+    "score": "0.91",
+    "tier": "t3_name_similarity",
+    "warnings": []
+   }
+  ]
+ },
+ "trigger_description_sku_token": {
+  "ambiguous": false,
+  "notes": [
+   "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "trigger_manual_only_supplier": {
+  "ambiguous": false,
+  "notes": [
+   "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "trigger_sku_shaped_seller_code": {
+  "ambiguous": false,
+  "notes": [
+   "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb17_vitel_me_sku_description": {
+  "ambiguous": false,
+  "notes": [
+   "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb20_vitel_ruijie_hardware": {
+  "ambiguous": false,
+  "notes": [
+   "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb21_generic_cloud": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb23_tgdr": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb25_tfzp_t0": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": true,
+  "suggestions": [
+   {
+    "product_id": 395,
+    "rank": 1,
+    "reasons": [
+     "Tedarikçi ürün kaydı #10: tedarikçi #24, kod TFZP"
+    ],
+    "score": "1.00",
+    "tier": "t0_stale_supplierinfo",
+    "warnings": [
+     "Kayıtlı inceleme kanıtı eski: bu tedarikçi kodu artık bu ürüne bağlı. Kontrollü yeniden sınıflandırma gerekir; otomatik yapılmaz."
+    ]
+   }
+  ]
+ },
+ "wb2_iade": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb33_vitel_ruijie_ap": {
+  "ambiguous": false,
+  "notes": [
+   "Varyantlı lisans kataloğu satırı: benzerlik önerisi yapılmaz, yalnız kesin kod eşleşmesi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb47_github": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb48_azure_plan": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": []
+ },
+ "wb48_fabric_reservation": {
+  "ambiguous": true,
+  "notes": [
+   "3 aday ayırt edici bir özellik çakışması (aile/sürüm/süre/kapasite/lisans/kimlik) nedeniyle elendi."
+  ],
+  "reclassification_recommended": false,
+  "suggestions": [
+   {
+    "product_id": 149,
+    "rank": 1,
+    "reasons": [
+     "Ad benzerliği 0.73",
+     "Ortak anlamlı sözcükler: fabric"
+    ],
+    "score": "0.73",
+    "tier": "t3_name_similarity",
+    "warnings": [
+     "Benzer skorlu birden fazla aday var; doğru ürünü operatör seçmelidir."
+    ]
+   },
+   {
+    "product_id": 150,
+    "rank": 1,
+    "reasons": [
+     "Ad benzerliği 0.73",
+     "Ortak anlamlı sözcükler: fabric"
+    ],
+    "score": "0.73",
+    "tier": "t3_name_similarity",
+    "warnings": [
+     "Benzer skorlu birden fazla aday var; doğru ürünü operatör seçmelidir."
+    ]
+   }
+  ]
+ },
+ "wb58_esarj": {
+  "ambiguous": false,
+  "notes": [],
+  "reclassification_recommended": false,
+  "suggestions": []
+ }
+}
