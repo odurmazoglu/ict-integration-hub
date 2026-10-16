@@ -16,7 +16,7 @@ from __future__ import annotations
 from app.application.dto import DecisionResult
 from app.application.expense_mapping import invoice_is_product_identifier_free
 from app.application.workbench.evidence import ReviewClassificationEvidence, ReviewExecutionEvidence
-from app.application.workflow import WorkflowType
+from app.application.workflow import SOURCE_TAX_SAFETY_REASON_CODES, WorkflowType
 from app.billing.builder import tax_lines_fully_matched, validate_vendor_bill_inputs
 from app.domain.invoice import InternalInvoice
 from app.domain.invoice.document_types import is_return_invoice
@@ -62,6 +62,11 @@ def build_review_execution_evidence(
     # PR S: a return invoice never gets Stage-1 evidence, so no Vendor Bill decision can be
     # accepted for it (the mixed-invoice branch below does not run the bill validation).
     if is_return_invoice(invoice):
+        return None
+    # PR T W0: a source-tax hard block (withholding, unverified source document) never gets
+    # Stage-1 evidence either, whatever its match facts, so no Vendor Bill decision -- and
+    # therefore no execution -- can be accepted for it in any mode.
+    if any(reason.code in SOURCE_TAX_SAFETY_REASON_CODES for reason in decision_result.review_reasons):
         return None
     partner_match = decision_result.partner_match
     product_match = decision_result.product_match
