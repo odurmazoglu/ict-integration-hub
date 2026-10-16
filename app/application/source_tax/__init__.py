@@ -7,6 +7,7 @@ the storage-backed reader and the safety check live in
 
 from app.application.source_tax.assessment import assess_source_document, source_tax_review_reasons
 from app.application.source_tax.exceptions import (
+    SourceDocumentUnreadableError,
     SourceTaxError,
     SourceTaxFactsUnavailableError,
     SourceTaxSafetyBlockedError,
@@ -15,6 +16,7 @@ from app.application.source_tax.model import SourceDocumentIssue, SourceTaxAsses
 
 __all__ = [
     "SourceDocumentIssue",
+    "SourceDocumentUnreadableError",
     "SourceTaxAssessment",
     "SourceTaxError",
     "SourceTaxFactsUnavailableError",

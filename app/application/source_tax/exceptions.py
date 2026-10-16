@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.application.exceptions import ApplicationError
+from app.application.source_tax.model import SourceDocumentIssue
 from app.application.workflow import ManualReviewReasonCode
 
 
@@ -16,6 +17,19 @@ class SourceTaxFactsUnavailableError(SourceTaxError):
     """
 
     error_category = "source_tax_facts_unavailable"
+
+
+class SourceDocumentUnreadableError(SourceTaxError):
+    """The stored document can deterministically never be read (raised by the content port).
+
+    Not retryable: the review is classified as an unverified source document with ``issue``.
+    """
+
+    error_category = "source_document_unreadable"
+
+    def __init__(self, safe_message: str, *, issue: SourceDocumentIssue) -> None:
+        super().__init__(safe_message)
+        self.issue = issue
 
 
 class SourceTaxSafetyBlockedError(SourceTaxError):

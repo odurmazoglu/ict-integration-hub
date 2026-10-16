@@ -126,6 +126,8 @@ def build_vendor_bill_execution_use_case(
                 source_invoice_reader=source_invoice_reader,
                 customer_invoice_builder=CustomerInvoiceBuilder(),
                 customer_invoice_writer=customer_invoice_writer,
+                # PR T W1 (R2): independent of the Vendor Bill step's check.
+                source_tax_safety_check=source_tax_safety_check,
             ),
         )
     )

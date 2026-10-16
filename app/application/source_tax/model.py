@@ -15,6 +15,10 @@ class SourceDocumentIssue(StrEnum):
     FACTS_NOT_SUPPLIED = "FACTS_NOT_SUPPLIED"
     DOCUMENT_MISSING = "DOCUMENT_MISSING"
     DOCUMENT_AMBIGUOUS = "DOCUMENT_AMBIGUOUS"
+    #: The document row exists but its file is gone from a verified, populated storage root.
+    DOCUMENT_FILE_MISSING = "DOCUMENT_FILE_MISSING"
+    #: The stored key is unusable (absolute, ``..``, escapes the storage root).
+    STORAGE_KEY_INVALID = "STORAGE_KEY_INVALID"
     HASH_MISMATCH = "HASH_MISMATCH"
     #: Malformed, unsafe (DTD / entity) or not a UBL ``Invoice``.
     DOCUMENT_INVALID = "DOCUMENT_INVALID"

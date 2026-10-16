@@ -81,7 +81,7 @@ from app.persistence.workbench_review_source_invoice_correction_repository impor
     SqlAlchemyReviewSourceInvoiceCorrectionRepository,
 )
 from app.persistence.workbench_review_source_invoice_reader import review_source_invoice_evidence_fingerprint
-from app.services.document_storage import DocumentStorageError, LocalDocumentStorage
+from app.services.document_storage import DocumentStorageError
 from app.services.uyumsoft_canonical_import import ExactCompanyResolver, UyumsoftCanonicalInvoiceImporter
 from tests.unit.pr_t_w1_fixtures import BUYER_VKN, SYNTHETIC_UUID, LineSpec, TaxSpec, sha256, synthetic_ubl
 from tests.unit.source_tax_support import FixedSourceTaxFactsReader
@@ -427,15 +427,6 @@ def test_reader_unknown_review_is_not_found_not_unverified() -> None:
         _reader(locator_error=ReviewNotFoundError("no review")).assess(review_id="r", company_id=1, invoice_uuid="u")
 
 
-def test_storage_adapter_translates_storage_errors(tmp_path: Path) -> None:
-    adapter = StoredSourceTaxDocumentReader(LocalDocumentStorage(tmp_path))
-
-    with pytest.raises(SourceTaxFactsUnavailableError):
-        adapter.read("uyumsoft/inbox/1/ubl_xml/missing.xml")
-    with pytest.raises(SourceTaxFactsUnavailableError):
-        adapter.read("../escape.xml")
-
-
 def test_storage_adapter_never_hides_a_non_storage_bug() -> None:
     class _Broken:
         def read(self, storage_key: str) -> bytes:
@@ -675,11 +666,28 @@ async def test_reclassification_with_tampered_document_is_unverified(env: Env) -
     ]
 
 
-async def test_reclassification_storage_outage_writes_nothing(env: Env) -> None:
+async def test_reclassification_missing_file_under_a_verified_root_is_unverified(env: Env) -> None:
+    """R1: the row exists, the populated root is mounted, the file is gone -> deterministic."""
+
     _executable_supplier(env)
     review_id = await _seed_historical_review(env, AY_STYLE, document=_withholding_document(_ubl(AY_STYLE)))
+    (env.storage_root / "unrelated-marker").write_text("keeps the root populated")
     document = env.session.scalar(select(InvoiceDocument))
     (env.storage_root / document.storage_key).unlink()
+
+    await _reclassify(env, review_id, version=1)
+
+    item = _review(env, review_id)
+    assert [reason["code"] for reason in item.review_reasons] == [UNVERIFIED.value]
+    assert ["issue", SourceDocumentIssue.DOCUMENT_FILE_MISSING.value] in item.review_reasons[0]["details"]
+
+
+async def test_reclassification_storage_outage_writes_nothing(env: Env) -> None:
+    """R1: an unmounted / missing storage root is an outage: 503, no reason persisted."""
+
+    _executable_supplier(env)
+    review_id = await _seed_historical_review(env, AY_STYLE, document=_withholding_document(_ubl(AY_STYLE)))
+    env.storage_root.rename(env.storage_root.with_name("documents-unmounted"))
 
     with pytest.raises(SourceTaxFactsUnavailableError):
         await _reclassify(env, review_id, version=1)

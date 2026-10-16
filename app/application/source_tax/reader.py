@@ -12,7 +12,11 @@ import logging
 from typing import Protocol
 
 from app.application.source_tax.assessment import assess_source_document, source_tax_review_reasons
-from app.application.source_tax.exceptions import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
+from app.application.source_tax.exceptions import (
+    SourceDocumentUnreadableError,
+    SourceTaxFactsUnavailableError,
+    SourceTaxSafetyBlockedError,
+)
 from app.application.source_tax.model import SourceDocumentIssue, SourceTaxAssessment
 from app.application.workbench.exceptions import ReviewNotFoundError, ReviewPersistenceError
 from app.domain.invoice import InternalInvoice
@@ -34,7 +38,8 @@ class SourceDocumentLocator(Protocol):
 
 
 class SourceDocumentContentReader(Protocol):
-    """Raises :class:`SourceTaxFactsUnavailableError` when storage cannot be read."""
+    """Raises :class:`SourceDocumentUnreadableError` when the document can deterministically
+    never be read, and :class:`SourceTaxFactsUnavailableError` when storage is unavailable."""
 
     def read(self, storage_key: str) -> bytes:
         pass
@@ -82,6 +87,8 @@ class StoredSourceTaxFactsReader:
         document = documents[0]
         try:
             content = self._document_reader.read(document.storage_key)
+        except SourceDocumentUnreadableError as exc:
+            return SourceTaxAssessment.unverified(exc.issue)
         except SourceTaxFactsUnavailableError:
             logger.warning(
                 "source_tax_document_unreadable",

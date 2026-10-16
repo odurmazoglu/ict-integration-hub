@@ -29,8 +29,18 @@ Verification before any fact is trusted (`app/application/source_tax/assessment.
 3. the XML safety rules are the canonical parser's (no DTD / entities, UBL `Invoice` root);
 4. the document `cbc:UUID` must equal the review's source-invoice UUID exactly.
 
-A storage or database read failure is **not** a verdict: it raises the retryable
-`SourceTaxFactsUnavailableError` (HTTP 503) and nothing is persisted.
+Storage failures are classified (`LocalDocumentStorage` + `StoredSourceTaxDocumentReader`):
+
+| Condition | Result |
+| --- | --- |
+| unsafe / invalid storage key (empty, `.`, absolute, `..`, NUL, escapes the root incl. via symlink) | `SOURCE_DOCUMENT_UNVERIFIED` (`STORAGE_KEY_INVALID`) |
+| file missing while the root is a readable, populated directory | `SOURCE_DOCUMENT_UNVERIFIED` (`DOCUMENT_FILE_MISSING`) |
+| root missing, not a directory, unreadable, or **empty** (an unmounted volume leaves an empty mountpoint) | retryable `SourceTaxFactsUnavailableError` (HTTP 503) |
+| permission denied, I/O error, stale handle, any other `OSError`; database failure | retryable `SourceTaxFactsUnavailableError` (HTTP 503) |
+
+A retryable failure is never a verdict and persists nothing. A persisted
+`SOURCE_DOCUMENT_UNVERIFIED` is not permanent either: a later reclassification recomputes it
+from the stored state.
 
 ## Where it is enforced
 
@@ -42,7 +52,7 @@ A storage or database read failure is **not** a verdict: it raises the retryable
 | Stage-1 evidence | never built for a source-tax hard block or any `source=source_tax` reason |
 | Decision acceptance | `SubmitReviewDecisionUseCase` re-verifies for every VENDOR_BILL decision (replays too); refused without the check |
 | Vendor Bill preview | required check before the build |
-| Vendor Bill execution, Existing Purchase Order billing | required check on **every attempt** (DRY_RUN / EXECUTE, retry, resume), before the RESALE check, the build and any Odoo call; every accounting mode passes through it |
+| Vendor Bill execution, Existing Purchase Order billing, Customer Invoice (recharge) creation | required check on **every attempt** (DRY_RUN / EXECUTE, retry, resume), before the RESALE check, the build and any Odoo call; every accounting mode passes through it. The customer-invoice check is independent of the Vendor Bill step and of persisted billing evidence |
 
 The execution-side checks do not trust the review's persisted reasons or Stage-1/2 evidence,
 so evidence pinned before W1, operator tax / account / product resolutions and review-scoped
