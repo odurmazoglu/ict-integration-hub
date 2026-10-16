@@ -72,6 +72,8 @@ REASON_TITLES: dict[ManualReviewReasonCode, str] = {
     ManualReviewReasonCode.AMBIGUOUS_COMMERCIAL_PURCHASE: (
         "Ürün tedarikçisi faturasında ürün kodu yok — otomatik gider uygulanmaz"
     ),
+    ManualReviewReasonCode.WITHHOLDING_TAX_NOT_SUPPORTED: "Tevkifatlı fatura — tedarikçi faturası oluşturulmaz",
+    ManualReviewReasonCode.SOURCE_DOCUMENT_UNVERIFIED: "Orijinal fatura belgesi doğrulanamadı",
 }
 
 PURPOSE_LABELS: dict[PurchasePurpose, str] = {
@@ -237,6 +239,20 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
         return OperatorNextAction.TECHNICAL, _todo(
             "Bu belge bir iade faturasıdır; Hub tedarikçi faturası oluşturmaz. İadeyi muhasebe ile "
             "Odoo'da değerlendirin; gerekirse incelemeyi reddedin.",
+            findings,
+        )
+    # PR T W0: source-tax hard blocks come before any supplier/product step, which could
+    # never make the invoice executable.
+    if ManualReviewReasonCode.WITHHOLDING_TAX_NOT_SUPPORTED in codes:
+        return OperatorNextAction.TECHNICAL, _todo(
+            "Bu faturada vergi tevkifatı var; Hub tevkifatlı faturalar için tedarikçi faturası oluşturmaz. "
+            "Faturayı muhasebe ile Odoo'da değerlendirin; gerekirse incelemeyi reddedin.",
+            findings,
+        )
+    if ManualReviewReasonCode.SOURCE_DOCUMENT_UNVERIFIED in codes:
+        return OperatorNextAction.TECHNICAL, _todo(
+            "Orijinal e-fatura belgesi bulunamadı veya doğrulanamadı; vergi kontrolleri yapılamıyor. "
+            "Teknik destek alın.",
             findings,
         )
     if ManualReviewReasonCode.SUPPLIER_NOT_FOUND in codes:

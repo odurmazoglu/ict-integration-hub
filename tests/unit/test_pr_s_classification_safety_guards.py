@@ -588,7 +588,8 @@ def test_reason_codes_are_append_only_relative_to_the_previous_image() -> None:
     values = tuple(code.value for code in ManualReviewReasonCode)
 
     assert values[: len(_EEE18A2_REASON_CODES)] == _EEE18A2_REASON_CODES
-    assert values[len(_EEE18A2_REASON_CODES) :] == (RETURN.value, AMBIGUOUS.value)
+    # PR S appended exactly these two right after eee18a2; later members (PR T W0) follow them.
+    assert values[len(_EEE18A2_REASON_CODES) : len(_EEE18A2_REASON_CODES) + 2] == (RETURN.value, AMBIGUOUS.value)
 
 
 def test_previous_image_cannot_parse_new_codes_so_rollback_needs_the_enum_only_compat_build() -> None:
@@ -597,9 +598,10 @@ def test_previous_image_cannot_parse_new_codes_so_rollback_needs_the_enum_only_c
     for code in (RETURN, AMBIGUOUS):
         with pytest.raises(ValueError):
             previous_image_enum(code.value)
-    # The compat build = previous image + exactly these two members; nothing else changed.
+    # The compat build = previous image + exactly these two members; nothing else changed. Later
+    # append-only members (PR T W0) are covered by their own compat test.
     compat = StrEnum("CompatReasonCode", {v: v for v in (*_EEE18A2_REASON_CODES, RETURN.value, AMBIGUOUS.value)})
-    assert {code.value for code in ManualReviewReasonCode} == {code.value for code in compat}
+    assert {code.value for code in compat} <= {code.value for code in ManualReviewReasonCode}
 
 
 # ===================================================================== unchanged behavior

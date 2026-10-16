@@ -39,6 +39,20 @@ class ManualReviewReasonCode(StrEnum):
     #: review-scoped accounting resolution (see use_cases.effective_decision).
     RETURN_INVOICE_NOT_SUPPORTED = "RETURN_INVOICE_NOT_SUPPORTED"
     AMBIGUOUS_COMMERCIAL_PURCHASE = "AMBIGUOUS_COMMERCIAL_PURCHASE"
+    #: PR T W0 (rollback compatibility only). Defined so this image can read reviews that the
+    #: withholding-tax guard (W1) classifies; nothing in this image emits them. Both are hard
+    #: blocks: never stripped, and a review carrying one never gets Stage-1 execution evidence.
+    WITHHOLDING_TAX_NOT_SUPPORTED = "WITHHOLDING_TAX_NOT_SUPPORTED"
+    SOURCE_DOCUMENT_UNVERIFIED = "SOURCE_DOCUMENT_UNVERIFIED"
+
+
+#: PR T W0: reasons that make a review non-executable in every mode, whatever its match facts.
+SOURCE_TAX_SAFETY_REASON_CODES = frozenset(
+    {
+        ManualReviewReasonCode.WITHHOLDING_TAX_NOT_SUPPORTED,
+        ManualReviewReasonCode.SOURCE_DOCUMENT_UNVERIFIED,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -61,7 +61,11 @@ def test_reason_codes_are_append_only() -> None:
     values = tuple(code.value for code in ManualReviewReasonCode)
 
     assert values[: len(_EEE18A2_REASON_CODES)] == _EEE18A2_REASON_CODES
-    assert values[len(_EEE18A2_REASON_CODES) :] == ("RETURN_INVOICE_NOT_SUPPORTED", "AMBIGUOUS_COMMERCIAL_PURCHASE")
+    # S0 appended exactly these two right after eee18a2; later members (PR T W0) follow them.
+    assert values[len(_EEE18A2_REASON_CODES) : len(_EEE18A2_REASON_CODES) + 2] == (
+        "RETURN_INVOICE_NOT_SUPPORTED",
+        "AMBIGUOUS_COMMERCIAL_PURCHASE",
+    )
 
 
 def test_every_reason_code_has_a_workbench_title() -> None:
