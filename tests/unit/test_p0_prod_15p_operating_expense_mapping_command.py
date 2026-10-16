@@ -89,6 +89,7 @@ from app.persistence import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
+from tests.unit.source_tax_support import CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -328,6 +329,7 @@ def _use_case(
         mapping_repository=mapping_repository,
         onboarding_use_case=OnboardOperatingExpenseMappingUseCase(mapping_repository),
         reclassifier=ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(_ambiguous_facts(invoice), mapping_repository=mapping_repository),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=review_repository,
@@ -471,6 +473,7 @@ async def test_wrong_company_fails_safely(session: Session) -> None:
         mapping_repository=mapping_repository,
         onboarding_use_case=OnboardOperatingExpenseMappingUseCase(mapping_repository),
         reclassifier=ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(_ambiguous_facts(invoice), mapping_repository=mapping_repository),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=SqlAlchemyReviewRepository(session),
@@ -564,6 +567,7 @@ async def test_account_scoped_to_another_company_is_rejected(session: Session) -
         mapping_repository=mapping_repository,
         onboarding_use_case=OnboardOperatingExpenseMappingUseCase(mapping_repository),
         reclassifier=ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(_ambiguous_facts(invoice), mapping_repository=mapping_repository),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=SqlAlchemyReviewRepository(session),

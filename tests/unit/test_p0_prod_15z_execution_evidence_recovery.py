@@ -85,6 +85,7 @@ from app.persistence import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK, CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -321,6 +322,7 @@ class _FakeExpenseAccountReader:
 def _reclassifier(session: Session, *, facts: _Facts, mapping_repository) -> ReclassifyWorkbenchReviewUseCase:
     review_repository = SqlAlchemyReviewRepository(session)
     return ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(facts, mapping_repository=mapping_repository),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=review_repository,
@@ -361,6 +363,7 @@ def _accounting_command(
 def _recovery_use_case(session: Session, *, facts: _Facts, mapping_repository) -> RebuildReviewExecutionEvidenceUseCase:
     review_repository = SqlAlchemyReviewRepository(session)
     resolver = EffectiveDecisionResolver(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(facts, mapping_repository=mapping_repository),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
@@ -854,6 +857,7 @@ async def test_decision_can_consume_rebuilt_evidence(session: Session) -> None:
 
     evidence_reader = SqlAlchemyReviewExecutionEvidenceReader(session)
     decision_use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=evidence_reader,

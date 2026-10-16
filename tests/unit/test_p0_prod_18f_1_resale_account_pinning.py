@@ -65,6 +65,7 @@ from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.persistence import SqlAlchemyReviewPurchasePurposeResolutionRepository, SqlAlchemyReviewRepository
 from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_18e_1b_resale_workflow_wiring import (
     CHILD_CATEGORY_ID,
     COMPANY_ID,
@@ -142,6 +143,7 @@ class _Uom:
 def _preview_use_case(session: Session, *, with_pin_reader: bool = True) -> PreviewVendorBillUseCase:
     source_reader = SqlAlchemyExecutionSourceInvoiceReader(session)
     return PreviewVendorBillUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         accepted_decision_reader=SqlAlchemyReviewRepository(session),
         source_invoice_reader=source_reader,
         execution_planner=ExecutionPlanner(),

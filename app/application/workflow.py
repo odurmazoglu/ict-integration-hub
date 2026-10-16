@@ -39,9 +39,9 @@ class ManualReviewReasonCode(StrEnum):
     #: review-scoped accounting resolution (see use_cases.effective_decision).
     RETURN_INVOICE_NOT_SUPPORTED = "RETURN_INVOICE_NOT_SUPPORTED"
     AMBIGUOUS_COMMERCIAL_PURCHASE = "AMBIGUOUS_COMMERCIAL_PURCHASE"
-    #: PR T W0 (rollback compatibility only). Defined so this image can read reviews that the
-    #: withholding-tax guard (W1) classifies; nothing in this image emits them. Both are hard
-    #: blocks: never stripped, and a review carrying one never gets Stage-1 execution evidence.
+    #: Added in PR T W0 (rollback compatibility); emitted by the PR T W1 source-tax guard
+    #: (``app.application.source_tax``). Both are hard blocks: never stripped, and a review
+    #: carrying one never gets Stage-1 execution evidence. W0 is the rollback floor.
     WITHHOLDING_TAX_NOT_SUPPORTED = "WITHHOLDING_TAX_NOT_SUPPORTED"
     SOURCE_DOCUMENT_UNVERIFIED = "SOURCE_DOCUMENT_UNVERIFIED"
 
@@ -53,6 +53,10 @@ SOURCE_TAX_SAFETY_REASON_CODES = frozenset(
         ManualReviewReasonCode.SOURCE_DOCUMENT_UNVERIFIED,
     }
 )
+#: PR T W1: ``ManualReviewReason.source`` of every reason derived from the original UBL
+#: document's tax facts. Such a reason is never stripped and never gets Stage-1 evidence,
+#: including an UNSUPPORTED_INVOICE_CONTENT reason for a non-0015 ``TaxTypeCode``.
+SOURCE_TAX_REASON_SOURCE = "source_tax"
 
 
 @dataclass(frozen=True, slots=True)

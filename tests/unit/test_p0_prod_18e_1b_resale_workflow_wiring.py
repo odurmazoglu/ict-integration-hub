@@ -85,6 +85,7 @@ from app.persistence import (
 )
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -550,6 +551,7 @@ def _use_case(
     gate: bool = True,
 ) -> SubmitReviewDecisionUseCase:
     return SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

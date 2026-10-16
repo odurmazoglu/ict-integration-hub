@@ -8,6 +8,7 @@ from typing import Protocol
 from app.application.commands import ImportInvoiceCommand
 from app.application.dto import ImportInvoiceResult
 from app.application.exceptions import ApplicationError
+from app.application.source_tax import SourceTaxAssessment, assess_source_document
 from app.application.use_cases import ImportInvoiceUseCase
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.domain.invoice import InternalInvoice
@@ -39,6 +40,12 @@ class ImportUseCaseFactory(Protocol):
 
 
 ParseUblInvoice = Callable[[bytes], InternalInvoice]
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredSourceDocument:
+    content: bytes
+    content_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,13 +157,14 @@ class UyumsoftCanonicalInvoiceImporter:
                 safe_message="Provider invoice metadata was not found after synchronization.",
             )
 
-        document_content = self._download_and_read_document(persisted_record)
-        if isinstance(document_content, UyumsoftCanonicalImportOutcome):
-            return document_content
+        document = self._download_and_read_document(persisted_record)
+        if isinstance(document, UyumsoftCanonicalImportOutcome):
+            return document
 
-        parsed = self._parse_internal_invoice(document_content, invoice=invoice)
+        parsed = self._parse_internal_invoice(document.content, invoice=invoice)
         if isinstance(parsed, UyumsoftCanonicalImportOutcome):
             return parsed
+        source_tax_assessment = _source_tax_assessment(document, parsed)
 
         try:
             company_id = self._company_resolver.resolve_company_id(parsed)
@@ -184,6 +192,7 @@ class UyumsoftCanonicalInvoiceImporter:
                         idempotency_key=idempotency_key,
                         company_id=company_id,
                         dry_run=True,
+                        source_tax_assessment=source_tax_assessment,
                     )
                 )
             )
@@ -205,7 +214,7 @@ class UyumsoftCanonicalInvoiceImporter:
     def _download_and_read_document(
         self,
         persisted_record: UyumsoftInvoiceMetadata,
-    ) -> bytes | UyumsoftCanonicalImportOutcome:
+    ) -> _StoredSourceDocument | UyumsoftCanonicalImportOutcome:
         try:
             download = self._document_service.download_documents(
                 invoice_ids=[persisted_record.id],
@@ -214,7 +223,10 @@ class UyumsoftCanonicalInvoiceImporter:
             if len(download.items) != 1:
                 raise DocumentDownloadError("Exactly one UBL document is required for canonical import.")
             item = download.items[0]
-            return self._storage.read(item.storage_key)
+            return _StoredSourceDocument(
+                content=self._storage.read(item.storage_key),
+                content_sha256=item.content_hash_sha256,
+            )
         except (ConnectorError, ConnectorTimeoutError, DocumentDownloadError) as exc:
             return UyumsoftCanonicalImportOutcome(
                 direction=persisted_record.direction,  # type: ignore[arg-type]
@@ -253,6 +265,17 @@ class UyumsoftCanonicalInvoiceImporter:
                 safe_message="Invoice UBL parser did not return InternalInvoice.",
             )
         return parsed
+
+
+def _source_tax_assessment(document: _StoredSourceDocument, invoice: InternalInvoice) -> SourceTaxAssessment:
+    """PR T W1: the stored bytes' tax facts, trusted only once the bytes match the hash
+    recorded at download and the document UUID matches the parsed invoice."""
+
+    return assess_source_document(
+        document.content,
+        expected_sha256=document.content_sha256,
+        expected_invoice_uuid=invoice.header.invoice_uuid,
+    )
 
 
 def import_idempotency_key(*, company_id: int, provider: str, invoice: UyumsoftInvoiceSummary) -> str:

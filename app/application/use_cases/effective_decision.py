@@ -41,6 +41,7 @@ from app.application.expense_mapping.matching import (
 )
 from app.application.expense_mapping.predicates import invoice_is_ambiguous_commercial_purchase
 from app.application.fixed_asset_accounting import FixedAssetAccounting
+from app.application.source_tax.reader import SourceTaxAssessmentReader
 from app.application.workbench.evidence import ReviewSourceInvoiceEvidence
 from app.application.workbench.exceptions import ReviewPersistenceError, WorkbenchContractError
 from app.application.workbench.ports import (
@@ -136,6 +137,7 @@ class EffectiveDecisionResolver:
         *,
         decision_engine: DecisionEngine,
         source_invoice_reader: ReviewSourceInvoiceEvidenceReader,
+        source_tax_facts_reader: SourceTaxAssessmentReader,
         supplier_remediation_effect_reader: SupplierRemediationEffectWriter | None = None,
         supplier_partner_reader: SupplierPartnerReader | None = None,
         operating_expense_matcher: OperatingExpenseMatcher | None = None,
@@ -143,6 +145,12 @@ class EffectiveDecisionResolver:
     ) -> None:
         self._decision_engine = decision_engine
         self._source_invoice_reader = source_invoice_reader
+        # PR T W1: required, never defaulted -- reclassification, evidence recovery and
+        # source-identity correction must all classify with the original document's
+        # verified tax facts, or a withholding invoice could lose its hard block.
+        if source_tax_facts_reader is None:
+            raise WorkbenchContractError("A source tax facts reader is required for review classification.")
+        self._source_tax_facts_reader = source_tax_facts_reader
         # Optional (P0-PROD-10D): only set by composition roots that want an accepted
         # supplier resolution to count at all. None preserves byte-identical pre-10D
         # behavior. PR A: an accepted resolution is used only once its partner is proven
@@ -180,10 +188,18 @@ class EffectiveDecisionResolver:
         # Source of truth: the immutable snapshot only. Never Uyumsoft, never the caller.
         source = self._source_invoice_reader.get(review_id=review_id, company_id=company_id)
 
+        # PR T W1: read-only and verified (hash + UUID) before use; a temporary storage
+        # failure raises SourceTaxFactsUnavailableError, so nothing is persisted for it.
+        source_tax_assessment = self._source_tax_facts_reader.assess(
+            review_id=review_id,
+            company_id=company_id,
+            invoice_uuid=source.invoice.header.invoice_uuid,
+        )
         command = ImportInvoiceCommand(
             invoice=source.invoice,
             idempotency_key=idempotency_key,
             company_id=company_id,
+            source_tax_assessment=source_tax_assessment,
         )
         decision_result = await self._decide(command)
 

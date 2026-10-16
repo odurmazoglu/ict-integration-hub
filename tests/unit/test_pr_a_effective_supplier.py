@@ -106,6 +106,7 @@ from tests.unit.effective_supplier_support import (
     raw_matched,
     raw_not_found,
 )
+from tests.unit.source_tax_support import CLEAN_SOURCE_TAX_FACTS_READER
 from tests.unit.test_adr_0013_operator_request_ingestion import (
     REQUESTED_AT,
     FakeAcknowledger,
@@ -323,6 +324,7 @@ async def _import(session: Session, engine: DecisionEngine, invoice: InternalInv
 
 def _reclassifier(session: Session, engine: DecisionEngine, effects: EffectReader, partners) -> Any:
     return ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=engine,
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=SqlAlchemyReviewRepository(session),
@@ -721,6 +723,7 @@ def test_resolver_surfaces_matcher_failure_and_skips_effects_on_raw_match() -> N
 def test_effect_reader_without_partner_reader_is_a_wiring_error() -> None:
     with pytest.raises(WorkbenchContractError):
         EffectiveDecisionResolver(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=object(),  # type: ignore[arg-type]
             source_invoice_reader=object(),  # type: ignore[arg-type]
             supplier_remediation_effect_reader=EffectReader(None),  # type: ignore[arg-type]

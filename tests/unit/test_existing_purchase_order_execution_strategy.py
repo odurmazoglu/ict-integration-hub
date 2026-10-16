@@ -30,6 +30,7 @@ from app.erp.write.account_move_repository import AccountMoveDraft
 from app.erp.write.exceptions import VendorBillWriteValidationError
 from app.matching import InvoiceProductMatchResult, PartnerMatchResult, PartnerMatchStatus
 from app.tax_mapping import InvoiceTaxMappingResult
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
 class RecordingSourceInvoiceReader:
@@ -56,6 +57,7 @@ class RecordingPurchaseOrderVendorBillRepository:
 
 def test_existing_purchase_order_strategy_supports_only_existing_purchase_order_and_modes() -> None:
     strategy = ExistingPurchaseOrderExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(_source()),
         purchase_order_vendor_bill_repository=RecordingPurchaseOrderVendorBillRepository(),
     )
@@ -68,6 +70,7 @@ def test_existing_purchase_order_strategy_supports_only_existing_purchase_order_
 def test_existing_purchase_order_dry_run_does_not_write() -> None:
     repository = RecordingPurchaseOrderVendorBillRepository()
     strategy = ExistingPurchaseOrderExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(_source()),
         purchase_order_vendor_bill_repository=repository,
     )
@@ -81,6 +84,7 @@ def test_existing_purchase_order_dry_run_does_not_write() -> None:
 
 def test_existing_purchase_order_execute_requires_approval() -> None:
     strategy = ExistingPurchaseOrderExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(_source()),
         purchase_order_vendor_bill_repository=RecordingPurchaseOrderVendorBillRepository(),
     )
@@ -92,6 +96,7 @@ def test_existing_purchase_order_execute_requires_approval() -> None:
 def test_existing_purchase_order_execute_uses_purchase_order_and_returns_artifact() -> None:
     repository = RecordingPurchaseOrderVendorBillRepository()
     strategy = ExistingPurchaseOrderExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(_source()),
         purchase_order_vendor_bill_repository=repository,
     )
@@ -113,6 +118,7 @@ def test_existing_purchase_order_execute_uses_purchase_order_and_returns_artifac
 def test_existing_purchase_order_execute_recovers_existing_bill_and_marks_created_false() -> None:
     repository = RecordingPurchaseOrderVendorBillRepository(recovered=AccountMoveDraft(id=902, name="BILL-902"))
     strategy = ExistingPurchaseOrderExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(_source()),
         purchase_order_vendor_bill_repository=repository,
     )

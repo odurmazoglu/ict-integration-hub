@@ -114,6 +114,7 @@ from app.persistence.workbench_review_source_invoice_correction_repository impor
 from app.services.document_storage import LocalDocumentStorage
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
+from tests.unit.source_tax_support import CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
 BUYER_VKN = "1111111111"
@@ -317,6 +318,7 @@ def _decision_engine(session: Session, partners: _Partners) -> DecisionEngine:
 
 def _resolver(session: Session, partners: _Partners, reader) -> EffectiveDecisionResolver:
     return EffectiveDecisionResolver(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(session, partners),
         source_invoice_reader=reader,
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
@@ -744,6 +746,7 @@ def _supplier_remediation(env: Env, *, partner: ResolutionPartnerRecord, writer)
         remediation_effect_writer=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
         supplier_partner_writer=writer,
         reclassifier=ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(session, env.partners),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=SqlAlchemyReviewRepository(session),
@@ -856,6 +859,7 @@ async def test_later_generic_reclassification_reads_the_corrected_source(env: En
     env.partners.add(partner_id=777, vat=AY_STYLE.vkn)  # supplier created later
 
     outcome = await ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(env.session, env.partners),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(env.session),
         reclassification_writer=SqlAlchemyReviewRepository(env.session),

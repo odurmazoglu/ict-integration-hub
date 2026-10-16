@@ -59,6 +59,7 @@ from app.persistence import SqlAlchemyExecutionRuntimeRepository
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
 @pytest.fixture()
@@ -327,6 +328,7 @@ class ExplodingWriteGate:
 
 def _vendor_bill_strategy(*, writer: RecordingVendorBillWriter) -> VendorBillExecutionStrategy:
     return VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=StaticSourceInvoiceReader(),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,

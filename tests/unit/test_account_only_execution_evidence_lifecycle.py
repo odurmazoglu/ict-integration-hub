@@ -86,6 +86,7 @@ from app.persistence import (
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK, CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 7
 IDEMPOTENCY_KEY = "uyumsoft:7:DMARKET-ETTN"
@@ -290,6 +291,7 @@ async def _import(session: Session, rule_result: _Facts, *, invoice: InternalInv
 
 async def _reclassify(session: Session, *, review_id: str, expected_version: int, rule_result: _Facts):
     use_case = ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(rule_result),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=SqlAlchemyReviewRepository(session),
@@ -317,6 +319,7 @@ def _submit_decision(
     idempotency_key: str | None = None,
 ):
     use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
@@ -651,6 +654,7 @@ class _CapturingWriter:
 def _execute_pinned(session: Session, review_id: str):
     writer = _CapturingWriter()
     result = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,
@@ -947,6 +951,7 @@ async def _historical_v2_without_snapshot(session: Session, monkeypatch) -> str:
 async def _fresh_matching_snapshot(session: Session, review_id: str, *, expected_version: int = 2, facts=None):
     """Existing supported application operation; no remediation orchestration."""
     result = await ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(facts or _resolved_facts(_invoice())),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=SqlAlchemyReviewRepository(session),
@@ -1102,6 +1107,7 @@ async def test_08o_compare_and_set_rejects_version_race_before_snapshot_insert(s
     monkeypatch.setattr(repository, "_find_review_execution_evidence", competing_transition)
     with pytest.raises(ReviewVersionConflictError):
         await ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(_resolved_facts(_invoice())),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=repository,

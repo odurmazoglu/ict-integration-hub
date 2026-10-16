@@ -60,6 +60,7 @@ from app.persistence.execution_runtime_repository import SqlAlchemyExecutionRunt
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
 def test_vendor_bill_execution_strategy_supports_only_vendor_bill_and_modes() -> None:
@@ -616,6 +617,7 @@ def _strategy(
     writer=None,
 ) -> VendorBillExecutionStrategy:
     return VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=reader or RecordingSourceInvoiceReader(source=_source()),
         vendor_bill_builder=builder or RecordingVendorBillBuilder(),
         vendor_bill_writer=writer or RecordingVendorBillWriter(),

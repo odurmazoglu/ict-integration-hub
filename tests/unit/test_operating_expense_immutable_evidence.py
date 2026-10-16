@@ -67,6 +67,7 @@ from app.persistence.execution_source_invoice_reader import (
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 7
 PARTNER_ID = 1001
@@ -554,6 +555,7 @@ async def test_identifier_present_failed_product_with_expense_match_pins_raw_sta
 
 def _accept_vendor_bill(session: Session, review_id: str) -> None:
     submit = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
@@ -691,6 +693,7 @@ def test_execution_strategy_passes_operating_expense_match_to_builder() -> None:
 
     builder = _Builder()
     strategy = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_Reader(),
         vendor_bill_builder=builder,
         vendor_bill_writer=_Writer(),

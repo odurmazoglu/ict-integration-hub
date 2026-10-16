@@ -14,6 +14,8 @@ from app.application.expense_mapping import (
     invoice_is_ambiguous_commercial_purchase,
     invoice_is_product_identifier_free,
 )
+from app.application.source_tax.assessment import source_tax_review_reasons
+from app.application.source_tax.model import SourceDocumentIssue, SourceTaxAssessment
 from app.application.workflow import (
     ManualReviewDecision,
     ManualReviewReason,
@@ -99,6 +101,13 @@ class DeterministicRuleEngine:
     mapping resolves for the matched supplier, the operating-expense Vendor Bill
     rule applies instead. Anything else remains Manual Review.
 
+    PR T W1: the original UBL document's verified tax facts
+    (``ImportInvoiceCommand.source_tax_assessment``) add the source-tax reasons of
+    :func:`~app.application.source_tax.source_tax_review_reasons` after the return guard
+    -- withholding, an unverifiable document, or any ``TaxTypeCode`` other than 0015 --
+    prepended to the review's other reasons; no Vendor Bill branch is taken while any is
+    present.
+
     PR S safety guards, evaluated after matching so every match fact is still recorded:
     a return invoice (``InvoiceTypeCode`` IADE family) is Manual Review with only the
     RETURN_INVOICE_NOT_SUPPORTED reason. An identifier-free invoice from a registered
@@ -163,8 +172,11 @@ class DeterministicRuleEngine:
         tax_ok = not tax_reasons
         identifier_free = invoice_is_product_identifier_free(invoice)
         expense_matched = operating_expense_match.status is OperatingExpenseMatchStatus.MATCHED
+        # PR T W1: source-tax hard blocks (withholding, non-VAT tax, unverifiable document)
+        # come before every Vendor Bill branch; the other reasons are still recorded.
+        source_tax_reasons = _source_tax_reasons(command)
 
-        if partner_ok and product_ok and tax_ok:
+        if partner_ok and product_ok and tax_ok and not source_tax_reasons:
             return _vendor_bill_result(
                 DIRECT_VENDOR_BILL_RULE_ID,
                 DIRECT_VENDOR_BILL_EXPLANATION,
@@ -174,7 +186,14 @@ class DeterministicRuleEngine:
                 operating_expense_match=operating_expense_match,
                 warnings=warnings,
             )
-        if partner_ok and tax_ok and identifier_free and expense_matched and not ambiguous_commercial:
+        if (
+            partner_ok
+            and tax_ok
+            and identifier_free
+            and expense_matched
+            and not ambiguous_commercial
+            and not source_tax_reasons
+        ):
             return _vendor_bill_result(
                 OPERATING_EXPENSE_VENDOR_BILL_RULE_ID,
                 OPERATING_EXPENSE_VENDOR_BILL_EXPLANATION,
@@ -195,6 +214,7 @@ class DeterministicRuleEngine:
         )
         if ambiguous_commercial:
             review_reasons = (_ambiguous_commercial_purchase_reason(),) + review_reasons
+        review_reasons = source_tax_reasons + review_reasons
         return RuleEvaluationResult(
             workflow_decision=_manual_review_decision(review_reasons),
             partner_match=partner_match,
@@ -209,6 +229,17 @@ def _invoice(command: ImportInvoiceCommand) -> InternalInvoice:
     if not isinstance(command.invoice, InternalInvoice):
         raise RuleEvaluationError("InternalInvoice DTO is required for rule evaluation.")
     return command.invoice
+
+
+def _source_tax_reasons(command: ImportInvoiceCommand) -> tuple[ManualReviewReason, ...]:
+    assessment = command.source_tax_assessment
+    if assessment is None:
+        if command.dry_run:
+            # Legacy / test callers that never carry an assessment. Every production path
+            # supplies one, and every Vendor Bill write re-verifies the stored document.
+            return ()
+        assessment = SourceTaxAssessment.unverified(SourceDocumentIssue.FACTS_NOT_SUPPLIED)
+    return source_tax_review_reasons(assessment)
 
 
 def _evaluate_partner(

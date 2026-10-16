@@ -47,6 +47,7 @@ from app.matching import (
     ProductMatchStatus,
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 1
 REVIEW_ID = "review:9b13ad00-e89b-5e0e-8f0e-6de12037e199"
@@ -355,6 +356,7 @@ def _use_case(
     currency = currency_reader or StaticCurrencyReader()
     product_uom = product_uom_reader or StaticProductUomReader()
     use_case = PreviewVendorBillUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         accepted_decision_reader=StaticAcceptedDecisionReader(decision),
         source_invoice_reader=source_reader,
         execution_planner=ExecutionPlanner(),
@@ -742,6 +744,8 @@ def test_preview_use_case_never_references_any_write_gate_setting() -> None:
         # purchase purpose it was accepted under -- neither is a write gate nor an Odoo reader.
         "resale_accounting_pin_reader",
         "purchase_purpose_reader",
+        # PR T W1: read-only source-document tax check (Hub persistence + document storage).
+        "source_tax_safety_check",
     }
 
 

@@ -27,6 +27,7 @@ from app.application.execution.exceptions import (
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
 from app.application.ports import VendorBillWriter
+from app.application.source_tax import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
 from app.application.workbench.dto import LineResolution
 from app.billing import ValidatedResaleLineAccount, VendorBillBuilder, vendor_bill_monetary_errors
 from app.billing.exceptions import VendorBillBuildError
@@ -42,6 +43,25 @@ class ResaleExecutionAccountingCheck(Protocol):
 
     def validate(self, source: ExecutionSourceInvoice) -> Mapping[str, ValidatedResaleLineAccount] | None:
         pass
+
+
+class SourceTaxVendorBillCheck(Protocol):
+    """PR T W1 source-document tax safety (``SourceTaxSafetyCheck``): raises
+    ``SourceTaxSafetyBlockedError`` or the retryable ``SourceTaxFactsUnavailableError``."""
+
+    def ensure_vendor_bill_allowed(self, *, review_id: str, company_id: int, invoice: object) -> object:
+        pass
+
+
+#: ``ExecutionStepResult.error_code`` values of the PR T W1 source-tax backstop.
+SOURCE_TAX_BLOCKED_ERROR_CODE = "source_tax_safety_blocked"
+SOURCE_TAX_UNAVAILABLE_ERROR_CODE = "source_tax_facts_unavailable"
+
+
+def ensure_source_tax_allowed(check: SourceTaxVendorBillCheck, source: ExecutionSourceInvoice) -> None:
+    """Shared by every Vendor Bill-producing strategy, before anything is built or written."""
+
+    check.ensure_vendor_bill_allowed(review_id=source.review_id, company_id=source.company_id, invoice=source.invoice)
 
 
 class VendorBillCurrencyDecimalPlaces(Protocol):
@@ -73,6 +93,7 @@ class VendorBillExecutionStrategy:
         vendor_bill_writer: VendorBillWriter,
         resale_accounting_check: ResaleExecutionAccountingCheck,
         currency_reader: VendorBillCurrencyPrecisionReader,
+        source_tax_safety_check: SourceTaxVendorBillCheck,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._vendor_bill_builder = vendor_bill_builder
@@ -83,6 +104,11 @@ class VendorBillExecutionStrategy:
         # Required for the same reason (P0-PROD-19E-2): without the currency's precision a
         # monetary mismatch could not fail closed before the Odoo write.
         self._currency_reader = currency_reader
+        # Required for the same reason (PR T W1): without it a withholding invoice's Vendor
+        # Bill could be written from Stage-1/2 evidence that predates the source-tax guard.
+        if source_tax_safety_check is None:
+            raise ExecutionSourceInvoiceError("Source tax safety check is required for Vendor Bill execution.")
+        self._source_tax_safety_check = source_tax_safety_check
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -100,6 +126,9 @@ class VendorBillExecutionStrategy:
                 decision_version=request.decision_version,
             )
             _validate_source(request=request, source=source)
+            # PR T W1: the original document is re-verified on every attempt (DRY_RUN and
+            # EXECUTE, retry and resume), before any accounting mode's build or write.
+            ensure_source_tax_allowed(self._source_tax_safety_check, source)
             # P0-PROD-18F-2: RESALE drift + fiscal-position validation, before the build and
             # therefore before the writer's first Odoo call. Runs on every attempt, so no
             # retry or resume can skip it.
@@ -150,6 +179,10 @@ class VendorBillExecutionStrategy:
             )
         except ExecutionSourceInvoiceError as exc:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
+        except SourceTaxSafetyBlockedError as exc:
+            return _failure_result(request, error_code=SOURCE_TAX_BLOCKED_ERROR_CODE, message=exc.safe_message)
+        except SourceTaxFactsUnavailableError as exc:
+            return _failure_result(request, error_code=SOURCE_TAX_UNAVAILABLE_ERROR_CODE, message=exc.safe_message)
         except ResaleExecutionAccountingError as exc:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
         except VendorBillBuildError as exc:

@@ -65,7 +65,9 @@ from app.application.execution.exceptions import (
 from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.ports import AcceptedReviewDecisionReader, ExecutionSourceInvoiceReader
 from app.application.execution.vendor_bill_strategy import (
+    SourceTaxVendorBillCheck,
     account_only_line_resolution,
+    ensure_source_tax_allowed,
     vendor_bill_write_idempotency_key,
 )
 from app.application.workbench.purchase_account_discovery import FiscalPositionMapping
@@ -236,6 +238,7 @@ class PreviewVendorBillUseCase:
         vendor_bill_builder: VendorBillBuilder,
         currency_reader: VendorBillPreviewCurrencyReader,
         product_uom_reader: VendorBillPreviewProductUomReader,
+        source_tax_safety_check: SourceTaxVendorBillCheck,
         resale_accounting_pin_reader: VendorBillPreviewResaleAccountingPinReader | None = None,
         purchase_purpose_reader: PurchasePurposeHistoryReader | None = None,
     ) -> None:
@@ -247,6 +250,10 @@ class PreviewVendorBillUseCase:
         self._product_uom_reader = product_uom_reader
         self._resale_accounting_pin_reader = resale_accounting_pin_reader
         self._purchase_purpose_reader = purchase_purpose_reader
+        # PR T W1: required -- a preview must never show a withholding invoice as billable.
+        if source_tax_safety_check is None:
+            raise ExecutionPlanningError("Source tax safety check is required for Vendor Bill preview.")
+        self._source_tax_safety_check = source_tax_safety_check
 
     def preview(self, request: PreviewVendorBillRequest) -> VendorBillPreview:
         if not isinstance(request, PreviewVendorBillRequest):
@@ -300,6 +307,9 @@ class PreviewVendorBillUseCase:
             company_id=decision.company_id,
             decision_version=decision.decision_version,
         )
+        # PR T W1: the same source-document tax backstop execution runs, before any build.
+        # SourceTaxSafetyBlockedError / SourceTaxFactsUnavailableError propagate unchanged.
+        ensure_source_tax_allowed(self._source_tax_safety_check, source)
 
         # P0-PROD-19E-2: the currency's precision is resolved before the build, exactly as
         # EXECUTE does, so the builder's currency-aware checks and price_unit are identical.

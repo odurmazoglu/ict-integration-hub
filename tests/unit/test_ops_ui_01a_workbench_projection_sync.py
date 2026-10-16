@@ -68,6 +68,7 @@ from app.persistence import (
     SqlAlchemyUnitOfWork,
 )
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_19f_review_lifecycle_effective_state import (
     COMPANY_ID,
     EXPENSE_ACCOUNT_ID,
@@ -514,6 +515,7 @@ def test_projection_failure_after_decision_commit_keeps_the_committed_decision(s
     synchronizer = _synchronizer(session, StudioFake(), publisher=RaisingPublisher())
 
     acknowledgement = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
@@ -1333,6 +1335,7 @@ def test_synchronous_decision_path_projects_without_touching_the_request_session
     studio = StudioFake()
 
     acknowledgement = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

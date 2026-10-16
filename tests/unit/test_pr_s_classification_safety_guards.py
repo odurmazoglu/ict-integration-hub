@@ -90,6 +90,7 @@ from app.persistence import (
     SqlAlchemyReviewSourceInvoiceEvidenceReader,
     SqlAlchemyUnitOfWork,
 )
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_fixed_asset_accounting import ACTOR as FA_ACTOR
 from tests.unit.test_fixed_asset_accounting import EXPENSE_ACCOUNT as FA_EXPENSE_ACCOUNT
 from tests.unit.test_fixed_asset_accounting import PARTNER_ID as FA_PARTNER_ID
@@ -901,6 +902,7 @@ def _decide_account_only(session: Session, review_id: str) -> None:
     """An API Vendor Bill decision with explicit per-line account-only overrides (P0-PROD-08G)."""
 
     SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

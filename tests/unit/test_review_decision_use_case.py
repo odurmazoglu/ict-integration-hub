@@ -32,6 +32,7 @@ from app.matching import (
     ProductMatchStatus,
 )
 from app.tax_mapping import InvoiceTaxMappingResult
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
 def test_submit_review_decision_use_case_loads_evidence_for_vendor_bill_and_delegates_atomic_write() -> None:
@@ -50,7 +51,10 @@ def test_submit_review_decision_use_case_loads_evidence_for_vendor_bill_and_dele
     unit_of_work = _FakeUnitOfWork()
 
     result = SubmitReviewDecisionUseCase(
-        review_decision_writer=writer, unit_of_work=unit_of_work, execution_evidence_reader=reader
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+        review_decision_writer=writer,
+        unit_of_work=unit_of_work,
+        execution_evidence_reader=reader,
     ).execute(command)
 
     assert result is acknowledgement
@@ -69,7 +73,9 @@ def test_submit_review_decision_use_case_commits_after_a_successful_write() -> N
     writer = RecordingDecisionWriter()
     unit_of_work = _FakeUnitOfWork()
 
-    SubmitReviewDecisionUseCase(review_decision_writer=writer, unit_of_work=unit_of_work).execute(command)
+    SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK, review_decision_writer=writer, unit_of_work=unit_of_work
+    ).execute(command)
 
     assert unit_of_work.events == ("commit",)
 
@@ -78,7 +84,9 @@ def test_submit_review_decision_use_case_rolls_back_on_writer_failure() -> None:
     error = ReviewVersionConflictError("Review item version does not match expected_version.")
     unit_of_work = _FakeUnitOfWork()
     use_case = SubmitReviewDecisionUseCase(
-        review_decision_writer=RecordingDecisionWriter(error=error), unit_of_work=unit_of_work
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+        review_decision_writer=RecordingDecisionWriter(error=error),
+        unit_of_work=unit_of_work,
     )
 
     with pytest.raises(ReviewVersionConflictError):
@@ -91,7 +99,11 @@ def test_submit_review_decision_use_case_delegates_non_executable_decision_witho
     command = _select_workflow_command(selected_workflow=WorkflowType.RFQ)
     writer = RecordingDecisionWriter()
 
-    SubmitReviewDecisionUseCase(review_decision_writer=writer, unit_of_work=_FakeUnitOfWork()).execute(command)
+    SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+        review_decision_writer=writer,
+        unit_of_work=_FakeUnitOfWork(),
+    ).execute(command)
 
     assert writer.commands == (command,)
     assert writer.commands_with_evidence == ()
@@ -100,7 +112,9 @@ def test_submit_review_decision_use_case_delegates_non_executable_decision_witho
 def test_submit_review_decision_use_case_requires_evidence_reader_for_vendor_bill() -> None:
     with pytest.raises(ReviewDecisionError) as raised:
         SubmitReviewDecisionUseCase(
-            review_decision_writer=RecordingDecisionWriter(), unit_of_work=_FakeUnitOfWork()
+            source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+            review_decision_writer=RecordingDecisionWriter(),
+            unit_of_work=_FakeUnitOfWork(),
         ).execute(_select_workflow_command())
 
     assert str(raised.value) == "Execution source evidence is required for Vendor Bill decisions."
@@ -112,6 +126,7 @@ def test_submit_review_decision_use_case_missing_evidence_prevents_decision_writ
 
     with pytest.raises(ExecutionSourceInvoiceNotFoundError):
         SubmitReviewDecisionUseCase(
+            source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
             review_decision_writer=writer,
             unit_of_work=_FakeUnitOfWork(),
             execution_evidence_reader=FailingEvidenceReader(error),
@@ -127,6 +142,7 @@ def test_submit_review_decision_use_case_malformed_evidence_prevents_decision_wr
 
     with pytest.raises(ExecutionSourceInvoiceIntegrityError):
         SubmitReviewDecisionUseCase(
+            source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
             review_decision_writer=writer,
             unit_of_work=_FakeUnitOfWork(),
             execution_evidence_reader=FailingEvidenceReader(error),
@@ -138,7 +154,9 @@ def test_submit_review_decision_use_case_malformed_evidence_prevents_decision_wr
 
 def test_submit_review_decision_use_case_rejects_non_command_input() -> None:
     use_case = SubmitReviewDecisionUseCase(
-        review_decision_writer=RecordingDecisionWriter(), unit_of_work=_FakeUnitOfWork()
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+        review_decision_writer=RecordingDecisionWriter(),
+        unit_of_work=_FakeUnitOfWork(),
     )
 
     with pytest.raises(WorkbenchContractError):
@@ -148,7 +166,9 @@ def test_submit_review_decision_use_case_rejects_non_command_input() -> None:
 def test_submit_review_decision_use_case_propagates_known_safe_errors() -> None:
     error = ReviewVersionConflictError("Review item version does not match expected_version.")
     use_case = SubmitReviewDecisionUseCase(
-        review_decision_writer=RecordingDecisionWriter(error=error), unit_of_work=_FakeUnitOfWork()
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+        review_decision_writer=RecordingDecisionWriter(error=error),
+        unit_of_work=_FakeUnitOfWork(),
     )
 
     with pytest.raises(ReviewVersionConflictError) as raised:
@@ -160,7 +180,9 @@ def test_submit_review_decision_use_case_propagates_known_safe_errors() -> None:
 def test_submit_review_decision_use_case_translates_unexpected_errors_safely() -> None:
     sensitive = RuntimeError("sql password=secret token=abc")
     use_case = SubmitReviewDecisionUseCase(
-        review_decision_writer=RecordingDecisionWriter(error=sensitive), unit_of_work=_FakeUnitOfWork()
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+        review_decision_writer=RecordingDecisionWriter(error=sensitive),
+        unit_of_work=_FakeUnitOfWork(),
     )
 
     with pytest.raises(ReviewDecisionError) as raised:

@@ -23,7 +23,14 @@ from app.application.execution.exceptions import (
     ExecutionUnsupportedStepError,
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
+from app.application.execution.vendor_bill_strategy import (
+    SOURCE_TAX_BLOCKED_ERROR_CODE,
+    SOURCE_TAX_UNAVAILABLE_ERROR_CODE,
+    SourceTaxVendorBillCheck,
+    ensure_source_tax_allowed,
+)
 from app.application.ports import CustomerInvoiceWriter
+from app.application.source_tax import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
 from app.application.workbench.allocations import BusinessContextAllocation, BusinessContextAllocationType
 from app.billing import CustomerInvoiceBuilder
 from app.billing.exceptions import CustomerInvoiceBuildError
@@ -41,10 +48,17 @@ class CustomerInvoiceExecutionStrategy:
         source_invoice_reader: ExecutionSourceInvoiceReader,
         customer_invoice_builder: CustomerInvoiceBuilder,
         customer_invoice_writer: CustomerInvoiceWriter,
+        source_tax_safety_check: SourceTaxVendorBillCheck,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._customer_invoice_builder = customer_invoice_builder
         self._customer_invoice_writer = customer_invoice_writer
+        # PR T W1 (R2): a recharge invoice is built from the same incoming invoice, so it gets
+        # its own source-document tax check -- never only the Vendor Bill step's, the
+        # decision gate's or the billing evidence's. Required, never defaulted.
+        if source_tax_safety_check is None:
+            raise ExecutionSourceInvoiceError("Source tax safety check is required for Customer Invoice execution.")
+        self._source_tax_safety_check = source_tax_safety_check
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -76,6 +90,9 @@ class CustomerInvoiceExecutionStrategy:
                 decision_version=request.decision_version,
             )
             _validate_source(request=request, source=source)
+            # Re-reads and verifies the original stored UBL on every attempt (DRY_RUN and
+            # EXECUTE, retry and resume), before the build and any ERP write.
+            ensure_source_tax_allowed(self._source_tax_safety_check, source)
             customer_invoice = self._customer_invoice_builder.build(
                 company_id=request.company_id,
                 source_invoice_id=source.source_invoice_id,
@@ -93,6 +110,10 @@ class CustomerInvoiceExecutionStrategy:
             )
         except ExecutionSourceInvoiceError as exc:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
+        except SourceTaxSafetyBlockedError as exc:
+            return _failure_result(request, error_code=SOURCE_TAX_BLOCKED_ERROR_CODE, message=exc.safe_message)
+        except SourceTaxFactsUnavailableError as exc:
+            return _failure_result(request, error_code=SOURCE_TAX_UNAVAILABLE_ERROR_CODE, message=exc.safe_message)
         except CustomerInvoiceBuildError as exc:
             return _failure_result(request, error_code="customer_invoice_build_error", message=exc.safe_message)
         except ApplicationError as exc:

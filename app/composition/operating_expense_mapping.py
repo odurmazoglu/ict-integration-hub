@@ -11,6 +11,7 @@ from app.composition.imports import (
     build_runtime_workbench_projection_synchronizer,
     build_supplier_partner_reader,
 )
+from app.composition.source_tax import build_source_tax_facts_reader
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -64,6 +65,7 @@ def build_submit_operating_expense_mapping_use_case(
             odoo_client=resolved_odoo_client,
         ),
         source_invoice_reader=source_invoice_reader,
+        source_tax_facts_reader=build_source_tax_facts_reader(session=session, settings=settings),
         reclassification_writer=review_repository,
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
         supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),

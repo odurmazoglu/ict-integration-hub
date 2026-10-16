@@ -83,6 +83,7 @@ from app.application.return_reference import (
     ReturnReferenceLookupUnavailableError,
     ReturnReferenceNotApplicableError,
 )
+from app.application.source_tax import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
 from app.application.workbench import (
     BusinessContextAllocation,
     BusinessContextAllocationSet,
@@ -1819,6 +1820,11 @@ def _raise_error(exc: Exception, *, trace_id: str) -> JSONResponse:
 
 
 def _status_code_for_exception(exc: Exception) -> int:
+    # PR T W1: a blocked source document is a state conflict; an unreadable one is temporary.
+    if isinstance(exc, SourceTaxSafetyBlockedError):
+        return HTTPStatus.CONFLICT
+    if isinstance(exc, SourceTaxFactsUnavailableError):
+        return HTTPStatus.SERVICE_UNAVAILABLE
     if isinstance(exc, ReturnReferenceNotApplicableError):
         return HTTPStatus.CONFLICT
     if isinstance(exc, ReturnReferenceLookupUnavailableError):

@@ -97,6 +97,7 @@ from app.persistence import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
+from tests.unit.source_tax_support import CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -325,6 +326,7 @@ async def _reclassify(
     trigger: ReviewReclassificationTrigger = ReviewReclassificationTrigger.SUPPLIER_RESOLUTION,
 ):
     use_case = ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(rule_result),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=SqlAlchemyReviewRepository(session),
@@ -610,6 +612,7 @@ def _use_case(
         remediation_effect_writer=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
         supplier_partner_writer=_UnreachableSupplierPartnerWriter(),
         reclassifier=ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(rule_result),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=SqlAlchemyReviewRepository(session),

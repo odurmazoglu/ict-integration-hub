@@ -114,6 +114,7 @@ from app.composition.purchase_purpose_and_accounting_resolution import (
 )
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.composition.return_reference import build_lookup_return_reference_use_case
+from app.composition.source_tax import build_source_tax_safety_check
 from app.composition.supplier_remediation import (
     build_get_one_off_vendor_retirement_use_case,
 )
@@ -278,6 +279,8 @@ def get_submit_review_decision_use_case(
         projection_synchronizer=build_runtime_workbench_projection_synchronizer(
             session=session, settings=settings, odoo_client=odoo_client
         ),
+        # PR T W1: a Vendor Bill decision is refused unless the original document passes.
+        source_tax_safety_check=build_source_tax_safety_check(session=session, settings=settings),
     )
 
 

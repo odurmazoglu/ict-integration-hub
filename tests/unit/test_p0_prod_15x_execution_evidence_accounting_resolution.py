@@ -85,6 +85,7 @@ from app.persistence import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK, CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -330,6 +331,7 @@ class _FakeExpenseAccountReader:
 def _reclassifier(session: Session, *, facts: _Facts, mapping_repository) -> ReclassifyWorkbenchReviewUseCase:
     review_repository = SqlAlchemyReviewRepository(session)
     return ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(facts, mapping_repository=mapping_repository),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=review_repository,
@@ -693,6 +695,7 @@ async def test_decision_submission_no_longer_fails_with_execution_source_invoice
     assert evidence.operating_expense_match.expense_account_id == EXPENSE_ACCOUNT
 
     decision_use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=evidence_reader,

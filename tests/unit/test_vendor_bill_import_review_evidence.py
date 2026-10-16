@@ -63,6 +63,7 @@ from app.tax_mapping import (
     TaxMatchStatus,
     TaxType,
 )
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 7
 ETTN = "INV-ETTN"
@@ -604,6 +605,7 @@ async def test_stage1_evidence_enables_accepted_vendor_bill_decision_and_stage2(
     assert item is not None
 
     submit = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

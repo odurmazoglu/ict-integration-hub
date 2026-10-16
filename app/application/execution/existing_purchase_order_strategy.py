@@ -22,6 +22,13 @@ from app.application.execution.exceptions import (
     ExecutionUnsupportedStepError,
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
+from app.application.execution.vendor_bill_strategy import (
+    SOURCE_TAX_BLOCKED_ERROR_CODE,
+    SOURCE_TAX_UNAVAILABLE_ERROR_CODE,
+    SourceTaxVendorBillCheck,
+    ensure_source_tax_allowed,
+)
+from app.application.source_tax import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
 from app.application.workbench.allocations import BusinessContextAllocation
 
 
@@ -36,9 +43,14 @@ class ExistingPurchaseOrderExecutionStrategy:
         *,
         source_invoice_reader: ExecutionSourceInvoiceReader,
         purchase_order_vendor_bill_repository: object,
+        source_tax_safety_check: SourceTaxVendorBillCheck,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._purchase_order_vendor_bill_repository = purchase_order_vendor_bill_repository
+        # PR T W1: billing a Purchase Order creates a Vendor Bill too; required, never defaulted.
+        if source_tax_safety_check is None:
+            raise ExecutionSourceInvoiceError("Source tax safety check is required for Purchase Order billing.")
+        self._source_tax_safety_check = source_tax_safety_check
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -64,6 +76,7 @@ class ExistingPurchaseOrderExecutionStrategy:
                 decision_version=request.decision_version,
             )
             _validate_source(request=request, source=source)
+            ensure_source_tax_allowed(self._source_tax_safety_check, source)
             allocation = _purchase_order_allocation(request)
             purchase_order_id = allocation.purchase_order_id
             if purchase_order_id is None:
@@ -112,6 +125,10 @@ class ExistingPurchaseOrderExecutionStrategy:
             )
         except ExecutionSourceInvoiceError as exc:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
+        except SourceTaxSafetyBlockedError as exc:
+            return _failure_result(request, error_code=SOURCE_TAX_BLOCKED_ERROR_CODE, message=exc.safe_message)
+        except SourceTaxFactsUnavailableError as exc:
+            return _failure_result(request, error_code=SOURCE_TAX_UNAVAILABLE_ERROR_CODE, message=exc.safe_message)
         except ApplicationError as exc:
             return _failure_result(request, error_code=_writer_error_code(exc), message=exc.safe_message)
 

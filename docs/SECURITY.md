@@ -197,6 +197,15 @@ Hub runtime persistence and Odoo draft creation are a distributed write boundary
 
 Future decision ingestion must run as a Hub-controlled scheduler or service. Browser-side JavaScript must never receive Odoo API keys, Hub service tokens, or Keycloak client secrets.
 
+## Source-Document Tax Safety (PR T W1)
+
+Vendor Bill decisions, previews and execution attempts re-read the review's original stored UBL
+document, verify it (SHA-256 against `invoice_documents.content_hash_sha256`, document UUID against
+the review's source invoice, canonical-parser XML safety rules: no DTD / entities) and refuse
+withholding, non-VAT (`TaxTypeCode` other than `0015`) or unverifiable documents. The check is
+read-only, independent of persisted reasons and evidence, and fail-closed: a storage outage is a
+retryable 503, never a pass. See `docs/WITHHOLDING_TAX_GUARD.md`.
+
 ## Out Of Scope
 
 Not implemented:

@@ -38,6 +38,7 @@ from app.matching import (
     ProductMatchStatus,
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
 def test_customer_invoice_strategy_supports_only_creation_mode_allocations() -> None:
@@ -191,6 +192,7 @@ class StaticSourceInvoiceReader:
 
 def _strategy(*, writer: RecordingCustomerInvoiceWriter) -> CustomerInvoiceExecutionStrategy:
     return CustomerInvoiceExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=StaticSourceInvoiceReader(),
         customer_invoice_builder=CustomerInvoiceBuilder(),
         customer_invoice_writer=writer,
