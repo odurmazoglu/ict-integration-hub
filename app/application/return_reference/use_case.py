@@ -3,7 +3,12 @@
 Read-only and informational: the use case reads the review, its source-invoice evidence
 and the stored raw UBL document, extracts the BillingReference entries at read time,
 searches the company's Uyumsoft outbox (active, then archived) by exact invoice number
-and validates the single candidate. It has no writer dependency, persists nothing and
+and validates the single candidate.
+
+Company isolation is fail-closed: the outbox is searched only when the configured Uyumsoft
+account is explicitly bound to the requesting company *and* the return's buyer tax number
+resolves to exactly that company. Otherwise the result is COMPANY_UNVERIFIED with no
+provider call and no candidate data. It has no writer dependency, persists nothing and
 is never invoked by a Workbench read -- only by the explicit lookup action.
 """
 
@@ -120,6 +125,7 @@ class LookupReturnReferenceUseCase:
         document_reader: SourceDocumentContentReader,
         company_resolver: CompanyTaxIdentityResolver,
         outbox_lookup: OutboxInvoiceLookup,
+        outbox_account_company_id: int | None,
     ) -> None:
         self._review_reader = review_reader
         self._source_reader = source_reader
@@ -127,6 +133,8 @@ class LookupReturnReferenceUseCase:
         self._document_reader = document_reader
         self._company_resolver = company_resolver
         self._outbox_lookup = outbox_lookup
+        #: Company that owns the configured Uyumsoft account; ``None`` disables every outbox search.
+        self._outbox_account_company_id = outbox_account_company_id
 
     def execute(self, query: ReturnReferenceLookupQuery) -> ReturnReferenceLookupResult:
         if not isinstance(query, ReturnReferenceLookupQuery):
@@ -147,6 +155,7 @@ class LookupReturnReferenceUseCase:
             document_reader=self._document_reader,
             company_resolver=self._company_resolver,
             outbox_lookup=self._outbox_lookup,
+            outbox_account_company_id=self._outbox_account_company_id,
         ).run()
         logger.info(
             "return_reference_lookup_completed",
@@ -177,6 +186,7 @@ class _Lookup:
         document_reader: SourceDocumentContentReader,
         company_resolver: CompanyTaxIdentityResolver,
         outbox_lookup: OutboxInvoiceLookup,
+        outbox_account_company_id: int | None,
     ) -> None:
         self._query = query
         self._review_version = review_version
@@ -186,6 +196,7 @@ class _Lookup:
         self._document_reader = document_reader
         self._company_resolver = company_resolver
         self._outbox_lookup = outbox_lookup
+        self._outbox_account_company_id = outbox_account_company_id
         self._provider_calls = 0
         self._cache: dict[tuple[str, date], _SearchResult] = {}
 
@@ -206,15 +217,17 @@ class _Lookup:
             return self._result(ReturnReferenceStatus.REFERENCE_MISSING)
 
         searchable = any(not reference_format_issues(reference) for reference in extraction.references)
-        company_verified = self._company_identity_verified() if searchable else None
-        references = tuple(
-            self._reference_result(reference, company_verified=bool(company_verified))
-            for reference in extraction.references
-        )
+        if not searchable:
+            references = tuple(self._unsearched_reference(reference) for reference in extraction.references)
+            return self._result(overall_status(reference.status for reference in references), references=references)
+        ownership_issue = self._company_ownership_issue()
+        if ownership_issue is not None:
+            return self._company_unverified(extraction.references, ownership_issue)
+        references = tuple(self._reference_result(reference) for reference in extraction.references)
         return self._result(
             overall_status(reference.status for reference in references),
             references=references,
-            company_identity_verified=company_verified,
+            company_identity_verified=True,
         )
 
     def _source_content(self) -> bytes | ReturnReferenceIssue:
@@ -238,18 +251,51 @@ class _Lookup:
             return ReturnReferenceIssue.SOURCE_DOCUMENT_HASH_MISMATCH
         return content
 
-    def _company_identity_verified(self) -> bool:
+    def _company_ownership_issue(self) -> ReturnReferenceIssue | None:
+        """Both the outbox account and the return must belong to the requesting company."""
+
+        account_company_id = self._outbox_account_company_id
+        if type(account_company_id) is not int or account_company_id != self._query.company_id:
+            return ReturnReferenceIssue.OUTBOX_ACCOUNT_OWNER_UNVERIFIED
         tax_number = (self._invoice.customer.tax_number or "").strip()
         if not tax_number:
-            return False
-        return self._company_resolver.company_ids_for_tax_number(tax_number) == (self._query.company_id,)
+            return ReturnReferenceIssue.COMPANY_IDENTITY_UNVERIFIED
+        if self._company_resolver.company_ids_for_tax_number(tax_number) != (self._query.company_id,):
+            return ReturnReferenceIssue.COMPANY_IDENTITY_UNVERIFIED
+        return None
 
-    def _reference_result(self, reference: BillingReference, *, company_verified: bool) -> ReferenceResult:
+    def _company_unverified(
+        self, references: tuple[BillingReference, ...], issue: ReturnReferenceIssue
+    ) -> ReturnReferenceLookupResult:
+        logger.warning(
+            "return_reference_company_unverified",
+            extra={"review_id": self._query.review_id, "company_id": self._query.company_id, "issue": issue.value},
+        )
+        unverified = tuple(
+            self._unsearched_reference(reference, fallback=ReturnReferenceStatus.COMPANY_UNVERIFIED)
+            for reference in references
+        )
+        return self._result(
+            ReturnReferenceStatus.COMPANY_UNVERIFIED,
+            issues=(issue,),
+            references=unverified,
+            company_identity_verified=False,
+        )
+
+    @staticmethod
+    def _unsearched_reference(
+        reference: BillingReference,
+        *,
+        fallback: ReturnReferenceStatus = ReturnReferenceStatus.REFERENCE_UNPARSEABLE,
+    ) -> ReferenceResult:
         format_issues = reference_format_issues(reference)
         if format_issues:
             return _reference(reference, ReturnReferenceStatus.REFERENCE_UNPARSEABLE, issues=format_issues)
-        if reference.invoice_number is None or reference.issue_date is None:  # excluded by format_issues
-            return _reference(reference, ReturnReferenceStatus.REFERENCE_UNPARSEABLE)
+        return _reference(reference, fallback)
+
+    def _reference_result(self, reference: BillingReference) -> ReferenceResult:
+        if reference_format_issues(reference) or reference.invoice_number is None or reference.issue_date is None:
+            return self._unsearched_reference(reference)
         search = self._search(reference.invoice_number, reference.issue_date)
         evaluations = tuple(
             evaluate_candidate(
@@ -259,7 +305,7 @@ class _Lookup:
                 return_type_code=self._return_code,
                 return_seller_tax_number=self._invoice.supplier.tax_number,
                 return_currency=self._invoice.header.currency_code,
-                company_identity_verified=company_verified,
+                company_identity_verified=True,  # _reference_result runs only after ownership is verified
             )
             for candidate in search.candidates
         )
@@ -310,6 +356,7 @@ class _Lookup:
                 provider_total=page.provider_total,
                 returned=len(page.candidates),
                 exact=len(exact),
+                page_size=page.page_size,
             ),
             exact,
         )

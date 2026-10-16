@@ -7,6 +7,8 @@ Rules:
   reference can be NOT_FOUND, MATCHED or MISMATCH; otherwise it is INCOMPLETE_SEARCH.
 - More than one exact candidate, or a provider total larger than the page returned, is
   AMBIGUOUS. A candidate is never chosen automatically.
+- A full page without a provider total may hide further rows: unless more than one exact
+  candidate is already confirmed (AMBIGUOUS), the reference is INCOMPLETE_SEARCH.
 - A single candidate is MATCHED only when every check passes, else MISMATCH.
 """
 
@@ -35,6 +37,7 @@ VALID_ORIGINAL_STATUSES = frozenset({"Approved"})
 
 #: When several references disagree, the overall status is the first present in this order.
 OVERALL_STATUS_PRECEDENCE = (
+    ReturnReferenceStatus.COMPANY_UNVERIFIED,
     ReturnReferenceStatus.INCOMPLETE_SEARCH,
     ReturnReferenceStatus.REFERENCE_UNPARSEABLE,
     ReturnReferenceStatus.AMBIGUOUS,
@@ -93,6 +96,8 @@ def search_issues(searches: Iterable[SearchOutcome]) -> tuple[ReturnReferenceIss
             issues.append(failed)
         elif search.provider_total is not None and search.provider_total > search.returned:
             issues.append(ReturnReferenceIssue.PROVIDER_RESULT_TRUNCATED)
+        elif search.provider_total is None and _page_full(search):
+            issues.append(ReturnReferenceIssue.PROVIDER_TOTAL_MISSING)
     return tuple(dict.fromkeys(issues))
 
 
@@ -142,6 +147,8 @@ def reference_status(
         return ReturnReferenceStatus.AMBIGUOUS, (*issues, ReturnReferenceIssue.MULTIPLE_CANDIDATES)
     if ReturnReferenceIssue.PROVIDER_RESULT_TRUNCATED in issues:
         return ReturnReferenceStatus.AMBIGUOUS, issues
+    if ReturnReferenceIssue.PROVIDER_TOTAL_MISSING in issues:
+        return ReturnReferenceStatus.INCOMPLETE_SEARCH, issues
     if not evaluations:
         return ReturnReferenceStatus.NOT_FOUND, issues
     if evaluations[0].failed_checks:
@@ -159,6 +166,11 @@ def overall_status(statuses: Iterable[ReturnReferenceStatus]) -> ReturnReference
         if status in present:
             return status
     return ReturnReferenceStatus.MISMATCH
+
+
+def _page_full(search: SearchOutcome) -> bool:
+    # An unknown page size cannot prove the page was short: treat it as full.
+    return search.page_size is None or search.returned >= search.page_size
 
 
 def _same_tax_number(left: str | None, right: str | None) -> bool:

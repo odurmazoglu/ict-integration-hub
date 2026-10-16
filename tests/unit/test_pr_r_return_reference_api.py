@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -18,6 +20,7 @@ from app.application.return_reference import (
     OutboxInvoiceCandidate,
     ReferenceResult,
     ReturnReferenceCheck,
+    ReturnReferenceIssue,
     ReturnReferenceLookupResult,
     ReturnReferenceLookupUnavailableError,
     ReturnReferenceNotApplicableError,
@@ -124,6 +127,56 @@ def test_lookup_returns_informational_result_scoped_to_context_company() -> None
     assert candidate["scenario"] == "ComercialInvoice"
     assert "buyer_tax_number" not in candidate
     assert {check["check"] for check in candidate["checks"]} == {check.value for check in ReturnReferenceCheck}
+
+
+def test_company_unverified_result_exposes_no_outbox_data() -> None:
+    result = ReturnReferenceLookupResult(
+        review_id=REVIEW_ID,
+        company_id=7,
+        review_version=3,
+        return_invoice_type_code="IADE",
+        status=ReturnReferenceStatus.COMPANY_UNVERIFIED,
+        issues=(ReturnReferenceIssue.OUTBOX_ACCOUNT_OWNER_UNVERIFIED,),
+        references=(
+            ReferenceResult(
+                position=1,
+                invoice_number=REFERENCE_NUMBER,
+                issue_date=date(2026, 9, 10),
+                document_type_code="IADE",
+                status=ReturnReferenceStatus.COMPANY_UNVERIFIED,
+            ),
+        ),
+        company_identity_verified=False,
+    )
+
+    with _client(_UseCase(result)) as client:
+        response = client.post(PATH)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "COMPANY_UNVERIFIED"
+    assert data["issues"] == ["OUTBOX_ACCOUNT_OWNER_UNVERIFIED"]
+    assert data["company_identity_verified"] is False
+    assert data["provider_calls"] == 0
+    reference = data["references"][0]
+    assert (reference["searches"], reference["candidates"]) == ([], [])
+
+
+@pytest.mark.parametrize("verified", [False, None])
+def test_response_mapper_drops_outbox_data_unless_company_is_verified(verified: bool | None) -> None:
+    """Defense in depth: even a result object that bypassed the model invariant leaks nothing."""
+
+    real = _result()
+    forged = SimpleNamespace(**{field.name: getattr(real, field.name) for field in fields(real)})
+    forged.company_identity_verified = verified
+
+    with _client(_UseCase(forged)) as client:
+        response = client.post(PATH)
+
+    assert response.status_code == 200
+    reference = response.json()["data"]["references"][0]
+    assert (reference["searches"], reference["candidates"]) == ([], [])
+    assert ORIGINAL_ETTN not in response.text
 
 
 @pytest.mark.parametrize(

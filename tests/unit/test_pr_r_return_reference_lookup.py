@@ -16,6 +16,7 @@ from app.application.return_reference import (
     OutboxLookupPage,
     OutboxLookupUnavailableError,
     ReturnReferenceCheck,
+    ReturnReferenceError,
     ReturnReferenceIssue,
     ReturnReferenceLookupQuery,
     ReturnReferenceLookupResult,
@@ -23,7 +24,9 @@ from app.application.return_reference import (
     ReturnReferenceNotApplicableError,
     ReturnReferenceSourceDocumentError,
     ReturnReferenceStatus,
+    SearchOutcome,
 )
+from app.application.return_reference.matching import reference_status
 from app.application.workbench.exceptions import ReviewNotFoundError, WorkbenchContractError
 from app.domain.invoice import parse_ubl_invoice
 from app.domain.invoice.document_types import is_return_invoice
@@ -63,11 +66,24 @@ def _candidate(**overrides: object) -> OutboxInvoiceCandidate:
     return OutboxInvoiceCandidate(**values)  # type: ignore[arg-type]
 
 
-EMPTY = OutboxLookupPage(candidates=(), provider_total=0)
+PAGE_SIZE = 10
+EMPTY = OutboxLookupPage(candidates=(), provider_total=0, page_size=PAGE_SIZE)
+_COUNTED = object()
 
 
-def _page(*candidates: OutboxInvoiceCandidate, total: int | None = None) -> OutboxLookupPage:
-    return OutboxLookupPage(candidates=candidates, provider_total=len(candidates) if total is None else total)
+def _page(
+    *candidates: OutboxInvoiceCandidate, total: int | None | object = _COUNTED, page_size: int = PAGE_SIZE
+) -> OutboxLookupPage:
+    """``total`` defaults to the row count; pass ``None`` for a provider response without TotalCount."""
+
+    provider_total = len(candidates) if total is _COUNTED else total
+    return OutboxLookupPage(candidates=candidates, provider_total=provider_total, page_size=page_size)  # type: ignore[arg-type]
+
+
+def _filler(count: int) -> tuple[OutboxInvoiceCandidate, ...]:
+    """Non-exact provider rows (ignored as candidates) that fill a page."""
+
+    return tuple(_candidate(invoice_number=f"OTH2026{index:09d}", ettn=None) for index in range(count))
 
 
 class _OutboxLookup:
@@ -134,6 +150,7 @@ def _lookup(
     company: _CompanyResolver | None = None,
     stored: bytes | Exception | None = None,
     documents: _Documents | None = None,
+    account_company_id: int | None = COMPANY_ID,
 ) -> tuple[ReturnReferenceLookupResult, _OutboxLookup, _CompanyResolver]:
     xml = xml if xml is not None else return_ubl()
     outbox = outbox or _OutboxLookup({(REFERENCE_NUMBER, False): _page(_candidate())})
@@ -146,6 +163,7 @@ def _lookup(
         document_reader=documents,
         company_resolver=company,
         outbox_lookup=outbox,
+        outbox_account_company_id=account_company_id,
     )
     result = use_case.execute(ReturnReferenceLookupQuery(review_id=REVIEW_ID, company_id=COMPANY_ID))
     return result, outbox, company
@@ -276,24 +294,108 @@ def test_unverified_return_variant_fails_the_invoice_type_check() -> None:
     assert _only_reference(result).failed_checks == (Check.INVOICE_TYPE,)
 
 
-def test_company_identity_failure_fails_company_and_seller_checks() -> None:
-    result, _, _ = _lookup(company=_CompanyResolver((99,)))
-
-    assert result.company_identity_verified is False
-    assert result.status is Status.MISMATCH
-    assert _only_reference(result).failed_checks == (Check.COMPANY_IDENTITY, Check.SELLER_IDENTITY)
-
-
-def test_company_identity_requires_exactly_one_company() -> None:
-    result, _, _ = _lookup(company=_CompanyResolver((COMPANY_ID, 99)))
-
-    assert result.company_identity_verified is False
-    assert result.status is Status.MISMATCH
-
-
 def test_company_identity_unavailable_raises_instead_of_concluding() -> None:
     with pytest.raises(ReturnReferenceLookupUnavailableError):
         _lookup(company=_CompanyResolver(ReturnReferenceLookupUnavailableError("down")))
+
+
+# ------------------------------------------------------------------ company isolation (fail-closed)
+
+OTHER_COMPANY_ID = 99
+
+
+def _assert_fail_closed(result: ReturnReferenceLookupResult, outbox: _OutboxLookup, issue: Issue) -> None:
+    assert result.status is Status.COMPANY_UNVERIFIED
+    assert result.issues == (issue,)
+    assert result.company_identity_verified is False
+    assert result.provider_calls == 0
+    assert outbox.calls == []
+    for reference in result.references:
+        assert reference.candidates == ()
+        assert reference.searches == ()
+        assert reference.failed_checks == ()
+
+
+def _outbox_with_a_hit() -> _OutboxLookup:
+    """An outbox that *would* expose a valid candidate if it were ever searched."""
+
+    return _OutboxLookup({(REFERENCE_NUMBER, False): _page(_candidate())})
+
+
+@pytest.mark.parametrize("account_company_id", [None, OTHER_COMPANY_ID])
+def test_outbox_account_not_owned_by_requesting_company_is_never_searched(account_company_id: int | None) -> None:
+    """Cross-company: the configured Uyumsoft account is unbound or belongs to another company."""
+
+    company = _CompanyResolver()
+    result, outbox, _ = _lookup(outbox=_outbox_with_a_hit(), company=company, account_company_id=account_company_id)
+
+    _assert_fail_closed(result, outbox, Issue.OUTBOX_ACCOUNT_OWNER_UNVERIFIED)
+    assert _only_reference(result).status is Status.COMPANY_UNVERIFIED
+    assert company.calls == []
+
+
+def test_unbound_account_fails_closed_even_when_the_erp_is_unavailable() -> None:
+    result, outbox, company = _lookup(
+        company=_CompanyResolver(ReturnReferenceLookupUnavailableError("down")), account_company_id=None
+    )
+
+    _assert_fail_closed(result, outbox, Issue.OUTBOX_ACCOUNT_OWNER_UNVERIFIED)
+    assert company.calls == []
+
+
+@pytest.mark.parametrize("company_ids", [(OTHER_COMPANY_ID,), (COMPANY_ID, OTHER_COMPANY_ID), ()])
+def test_return_buyer_not_exactly_the_requesting_company_is_never_searched(company_ids: tuple[int, ...]) -> None:
+    """Cross-company: the return was addressed to another company (or an ambiguous / unknown one)."""
+
+    result, outbox, company = _lookup(outbox=_outbox_with_a_hit(), company=_CompanyResolver(company_ids))
+
+    _assert_fail_closed(result, outbox, Issue.COMPANY_IDENTITY_UNVERIFIED)
+    assert company.calls == [COMPANY_VKN]
+
+
+def test_return_without_buyer_tax_number_is_never_searched() -> None:
+    result, outbox, company = _lookup(return_ubl(customer_vkn=""), outbox=_outbox_with_a_hit())
+
+    _assert_fail_closed(result, outbox, Issue.COMPANY_IDENTITY_UNVERIFIED)
+    assert company.calls == []
+
+
+def test_company_unverified_keeps_reference_format_problems_visible() -> None:
+    xml = return_ubl(references=((REFERENCE_NUMBER, REFERENCE_DATE, "IADE"), (None, REFERENCE_DATE, "IADE")))
+
+    result, outbox, _ = _lookup(xml, account_company_id=None)
+
+    _assert_fail_closed(result, outbox, Issue.OUTBOX_ACCOUNT_OWNER_UNVERIFIED)
+    assert [reference.status for reference in result.references] == [
+        Status.COMPANY_UNVERIFIED,
+        Status.REFERENCE_UNPARSEABLE,
+    ]
+    assert result.references[1].issues == (Issue.INVOICE_NUMBER_MISSING,)
+
+
+def test_only_unparseable_references_need_no_company_verification() -> None:
+    result, outbox, company = _lookup(return_ubl(references=((None, REFERENCE_DATE, "IADE"),)), account_company_id=None)
+
+    assert result.status is Status.REFERENCE_UNPARSEABLE
+    assert result.company_identity_verified is None
+    assert (outbox.calls, company.calls) == ([], [])
+
+
+def test_verified_company_reports_outbox_data() -> None:
+    result, outbox, company = _lookup()
+
+    assert result.company_identity_verified is True
+    assert company.calls == [COMPANY_VKN]
+    assert len(outbox.calls) == 2
+    assert len(_only_reference(result).candidates) == 1
+
+
+@pytest.mark.parametrize("verified", [False, None])
+def test_result_cannot_carry_outbox_data_without_a_verified_company(verified: bool | None) -> None:
+    result, _, _ = _lookup()
+
+    with pytest.raises(ReturnReferenceError):
+        replace(result, company_identity_verified=verified)
 
 
 # ------------------------------------------------------------------ search completeness
@@ -358,6 +460,89 @@ def test_non_exact_provider_rows_are_ignored() -> None:
     reference = _only_reference(result)
     assert result.status is Status.NOT_FOUND
     assert (reference.searches[0].returned, reference.searches[0].exact) == (2, 0)
+
+
+def test_full_page_without_provider_total_is_incomplete_not_not_found() -> None:
+    outbox = _OutboxLookup({(REFERENCE_NUMBER, False): _page(*_filler(PAGE_SIZE), total=None)})
+
+    result, _, _ = _lookup(outbox=outbox)
+
+    reference = _only_reference(result)
+    assert result.status is Status.INCOMPLETE_SEARCH
+    assert reference.status is Status.INCOMPLETE_SEARCH
+    assert reference.issues == (Issue.PROVIDER_TOTAL_MISSING,)
+    assert (reference.searches[0].returned, reference.searches[0].page_size) == (PAGE_SIZE, PAGE_SIZE)
+
+
+def test_full_archived_page_without_provider_total_is_incomplete() -> None:
+    outbox = _OutboxLookup({(REFERENCE_NUMBER, True): _page(*_filler(PAGE_SIZE), total=None)})
+
+    result, _, _ = _lookup(outbox=outbox)
+
+    assert result.status is Status.INCOMPLETE_SEARCH
+    assert _only_reference(result).issues == (Issue.PROVIDER_TOTAL_MISSING,)
+
+
+def test_full_page_without_provider_total_never_yields_matched() -> None:
+    outbox = _OutboxLookup({(REFERENCE_NUMBER, False): _page(_candidate(), *_filler(PAGE_SIZE - 1), total=None)})
+
+    result, _, _ = _lookup(outbox=outbox)
+
+    reference = _only_reference(result)
+    assert result.status is Status.INCOMPLETE_SEARCH
+    assert reference.issues == (Issue.PROVIDER_TOTAL_MISSING,)
+    assert len(reference.candidates) == 1
+
+
+def test_confirmed_multiple_candidates_stay_ambiguous_on_a_full_page_without_total() -> None:
+    second = _candidate(ettn=SECOND_ORIGINAL_ETTN)
+    outbox = _OutboxLookup(
+        {(REFERENCE_NUMBER, False): _page(_candidate(), second, *_filler(PAGE_SIZE - 2), total=None)}
+    )
+
+    result, _, _ = _lookup(outbox=outbox)
+
+    reference = _only_reference(result)
+    assert result.status is Status.AMBIGUOUS
+    assert reference.issues == (Issue.PROVIDER_TOTAL_MISSING, Issue.MULTIPLE_CANDIDATES)
+    assert reference.failed_checks == ()
+
+
+def test_short_page_without_provider_total_is_definitive() -> None:
+    outbox = _OutboxLookup({(REFERENCE_NUMBER, False): _page(*_filler(PAGE_SIZE - 1), total=None)})
+
+    result, _, _ = _lookup(outbox=outbox)
+
+    assert result.status is Status.NOT_FOUND
+    assert _only_reference(result).issues == ()
+
+
+def test_short_page_without_provider_total_can_match() -> None:
+    outbox = _OutboxLookup({(REFERENCE_NUMBER, False): _page(_candidate(), total=None)})
+
+    result, _, _ = _lookup(outbox=outbox)
+
+    assert result.status is Status.MATCHED
+
+
+def test_full_page_with_matching_provider_total_is_definitive() -> None:
+    outbox = _OutboxLookup({(REFERENCE_NUMBER, False): _page(*_filler(PAGE_SIZE), total=PAGE_SIZE)})
+
+    result, _, _ = _lookup(outbox=outbox)
+
+    assert result.status is Status.NOT_FOUND
+
+
+def test_search_with_unknown_page_size_and_no_total_is_treated_as_incomplete() -> None:
+    searches = (
+        SearchOutcome(archived=False, completed=True, provider_total=None, returned=0, page_size=None),
+        SearchOutcome(archived=True, completed=True, provider_total=0, returned=0, page_size=PAGE_SIZE),
+    )
+
+    assert reference_status(searches=searches, evaluations=()) == (
+        Status.INCOMPLETE_SEARCH,
+        (Issue.PROVIDER_TOTAL_MISSING,),
+    )
 
 
 def test_truncated_provider_page_is_ambiguous() -> None:
@@ -518,6 +703,7 @@ def test_unknown_review_propagates_not_found() -> None:
         document_reader=_Documents(return_ubl()),
         company_resolver=_CompanyResolver(),
         outbox_lookup=_OutboxLookup(),
+        outbox_account_company_id=COMPANY_ID,
     )
     with pytest.raises(ReviewNotFoundError):
         use_case.execute(ReturnReferenceLookupQuery(review_id="review:other", company_id=COMPANY_ID))
@@ -541,6 +727,7 @@ def test_use_case_depends_on_read_ports_only() -> None:
         "document_reader",
         "company_resolver",
         "outbox_lookup",
+        "outbox_account_company_id",
     }
 
 

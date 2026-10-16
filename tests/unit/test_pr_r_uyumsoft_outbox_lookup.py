@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import SecretStr
@@ -17,6 +18,7 @@ from app.composition.return_reference import (
     OdooCompanyTaxIdentityResolver,
     StoredSourceDocumentReader,
     UyumsoftOutboxInvoiceLookup,
+    build_lookup_return_reference_use_case,
 )
 from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
 from app.connectors.uyumsoft.client import READ_ONLY_OPERATIONS, UyumsoftSoapClient
@@ -25,6 +27,7 @@ from app.connectors.uyumsoft.invoice_mapping import (
     build_invoice_list_query_model,
     normalize_outbox_lookup_response,
 )
+from app.core.config import Settings
 from app.erp.exceptions import ErpRepositoryError
 from app.erp.models import Company
 from app.schemas.uyumsoft_invoices import (
@@ -185,6 +188,15 @@ def test_outbox_record_uses_verified_field_semantics() -> None:
     )
 
 
+def test_absent_total_count_is_unknown_not_zero() -> None:
+    raw = {"IsSucceded": True, "Message": None, "Value": {"Items": [_raw_item()], "PageIndex": 0}}
+
+    response = normalize_outbox_lookup_response(raw, page_size=1)
+
+    assert response.total_count is None
+    assert (response.page_size, len(response.invoices)) == (1, 1)
+
+
 def test_naive_provider_timestamp_keeps_its_local_calendar_date() -> None:
     raw = _raw_response([_raw_item(ExecutionDate=datetime(2026, 9, 10, 23, 30))])
 
@@ -281,9 +293,21 @@ def test_adapter_builds_a_narrow_exact_request_around_the_reference_date() -> No
     assert request.from_date == datetime.combine(date(2026, 9, 9), time.min, tzinfo=UYUMSOFT_LOCAL_TIMEZONE)
     assert request.to_date == datetime.combine(date(2026, 9, 11), time.max, tzinfo=UYUMSOFT_LOCAL_TIMEZONE)
     assert page.provider_total == 1
+    assert page.page_size == 10
     assert page.candidates[0].invoice_number == REFERENCE_NUMBER
     assert page.candidates[0].ettn == ORIGINAL_ETTN
     assert page.candidates[0].buyer_tax_number == "1"
+
+
+def test_adapter_keeps_a_missing_provider_total_unknown_and_reports_its_page_size() -> None:
+    client = _RecordingLookupClient(UyumsoftOutboxLookupResponse(page_size=3, total_count=None, invoices=[]))
+
+    page = UyumsoftOutboxInvoiceLookup(client, page_size=3).find_by_invoice_number(
+        REFERENCE_NUMBER, issue_date=date(2026, 9, 10), archived=False
+    )
+
+    assert (page.provider_total, page.page_size) == (None, 3)
+    assert client.requests[0].page_size == 3
 
 
 @pytest.mark.parametrize("error", [ConnectorError("soap fault"), ConnectorTimeoutError("timeout")])
@@ -327,3 +351,31 @@ class _Storage:
 def test_document_reader_translates_storage_failure() -> None:
     with pytest.raises(ReturnReferenceSourceDocumentError):
         StoredSourceDocumentReader(_Storage()).read("key")
+
+
+# ------------------------------------------------------------------ outbox account ownership wiring
+
+
+def test_outbox_account_company_is_unbound_by_default() -> None:
+    assert Settings.model_fields["uyumsoft_account_company_id"].default is None
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_outbox_account_company_must_be_positive(value: int) -> None:
+    with pytest.raises(ValueError):
+        Settings(uyumsoft_account_company_id=value)
+
+
+@pytest.mark.parametrize("value", [None, 7])
+def test_composition_passes_the_configured_outbox_account_company(value: int | None) -> None:
+    settings = Settings().model_copy(update={"uyumsoft_account_company_id": value})
+
+    use_case = build_lookup_return_reference_use_case(
+        session=MagicMock(),
+        settings=settings,
+        uyumsoft_client=_RecordingLookupClient(ConnectorError("unused")),
+        odoo_client=MagicMock(),
+        storage=_Storage(),
+    )
+
+    assert use_case._outbox_account_company_id == value

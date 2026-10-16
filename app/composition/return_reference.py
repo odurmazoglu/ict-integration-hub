@@ -42,7 +42,8 @@ from app.schemas.uyumsoft_invoices import (
 from app.services.document_storage import DocumentStorage, DocumentStorageError, LocalDocumentStorage
 
 #: Small on purpose: an exact-number search should return 0 or 1 rows; anything beyond the
-#: page is reported as PROVIDER_RESULT_TRUNCATED (AMBIGUOUS), never paged through.
+#: page is reported as PROVIDER_RESULT_TRUNCATED (AMBIGUOUS), or as PROVIDER_TOTAL_MISSING
+#: (INCOMPLETE_SEARCH) when a full page carries no total -- never paged through.
 OUTBOX_LOOKUP_PAGE_SIZE = 10
 #: Search window around the reference IssueDate, in Turkish local calendar days.
 OUTBOX_LOOKUP_WINDOW_DAYS = 1
@@ -83,6 +84,7 @@ class UyumsoftOutboxInvoiceLookup:
         return OutboxLookupPage(
             candidates=tuple(_candidate(record) for record in response.invoices),
             provider_total=response.total_count,
+            page_size=self._page_size,
         )
 
 
@@ -126,6 +128,7 @@ def build_lookup_return_reference_use_case(
         document_reader=StoredSourceDocumentReader(storage or LocalDocumentStorage(settings.document_storage_root)),
         company_resolver=OdooCompanyTaxIdentityResolver(OdooCompanyRepository(adapter=adapter)),
         outbox_lookup=UyumsoftOutboxInvoiceLookup(uyumsoft_client or UyumsoftSoapClient.from_settings(settings)),
+        outbox_account_company_id=settings.uyumsoft_account_company_id,
     )
 
 

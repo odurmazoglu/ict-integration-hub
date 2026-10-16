@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 
+from app.application.return_reference.exceptions import ReturnReferenceError
+
 
 class ReturnReferenceStatus(StrEnum):
     MATCHED = "MATCHED"
@@ -20,6 +22,9 @@ class ReturnReferenceStatus(StrEnum):
     REFERENCE_MISSING = "REFERENCE_MISSING"
     REFERENCE_UNPARSEABLE = "REFERENCE_UNPARSEABLE"
     INCOMPLETE_SEARCH = "INCOMPLETE_SEARCH"
+    #: The requesting company could not be verified as the owner of the configured Uyumsoft
+    #: account or of the return invoice: the outbox was not searched and no candidate is reported.
+    COMPANY_UNVERIFIED = "COMPANY_UNVERIFIED"
 
 
 class ReturnReferenceCheck(StrEnum):
@@ -55,6 +60,12 @@ class ReturnReferenceIssue(StrEnum):
     ACTIVE_SEARCH_FAILED = "ACTIVE_SEARCH_FAILED"
     ARCHIVED_SEARCH_FAILED = "ARCHIVED_SEARCH_FAILED"
     PROVIDER_RESULT_TRUNCATED = "PROVIDER_RESULT_TRUNCATED"
+    #: The provider returned a full page without ``TotalCount``: further rows may exist.
+    PROVIDER_TOTAL_MISSING = "PROVIDER_TOTAL_MISSING"
+    #: The configured Uyumsoft account is not bound to the requesting company (or not bound at all).
+    OUTBOX_ACCOUNT_OWNER_UNVERIFIED = "OUTBOX_ACCOUNT_OWNER_UNVERIFIED"
+    #: The return's buyer tax number does not resolve to exactly the requesting company.
+    COMPANY_IDENTITY_UNVERIFIED = "COMPANY_IDENTITY_UNVERIFIED"
     MULTIPLE_CANDIDATES = "MULTIPLE_CANDIDATES"
 
 
@@ -77,6 +88,8 @@ class OutboxInvoiceCandidate:
 class OutboxLookupPage:
     candidates: tuple[OutboxInvoiceCandidate, ...]
     provider_total: int | None
+    #: The page size requested from the provider; a full page without a total is incomplete.
+    page_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +115,7 @@ class SearchOutcome:
     provider_total: int | None = None
     returned: int = 0
     exact: int = 0
+    page_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,3 +142,10 @@ class ReturnReferenceLookupResult:
     references: tuple[ReferenceResult, ...] = ()
     provider_calls: int = 0
     company_identity_verified: bool | None = None
+
+    def __post_init__(self) -> None:
+        # Structural company-isolation guard: outbox data exists only for a verified company.
+        if self.company_identity_verified is not True and any(
+            reference.candidates or reference.searches for reference in self.references
+        ):
+            raise ReturnReferenceError("Outbox search data requires a verified company identity.")

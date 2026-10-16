@@ -18,6 +18,29 @@ company's Uyumsoft outbox. The result is **informational only**.
 - Permissions: `workbench_review_read` **and** `invoice_document_read` (provider access).
   Company scope comes from `RequestContext`.
 
+## Company isolation (fail-closed)
+
+The Hub uses a single configured Uyumsoft account, whose outbox belongs to one company.
+The outbox is searched **only** when both hold:
+
+1. `UYUMSOFT_ACCOUNT_COMPANY_ID` is set and equals the requesting company
+   (`RequestContext.company_id`). Unset (the default) disables every outbox search.
+2. The return's buyer tax number resolves to exactly one Odoo company, and it is the
+   requesting company.
+
+Otherwise the result is `COMPANY_UNVERIFIED` with issue `OUTBOX_ACCOUNT_OWNER_UNVERIFIED`
+or `COMPANY_IDENTITY_UNVERIFIED`: no Uyumsoft call is made and no search or candidate
+data is returned. References are still listed (they come from the company's own stored
+document); a malformed reference stays `REFERENCE_UNPARSEABLE`.
+
+Two further layers enforce this independently of the use case flow:
+`ReturnReferenceLookupResult` refuses to hold searches or candidates unless
+`company_identity_verified is True`, and the API response mapper drops searches and
+candidates unless the result is explicitly verified.
+
+`WhoAmI` is not used to derive the owner: its response shape has not been verified
+against production. Binding the account to a company is an explicit operator setting.
+
 ## Reference extraction
 
 The stored raw UBL document of the review (linked through the review's import
@@ -61,12 +84,16 @@ searched once.
   matching; no candidate is ever chosen automatically.
 - Either search failing ⇒ `INCOMPLETE_SEARCH` (never `NOT_FOUND`, never `MATCHED`).
 - More than one exact candidate, or a provider total larger than the page ⇒ `AMBIGUOUS`.
+- A full page (rows returned ≥ page size) without a provider `TotalCount` ⇒
+  `INCOMPLETE_SEARCH` with issue `PROVIDER_TOTAL_MISSING`: further rows may exist, so
+  neither `NOT_FOUND` nor `MATCHED`/`MISMATCH` is concluded. Confirmed multiple exact
+  candidates on such a page stay `AMBIGUOUS`. A short page without a total is complete.
 - No exact candidate in both completed searches ⇒ `NOT_FOUND`.
 - One candidate ⇒ `MATCHED` only if every check passes, else `MISMATCH`:
 
 | Check | Rule |
 | --- | --- |
-| `COMPANY_IDENTITY` | exactly one Odoo company has the return buyer tax number, and it is the review company |
+| `COMPANY_IDENTITY` | exactly one Odoo company has the return buyer tax number, and it is the review company (verified before searching; see Company isolation) |
 | `SELLER_IDENTITY` | the original comes from that company's own outbox and `COMPANY_IDENTITY` holds (the outbox item has no seller tax number) |
 | `BUYER_IDENTITY` | original `TargetTcknVkn` equals the return seller tax number (digits only) |
 | `CURRENCY` | original currency equals the return currency |
@@ -77,7 +104,7 @@ searched once.
 Reference problems are `REFERENCE_UNPARSEABLE` (missing/invalid number or date, malformed
 XML, missing/ambiguous/unreadable/altered source document) and are never searched. No
 reference at all ⇒ `REFERENCE_MISSING`. The overall status is `MATCHED` only when every
-reference matched; otherwise the first present of `INCOMPLETE_SEARCH`,
+reference matched; otherwise the first present of `COMPANY_UNVERIFIED`, `INCOMPLETE_SEARCH`,
 `REFERENCE_UNPARSEABLE`, `AMBIGUOUS`, `MISMATCH`, `NOT_FOUND`.
 
 An unavailable company-identity read is an error (HTTP 503), not a conclusion.
@@ -93,9 +120,11 @@ volume stays far below 100 invoices per poll window. This is **not verified** an
 shared pagination is unchanged; it needs a separate review with a test-environment check
 (for example page size 1 over a window holding at least two invoices, comparing
 `PageIndex` 0 and 1). The PR R lookup is not affected in practice: an exact-number
-search returns at most a handful of rows, and a truncated page is reported as
-`AMBIGUOUS`.
+search returns at most a handful of rows, a truncated page is reported as
+`AMBIGUOUS`, and a full page without a total as `INCOMPLETE_SEARCH`.
 
 ## Rollback
 
-Code-only change: revert the commit. No migration, no stored data, no flag.
+Code-only change: revert the commit. No migration, no stored data. To disable the lookup's
+outbox access without a revert, unset `UYUMSOFT_ACCOUNT_COMPANY_ID` (every lookup then
+returns `COMPANY_UNVERIFIED` without calling Uyumsoft).

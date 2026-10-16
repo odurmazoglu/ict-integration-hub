@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     uyumsoft_timeout_seconds: float = 20
     uyumsoft_retry_attempts: int = Field(default=3, ge=1, le=5)
     uyumsoft_retry_backoff_seconds: float = Field(default=0.2, ge=0, le=5)
+    #: PR R. Odoo company that owns the configured Uyumsoft account. Unset (default) fails
+    #: closed: the return-reference lookup never searches the outbox for any company.
+    uyumsoft_account_company_id: int | None = Field(default=None, ge=1)
     #: Hub-owned inbound poller (separate worker process). Off by default; enabling it
     #: in production is a separate operator step.
     uyumsoft_inbound_poll_enabled: bool = False

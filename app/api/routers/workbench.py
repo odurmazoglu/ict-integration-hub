@@ -1729,19 +1729,26 @@ def _workbench_execution_status_response(status: WorkbenchExecutionStatus) -> Wo
 
 
 def _return_reference_lookup_response(result: ReturnReferenceLookupResult) -> ReturnReferenceLookupResponse:
+    # Defense in depth for company isolation: outbox searches and candidates are emitted only
+    # for an explicitly verified company, independent of the use case's own guard.
+    verified = result.company_identity_verified is True
     return ReturnReferenceLookupResponse(
         review_id=result.review_id,
         review_version=result.review_version,
         return_invoice_type_code=result.return_invoice_type_code,
         status=result.status.value,
         issues=[issue.value for issue in result.issues],
-        references=[_return_reference_result_response(reference) for reference in result.references],
+        references=[
+            _return_reference_result_response(reference, include_outbox=verified) for reference in result.references
+        ],
         provider_calls=result.provider_calls,
         company_identity_verified=result.company_identity_verified,
     )
 
 
-def _return_reference_result_response(reference: ReferenceResult) -> ReturnReferenceResultResponse:
+def _return_reference_result_response(
+    reference: ReferenceResult, *, include_outbox: bool
+) -> ReturnReferenceResultResponse:
     return ReturnReferenceResultResponse(
         position=reference.position,
         invoice_number=reference.invoice_number,
@@ -1758,9 +1765,12 @@ def _return_reference_result_response(reference: ReferenceResult) -> ReturnRefer
                 returned=search.returned,
                 exact=search.exact,
             )
-            for search in reference.searches
+            for search in (reference.searches if include_outbox else ())
         ],
-        candidates=[_return_reference_candidate_response(evaluation) for evaluation in reference.candidates],
+        candidates=[
+            _return_reference_candidate_response(evaluation)
+            for evaluation in (reference.candidates if include_outbox else ())
+        ],
     )
 
 

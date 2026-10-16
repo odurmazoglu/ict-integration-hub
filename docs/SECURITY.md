@@ -148,7 +148,10 @@ Required permissions:
 - Uyumsoft invoice document download: `invoice_document_read`
 - Return-invoice reference lookup (`POST /api/workbench/reviews/{review_id}/return-reference-lookup`, PR R):
   `workbench_review_read` **and** `invoice_document_read`. Company-scoped through `RequestContext`; read-only
-  (`GetOutboxInvoiceList` only), nothing persisted. See `docs/RETURN_INVOICE_REFERENCE_MATCHING.md`.
+  (`GetOutboxInvoiceList` only), nothing persisted. Fail-closed company isolation: the outbox is searched only
+  when `UYUMSOFT_ACCOUNT_COMPANY_ID` equals the requesting company and the return's buyer tax number resolves to
+  exactly that company; otherwise `COMPANY_UNVERIFIED` with no provider call and no candidate data. See
+  `docs/RETURN_INVOICE_REFERENCE_MATCHING.md`.
 
 Neither route derives or enforces `RequestContext.company_id` as a request scope: Uyumsoft sync has no company-scoped request concept (company is resolved per invoice, inside canonical import, after sync); the document-download route resolves invoices by Hub-local id with no company ownership column at this stage of the pipeline. An authenticated, permitted caller can therefore act across the full tenant base for these two routes, same as before this change -- authentication answers "who may call this," it does not retroactively add tenant scoping a route's underlying service does not implement.
 
