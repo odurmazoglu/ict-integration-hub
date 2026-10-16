@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from zeep.helpers import serialize_object
 
@@ -11,9 +12,12 @@ from app.schemas.uyumsoft_invoices import (
     UyumsoftInvoiceListRequest,
     UyumsoftInvoiceListResponse,
     UyumsoftInvoiceSummary,
+    UyumsoftOutboxInvoiceRecord,
+    UyumsoftOutboxLookupResponse,
 )
 
 UYUMSOFT_NAMESPACE = "http://tempuri.org/"
+UYUMSOFT_LOCAL_TIMEZONE = ZoneInfo("Europe/Istanbul")
 QUERY_MODEL_NAMES: dict[InvoiceDirection, str] = {
     "Inbox": "InboxInvoiceListQueryModel",
     "Outbox": "OutboxInvoiceListQueryModel",
@@ -64,7 +68,9 @@ def build_invoice_list_query_model(
     query_model = zeep_client.get_type(f"{{{UYUMSOFT_NAMESPACE}}}{query_model_name}")
     supported_fields = get_supported_zeep_fields(query_model)
     date_fields = _date_query_fields(request)
-    required_fields = PAGINATION_QUERY_FIELDS | set(date_fields)
+    # PR R: an explicitly requested narrowing filter is required, never silently dropped --
+    # dropping InvoiceNumbers would turn an exact lookup into a broad date-window listing.
+    required_fields = PAGINATION_QUERY_FIELDS | set(date_fields) | _requested_filter_fields(request)
     missing_required_fields = sorted(required_fields - supported_fields)
     if missing_required_fields:
         missing = ", ".join(missing_required_fields)
@@ -79,6 +85,10 @@ def build_invoice_list_query_model(
     }
     if direction == "Inbox":
         candidate_values["OnlyNewestInvoices"] = request.only_newest_invoices
+    if request.invoice_numbers:
+        candidate_values["InvoiceNumbers"] = list(request.invoice_numbers)
+    if request.is_archived is not None:
+        candidate_values["IsArchived"] = request.is_archived
     query_values = {key: value for key, value in candidate_values.items() if key in supported_fields}
     return query_model(
         **query_values,
@@ -88,6 +98,15 @@ def build_invoice_list_query_model(
 def get_supported_zeep_fields(query_model: Any) -> set[str]:
     fields: set[str] = set()
     _collect_zeep_fields(query_model, fields, set())
+    return fields
+
+
+def _requested_filter_fields(request: UyumsoftInvoiceListRequest) -> set[str]:
+    fields: set[str] = set()
+    if request.invoice_numbers:
+        fields.add("InvoiceNumbers")
+    if request.is_archived is not None:
+        fields.add("IsArchived")
     return fields
 
 
@@ -118,6 +137,51 @@ def normalize_invoice_list_response(
         invoices=invoices,
         extra_fields=_response_extra_fields(response_mapping),
     )
+
+
+def normalize_outbox_lookup_response(raw_response: Any, *, page_size: int) -> UyumsoftOutboxLookupResponse:
+    """Outbox list response mapped with the verified field semantics (see UyumsoftOutboxInvoiceRecord)."""
+
+    response_mapping = _to_mapping(raw_response)
+    paged_response = _extract_paged_response(response_mapping)
+    return UyumsoftOutboxLookupResponse(
+        page_size=page_size,
+        total_count=_first_int(
+            _first_value(response_mapping, TOTAL_COUNT_KEYS),
+            _first_value(paged_response, TOTAL_COUNT_KEYS),
+        ),
+        invoices=[_outbox_record(raw_item) for raw_item in _extract_items(raw_response)],
+    )
+
+
+def _outbox_record(raw_item: Any) -> UyumsoftOutboxInvoiceRecord:
+    item = _to_mapping(raw_item)
+    return UyumsoftOutboxInvoiceRecord(
+        invoice_number=_to_optional_str(item.get("InvoiceId")),
+        ettn=_to_optional_str(item.get("DocumentId")),
+        invoice_type=_to_optional_str(item.get("InvoiceTipType")),
+        scenario=_to_optional_str(item.get("Type")),
+        status=_to_optional_str(item.get("Status")),
+        target_tax_number=_to_optional_str(item.get("TargetTcknVkn")),
+        currency=_to_optional_str(item.get("DocumentCurrencyCode")),
+        issue_date=_local_calendar_date(item.get("ExecutionDate")),
+        is_archived=item.get("IsArchived") if isinstance(item.get("IsArchived"), bool) else None,
+    )
+
+
+def _local_calendar_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date() if value.tzinfo is None else value.astimezone(UYUMSOFT_LOCAL_TIMEZONE).date()
+    if isinstance(value, date):
+        return value
+    text = _to_optional_str(value)
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _local_calendar_date(parsed)
 
 
 def is_unsuccessful_response(raw_response: Any) -> bool:

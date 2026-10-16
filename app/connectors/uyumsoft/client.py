@@ -20,6 +20,7 @@ from app.connectors.uyumsoft.invoice_mapping import (
     build_invoice_list_query_model,
     is_unsuccessful_response,
     normalize_invoice_list_response,
+    normalize_outbox_lookup_response,
     response_message,
 )
 from app.core.config import Settings
@@ -34,6 +35,7 @@ from app.schemas.uyumsoft_invoices import (
     UyumsoftInvoiceDocument,
     UyumsoftInvoiceListRequest,
     UyumsoftInvoiceListResponse,
+    UyumsoftOutboxLookupResponse,
 )
 
 READ_ONLY_OPERATIONS = frozenset(
@@ -118,6 +120,22 @@ class UyumsoftSoapClient:
 
     def list_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftInvoiceListResponse:
         return self._list_invoices("GetOutboxInvoiceList", "Outbox", request)
+
+    def lookup_outbox_invoices(self, request: UyumsoftInvoiceListRequest) -> UyumsoftOutboxLookupResponse:
+        """Exact-number outbox lookup (PR R) through the allowlisted GetOutboxInvoiceList.
+
+        Refuses a request without ``invoice_numbers`` so it can never become a broad listing.
+        """
+
+        if not request.invoice_numbers or any(not number.strip() for number in request.invoice_numbers):
+            raise ConnectorError("Uyumsoft outbox lookup requires exact invoice numbers.")
+        zeep_client = self._get_client()
+        query = build_invoice_list_query_model(zeep_client, request, direction="Outbox")
+        raw_response = self._call_invoice_list("GetOutboxInvoiceList", query)
+        if is_unsuccessful_response(raw_response):
+            detail = response_message(raw_response) or "Uyumsoft outbox lookup request was not successful."
+            raise ConnectorError(detail)
+        return normalize_outbox_lookup_response(raw_response, page_size=request.page_size)
 
     def download_invoice(self, *, direction: InvoiceDirection, invoice_id: str) -> UyumsoftInvoiceDocument:
         if not invoice_id.strip():

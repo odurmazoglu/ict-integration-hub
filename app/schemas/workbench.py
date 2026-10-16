@@ -854,7 +854,71 @@ class WorkbenchQuotationScenarioEvidenceResponse(BaseModel):
     message: str | None = None
 
 
+class ReturnReferenceCheckResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    check: str
+    passed: bool
+
+
+class ReturnReferenceCandidateResponse(BaseModel):
+    """One exact-number outbox candidate. The buyer tax number is reported only as a check."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    invoice_number: str | None
+    ettn: str | None
+    invoice_type: str | None
+    scenario: str | None
+    status: str | None
+    currency: str | None
+    issue_date: date | None
+    archived: bool | None
+    checks: list[ReturnReferenceCheckResponse]
+
+
+class ReturnReferenceSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    archived: bool
+    completed: bool
+    provider_total: int | None
+    returned: int
+    exact: int
+
+
+class ReturnReferenceResultResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    position: int
+    invoice_number: str | None
+    issue_date: date | None
+    document_type_code: str | None
+    status: str
+    issues: list[str]
+    failed_checks: list[str]
+    searches: list[ReturnReferenceSearchResponse]
+    candidates: list[ReturnReferenceCandidateResponse]
+
+
+class ReturnReferenceLookupResponse(BaseModel):
+    """PR R. Informational only: never persisted, never changes the review or its decision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    review_id: str
+    review_version: int
+    return_invoice_type_code: str
+    status: str
+    issues: list[str]
+    references: list[ReturnReferenceResultResponse]
+    provider_calls: int
+    company_identity_verified: bool | None
+    informational_only: Literal[True] = True
+
+
 ReviewItemEnvelope = ApiEnvelope[ReviewItemResponse]
+ReturnReferenceLookupEnvelope = ApiEnvelope[ReturnReferenceLookupResponse]
 ReviewQueueEnvelope = ApiEnvelope[ReviewQueueResponse]
 ReviewDecisionAcknowledgementEnvelope = ApiEnvelope[ReviewDecisionAcknowledgementResponse]
 WorkbenchDecisionIngestionEnvelope = ApiEnvelope[WorkbenchDecisionIngestionResponse]

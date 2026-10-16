@@ -1340,6 +1340,7 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}/purchase-purpose",
         "/api/workbench/reviews/{review_id}/execution-evidence/rebuild",
         "/api/workbench/reviews/{review_id}/quotation-scenarios",
+        "/api/workbench/reviews/{review_id}/return-reference-lookup",
         "/api/workbench/reviews/{review_id}/supplier-resolution",
         "/api/workbench/reviews/{review_id}/vendor-bill-preview",
         "/api/workbench/reviews/{review_id}/vendor-bill-readback",
@@ -1348,6 +1349,11 @@ async def test_openapi_contains_expected_workbench_routes_and_no_identity_inputs
         "/api/workbench/reviews/{review_id}/write-authorizations",
         "/api/workbench/reviews/{review_id}/write-authorizations/{authorization_id}/revoke",
     }
+    # PR R: the operator-triggered lookup is POST-only and takes nothing but the path review_id.
+    return_reference = workbench_paths["/api/workbench/reviews/{review_id}/return-reference-lookup"]
+    assert set(return_reference) == {"post"}
+    assert "requestBody" not in return_reference["post"]
+    assert [(p["name"], p["in"]) for p in return_reference["post"]["parameters"]] == [("review_id", "path")]
     # P0-PROD-18D discovery routes are GET-only and accept no caller-controlled Odoo inputs.
     assert set(workbench_paths["/api/workbench/resale-product-categories"]) == {"get"}
     assert set(workbench_paths["/api/workbench/products/{product_id}/purchase-account"]) == {"get"}

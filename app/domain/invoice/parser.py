@@ -67,6 +67,14 @@ def parse_ubl_invoice(content: bytes | str) -> InternalInvoice:
     )
 
 
+def parse_ubl_invoice_root(content: bytes | str) -> ElementTree.Element:
+    """The safely parsed ``Invoice`` root element (same XML safety rules as :func:`parse_ubl_invoice`)."""
+
+    root = _parse_xml(content)
+    _require_ubl_invoice_root(root)
+    return root
+
+
 def legacy_supplier_tax_identifier(content: bytes | str) -> str | None:
     """The supplier tax number the pre-PR #201 parser would have produced for ``content``.
 
