@@ -8,6 +8,7 @@ from app.domain.invoice import InternalInvoice
 
 if TYPE_CHECKING:
     from app.application.effective_supplier import AcceptedSupplier
+    from app.application.source_tax.model import SourceTaxAssessment
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,3 +24,8 @@ class ImportInvoiceCommand(Command):
     #: review. Only product matching consults it, and only when the raw deterministic
     #: partner match is not MATCHED (``resolve_effective_supplier``). Never set on import.
     accepted_supplier: AcceptedSupplier | None = None
+    #: PR T W1: the verified tax facts of the invoice's original UBL document (or why it
+    #: could not be verified). Set by canonical import from the bytes it just stored and by
+    #: ``EffectiveDecisionResolver`` from the stored document; never part of source evidence.
+    #: ``None`` is only tolerated for a dry run -- a real write without it fails closed.
+    source_tax_assessment: SourceTaxAssessment | None = None

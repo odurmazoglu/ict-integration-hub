@@ -14,6 +14,7 @@ from app.composition.imports import (
     build_runtime_workbench_projection_synchronizer,
     build_supplier_partner_reader,
 )
+from app.composition.source_tax import build_source_tax_facts_reader
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -79,6 +80,7 @@ def build_resolve_workbench_supplier_use_case(
             odoo_client=resolved_odoo_client,
         ),
         source_invoice_reader=source_invoice_reader,
+        source_tax_facts_reader=build_source_tax_facts_reader(session=session, settings=settings),
         reclassification_writer=review_repository,
         # P0-PROD-10D: substitutes this exact review's accepted remediation effect partner
         # into execution evidence when the raw match is not MATCHED. Kept for historical

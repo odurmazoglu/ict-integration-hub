@@ -18,6 +18,7 @@ from app.composition.purchase_account_discovery import (
     build_get_product_purchase_account_use_case,
     build_list_category_purchase_accounts_use_case,
 )
+from app.composition.source_tax import build_source_tax_facts_reader
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -222,6 +223,7 @@ def _master_data_reclassifier(
             session=session, settings=settings, odoo_client=odoo_client
         ),
         source_invoice_reader=source_invoice_reader,
+        source_tax_facts_reader=build_source_tax_facts_reader(session=session, settings=settings),
         reclassification_writer=review_repository,
         supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
         supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=odoo_client),

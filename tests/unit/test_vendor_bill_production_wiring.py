@@ -73,6 +73,19 @@ from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEv
 from app.persistence import SqlAlchemyExecutionRuntimeRepository, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.persistence.write_authorization_repository import SqlAlchemyWriteAuthorizationRepository
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
+
+
+@pytest.fixture(autouse=True)
+def _clean_source_documents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests compose the real runtime over synthetic evidence with no stored UBL, which
+    the PR T W1 backstop (correctly) refuses; its own wiring is covered in
+    ``test_pr_t_w1_source_tax_wiring.py``. Everything else stays the production composition."""
+
+    monkeypatch.setattr(
+        "app.composition.execution.build_source_tax_safety_check",
+        lambda **_kwargs: ALLOW_SOURCE_TAX_SAFETY_CHECK,
+    )
 
 
 @pytest.fixture()

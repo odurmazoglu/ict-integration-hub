@@ -46,6 +46,7 @@ from app.persistence.execution_source_invoice_reader import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
 def test_exact_review_company_version_returns_source_evidence(session: Session) -> None:
@@ -303,6 +304,7 @@ def test_vendor_bill_execution_strategy_can_consume_returned_source(session: Ses
     _seed_decision_and_evidence(session)
     writer = RecordingVendorBillWriter()
     strategy = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,

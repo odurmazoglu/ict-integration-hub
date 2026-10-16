@@ -64,6 +64,7 @@ from app.persistence import (
 )
 from app.persistence.review_billing_evidence_reader import serialize_billing_instruction_payload
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_workbench_review_execution_evidence import _evidence as _source_evidence
 
 
@@ -480,6 +481,7 @@ def test_application_customer_invoice_production_wiring_has_no_sqlalchemy_or_pro
 
 def _submit_use_case(session: Session, repository: SqlAlchemyReviewRepository) -> SubmitReviewDecisionUseCase:
     return SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=repository,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

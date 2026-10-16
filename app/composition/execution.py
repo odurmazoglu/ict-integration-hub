@@ -33,6 +33,7 @@ from app.application.workbench.vendor_bill_readback import (
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.composition.imports import build_runtime_workbench_projection_synchronizer
 from app.composition.purchase_account_discovery import build_get_product_purchase_account_use_case
+from app.composition.source_tax import build_source_tax_safety_check
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.account_move_line_verification_reader import OdooAccountMoveLineVerificationReader
@@ -95,6 +96,7 @@ def build_vendor_bill_execution_use_case(
         repository=account_move_repository,
         policy=customer_invoice_policy,
     )
+    source_tax_safety_check = build_source_tax_safety_check(session=session, settings=settings)
     strategy = VendorBillExecutionStrategy(
         source_invoice_reader=source_invoice_reader,
         vendor_bill_builder=VendorBillBuilder(),
@@ -106,6 +108,8 @@ def build_vendor_bill_execution_use_case(
         ),
         # P0-PROD-19E-2: the same structurally read-only currency resolution preview uses.
         currency_reader=OdooVendorBillExecutionCurrencyReader(adapter=OdooReadOnlyAdapter(client=resolved_odoo_client)),
+        # PR T W1: the original document's tax content is re-verified on every attempt.
+        source_tax_safety_check=source_tax_safety_check,
     )
     purchase_order_vendor_bill_repository = PurchaseOrderVendorBillRepository(
         client=odoo_client or OdooJson2Client.from_settings(settings),
@@ -113,6 +117,7 @@ def build_vendor_bill_execution_use_case(
     purchase_order_strategy = ExistingPurchaseOrderExecutionStrategy(
         source_invoice_reader=source_invoice_reader,
         purchase_order_vendor_bill_repository=purchase_order_vendor_bill_repository,
+        source_tax_safety_check=source_tax_safety_check,
     )
     customer_recharge_strategy = CustomerRechargeExecutionRouter(
         (
@@ -312,6 +317,8 @@ def build_vendor_bill_preview_use_case(
         vendor_bill_builder=VendorBillBuilder(),
         currency_reader=OdooVendorBillPreviewCurrencyReader(adapter=read_only_adapter),
         product_uom_reader=OdooVendorBillPreviewProductUomReader(adapter=read_only_adapter),
+        # PR T W1: read-only source-document tax check, the same one execution runs.
+        source_tax_safety_check=build_source_tax_safety_check(session=session, settings=settings),
         # P0-PROD-18F-1: RESALE accounting comes from the decision's own pin in Hub
         # persistence -- no Odoo accounting reader is composed into preview at all.
         resale_accounting_pin_reader=source_invoice_reader,

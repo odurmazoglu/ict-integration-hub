@@ -84,6 +84,7 @@ from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceE
 from app.persistence import SqlAlchemyReviewPurchasePurposeResolutionRepository, SqlAlchemyReviewRepository
 from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
 from tests.unit.resale_execution_support import TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_15ad_source_amount_preservation import (
     _cloudspark_lines,
     _expense_match,
@@ -302,6 +303,7 @@ def _validator(
 
 def _strategy(session: Session, validator, client: _RecordingAccountMoveClient) -> VendorBillExecutionStrategy:
     return VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=OdooVendorBillWriter(

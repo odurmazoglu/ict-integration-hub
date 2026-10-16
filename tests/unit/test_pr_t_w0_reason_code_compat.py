@@ -133,11 +133,13 @@ def test_existing_titles_are_unchanged() -> None:
 
 
 def test_new_codes_are_referenced_only_by_their_owning_modules() -> None:
-    """Definition and display (W0) plus the Stage-1 evidence gate; no module emits them yet."""
+    """Definition and display (W0) plus the Stage-1 evidence gate; PR T W1 adds exactly one
+    emitter, the source-tax assessment (every other module consumes the codes indirectly)."""
 
     allowed = {
         Path("app/application/workflow.py"),
         Path("app/application/workbench/operator_guidance.py"),
+        Path("app/application/source_tax/assessment.py"),
     }
     for path in Path("app").rglob("*.py"):
         if path in allowed:

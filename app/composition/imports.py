@@ -44,6 +44,7 @@ from app.application.workbench.projection_sync import WorkbenchProjectionSources
 from app.application.workflow import ManualReviewReasonCode
 from app.composition.advisory_display import AdvisorySuggestionDisplayReader
 from app.composition.resale_decision_gate import build_resale_decision_gate
+from app.composition.source_tax import build_source_tax_safety_check
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings
@@ -613,6 +614,8 @@ def build_odoo_decision_submitter(
         projection_synchronizer=build_runtime_workbench_projection_synchronizer(
             session=session, settings=settings, odoo_client=odoo_client
         ),
+        # PR T W1: a Vendor Bill decision is refused unless the original document passes.
+        source_tax_safety_check=build_source_tax_safety_check(session=session, settings=settings),
     )
 
 

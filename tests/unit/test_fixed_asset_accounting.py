@@ -111,6 +111,7 @@ from app.persistence.execution_source_invoice_reader import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK, CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -371,6 +372,7 @@ class _FakeFixedAssetReader:
 def _reclassifier(session: Session, facts: _Facts, mapping_repository) -> ReclassifyWorkbenchReviewUseCase:
     review_repository = SqlAlchemyReviewRepository(session)
     return ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(facts, mapping_repository),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=review_repository,
@@ -472,6 +474,7 @@ async def _resolved(session: Session, ettn: str, **kwargs):
 
 def _decide(session: Session, review_id: str, *, version: int = 2, line_resolutions=()) -> None:
     SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
@@ -1127,6 +1130,7 @@ def test_execution_strategy_sends_the_frozen_asset_lines_and_retry_is_identical(
 
     writer = _Writer()
     strategy = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_Reader(),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,

@@ -103,6 +103,7 @@ from app.persistence import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
+from tests.unit.source_tax_support import CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
 OTHER_COMPANY_ID = 2
@@ -378,6 +379,7 @@ def _accounting_use_case(
         expense_account_reader=_FakeExpenseAccountReader(accounts=accounts),
         accounting_resolution_writer=accounting_resolution_repository,
         reclassifier=ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(facts, mapping_repository=mapping_repository),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=review_repository,
@@ -691,6 +693,7 @@ async def test_cross_company_account_is_rejected(session: Session) -> None:
         expense_account_reader=reader,
         accounting_resolution_writer=accounting_resolution_repository,
         reclassifier=ReclassifyWorkbenchReviewUseCase(
+            source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
             decision_engine=_decision_engine(_ambiguous_facts(invoice), mapping_repository=mapping_repository),
             source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
             reclassification_writer=review_repository,
@@ -880,6 +883,7 @@ async def test_supplier_wide_mapping_still_resolves_without_a_review_scoped_reso
 
     review_repository = SqlAlchemyReviewRepository(session)
     reclassifier = ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(_ambiguous_facts(invoice), mapping_repository=mapping_repository),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=review_repository,

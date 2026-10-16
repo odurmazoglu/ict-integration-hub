@@ -11,6 +11,7 @@ from app.application.workbench.source_identity_correction_use_cases import (
     SourceDocumentContentReader,
 )
 from app.composition.imports import build_deterministic_decision_engine, build_supplier_partner_reader
+from app.composition.source_tax import build_source_tax_facts_reader
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.persistence import (
@@ -57,6 +58,7 @@ def build_correct_review_source_identity_use_case(
         return EffectiveDecisionResolver(
             decision_engine=decision_engine,
             source_invoice_reader=source_reader,
+            source_tax_facts_reader=build_source_tax_facts_reader(session=session, settings=settings),
             supplier_remediation_effect_reader=SqlAlchemyReviewSupplierRemediationEffectRepository(session),
             supplier_partner_reader=build_supplier_partner_reader(settings=settings, odoo_client=resolved_odoo_client),
             operating_expense_matcher=OperatingExpenseMatchingEngine(

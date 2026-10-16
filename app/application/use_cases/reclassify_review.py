@@ -29,6 +29,7 @@ from __future__ import annotations
 from app.application.decision import DecisionEngine
 from app.application.effective_supplier import SupplierPartnerReader
 from app.application.expense_mapping.matcher import OperatingExpenseMatcher
+from app.application.source_tax.reader import SourceTaxAssessmentReader
 from app.application.use_cases.effective_decision import SAFE_EFFECTIVE_DECISION_ERROR, EffectiveDecisionResolver
 from app.application.use_cases.review_classification_outcome import (
     build_review_classification_evidence,
@@ -61,6 +62,7 @@ class ReclassifyWorkbenchReviewUseCase:
         decision_engine: DecisionEngine,
         source_invoice_reader: ReviewSourceInvoiceEvidenceReader,
         reclassification_writer: ReviewReclassificationWriter,
+        source_tax_facts_reader: SourceTaxAssessmentReader,
         supplier_remediation_effect_reader: SupplierRemediationEffectWriter | None = None,
         supplier_partner_reader: SupplierPartnerReader | None = None,
         operating_expense_matcher: OperatingExpenseMatcher | None = None,
@@ -70,6 +72,7 @@ class ReclassifyWorkbenchReviewUseCase:
         self._resolver = EffectiveDecisionResolver(
             decision_engine=decision_engine,
             source_invoice_reader=source_invoice_reader,
+            source_tax_facts_reader=source_tax_facts_reader,
             supplier_remediation_effect_reader=supplier_remediation_effect_reader,
             supplier_partner_reader=supplier_partner_reader,
             operating_expense_matcher=operating_expense_matcher,

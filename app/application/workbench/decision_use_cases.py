@@ -38,6 +38,7 @@ from app.billing.dto import CustomerInvoiceBillingInstruction
 
 if TYPE_CHECKING:
     from app.application.execution.contracts import ExecutionSourceInvoice
+    from app.application.source_tax.reader import SourceTaxSafetyCheck
 
 
 class SubmitReviewDecisionUseCase:
@@ -54,6 +55,7 @@ class SubmitReviewDecisionUseCase:
         selected_account_reader: SelectedAccountReader | None = None,
         resale_decision_gate: ResaleDecisionGate | None = None,
         projection_synchronizer: ReviewProjectionSynchronizer | None = None,
+        source_tax_safety_check: SourceTaxSafetyCheck | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
         self._projection_synchronizer = projection_synchronizer
@@ -63,6 +65,9 @@ class SubmitReviewDecisionUseCase:
         self._selected_product_reader = selected_product_reader
         self._selected_account_reader = selected_account_reader
         self._resale_decision_gate = resale_decision_gate
+        # PR T W1: like the execution evidence reader, a Vendor Bill decision is refused
+        # without it (``_enforce_source_tax_safety``) -- never accepted unchecked.
+        self._source_tax_safety_check = source_tax_safety_check
 
     def execute(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         if not isinstance(command, ReviewDecisionCommand):
@@ -80,6 +85,8 @@ class SubmitReviewDecisionUseCase:
                 ),
                 "Execution source evidence could not be loaded safely.",
             )
+            # PR T W1: before anything else is resolved, and for replays too.
+            self._enforce_source_tax_safety(command, evidence)
             evidence = self._apply_selected_product_resolutions(command, evidence)
             self._validate_selected_expense_accounts(command)
             is_replay = _translate_decision_failure(
@@ -154,6 +161,26 @@ class SubmitReviewDecisionUseCase:
         if not isinstance(command, ReviewDecisionCommand):
             raise WorkbenchContractError("ReviewDecisionCommand is required.")
         return self._review_decision_writer.has_matching_review_decision(command)
+
+    def _enforce_source_tax_safety(self, command: ReviewDecisionCommand, evidence) -> None:
+        """Re-verify the original UBL document's tax content (PR T W1).
+
+        Independent of the review's persisted reasons and of its Stage-1 evidence (which
+        may predate the guard), so no operator resolution can accept a Vendor Bill for a
+        withholding / non-VAT / unverifiable invoice. Read-only; raises
+        ``SourceTaxSafetyBlockedError`` or the retryable ``SourceTaxFactsUnavailableError``.
+        """
+
+        if self._source_tax_safety_check is None:
+            raise ReviewDecisionError("Source tax safety check is required for Vendor Bill decisions.")
+        _translate_decision_failure(
+            lambda: self._source_tax_safety_check.ensure_vendor_bill_allowed(
+                review_id=command.review_id,
+                company_id=command.company_id,
+                invoice=evidence.invoice,
+            ),
+            "Source invoice tax content could not be checked safely.",
+        )
 
     def _apply_selected_product_resolutions(self, command: ReviewDecisionCommand, evidence):
         """Validate and pin any explicit ``LineResolution.selected_product_id`` overrides.

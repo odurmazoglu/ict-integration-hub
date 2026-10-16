@@ -50,6 +50,7 @@ from app.matching import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 EXPENSE_ACCOUNT_ID = 9101
 TAX_ID = 401
@@ -658,6 +659,7 @@ def test_e_persisted_account_only_resolution_is_consumed_by_execution() -> None:
     builder = _RecordingBuilder()
 
     result = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_StaticReader(source),
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),
@@ -678,6 +680,7 @@ def test_e_no_line_resolution_never_triggers_account_only_mode() -> None:
     builder = _RecordingBuilder()
 
     VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_StaticReader(source),
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),
@@ -694,6 +697,7 @@ def test_e_a_non_account_only_line_resolution_does_not_trigger_account_only_mode
     builder = _RecordingBuilder()
 
     VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_StaticReader(source),
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),
@@ -716,6 +720,7 @@ def test_g_no_automatic_product_not_found_to_expense_conversion() -> None:
     builder = VendorBillBuilder()  # the real builder, not a stub
 
     result = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_StaticReader(source),
         vendor_bill_builder=builder,
         vendor_bill_writer=_StubWriter(),

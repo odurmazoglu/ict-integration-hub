@@ -79,6 +79,7 @@ from app.tax_mapping import (
     TaxMatchStatus,
     TaxType,
 )
+from tests.unit.source_tax_support import CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 7
 PARTNER_ID = 4010
@@ -363,6 +364,7 @@ async def _seed_supplier_not_found_v1(session: Session, invoice: InternalInvoice
 
 def _reclassifier(session: Session, rule_result: RuleEvaluationResult) -> ReclassifyWorkbenchReviewUseCase:
     return ReclassifyWorkbenchReviewUseCase(
+        source_tax_facts_reader=CLEAN_SOURCE_TAX_FACTS_READER,
         decision_engine=_decision_engine(rule_result),
         source_invoice_reader=SqlAlchemyReviewSourceInvoiceEvidenceReader(session),
         reclassification_writer=SqlAlchemyReviewRepository(session),

@@ -74,6 +74,7 @@ from app.persistence import SqlAlchemyExecutionSourceInvoiceReader, SqlAlchemyRe
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 1
 SELLER_ITEM_CODE = "HBV000006MHLQ"
@@ -495,6 +496,7 @@ def test_k_persist_and_reload_preserves_the_human_selection(session: Session) ->
     )
 
     use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=repository,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
@@ -530,6 +532,7 @@ def test_k_persist_and_reload_preserves_the_human_selection(session: Session) ->
             return reloaded
 
     result = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_StaticReader(),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=_NoWriteWriter(),
@@ -564,6 +567,7 @@ def test_k_fail_closed_decision_never_persists_stage_two_evidence(session: Sessi
         evidence=_stage1_evidence(),
     )
     use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=repository,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

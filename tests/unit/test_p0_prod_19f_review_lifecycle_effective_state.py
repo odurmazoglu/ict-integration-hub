@@ -66,6 +66,7 @@ from app.models.workbench_review_item import WorkbenchReviewItem
 from app.persistence import SqlAlchemyExecutionSourceInvoiceReader, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 1
 REVIEW_ID = "review:vitel"
@@ -284,6 +285,7 @@ def _seed(session: Session, *, product_id: int | None, seller_item_code: str, re
 def _accept(session: Session, command: ReviewDecisionCommand) -> None:
     repository = SqlAlchemyReviewRepository(session)
     acknowledgement = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=repository,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

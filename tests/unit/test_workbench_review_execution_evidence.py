@@ -51,6 +51,7 @@ from app.models.workbench_review_source_invoice_correction import WorkbenchRevie
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence import SqlAlchemyReviewExecutionEvidenceReader, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
 def test_full_pre_decision_evidence_snapshot_persisted(session: Session) -> None:
@@ -474,6 +475,7 @@ def test_submit_use_case_with_concrete_reader_persists_vendor_bill_decision_and_
     _create_stage_one_evidence(session, repository=repository)
 
     acknowledgement = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=repository,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
@@ -497,6 +499,7 @@ def test_submit_use_case_replay_with_concrete_reader_does_not_duplicate_stage_tw
     repository = SqlAlchemyReviewRepository(session)
     _create_stage_one_evidence(session, repository=repository)
     use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=repository,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),
@@ -515,6 +518,7 @@ def test_submit_use_case_changed_stage_one_evidence_for_same_decision_identity_c
     repository = SqlAlchemyReviewRepository(session)
     _create_stage_one_evidence(session, repository=repository)
     use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=repository,
         unit_of_work=SqlAlchemyUnitOfWork(session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(session),

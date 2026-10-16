@@ -39,6 +39,7 @@ from app.billing.money import MonetaryPrecision, currency_round, monetary_equal
 from app.domain.invoice import Discount, InvoiceLine, parse_ubl_invoice
 from app.erp.write.exceptions import VendorBillWriteTransportError
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, StaticCurrencyPrecisionReader
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_19e_1_currency_rounding_reconciliation import (
     PRODUCT_ID,
     _basic_source,
@@ -378,6 +379,7 @@ def _execute(source, *, currency_reader=None):
     writer = RecordingVendorBillWriter()
     currency_reader = currency_reader or StaticCurrencyPrecisionReader(2)
     strategy = VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(source=_execution_source(source)),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,

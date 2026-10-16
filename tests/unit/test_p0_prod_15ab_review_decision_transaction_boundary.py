@@ -73,6 +73,7 @@ from app.models.workbench_review_reclassification import WorkbenchReviewReclassi
 from app.models.workbench_review_source_invoice_correction import WorkbenchReviewSourceInvoiceCorrection
 from app.models.workbench_review_source_invoice_evidence import WorkbenchReviewSourceInvoiceEvidence
 from app.persistence import SqlAlchemyReviewExecutionEvidenceReader, SqlAlchemyReviewRepository, SqlAlchemyUnitOfWork
+from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 1
 REVIEW_ID = "review:p0-prod-15ab-cloudspark-shape"
@@ -370,6 +371,7 @@ def test_first_decision_durably_commits_and_a_fresh_session_observes_it(engine) 
 
     request_session = _new_session(engine)
     use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(request_session),
         unit_of_work=SqlAlchemyUnitOfWork(request_session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(request_session),
@@ -398,6 +400,7 @@ def test_stale_expected_version_second_request_hits_the_real_conflict_contract(e
 
     first_session = _new_session(engine)
     SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(first_session),
         unit_of_work=SqlAlchemyUnitOfWork(first_session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(first_session),
@@ -413,6 +416,7 @@ def test_stale_expected_version_second_request_hits_the_real_conflict_contract(e
     # request must fail closed, never appear to succeed a second time.
     second_session = _new_session(engine)
     second_use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(second_session),
         unit_of_work=SqlAlchemyUnitOfWork(second_session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(second_session),
@@ -445,6 +449,7 @@ def test_pure_stale_version_while_still_pending_review_conflicts(engine) -> None
 
     request_session = _new_session(engine)
     use_case = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(request_session),
         unit_of_work=SqlAlchemyUnitOfWork(request_session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(request_session),
@@ -468,6 +473,7 @@ def test_identical_replay_with_matching_expected_version_is_idempotent_no_duplic
     idempotency_key = "p0-prod-15ab-decision-replay"
     first_session = _new_session(engine)
     first = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(first_session),
         unit_of_work=SqlAlchemyUnitOfWork(first_session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(first_session),
@@ -479,6 +485,7 @@ def test_identical_replay_with_matching_expected_version_is_idempotent_no_duplic
     # same durable result, never raise, never duplicate.
     second_session = _new_session(engine)
     second = SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(second_session),
         unit_of_work=SqlAlchemyUnitOfWork(second_session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(second_session),
@@ -505,6 +512,7 @@ def test_execution_evidence_relationship_remains_valid_after_commit(engine) -> N
 
     request_session = _new_session(engine)
     SubmitReviewDecisionUseCase(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         review_decision_writer=SqlAlchemyReviewRepository(request_session),
         unit_of_work=SqlAlchemyUnitOfWork(request_session),
         execution_evidence_reader=SqlAlchemyReviewExecutionEvidenceReader(request_session),
