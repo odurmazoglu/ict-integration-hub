@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+import re
 
 from app.domain.invoice import InternalInvoice, Tax
 from app.tax_mapping.exceptions import TaxMappingError
@@ -64,6 +65,13 @@ class TaxMappingEngine:
         tax_type = normalize_tax_type(tax.tax_type)
         rate = normalize_tax_rate(tax.rate)
         invalid_reason = _invalid_reason(tax_type=tax_type, rate=rate)
+        if invalid_reason is None and tax_type == TaxType.VAT:
+            if tax.exemption_reason is not None and str(tax.exemption_reason).strip():
+                invalid_reason = "VAT exemption requires an approved exemption mapping."
+            elif rate == Decimal("0"):
+                invalid_reason = "Zero-rate VAT requires an approved exemption mapping."
+            elif not _vat_name_rate_consistent(tax.tax_type, rate):
+                invalid_reason = "VAT rate in tax name does not match Percent."
         if invalid_reason is not None:
             return _invalid_result(tax, reason=invalid_reason, tax_type=tax_type, rate=rate)
 
@@ -84,28 +92,46 @@ class TaxMappingEngine:
         return result
 
 
+_TURKISH_FOLD = str.maketrans({"İ": "I", "ı": "I", "Ş": "S", "ş": "S", "Ğ": "G", "ğ": "G", "Ç": "C", "ç": "C", "Ö": "O", "ö": "O", "Ü": "U", "ü": "U"})
+_VAT_NAMES = {"KDV", "VAT", "VALUE ADDED TAX", "KATMA DEGER VERGISI", "GERCEK USULDE KATMA DEGER VERGISI"}
+_VAT_RATE_NAME = re.compile(r"^KDV\\s*%\\s*(\\d+(?:[.,]\\d+)?)$")
+
+
+def _fold_tax_name(value: object) -> str:
+    return " ".join(str(value).translate(_TURKISH_FOLD).upper().split())
+
+
+def _vat_name_rate_consistent(value: object, rate: Decimal | None) -> bool:
+    folded = _fold_tax_name(value)
+    match = _VAT_RATE_NAME.fullmatch(folded)
+    if match is None:
+        return True
+    try:
+        return rate is not None and Decimal(match.group(1).replace(",", ".")) == rate
+    except InvalidOperation:
+        return False
+
+
 def normalize_tax_type(value: object) -> TaxType | None:
     if isinstance(value, TaxType):
         return value
     if value is None:
         return None
-    normalized = str(value).strip().replace("-", "_").replace(" ", "_").upper()
-    if not normalized:
+    folded = _fold_tax_name(value)
+    if not folded:
         return None
+    if folded in _VAT_NAMES or _VAT_RATE_NAME.fullmatch(folded):
+        return TaxType.VAT
     aliases = {
-        "VAT": TaxType.VAT,
-        "KDV": TaxType.VAT,
-        "VALUE_ADDED_TAX": TaxType.VAT,
         "WITHHOLDING": TaxType.WITHHOLDING,
         "TEVKIFAT": TaxType.WITHHOLDING,
         "STOPAJ": TaxType.WITHHOLDING,
         "EXEMPTION": TaxType.EXEMPTION,
         "EXEMPT": TaxType.EXEMPTION,
         "ISTISNA": TaxType.EXEMPTION,
-        "İSTİSNA": TaxType.EXEMPTION,
         "UNKNOWN": TaxType.UNKNOWN,
     }
-    return aliases.get(normalized)
+    return aliases.get(folded.replace("-", "_").replace(" ", "_"))
 
 
 def normalize_tax_rate(value: object) -> Decimal | None:
@@ -123,8 +149,10 @@ def _invalid_reason(*, tax_type: TaxType | None, rate: Decimal | None) -> str | 
         return "Tax type is required or unsupported."
     if tax_type == TaxType.UNKNOWN:
         return "Tax type is unknown."
+    if tax_type != TaxType.VAT:
+        return "Only ordinary VAT is supported for automatic tax mapping."
     if rate is None:
-        return "Tax rate is required or malformed."
+        return "VAT percent is required; exemptions need an approved mapping."
     if rate < Decimal("0"):
         return "Tax rate must not be negative."
     return None
@@ -162,6 +190,10 @@ def _valid_candidates(
         for candidate in candidates
         if candidate.active
         and candidate.tax_type == tax_type
+        and candidate.usage_type == "purchase"
+        and candidate.amount_type == "percent"
+        and not candidate.has_children
+        and candidate.rate >= Decimal("0")
         and normalize_tax_rate(candidate.rate) == rate
         and (company_id is None or candidate.company_id == company_id)
     )
