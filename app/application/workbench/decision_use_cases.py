@@ -174,10 +174,11 @@ class SubmitReviewDecisionUseCase:
         if self._source_tax_safety_check is None:
             raise ReviewDecisionError("Source tax safety check is required for Vendor Bill decisions.")
         _translate_decision_failure(
-            lambda: self._source_tax_safety_check.ensure_vendor_bill_allowed(
+            lambda: self._source_tax_safety_check.ensure_vendor_bill_tax_allowed(
                 review_id=command.review_id,
                 company_id=command.company_id,
                 invoice=evidence.invoice,
+                tax_match=evidence.tax_match,
             ),
             "Source invoice tax content could not be checked safely.",
         )

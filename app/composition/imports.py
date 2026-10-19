@@ -19,6 +19,7 @@ from app.application.exceptions.base import ApplicationError
 from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.ports import InvoiceImportHistory
 from app.application.rules import DeterministicRuleEngine, InvoiceDecisionRuleEngine, OdooDecisionRuleFieldMapping
+from app.application.source_tax.exemption import DISABLED_VAT_EXEMPTION_POLICY
 from app.application.use_cases import ImportInvoiceUseCase
 from app.application.workbench import (
     ReviewItemCreationService,
@@ -44,7 +45,7 @@ from app.application.workbench.projection_sync import WorkbenchProjectionSources
 from app.application.workflow import ManualReviewReasonCode
 from app.composition.advisory_display import AdvisorySuggestionDisplayReader
 from app.composition.resale_decision_gate import build_resale_decision_gate
-from app.composition.source_tax import build_source_tax_safety_check
+from app.composition.source_tax import build_source_tax_safety_check, build_vat_exemption_tax_policy
 from app.connectors.odoo.client import OdooJson2Client
 from app.connectors.uyumsoft.client import UyumsoftSoapClient
 from app.core.config import Settings
@@ -615,7 +616,9 @@ def build_odoo_decision_submitter(
             session=session, settings=settings, odoo_client=odoo_client
         ),
         # PR T W1: a Vendor Bill decision is refused unless the original document passes.
-        source_tax_safety_check=build_source_tax_safety_check(session=session, settings=settings),
+        source_tax_safety_check=build_source_tax_safety_check(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
     )
 
 
@@ -641,8 +644,10 @@ def build_uyumsoft_canonical_invoice_importer(
     )
     decision_engine = _build_deterministic_decision_engine(
         session=session,
+        settings=settings,
         provider=provider,
         read_adapter=read_adapter,
+        odoo_client=resolved_odoo_client,
     )
 
     def use_case_factory() -> ImportInvoiceUseCase:
@@ -682,6 +687,8 @@ def _build_deterministic_decision_engine(
     session: Session,
     provider: StaticRepositoryProvider,
     read_adapter: OdooReadOnlyAdapter,
+    settings: Settings | None = None,
+    odoo_client: OdooJson2Client | None = None,
 ) -> DecisionEngine:
     """The production deterministic ``DecisionEngine`` shared by import and reclassification.
 
@@ -700,6 +707,12 @@ def _build_deterministic_decision_engine(
             ),
             tax_mapper=TaxMappingEngine(provider.tax_repository),
             operating_expense_matcher=operating_expense_matcher,
+            # PR T T2-A: empty VAT_EXEMPTION_PURCHASE_TAX_IDS (default) keeps T1 unchanged.
+            exemption_tax_policy=(
+                build_vat_exemption_tax_policy(settings=settings, odoo_client=odoo_client)
+                if settings is not None
+                else DISABLED_VAT_EXEMPTION_POLICY
+            ),
         ),
         strategy_resolver=WorkflowStrategyResolver(
             [
@@ -729,8 +742,10 @@ def build_deterministic_decision_engine(
     provider = build_odoo_read_repository_provider(read_adapter=read_adapter)
     return _build_deterministic_decision_engine(
         session=session,
+        settings=settings,
         provider=provider,
         read_adapter=read_adapter,
+        odoo_client=resolved_odoo_client,
     )
 
 

@@ -280,7 +280,9 @@ def get_submit_review_decision_use_case(
             session=session, settings=settings, odoo_client=odoo_client
         ),
         # PR T W1: a Vendor Bill decision is refused unless the original document passes.
-        source_tax_safety_check=build_source_tax_safety_check(session=session, settings=settings),
+        source_tax_safety_check=build_source_tax_safety_check(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
     )
 
 

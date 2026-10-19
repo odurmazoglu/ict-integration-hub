@@ -206,6 +206,15 @@ withholding, non-VAT (`TaxTypeCode` other than `0015`) or unverifiable documents
 read-only, independent of persisted reasons and evidence, and fail-closed: a storage outage is a
 retryable 503, never a pass. See `docs/WITHHOLDING_TAX_GUARD.md`.
 
+## VAT Exemption Mapping (PR T T2-A)
+
+Exemption code 335 is mapped only from the hash- and UUID-verified original document, only on
+an all-lines `ISTISNA` / `0015` / zero-tax invoice, and only to the accountant-approved tax id
+in `VAT_EXEMPTION_PURCHASE_TAX_IDS` (empty by default; 209 / 351 / tax 6 refused at startup).
+Every Vendor Bill use re-proves exemption pins from the fresh document and a fresh read-only
+Odoo tax read. Repartition lines, tax grids and accounts are not observable through the Odoo
+allowlist and are confirmed by accounting. See `docs/VAT_EXEMPTION_335.md`.
+
 ## Out Of Scope
 
 Not implemented:
