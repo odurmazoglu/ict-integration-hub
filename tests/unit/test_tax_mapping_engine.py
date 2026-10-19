@@ -17,10 +17,15 @@ from app.tax_mapping import (
 from app.tax_mapping.exceptions import TaxMappingError
 
 
+def _candidate(**fields: object) -> TaxCandidate:
+    """Standalone purchase percentage tax unless a test overrides the structure explicitly."""
+    return TaxCandidate(**{"usage_type": "purchase", "amount_type": "percent", "has_children": False, **fields})
+
+
 def test_exact_vat_match() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20"))])]),
-        [TaxCandidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20.00"))],
+        [_candidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20.00"))],
         company_id=3,
     )
 
@@ -35,40 +40,40 @@ def test_exact_vat_match() -> None:
     assert match.candidate_count == 1
 
 
-def test_exact_withholding_match() -> None:
+def test_withholding_is_not_auto_mapped() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="WITHHOLDING", rate=Decimal("5"))])]),
-        [TaxCandidate(tax_id=20, company_id=3, tax_type=TaxType.WITHHOLDING, rate=Decimal("5"))],
+        [_candidate(tax_id=20, company_id=3, tax_type=TaxType.WITHHOLDING, rate=Decimal("5"))],
         company_id=3,
     )
 
-    assert result.line_results[0].result.status == TaxMatchStatus.MATCHED
-    assert result.line_results[0].result.tax_id == 20
+    assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
+    assert result.line_results[0].result.tax_id is None
 
 
-def test_exact_exemption_match() -> None:
+def test_exemption_is_not_auto_mapped() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="EXEMPTION", rate=Decimal("0"))])]),
-        [TaxCandidate(tax_id=30, company_id=3, tax_type=TaxType.EXEMPTION, rate=Decimal("0"))],
+        [_candidate(tax_id=30, company_id=3, tax_type=TaxType.EXEMPTION, rate=Decimal("0"))],
         company_id=3,
     )
 
-    assert result.line_results[0].result.status == TaxMatchStatus.MATCHED
-    assert result.line_results[0].result.tax_id == 30
+    assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
+    assert result.line_results[0].result.tax_id is None
 
 
 def test_zero_rate_vat_remains_distinct_from_exemption() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("0"))])]),
         [
-            TaxCandidate(tax_id=30, company_id=3, tax_type=TaxType.EXEMPTION, rate=Decimal("0")),
-            TaxCandidate(tax_id=40, company_id=3, tax_type=TaxType.VAT, rate=Decimal("0.00")),
+            _candidate(tax_id=30, company_id=3, tax_type=TaxType.EXEMPTION, rate=Decimal("0")),
+            _candidate(tax_id=40, company_id=3, tax_type=TaxType.VAT, rate=Decimal("0.00")),
         ],
         company_id=3,
     )
 
-    assert result.line_results[0].result.status == TaxMatchStatus.MATCHED
-    assert result.line_results[0].result.tax_id == 40
+    assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
+    assert result.line_results[0].result.tax_id is None
 
 
 @pytest.mark.parametrize("tax_type", [None, "", "LOCAL_TAX", "UNKNOWN"])
@@ -102,7 +107,7 @@ def test_malformed_rate_is_invalid() -> None:
     )
 
     assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
-    assert result.line_results[0].result.reason == "Tax rate is required or malformed."
+    assert result.line_results[0].result.reason == "VAT percent is required; exemptions need an approved mapping."
 
 
 def test_not_found() -> None:
@@ -116,8 +121,8 @@ def test_multiple_matches() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20"))])]),
         [
-            TaxCandidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
-            TaxCandidate(tax_id=11, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20.0")),
+            _candidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
+            _candidate(tax_id=11, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20.0")),
         ],
         company_id=3,
     )
@@ -132,8 +137,8 @@ def test_same_rate_and_type_in_different_companies_with_explicit_company_selects
     result = _map(
         _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20"))])]),
         [
-            TaxCandidate(tax_id=10, company_id=2, tax_type=TaxType.VAT, rate=Decimal("20")),
-            TaxCandidate(tax_id=11, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
+            _candidate(tax_id=10, company_id=2, tax_type=TaxType.VAT, rate=Decimal("20")),
+            _candidate(tax_id=11, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
         ],
         company_id=3,
     )
@@ -146,8 +151,8 @@ def test_company_id_none_with_cross_company_duplicates_returns_multiple_matches(
     result = _map(
         _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20"))])]),
         [
-            TaxCandidate(tax_id=10, company_id=2, tax_type=TaxType.VAT, rate=Decimal("20")),
-            TaxCandidate(tax_id=11, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
+            _candidate(tax_id=10, company_id=2, tax_type=TaxType.VAT, rate=Decimal("20")),
+            _candidate(tax_id=11, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
         ],
         company_id=None,
     )
@@ -159,7 +164,7 @@ def test_company_id_none_with_cross_company_duplicates_returns_multiple_matches(
 def test_inactive_candidates_are_not_valid_matches() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20"))])]),
-        [TaxCandidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20"), active=False)],
+        [_candidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20"), active=False)],
         company_id=3,
     )
 
@@ -176,22 +181,22 @@ def test_multiple_invoice_lines_and_multiple_taxes_on_one_line() -> None:
             ]
         ),
         [
-            TaxCandidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
-            TaxCandidate(tax_id=20, company_id=3, tax_type=TaxType.WITHHOLDING, rate=Decimal("5")),
-            TaxCandidate(tax_id=30, company_id=3, tax_type=TaxType.VAT, rate=Decimal("10")),
+            _candidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20")),
+            _candidate(tax_id=20, company_id=3, tax_type=TaxType.WITHHOLDING, rate=Decimal("5")),
+            _candidate(tax_id=30, company_id=3, tax_type=TaxType.VAT, rate=Decimal("10")),
         ],
         company_id=3,
     )
 
     assert [(item.line_number, item.tax_index, item.result.tax_id) for item in result.line_results] == [
         ("1", 0, 10),
-        ("1", 1, 20),
+        ("1", 1, None),
         ("2", 0, 30),
     ]
 
 
 def test_duplicate_tax_occurrences_each_receive_result_and_lookup_is_cached() -> None:
-    repository = FakeTaxRepository([TaxCandidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20"))])
+    repository = FakeTaxRepository([_candidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20"))])
     invoice = _invoice(
         [
             _line("1", [Tax(tax_type="VAT", rate=Decimal("20"))]),
@@ -208,7 +213,7 @@ def test_duplicate_tax_occurrences_each_receive_result_and_lookup_is_cached() ->
 def test_decimal_normalization_treats_equivalent_representations_as_same_rate() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="VAT", rate=Decimal("20.0"))])]),
-        [TaxCandidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20.00"))],
+        [_candidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20.00"))],
         company_id=3,
     )
 
@@ -253,7 +258,7 @@ def test_unexpected_repository_programming_error_is_not_swallowed() -> None:
 
 
 def test_candidate_and_result_dtos_are_immutable() -> None:
-    candidate = TaxCandidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20"))
+    candidate = _candidate(tax_id=10, company_id=3, tax_type=TaxType.VAT, rate=Decimal("20"))
     result = TaxMatchResult(
         status=TaxMatchStatus.MATCHED,
         tax_id=10,
