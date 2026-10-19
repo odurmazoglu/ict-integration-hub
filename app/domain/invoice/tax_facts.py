@@ -22,6 +22,13 @@ so a fact can be aligned one-to-one with the canonical invoice's taxes. Their ex
 never raises: an unparseable number is recorded as ``malformed`` and only the exemption
 policy (which fails closed on it) reads it, so W1's verdict for a document is unchanged.
 
+Structural completeness (M1): the exact traversal sees only what the canonical parser
+sees, so a ``TaxSubtotal`` / ``TaxTotal`` anywhere else -- under ``cac:AllowanceCharge``, in
+a foreign namespace, nested deeper -- would otherwise be invisible to the exemption policy.
+Every non-withholding ``TaxSubtotal`` and ``TaxTotal`` found by the broad local-name walk is
+therefore matched *by element identity* against the exact traversal's elements, and the ones
+it did not recognize are counted; equal counts of different elements cannot hide one.
+
 The XML safety rules (no DTD / entities, UBL ``Invoice`` root) are the canonical
 parser's own (:func:`~app.domain.invoice.parser.parse_ubl_invoice_root`).
 """
@@ -43,6 +50,7 @@ SUPPORTED_TAX_TYPE_CODES = frozenset({"0015"})
 
 _WITHHOLDING_TAX_TOTAL = "WithholdingTaxTotal"
 _TAX_SUBTOTAL = "TaxSubtotal"
+_TAX_TOTAL = "TaxTotal"
 _TAX_TYPE_CODE_PATH = ("TaxCategory", "TaxScheme", "TaxTypeCode")
 
 
@@ -71,6 +79,18 @@ class SourceTaxSubtotalFact:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceTaxTotalFact:
+    """One exact-path ``cac:TaxTotal`` (line-level, or invoice-level when ``line_id`` is
+    ``None``) and its own ``cbc:TaxAmount`` (PR T T2-A M1)."""
+
+    line_id: str | None
+    amount_present: bool
+    amount: Decimal | None
+    malformed: bool
+    subtotal_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class SourceTaxFacts:
     """Tax facts of one original UBL invoice document."""
 
@@ -86,6 +106,17 @@ class SourceTaxFacts:
     line_ids: tuple[str | None, ...] | None = None
     line_tax_subtotals: tuple[SourceTaxSubtotalFact, ...] = ()
     invoice_tax_subtotals: tuple[SourceTaxSubtotalFact, ...] = ()
+    #: PR T T2-A M1. Non-withholding ``TaxSubtotal`` / ``TaxTotal`` elements (any namespace,
+    #: any depth) that the exact canonical traversal does not see; ``None`` = not extracted.
+    unrecognized_tax_subtotal_count: int | None = None
+    unrecognized_tax_total_count: int | None = None
+    line_tax_totals: tuple[SourceTaxTotalFact, ...] = ()
+    invoice_tax_totals: tuple[SourceTaxTotalFact, ...] = ()
+    #: Number of ``cac:LegalMonetaryTotal`` children of ``Invoice``; ``None`` = not extracted.
+    monetary_total_count: int | None = None
+    tax_exclusive_amount: Decimal | None = None
+    tax_inclusive_amount: Decimal | None = None
+    monetary_totals_malformed: bool = False
 
     @property
     def withholding_invoice_type(self) -> bool:
@@ -120,7 +151,8 @@ def extract_source_tax_facts(content: bytes | str) -> SourceTaxFacts:
     all_levels = sum(1 for element in root.iter() if _local_name(element.tag) == _WITHHOLDING_TAX_TOTAL)
     codes: set[str] = set()
     missing = 0
-    for subtotal in _non_withholding_tax_subtotals(root):
+    broad_subtotals = tuple(_non_withholding_elements(root, _TAX_SUBTOTAL))
+    for subtotal in broad_subtotals:
         code = _tax_type_code(subtotal)
         if code is None:
             missing += 1
@@ -128,6 +160,14 @@ def extract_source_tax_facts(content: bytes | str) -> SourceTaxFacts:
             codes.add(code)
     lines = root.findall("cac:InvoiceLine", NS)
     line_ids = tuple(_text(line.find("cbc:ID", NS)) for line in lines)
+    exact_totals = [total for line in lines for total in line.findall("cac:TaxTotal", NS)]
+    exact_totals.extend(root.findall("cac:TaxTotal", NS))
+    exact_total_ids = {id(total) for total in exact_totals}
+    exact_subtotal_ids = {id(subtotal) for total in exact_totals for subtotal in total.findall("cac:TaxSubtotal", NS)}
+    monetary_totals = root.findall("cac:LegalMonetaryTotal", NS)
+    monetary_total = monetary_totals[0] if monetary_totals else None
+    tax_exclusive, exclusive_malformed = _decimal(monetary_total, "cbc:TaxExclusiveAmount")
+    tax_inclusive, inclusive_malformed = _decimal(monetary_total, "cbc:TaxInclusiveAmount")
     return SourceTaxFacts(
         invoice_uuid=_text(root.find("cbc:UUID", NS)),
         invoice_type_code=_canonical(_text(root.find("cbc:InvoiceTypeCode", NS))),
@@ -140,6 +180,31 @@ def extract_source_tax_facts(content: bytes | str) -> SourceTaxFacts:
             fact for line, line_id in zip(lines, line_ids, strict=True) for fact in _tax_position_facts(line, line_id)
         ),
         invoice_tax_subtotals=_tax_position_facts(root, None),
+        unrecognized_tax_subtotal_count=sum(1 for element in broad_subtotals if id(element) not in exact_subtotal_ids),
+        unrecognized_tax_total_count=sum(
+            1 for element in _non_withholding_elements(root, _TAX_TOTAL) if id(element) not in exact_total_ids
+        ),
+        line_tax_totals=tuple(
+            _tax_total_fact(total, line_id)
+            for line, line_id in zip(lines, line_ids, strict=True)
+            for total in line.findall("cac:TaxTotal", NS)
+        ),
+        invoice_tax_totals=tuple(_tax_total_fact(total, None) for total in root.findall("cac:TaxTotal", NS)),
+        monetary_total_count=len(monetary_totals),
+        tax_exclusive_amount=tax_exclusive,
+        tax_inclusive_amount=tax_inclusive,
+        monetary_totals_malformed=exclusive_malformed or inclusive_malformed,
+    )
+
+
+def _tax_total_fact(total: ElementTree.Element, line_id: str | None) -> SourceTaxTotalFact:
+    amount, malformed = _decimal(total, "cbc:TaxAmount")
+    return SourceTaxTotalFact(
+        line_id=line_id,
+        amount_present=total.find("cbc:TaxAmount", NS) is not None,
+        amount=amount,
+        malformed=malformed,
+        subtotal_count=len(total.findall("cac:TaxSubtotal", NS)),
     )
 
 
@@ -193,9 +258,11 @@ def _subtotal_fact(subtotal: ElementTree.Element, *, line_id: str | None, tax_in
     )
 
 
-def _decimal(element: ElementTree.Element, path: str) -> tuple[Decimal | None, bool]:
+def _decimal(element: ElementTree.Element | None, path: str) -> tuple[Decimal | None, bool]:
     """``(value, malformed)``; an absent or empty element is ``(None, False)``, like the parser."""
 
+    if element is None:
+        return None, False
     text = _text(element.find(path, NS))
     if text is None:
         return None, False
@@ -208,14 +275,16 @@ def _decimal(element: ElementTree.Element, path: str) -> tuple[Decimal | None, b
     return value, False
 
 
-def _non_withholding_tax_subtotals(element: ElementTree.Element) -> Iterator[ElementTree.Element]:
+def _non_withholding_elements(element: ElementTree.Element, wanted: str) -> Iterator[ElementTree.Element]:
+    """Every descendant with local name ``wanted``, in any namespace, outside withholding totals."""
+
     for child in element:
         local_name = _local_name(child.tag)
         if local_name == _WITHHOLDING_TAX_TOTAL:
             continue
-        if local_name == _TAX_SUBTOTAL:
+        if local_name == wanted:
             yield child
-        yield from _non_withholding_tax_subtotals(child)
+        yield from _non_withholding_elements(child, wanted)
 
 
 def _tax_type_code(subtotal: ElementTree.Element) -> str | None:

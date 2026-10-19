@@ -125,7 +125,20 @@ def document(
     invoice_subtotals: tuple[Sub, ...] | None = None,
     line_ids: tuple[str, ...] | None = None,
     line_withholding: bool = False,
+    line_tax_total_amount: str | None = "0",
+    invoice_tax_total_amount: str | None = "0",
+    tax_exclusive: str | None = "419.49",
+    tax_inclusive: str | None = "419.49",
+    line_extra: str = "",
+    line_tax_total_extra: str = "",
+    root_extra: str = "",
 ) -> bytes:
+    def amount(value: str | None) -> str:
+        return f'<cbc:TaxAmount currencyID="TRY">{value}</cbc:TaxAmount>' if value is not None else ""
+
+    def money(name: str, value: str | None) -> str:
+        return f'<cbc:{name} currencyID="TRY">{value}</cbc:{name}>' if value is not None else ""
+
     lines = lines or ((Sub(),),)
     ids = line_ids or tuple(str(index) for index in range(1, len(lines) + 1))
     invoice_level = invoice_subtotals if invoice_subtotals is not None else tuple(sub for line in lines for sub in line)
@@ -135,15 +148,15 @@ def document(
     <cbc:ID>{line_id}</cbc:ID>
     <cbc:InvoicedQuantity unitCode="C62">1</cbc:InvoicedQuantity>
     <cbc:LineExtensionAmount currencyID="TRY">419.49</cbc:LineExtensionAmount>
-    <cac:TaxTotal><cbc:TaxAmount currencyID="TRY">0</cbc:TaxAmount>{"".join(_subtotal(sub) for sub in subs)}
-    </cac:TaxTotal>{WITHHOLDING_XML if line_withholding else ""}
+    <cac:TaxTotal>{amount(line_tax_total_amount)}{"".join(_subtotal(sub) for sub in subs)}{line_tax_total_extra}
+    </cac:TaxTotal>{WITHHOLDING_XML if line_withholding else ""}{line_extra}
     <cac:Item><cbc:Name>Synthetic printed book</cbc:Name></cac:Item>
     <cac:Price><cbc:PriceAmount currencyID="TRY">419.49</cbc:PriceAmount></cac:Price>
   </cac:InvoiceLine>"""
         for line_id, subs in zip(ids, lines, strict=True)
     )
     invoice_tax_xml = (
-        f"""<cac:TaxTotal><cbc:TaxAmount currencyID="TRY">0</cbc:TaxAmount>
+        f"""<cac:TaxTotal>{amount(invoice_tax_total_amount)}
     {"".join(_subtotal(sub) for sub in invoice_level)}</cac:TaxTotal>"""
         if invoice_level
         else ""
@@ -168,8 +181,9 @@ def document(
   {invoice_tax_xml}
   <cac:LegalMonetaryTotal>
     <cbc:LineExtensionAmount currencyID="TRY">419.49</cbc:LineExtensionAmount>
+    {money("TaxExclusiveAmount", tax_exclusive)}{money("TaxInclusiveAmount", tax_inclusive)}
     <cbc:PayableAmount currencyID="TRY">419.49</cbc:PayableAmount>
-  </cac:LegalMonetaryTotal>
+  </cac:LegalMonetaryTotal>{root_extra}
   {lines_xml}
 </Invoice>""".encode()
 
@@ -348,8 +362,8 @@ def test_ineligible_shapes(name: str, content: bytes) -> None:
     assert result.problems
 
 
-def test_invoice_level_subtotals_are_optional() -> None:
-    assert eligibility(document(invoice_subtotals=())).eligible
+def test_m1_invoice_level_tax_total_is_required() -> None:
+    assert not eligibility(document(invoice_subtotals=())).eligible
 
 
 def test_12_canonical_evidence_from_another_document_never_aligns() -> None:
@@ -1016,3 +1030,227 @@ def test_preview_re_proves_exemption_pins() -> None:
 
     with pytest.raises(SourceTaxSafetyBlockedError):
         use_case.preview(_request(review_id="review-product-1", decision_version=1))
+
+
+# ===================================================================== M1: structural completeness
+
+HIDDEN_VAT_SUBTOTAL = """
+      <cac:TaxSubtotal>
+        <cbc:TaxableAmount currencyID="TRY">419.49</cbc:TaxableAmount>
+        <cbc:TaxAmount currencyID="TRY">83.90</cbc:TaxAmount>
+        <cbc:Percent>20</cbc:Percent>
+        <cac:TaxCategory><cac:TaxScheme><cbc:Name>KDV</cbc:Name>
+          <cbc:TaxTypeCode>0015</cbc:TaxTypeCode></cac:TaxScheme></cac:TaxCategory>
+      </cac:TaxSubtotal>"""
+HIDDEN_ALLOWANCE_CHARGE_VAT = f"""
+    <cac:AllowanceCharge>
+      <cbc:ChargeIndicator>true</cbc:ChargeIndicator>
+      <cbc:Amount currencyID="TRY">419.49</cbc:Amount>
+      <cac:TaxTotal><cbc:TaxAmount currencyID="TRY">83.90</cbc:TaxAmount>{HIDDEN_VAT_SUBTOTAL}</cac:TaxTotal>
+    </cac:AllowanceCharge>"""
+FOREIGN_NS_SUBTOTAL = HIDDEN_VAT_SUBTOTAL.replace(
+    "<cac:TaxSubtotal>", '<x:TaxSubtotal xmlns:x="urn:example:foreign">', 1
+).replace("</cac:TaxSubtotal>", "</x:TaxSubtotal>")
+FOREIGN_NS_TAX_TOTAL = '<x:TaxTotal xmlns:x="urn:example:foreign"><x:TaxAmount>83.90</x:TaxAmount></x:TaxTotal>'
+
+
+def eff_structure() -> bytes:
+    """Synthetic replica of the verified reference-invoice shape (ISTISNA / TICARIFATURA, one
+    book line, 0015 / 335 / reason text, no Percent, TaxAmount 0, TaxableAmount 419.49,
+    matching invoice-level subtotal, tax-exclusive == tax-inclusive)."""
+
+    return document()
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("allowance-charge-hidden-vat", document(line_extra=HIDDEN_ALLOWANCE_CHARGE_VAT)),
+        ("foreign-namespace-subtotal-in-line-total", document(line_tax_total_extra=FOREIGN_NS_SUBTOTAL)),
+        ("foreign-namespace-subtotal-under-line", document(line_extra=FOREIGN_NS_SUBTOTAL)),
+        ("foreign-namespace-tax-total", document(line_extra=FOREIGN_NS_TAX_TOTAL)),
+        ("cac-subtotal-nested-under-item", document(line_extra=f"<cac:Item>{HIDDEN_VAT_SUBTOTAL}</cac:Item>")),
+        ("root-level-foreign-subtotal", document(root_extra=FOREIGN_NS_SUBTOTAL)),
+        ("nonzero-line-tax-total", document(line_tax_total_amount="83.90")),
+        ("nonzero-invoice-tax-total", document(invoice_tax_total_amount="83.90")),
+        ("malformed-line-tax-total", document(line_tax_total_amount="8x.90")),
+        ("malformed-invoice-tax-total", document(invoice_tax_total_amount="NaN")),
+        ("missing-line-tax-total-amount", document(line_tax_total_amount=None)),
+        ("missing-invoice-tax-total-amount", document(invoice_tax_total_amount=None)),
+        ("empty-line-tax-total-amount", document(line_tax_total_amount="")),
+        ("tax-inclusive-differs", document(tax_inclusive="503.39")),
+        ("malformed-tax-exclusive", document(tax_exclusive="4l9.49")),
+        ("malformed-tax-inclusive", document(tax_inclusive="Infinity")),
+        (
+            "second-legal-monetary-total",
+            document(
+                root_extra="<cac:LegalMonetaryTotal><cbc:PayableAmount>1</cbc:PayableAmount></cac:LegalMonetaryTotal>"
+            ),
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_m1_structurally_incomplete_documents_are_ineligible(name: str, content: bytes) -> None:
+    facts = extract_source_tax_facts(content)
+
+    assert not assess_invoice_exemption(parse_ubl_invoice_safe(content), facts).eligible, name
+
+
+def parse_ubl_invoice_safe(content: bytes) -> InternalInvoice:
+    """The canonical invoice; a document the canonical parser itself refuses (malformed
+    monetary totals) is evaluated against the clean document's evidence instead."""
+
+    from app.domain.invoice.exceptions import InvoiceDomainError
+
+    try:
+        return parse_ubl_invoice(content)
+    except InvoiceDomainError:
+        return parse_ubl_invoice(eff_structure())
+
+
+def test_m1_hidden_structures_are_matched_by_identity_not_by_count() -> None:
+    # Every count the canonical alignment checks is unchanged -- one subtotal per line, the
+    # same invoice-level subtotals -- yet the extra element is still found.
+    clean = extract_source_tax_facts(document())
+    for extra in (HIDDEN_ALLOWANCE_CHARGE_VAT, FOREIGN_NS_SUBTOTAL):
+        hidden = extract_source_tax_facts(document(line_extra=extra))
+        assert len(hidden.line_tax_subtotals) == len(clean.line_tax_subtotals)
+        assert len(hidden.invoice_tax_subtotals) == len(clean.invoice_tax_subtotals)
+        assert hidden.unrecognized_tax_subtotal_count == 1
+    assert clean.unrecognized_tax_subtotal_count == 0 and clean.unrecognized_tax_total_count == 0
+    assert extract_source_tax_facts(document(line_extra=HIDDEN_ALLOWANCE_CHARGE_VAT)).unrecognized_tax_total_count == 1
+
+
+def test_m1_facts_without_completeness_are_refused() -> None:
+    invoice, assessment = invoice_and_assessment(eff_structure())
+    for field in ("unrecognized_tax_subtotal_count", "unrecognized_tax_total_count"):
+        assert not assess_invoice_exemption(invoice, replace(assessment.facts, **{field: None})).eligible
+    assert not assess_invoice_exemption(invoice, replace(assessment.facts, monetary_total_count=None)).eligible
+
+
+def test_m1_canonical_monetary_totals_must_match_the_document() -> None:
+    facts = extract_source_tax_facts(eff_structure())
+    other = parse_ubl_invoice(document(tax_exclusive="400.00", tax_inclusive="400.00"))
+
+    assert not assess_invoice_exemption(other, facts).eligible
+
+
+def test_m1_absent_monetary_tax_amounts_are_not_required() -> None:
+    assert eligibility(document(tax_exclusive=None, tax_inclusive=None)).eligible
+    assert eligibility(document(tax_inclusive=None)).eligible
+
+
+def test_m1_w1_verdicts_are_unchanged_for_hidden_structures() -> None:
+    facts = extract_source_tax_facts(document(line_extra=HIDDEN_ALLOWANCE_CHARGE_VAT))
+
+    assert facts.tax_type_codes == ("0015",)
+    assert not facts.has_withholding and not facts.has_unsupported_tax_content
+
+
+def test_m1_eff_structure_stays_eligible_and_maps_with_the_approved_tax() -> None:
+    invoice, assessment = invoice_and_assessment(eff_structure())
+    reader = FakeTaxReader()
+
+    result = engine(enabled_policy(reader), invoice).evaluate(command(invoice, assessment))
+
+    assert assess_invoice_exemption(invoice, assessment.facts).eligible
+    assert [line.result for line in result.tax_match.line_results] == [
+        exemption_match_result(code="335", tax_id=TAX_ID, company_id=COMPANY_ID)
+    ]
+    assert reader.calls == [TAX_ID]
+
+
+def test_m1_hidden_vat_keeps_the_t1_result_at_classification() -> None:
+    content = document(line_extra=HIDDEN_ALLOWANCE_CHARGE_VAT)
+    invoice, assessment = invoice_and_assessment(content)
+    reader = FakeTaxReader()
+
+    enabled = engine(enabled_policy(reader), invoice).evaluate(command(invoice, assessment))
+    t1 = engine(DISABLED_VAT_EXEMPTION_POLICY, invoice).evaluate(command(invoice, assessment))
+
+    assert enabled == t1
+    assert statuses(enabled) == (TaxMatchStatus.INVALID_INPUT,)
+    assert reader.calls == []
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        document(line_extra=HIDDEN_ALLOWANCE_CHARGE_VAT),
+        document(line_tax_total_extra=FOREIGN_NS_SUBTOTAL),
+        document(line_tax_total_amount="83.90"),
+        document(tax_inclusive="503.39"),
+    ],
+    ids=["allowance-charge", "foreign-namespace", "line-total", "monetary-total"],
+)
+@pytest.mark.parametrize("mode", [ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE])
+def test_m1_source_change_after_classification_blocks_execution(changed: bytes, mode: ExecutionMode) -> None:
+    # Classified (and pinned) against the clean document ...
+    invoice, assessment = invoice_and_assessment(eff_structure())
+    classified = engine(enabled_policy(), invoice).evaluate(command(invoice, assessment))
+    assert statuses(classified) == (TaxMatchStatus.MATCHED,)
+    # ... executed when the verified stored document carries a hidden / changed tax structure.
+    reader = FakeTaxReader()
+
+    result, builder, writer = run_strategy(
+        safety_check(changed, policy=enabled_policy(reader)),
+        pinned_source(tax_match=classified.tax_match),
+        mode,
+    )
+
+    assert result.error_code == SOURCE_TAX_BLOCKED_ERROR_CODE
+    assert builder.calls == 0 and writer.commands == ()
+    assert reader.calls == []
+
+
+def test_m1_decision_acceptance_blocks_a_hidden_tax_structure() -> None:
+    evidence = replace(_source_evidence(), invoice=pinned_source().invoice, tax_match=pinned_source().tax_match)
+    writer = RecordingDecisionWriter()
+    use_case = SubmitReviewDecisionUseCase(
+        review_decision_writer=writer,
+        unit_of_work=_FakeUnitOfWork(),
+        execution_evidence_reader=RecordingEvidenceReader(result=evidence),
+        source_tax_safety_check=safety_check(document(line_extra=HIDDEN_ALLOWANCE_CHARGE_VAT)),
+    )
+
+    with pytest.raises(SourceTaxSafetyBlockedError):
+        use_case.execute(_select_workflow_command())
+
+    assert writer.commands_with_evidence == ()
+
+
+def test_m1_preview_blocks_a_hidden_tax_structure() -> None:
+    from tests.unit.test_vendor_bill_preview import _product_decision, _product_source, _request
+    from tests.unit.test_vendor_bill_preview import _use_case as _preview_use_case
+
+    pinned = pinned_source()
+    source = replace(
+        _product_source(),
+        invoice=replace(
+            pinned.invoice, header=replace(pinned.invoice.header, ettn=_product_source().source_invoice_id)
+        ),
+        tax_match=pinned.tax_match,
+    )
+    use_case, _, _ = _preview_use_case(decision=_product_decision(), source=source)
+    use_case._source_tax_safety_check = safety_check(document(line_tax_total_extra=FOREIGN_NS_SUBTOTAL))
+
+    with pytest.raises(SourceTaxSafetyBlockedError):
+        use_case.preview(_request(review_id="review-product-1", decision_version=1))
+
+
+def test_m1_every_retry_attempt_re_checks_completeness(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.application.execution.vendor_bill_strategy.vendor_bill_monetary_errors", lambda *_: ())
+    facts_reader = FixedSourceTaxFactsReader(SourceTaxAssessment.verified(extract_source_tax_facts(eff_structure())))
+    check = SourceTaxSafetyCheck(facts_reader=facts_reader, exemption_policy=enabled_policy())
+    source = pinned_source()
+
+    first, _, _ = run_strategy(check, source, ExecutionMode.DRY_RUN)
+    facts_reader.assessment = SourceTaxAssessment.verified(
+        extract_source_tax_facts(document(line_extra=HIDDEN_ALLOWANCE_CHARGE_VAT))
+    )
+    retry, builder, writer = run_strategy(check, source, ExecutionMode.EXECUTE)
+
+    assert first.status is ExecutionStepStatus.DRY_RUN_OK
+    assert retry.error_code == SOURCE_TAX_BLOCKED_ERROR_CODE
+    assert builder.calls == 0 and writer.commands == ()
+    assert len(facts_reader.calls) == 2

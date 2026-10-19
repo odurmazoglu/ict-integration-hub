@@ -43,10 +43,29 @@ The T1 results are replaced only when **all** of the following hold
 5. every line has exactly one `TaxSubtotal`: `TaxTypeCode` `0015`, `TaxExemptionReasonCode`
    `335`, `TaxAmount` exactly 0, `Percent` absent or 0, `TaxableAmount` present and >= 0, and a
    canonical tax name that normalizes to VAT;
-6. invoice-level `TaxSubtotal`s, when present, are the same exempt shape with the same code and
-   their `TaxableAmount`s sum to the line `TaxableAmount`s;
-7. code 335 is configured, and the configured tax passes the Odoo validation below;
-8. T1 produced exactly one `INVALID_INPUT` result per canonical tax and no errors.
+6. at least one invoice-level `TaxTotal` exists; its `TaxSubtotal`s are the same exempt shape
+   with the same code and their `TaxableAmount`s sum to the line `TaxableAmount`s;
+7. the document is **structurally complete** (M1, see below);
+8. code 335 is configured, and the configured tax passes the Odoo validation below;
+9. T1 produced exactly one `INVALID_INPUT` result per canonical tax and no errors.
+
+### Structural completeness (M1)
+
+The canonical parser (and so canonical evidence) only sees `Invoice/cac:InvoiceLine/cac:TaxTotal`
+subtotals. A tax structure anywhere else -- `cac:AllowanceCharge/cac:TaxTotal`, a foreign XML
+namespace, a deeper nesting -- would otherwise be invisible. The facts extractor therefore walks
+every element (any namespace, any depth, outside `WithholdingTaxTotal`) and matches each
+`TaxSubtotal` and `TaxTotal` **by element identity** against the exact-path traversal (line-level
+`cac:TaxTotal` + invoice-level `cac:TaxTotal`). Eligibility requires:
+
+| Check | Rejects |
+| --- | --- |
+| 0 unrecognized `TaxSubtotal` and 0 unrecognized `TaxTotal` elements | hidden VAT under `AllowanceCharge`, foreign-namespace or nested subtotals/totals (equal counts of different elements cannot hide one) |
+| every exact-path `TaxTotal/TaxAmount` present, well-formed and exactly 0, with at least one `TaxSubtotal` | nonzero, missing, empty or malformed line/invoice totals |
+| exactly one `cac:LegalMonetaryTotal`; `TaxExclusiveAmount` / `TaxInclusiveAmount` well-formed, equal when both present, and equal to canonical evidence | a tax-inclusive total above the tax-exclusive one; malformed or duplicated totals |
+
+The execution money gate (`vendor_bill_monetary_errors`, P0-PROD-19E-2) is unchanged and still
+runs before every write.
 
 Then every line gets:
 

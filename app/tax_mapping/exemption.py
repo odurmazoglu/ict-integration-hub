@@ -10,6 +10,11 @@ extra guard against configuring the wrong (e.g. generic 0%) tax.
 
 v1 is all-lines: every invoice line must be a single, aligned ``0015`` / ``335`` /
 zero-amount subtotal, or no line is mapped and T1's fail-closed result stands.
+
+The document must also be structurally complete (M1): no tax subtotal or total outside the
+canonical paths, every ``TaxTotal/TaxAmount`` exactly 0, an invoice-level ``TaxTotal``, one
+``LegalMonetaryTotal`` whose tax-exclusive and tax-inclusive amounts (when present) are equal
+and match canonical evidence.
 """
 
 from __future__ import annotations
@@ -21,7 +26,12 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.invoice import InternalInvoice, Tax
-from app.domain.invoice.tax_facts import SUPPORTED_TAX_TYPE_CODES, SourceTaxFacts, SourceTaxSubtotalFact
+from app.domain.invoice.tax_facts import (
+    SUPPORTED_TAX_TYPE_CODES,
+    SourceTaxFacts,
+    SourceTaxSubtotalFact,
+    SourceTaxTotalFact,
+)
 from app.tax_mapping.engine import EXACT_MATCH_CONFIDENCE, normalize_tax_type
 from app.tax_mapping.result import (
     InvoiceTaxLineResult,
@@ -115,7 +125,7 @@ def assess_invoice_exemption(invoice: InternalInvoice, facts: SourceTaxFacts | N
     if problems:
         return ExemptionEligibility(code=None, problems=problems)
     assert facts is not None
-    problems = _alignment_problems(invoice, facts)
+    problems = _completeness_problems(invoice, facts) or _alignment_problems(invoice, facts)
     if problems:
         return ExemptionEligibility(code=None, problems=problems)
     codes = {fact.exemption_reason_code for fact in facts.line_tax_subtotals}
@@ -146,6 +156,55 @@ def _document_problems(invoice: InternalInvoice, facts: SourceTaxFacts | None) -
     if facts.line_ids is None:
         problems.append("Source line structure was not extracted.")
     return tuple(problems)
+
+
+def _completeness_problems(invoice: InternalInvoice, facts: SourceTaxFacts) -> tuple[str, ...]:
+    """Prove nothing tax-relevant exists outside what the exact traversal (and so the
+    canonical evidence) sees, and that the document's own totals carry no tax."""
+
+    if facts.unrecognized_tax_subtotal_count is None or facts.unrecognized_tax_total_count is None:
+        return ("Source tax structure completeness was not extracted.",)
+    problems: list[str] = []
+    if facts.unrecognized_tax_subtotal_count:
+        problems.append("Source document has TaxSubtotal elements outside the canonical tax paths.")
+    if facts.unrecognized_tax_total_count:
+        problems.append("Source document has TaxTotal elements outside the canonical tax paths.")
+    if not facts.invoice_tax_totals:
+        problems.append("Source document has no invoice-level TaxTotal.")
+    problems.extend(
+        problem for total in facts.line_tax_totals + facts.invoice_tax_totals for problem in _tax_total_problems(total)
+    )
+    problems.extend(_monetary_total_problems(invoice, facts))
+    return tuple(problems)
+
+
+def _tax_total_problems(total: SourceTaxTotalFact) -> tuple[str, ...]:
+    where = f"line {total.line_id}" if total.line_id is not None else "invoice level"
+    if total.malformed:
+        return (f"TaxTotal of {where} has a malformed TaxAmount.",)
+    if not total.amount_present or total.amount is None:
+        return (f"TaxTotal of {where} has no TaxAmount.",)
+    if total.amount != ZERO:
+        return (f"TaxTotal of {where} must have TaxAmount 0.",)
+    if total.subtotal_count == 0:
+        return (f"TaxTotal of {where} has no TaxSubtotal.",)
+    return ()
+
+
+def _monetary_total_problems(invoice: InternalInvoice, facts: SourceTaxFacts) -> tuple[str, ...]:
+    if facts.monetary_total_count != 1:
+        return ("Source document must have exactly one LegalMonetaryTotal.",)
+    if facts.monetary_totals_malformed:
+        return ("Source document has a malformed monetary total.",)
+    exclusive, inclusive = facts.tax_exclusive_amount, facts.tax_inclusive_amount
+    if exclusive is not None and inclusive is not None and exclusive != inclusive:
+        return ("TaxInclusiveAmount must equal TaxExclusiveAmount for a VAT-exempt invoice.",)
+    totals = invoice.totals
+    if not _same_decimal(totals.tax_exclusive_amount, exclusive) or not _same_decimal(
+        totals.tax_inclusive_amount, inclusive
+    ):
+        return ("Source monetary totals do not match canonical evidence.",)
+    return ()
 
 
 def _alignment_problems(invoice: InternalInvoice, facts: SourceTaxFacts) -> tuple[str, ...]:
@@ -215,7 +274,7 @@ def _exempt_fact_problems(fact: SourceTaxSubtotalFact) -> tuple[str, ...]:
 def _invoice_level_problems(facts: SourceTaxFacts, *, code: str) -> tuple[str, ...]:
     subtotals = facts.invoice_tax_subtotals
     if not subtotals:
-        return ()
+        return ("Source document has no invoice-level TaxSubtotal.",)
     problems = [problem for fact in subtotals for problem in _exempt_fact_problems(fact)]
     if problems:
         return tuple(problems)
