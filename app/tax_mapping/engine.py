@@ -94,7 +94,7 @@ class TaxMappingEngine:
 
 _TURKISH_FOLD = str.maketrans({"İ": "I", "ı": "I", "Ş": "S", "ş": "S", "Ğ": "G", "ğ": "G", "Ç": "C", "ç": "C", "Ö": "O", "ö": "O", "Ü": "U", "ü": "U"})
 _VAT_NAMES = {"KDV", "VAT", "VALUE ADDED TAX", "KATMA DEGER VERGISI", "GERCEK USULDE KATMA DEGER VERGISI"}
-_VAT_RATE_NAME = re.compile(r"^KDV\\s*%\\s*(\\d+(?:[.,]\\d+)?)$")
+_VAT_RATE_NAME = re.compile(r"^KDV\s*%\s*(\d+(?:[.,]\d+)?)$")
 
 
 def _fold_tax_name(value: object) -> str:
