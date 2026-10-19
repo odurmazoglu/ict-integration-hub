@@ -1,14 +1,13 @@
 """PR T / T1 VAT normalization safety regressions (synthetic, no Odoo I/O)."""
 from decimal import Decimal
-from types import SimpleNamespace
 
 import pytest
 
 from app.domain.invoice import Header, InternalInvoice, InvoiceLine, MonetaryTotals, Party, Tax
+from app.erp.odoo.tax_repository import OdooTaxRepository
 from app.tax_mapping.engine import TaxMappingEngine, normalize_tax_type
 from app.tax_mapping.repository import TaxCandidate
 from app.tax_mapping.result import TaxMatchStatus, TaxType
-from app.erp.odoo.tax_repository import OdooTaxRepository, TAX_FIELDS
 
 
 def invoice_with(*taxes: Tax) -> InternalInvoice:
