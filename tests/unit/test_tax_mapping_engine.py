@@ -35,26 +35,26 @@ def test_exact_vat_match() -> None:
     assert match.candidate_count == 1
 
 
-def test_exact_withholding_match() -> None:
+def test_withholding_is_not_auto_mapped() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="WITHHOLDING", rate=Decimal("5"))])]),
         [TaxCandidate(tax_id=20, company_id=3, tax_type=TaxType.WITHHOLDING, rate=Decimal("5"))],
         company_id=3,
     )
 
-    assert result.line_results[0].result.status == TaxMatchStatus.MATCHED
-    assert result.line_results[0].result.tax_id == 20
+    assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
+    assert result.line_results[0].result.tax_id is None
 
 
-def test_exact_exemption_match() -> None:
+def test_exemption_is_not_auto_mapped() -> None:
     result = _map(
         _invoice([_line("1", [Tax(tax_type="EXEMPTION", rate=Decimal("0"))])]),
         [TaxCandidate(tax_id=30, company_id=3, tax_type=TaxType.EXEMPTION, rate=Decimal("0"))],
         company_id=3,
     )
 
-    assert result.line_results[0].result.status == TaxMatchStatus.MATCHED
-    assert result.line_results[0].result.tax_id == 30
+    assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
+    assert result.line_results[0].result.tax_id is None
 
 
 def test_zero_rate_vat_remains_distinct_from_exemption() -> None:
@@ -67,8 +67,8 @@ def test_zero_rate_vat_remains_distinct_from_exemption() -> None:
         company_id=3,
     )
 
-    assert result.line_results[0].result.status == TaxMatchStatus.MATCHED
-    assert result.line_results[0].result.tax_id == 40
+    assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
+    assert result.line_results[0].result.tax_id is None
 
 
 @pytest.mark.parametrize("tax_type", [None, "", "LOCAL_TAX", "UNKNOWN"])
@@ -102,7 +102,7 @@ def test_malformed_rate_is_invalid() -> None:
     )
 
     assert result.line_results[0].result.status == TaxMatchStatus.INVALID_INPUT
-    assert result.line_results[0].result.reason == "Tax rate is required or malformed."
+    assert result.line_results[0].result.reason == "VAT percent is required; exemptions need an approved mapping."
 
 
 def test_not_found() -> None:
@@ -185,7 +185,7 @@ def test_multiple_invoice_lines_and_multiple_taxes_on_one_line() -> None:
 
     assert [(item.line_number, item.tax_index, item.result.tax_id) for item in result.line_results] == [
         ("1", 0, 10),
-        ("1", 1, 20),
+        ("1", 1, None),
         ("2", 0, 30),
     ]
 
