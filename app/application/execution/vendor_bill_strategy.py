@@ -47,9 +47,13 @@ class ResaleExecutionAccountingCheck(Protocol):
 
 class SourceTaxVendorBillCheck(Protocol):
     """PR T W1 source-document tax safety (``SourceTaxSafetyCheck``): raises
-    ``SourceTaxSafetyBlockedError`` or the retryable ``SourceTaxFactsUnavailableError``."""
+    ``SourceTaxSafetyBlockedError`` or the retryable ``SourceTaxFactsUnavailableError``.
 
-    def ensure_vendor_bill_allowed(self, *, review_id: str, company_id: int, invoice: object) -> object:
+    PR T T2-A: also re-proves every exemption-pinned tax of ``tax_match``."""
+
+    def ensure_vendor_bill_tax_allowed(
+        self, *, review_id: str, company_id: int, invoice: object, tax_match: object
+    ) -> object:
         pass
 
 
@@ -61,7 +65,12 @@ SOURCE_TAX_UNAVAILABLE_ERROR_CODE = "source_tax_facts_unavailable"
 def ensure_source_tax_allowed(check: SourceTaxVendorBillCheck, source: ExecutionSourceInvoice) -> None:
     """Shared by every Vendor Bill-producing strategy, before anything is built or written."""
 
-    check.ensure_vendor_bill_allowed(review_id=source.review_id, company_id=source.company_id, invoice=source.invoice)
+    check.ensure_vendor_bill_tax_allowed(
+        review_id=source.review_id,
+        company_id=source.company_id,
+        invoice=source.invoice,
+        tax_match=source.tax_match,
+    )
 
 
 class VendorBillCurrencyDecimalPlaces(Protocol):

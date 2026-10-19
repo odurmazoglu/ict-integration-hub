@@ -14,8 +14,12 @@ from app.application.source_tax import (
     SourceDocumentUnreadableError,
     SourceTaxFactsUnavailableError,
 )
+from app.application.source_tax.exemption import DISABLED_VAT_EXEMPTION_POLICY, VatExemptionTaxPolicy
 from app.application.source_tax.reader import SourceTaxSafetyCheck, StoredSourceTaxFactsReader
+from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
+from app.erp.odoo.adapter import OdooReadOnlyAdapter
+from app.erp.odoo.tax_repository import OdooExemptionTaxReader
 from app.persistence.workbench_review_source_invoice_correction_repository import (
     SqlAlchemyReviewSourceInvoiceCorrectionRepository,
 )
@@ -67,14 +71,32 @@ def build_source_tax_facts_reader(
     )
 
 
+def build_vat_exemption_tax_policy(
+    *,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> VatExemptionTaxPolicy:
+    """PR T T2-A. Empty ``VAT_EXEMPTION_PURCHASE_TAX_IDS`` composes no Odoo client at all."""
+
+    if not settings.vat_exemption_purchase_tax_ids:
+        return DISABLED_VAT_EXEMPTION_POLICY
+    client = odoo_client or OdooJson2Client.from_settings(settings)
+    return VatExemptionTaxPolicy(
+        tax_ids_by_code=settings.vat_exemption_purchase_tax_ids,
+        tax_reader=OdooExemptionTaxReader(adapter=OdooReadOnlyAdapter(client=client)),
+    )
+
+
 def build_source_tax_safety_check(
     *,
     session: Session,
     settings: Settings,
     storage: DocumentStorage | None = None,
+    odoo_client: OdooJson2Client | None = None,
 ) -> SourceTaxSafetyCheck:
     return SourceTaxSafetyCheck(
-        facts_reader=build_source_tax_facts_reader(session=session, settings=settings, storage=storage)
+        facts_reader=build_source_tax_facts_reader(session=session, settings=settings, storage=storage),
+        exemption_policy=build_vat_exemption_tax_policy(settings=settings, odoo_client=odoo_client),
     )
 
 
@@ -82,4 +104,5 @@ __all__ = [
     "StoredSourceTaxDocumentReader",
     "build_source_tax_facts_reader",
     "build_source_tax_safety_check",
+    "build_vat_exemption_tax_policy",
 ]

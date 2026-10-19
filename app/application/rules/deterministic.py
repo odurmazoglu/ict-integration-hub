@@ -15,6 +15,7 @@ from app.application.expense_mapping import (
     invoice_is_product_identifier_free,
 )
 from app.application.source_tax.assessment import source_tax_review_reasons
+from app.application.source_tax.exemption import DISABLED_VAT_EXEMPTION_POLICY, VatExemptionTaxPolicy
 from app.application.source_tax.model import SourceDocumentIssue, SourceTaxAssessment
 from app.application.workflow import (
     ManualReviewDecision,
@@ -108,6 +109,11 @@ class DeterministicRuleEngine:
     prepended to the review's other reasons; no Vendor Bill branch is taken while any is
     present.
 
+    PR T T2-A: with a configured ``VatExemptionTaxPolicy``, T1's fail-closed result for an
+    invoice whose verified document proves an approved VAT exemption (code 335, every line)
+    becomes one ``EXEMPTION`` match per line to the approved Odoo tax. The default policy
+    (empty configuration) leaves every tax result exactly as T1 produced it.
+
     PR S safety guards, evaluated after matching so every match fact is still recorded:
     a return invoice (``InvoiceTypeCode`` IADE family) is Manual Review with only the
     RETURN_INVOICE_NOT_SUPPORTED reason. An identifier-free invoice from a registered
@@ -124,7 +130,9 @@ class DeterministicRuleEngine:
         product_matcher: ProductMatcher,
         tax_mapper: TaxMapper,
         operating_expense_matcher: OperatingExpenseMatcher | None = None,
+        exemption_tax_policy: VatExemptionTaxPolicy = DISABLED_VAT_EXEMPTION_POLICY,
     ) -> None:
+        self._exemption_tax_policy = exemption_tax_policy
         self._partner_matcher = partner_matcher
         self._product_matcher = product_matcher
         self._tax_mapper = tax_mapper
@@ -139,6 +147,7 @@ class DeterministicRuleEngine:
         product_partner_match = supplier_match_for_product_matching(partner_match, command.accepted_supplier)
         product_match = _evaluate_products(self._product_matcher, invoice, command.company_id, product_partner_match)
         tax_match = _evaluate_taxes(self._tax_mapper, invoice, command.company_id)
+        tax_match = _evaluate_exemptions(self._exemption_tax_policy, invoice, tax_match, command)
         ambiguous_commercial = invoice_is_ambiguous_commercial_purchase(invoice)
         operating_expense_match = (
             _PRODUCT_SOURCE_SUPPLIER_EXPENSE_MATCH
@@ -280,6 +289,25 @@ def _evaluate_taxes(
         raise
     except Exception as exc:
         raise TaxRuleEvaluationError(_safe_message(exc, "Tax mapping failed.")) from exc
+
+
+def _evaluate_exemptions(
+    policy: VatExemptionTaxPolicy,
+    invoice: InternalInvoice,
+    tax_match: InvoiceTaxMappingResult,
+    command: ImportInvoiceCommand,
+) -> InvoiceTaxMappingResult:
+    try:
+        return policy.map_invoice(
+            invoice,
+            tax_match,
+            assessment=command.source_tax_assessment,
+            company_id=command.company_id,
+        )
+    except ApplicationError:
+        raise
+    except Exception as exc:
+        raise TaxRuleEvaluationError(_safe_message(exc, "VAT exemption mapping failed.")) from exc
 
 
 def _evaluate_operating_expense(

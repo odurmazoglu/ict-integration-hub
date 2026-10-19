@@ -3,8 +3,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, Field, SecretStr, StrictInt
+from pydantic import AnyHttpUrl, Field, SecretStr, StrictInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.tax_mapping.exemption import validate_vat_exemption_tax_config
 
 UyumsoftEnvironment = Literal["test", "production"]
 AuthenticationMode = Literal["disabled", "development_headers", "oidc_jwt"]
@@ -69,6 +71,11 @@ class Settings(BaseSettings):
     #: a CAPITALIZE_FIXED_ASSET accounting resolution. Empty means fixed-asset accounting is
     #: unavailable (fails closed). Keeps e.g. accumulated-depreciation accounts unselectable.
     odoo_fixed_asset_account_ids: frozenset[OdooRecordId] = frozenset()
+    #: PR T T2-A: JSON ``{"<UBL-TR exemption code>": <Odoo account.tax id>}`` -- the dedicated,
+    #: accountant-approved purchase tax per exemption code. Empty (default) disables exemption
+    #: mapping: T1 behaviour, no Odoo read, every exemption-pinned line blocked. Only code 335
+    #: is accepted; 209 / 351, duplicate ids, the generic 0% tax and non-positive ids are refused.
+    vat_exemption_purchase_tax_ids: dict[str, OdooRecordId] = Field(default_factory=dict)
 
     uyumsoft_environment: UyumsoftEnvironment = "test"
     uyumsoft_test_wsdl_url: AnyHttpUrl = Field(default="https://efatura-test.uyumsoft.com.tr/Services/Integration?wsdl")
@@ -135,6 +142,11 @@ class Settings(BaseSettings):
     #: 60 s database-only display sweep. Off by default: no advisory row is read by the
     #: projection, mapped hint fields are cleared, and no sweep task is registered.
     odoo_workbench_product_line_suggestions_display_enabled: bool = False
+
+    @field_validator("vat_exemption_purchase_tax_ids")
+    @classmethod
+    def _validate_vat_exemption_purchase_tax_ids(cls, value: dict[str, int]) -> dict[str, int]:
+        return validate_vat_exemption_tax_config(value)
 
     @property
     def uyumsoft_wsdl_url(self) -> str:

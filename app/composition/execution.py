@@ -96,7 +96,9 @@ def build_vendor_bill_execution_use_case(
         repository=account_move_repository,
         policy=customer_invoice_policy,
     )
-    source_tax_safety_check = build_source_tax_safety_check(session=session, settings=settings)
+    source_tax_safety_check = build_source_tax_safety_check(
+        session=session, settings=settings, odoo_client=resolved_odoo_client
+    )
     strategy = VendorBillExecutionStrategy(
         source_invoice_reader=source_invoice_reader,
         vendor_bill_builder=VendorBillBuilder(),
@@ -320,7 +322,9 @@ def build_vendor_bill_preview_use_case(
         currency_reader=OdooVendorBillPreviewCurrencyReader(adapter=read_only_adapter),
         product_uom_reader=OdooVendorBillPreviewProductUomReader(adapter=read_only_adapter),
         # PR T W1: read-only source-document tax check, the same one execution runs.
-        source_tax_safety_check=build_source_tax_safety_check(session=session, settings=settings),
+        source_tax_safety_check=build_source_tax_safety_check(
+            session=session, settings=settings, odoo_client=odoo_client
+        ),
         # P0-PROD-18F-1: RESALE accounting comes from the decision's own pin in Hub
         # persistence -- no Odoo accounting reader is composed into preview at all.
         resale_accounting_pin_reader=source_invoice_reader,

@@ -17,10 +17,12 @@ from app.application.source_tax.exceptions import (
     SourceTaxFactsUnavailableError,
     SourceTaxSafetyBlockedError,
 )
+from app.application.source_tax.exemption import DISABLED_VAT_EXEMPTION_POLICY, VatExemptionTaxPolicy
 from app.application.source_tax.model import SourceDocumentIssue, SourceTaxAssessment
 from app.application.workbench.exceptions import ReviewNotFoundError, ReviewPersistenceError
 from app.domain.invoice import InternalInvoice
 from app.domain.invoice.tax_facts import SourceTaxFacts
+from app.tax_mapping.result import InvoiceTaxMappingResult
 
 logger = logging.getLogger(__name__)
 
@@ -110,8 +112,36 @@ class SourceTaxSafetyCheck:
     accounting decision or stale Stage-1 evidence can route around it.
     """
 
-    def __init__(self, *, facts_reader: SourceTaxAssessmentReader) -> None:
+    def __init__(
+        self,
+        *,
+        facts_reader: SourceTaxAssessmentReader,
+        exemption_policy: VatExemptionTaxPolicy = DISABLED_VAT_EXEMPTION_POLICY,
+    ) -> None:
         self._facts_reader = facts_reader
+        # PR T T2-A: the default (empty configuration) blocks every exemption-pinned line.
+        self._exemption_policy = exemption_policy
+
+    def ensure_vendor_bill_tax_allowed(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        invoice: InternalInvoice,
+        tax_match: InvoiceTaxMappingResult,
+    ) -> SourceTaxFacts:
+        """:meth:`ensure_vendor_bill_allowed`, then (PR T T2-A) every exemption-pinned line
+        re-proven from those same freshly verified facts and a fresh Odoo tax read."""
+
+        facts = self.ensure_vendor_bill_allowed(review_id=review_id, company_id=company_id, invoice=invoice)
+        self._exemption_policy.ensure_pinned_exemptions_allowed(
+            review_id=review_id,
+            company_id=company_id,
+            invoice=invoice,
+            tax_match=tax_match,
+            facts=facts,
+        )
+        return facts
 
     def ensure_vendor_bill_allowed(
         self, *, review_id: str, company_id: int, invoice: InternalInvoice
