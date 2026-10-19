@@ -15,9 +15,9 @@ class TaxCandidate:
     tax_type: TaxType
     rate: Decimal
     active: bool = True
-    usage_type: str | None = "purchase"
-    amount_type: str | None = "percent"
-    has_children: bool = False
+    usage_type: str | None = None
+    amount_type: str | None = None
+    has_children: bool | None = None
 
 
 class TaxRepository(Protocol):

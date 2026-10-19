@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from decimal import Decimal, InvalidOperation
 
 from app.domain.invoice import InternalInvoice, Tax
@@ -94,16 +95,27 @@ class TaxMappingEngine:
 
 _TURKISH_FOLD = str.maketrans(
     {
-        "İ": "I", "ı": "I", "Ş": "S", "ş": "S", "Ğ": "G", "ğ": "G",
-        "Ç": "C", "ç": "C", "Ö": "O", "ö": "O", "Ü": "U", "ü": "U",
+        "İ": "I",
+        "ı": "I",
+        "Ş": "S",
+        "ş": "S",
+        "Ğ": "G",
+        "ğ": "G",
+        "Ç": "C",
+        "ç": "C",
+        "Ö": "O",
+        "ö": "O",
+        "Ü": "U",
+        "ü": "U",
     }
 )
 _VAT_NAMES = {"KDV", "VAT", "VALUE ADDED TAX", "KATMA DEGER VERGISI", "GERCEK USULDE KATMA DEGER VERGISI"}
-_VAT_RATE_NAME = re.compile(r"^KDV\s*%\s*(\d+(?:[.,]\d+)?)$")
+_VAT_RATE_NAME = re.compile(r"^KDV\s*%\s*([0-9]+(?:[.,][0-9]+)?)$", re.ASCII)
 
 
 def _fold_tax_name(value: object) -> str:
-    return " ".join(str(value).translate(_TURKISH_FOLD).upper().split())
+    folded = unicodedata.normalize("NFC", str(value)).translate(_TURKISH_FOLD).upper()
+    return " ".join(folded.replace("_", " ").replace("-", " ").split())
 
 
 def _vat_name_rate_consistent(value: object, rate: Decimal | None) -> bool:
@@ -197,7 +209,7 @@ def _valid_candidates(
         and candidate.tax_type == tax_type
         and candidate.usage_type == "purchase"
         and candidate.amount_type == "percent"
-        and not candidate.has_children
+        and candidate.has_children is False
         and candidate.rate >= Decimal("0")
         and normalize_tax_rate(candidate.rate) == rate
         and (company_id is None or candidate.company_id == company_id)

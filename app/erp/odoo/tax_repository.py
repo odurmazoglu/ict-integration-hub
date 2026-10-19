@@ -26,10 +26,7 @@ class OdooTaxRepository:
         if company_id is not None:
             domain.append(["company_id", "in", [company_id, False]])
         records = self._adapter.search_read_all(model="account.tax", domain=domain, fields=TAX_FIELDS)
-        return tuple(
-            candidate for record in records
-            if (candidate := _candidate(record)) is not None
-        )
+        return tuple(candidate for record in records if (candidate := _candidate(record)) is not None)
 
 
 def _candidate(record: dict[str, Any]) -> TaxCandidate | None:
