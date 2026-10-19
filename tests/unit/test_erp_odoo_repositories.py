@@ -266,7 +266,15 @@ def test_tax_lookup_implements_tax_mapping_repository_protocol() -> None:
     adapter = RecordingAdapter(
         {
             "account.tax": [
-                {"id": 30, "amount": "20.0", "active": True, "type_tax_use": "purchase", "company_id": [7, "Main"], "amount_type": "percent", "children_tax_ids": []}
+                {
+                    "id": 30,
+                    "amount": "20.0",
+                    "active": True,
+                    "type_tax_use": "purchase",
+                    "company_id": [7, "Main"],
+                    "amount_type": "percent",
+                    "children_tax_ids": [],
+                }
             ]
         }
     )
