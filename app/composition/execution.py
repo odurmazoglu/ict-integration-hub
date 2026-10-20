@@ -23,23 +23,27 @@ from app.application.execution import (
 )
 from app.application.execution.contracts import ExecutionStepType
 from app.application.execution.resale_execution_accounting import ResaleExecutionAccountingValidator
+from app.application.execution.vendor_bill_fx_guard import StoredSourceFxFactsReader, VendorBillFxRatePolicy
 from app.application.execution.vendor_bill_preview import PreviewVendorBillExpectationReader, PreviewVendorBillUseCase
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.vendor_bill_readback import (
     GetVendorBillReadbackUseCase,
+    VendorBillFxReadbackVerifier,
     VendorBillMonetaryReadbackVerifier,
     VendorBillResaleReadbackVerifier,
 )
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.composition.imports import build_runtime_workbench_projection_synchronizer
 from app.composition.purchase_account_discovery import build_get_product_purchase_account_use_case
-from app.composition.source_tax import build_source_tax_safety_check
+from app.composition.source_tax import StoredSourceTaxDocumentReader, build_source_tax_safety_check
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.odoo.account_move_line_verification_reader import OdooAccountMoveLineVerificationReader
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.fiscal_position_reader import OdooFiscalPositionReader
 from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
+from app.erp.odoo.vendor_bill_company_amounts_reader import OdooVendorBillCompanyAmountsReader
+from app.erp.odoo.vendor_bill_fx_rate_reader import OdooVendorBillFxRateReader
 from app.erp.odoo.vendor_bill_header_verification_reader import OdooVendorBillHeaderVerificationReader
 from app.erp.odoo.vendor_bill_preview_currency_reader import (
     OdooVendorBillExecutionCurrencyReader,
@@ -69,6 +73,10 @@ from app.persistence import (
     SqlAlchemyUnitOfWork,
     SqlAlchemyWriteAuthorizationRepository,
 )
+from app.persistence.workbench_review_source_invoice_correction_repository import (
+    SqlAlchemyReviewSourceInvoiceCorrectionRepository,
+)
+from app.services.document_storage import LocalDocumentStorage
 
 
 def build_vendor_bill_execution_use_case(
@@ -112,6 +120,10 @@ def build_vendor_bill_execution_use_case(
         currency_reader=OdooVendorBillExecutionCurrencyReader(adapter=OdooReadOnlyAdapter(client=resolved_odoo_client)),
         # PR T W1: the original document's tax content is re-verified on every attempt.
         source_tax_safety_check=source_tax_safety_check,
+        # P1: a foreign-currency bill's UBL rate must equal Odoo's rate before any write.
+        fx_rate_policy=build_vendor_bill_fx_rate_policy(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        ),
     )
     purchase_order_vendor_bill_repository = PurchaseOrderVendorBillRepository(
         client=odoo_client or OdooJson2Client.from_settings(settings),
@@ -293,6 +305,27 @@ def build_workbench_customer_quotation_execution_workflow(
     )
 
 
+def build_vendor_bill_fx_rate_policy(
+    *,
+    session: Session,
+    settings: Settings,
+    odoo_client: OdooJson2Client | None = None,
+) -> VendorBillFxRatePolicy:
+    """P1: the invoice's own exchange rate, from the verified original UBL (located and read
+    exactly as the PR T W1 source-tax guard does), plus read-only Odoo currency facts and
+    the created bill's TRY amounts. Nothing here can write."""
+
+    adapter = OdooReadOnlyAdapter(client=odoo_client or OdooJson2Client.from_settings(settings))
+    return VendorBillFxRatePolicy(
+        facts_reader=StoredSourceFxFactsReader(
+            document_locator=SqlAlchemyReviewSourceInvoiceCorrectionRepository(session),
+            document_reader=StoredSourceTaxDocumentReader(LocalDocumentStorage(settings.document_storage_root)),
+        ),
+        currency_reader=OdooVendorBillFxRateReader(adapter=adapter),
+        amounts_reader=OdooVendorBillCompanyAmountsReader(adapter=adapter),
+    )
+
+
 def build_vendor_bill_preview_use_case(
     *,
     session: Session,
@@ -329,6 +362,8 @@ def build_vendor_bill_preview_use_case(
         # persistence -- no Odoo accounting reader is composed into preview at all.
         resale_accounting_pin_reader=source_invoice_reader,
         purchase_purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
+        # P1: the same read-only exchange-rate check EXECUTE runs, reported, never raised.
+        fx_rate_policy=build_vendor_bill_fx_rate_policy(session=session, settings=settings, odoo_client=odoo_client),
     )
 
 
@@ -360,6 +395,11 @@ def build_get_vendor_bill_readback_use_case(
 
     resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
     adapter = OdooReadOnlyAdapter(client=resolved_odoo_client)
+    expectation_reader = PreviewVendorBillExpectationReader(
+        preview_use_case=build_vendor_bill_preview_use_case(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        )
+    )
     return GetVendorBillReadbackUseCase(
         review_reader=SqlAlchemyReviewRepository(session),
         execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(session),
@@ -373,12 +413,11 @@ def build_get_vendor_bill_readback_use_case(
         ),
         # P0-PROD-19E-1: every bill's money is checked against the same zero-write preview
         # (same builder, same pinned evidence) that real execution mirrors.
-        monetary_verifier=VendorBillMonetaryReadbackVerifier(
-            expectation_reader=PreviewVendorBillExpectationReader(
-                preview_use_case=build_vendor_bill_preview_use_case(
-                    session=session, settings=settings, odoo_client=resolved_odoo_client
-                )
-            )
+        monetary_verifier=VendorBillMonetaryReadbackVerifier(expectation_reader=expectation_reader),
+        # P1: a foreign-currency bill's actual rate and company-currency total.
+        fx_verifier=VendorBillFxReadbackVerifier(
+            expectation_reader=expectation_reader,
+            amounts_reader=OdooVendorBillCompanyAmountsReader(adapter=adapter),
         ),
     )
 

@@ -68,7 +68,11 @@ class OdooReadOnlyAdapter:
         fields: list[str],
         limit: int | None = None,
         offset: int = 0,
+        context: dict[str, Any] | None = None,
     ) -> tuple[JsonRecord, ...]:
+        """``context`` is an optional Odoo evaluation context (e.g. the ``date`` a currency
+        rate is resolved for); it is forwarded only when given."""
+
         self._ensure_readonly(method=READONLY_METHOD)
         request_limit = self._page_size if limit is None else limit
         return tuple(
@@ -79,6 +83,7 @@ class OdooReadOnlyAdapter:
                     fields=fields,
                     limit=request_limit,
                     offset=offset,
+                    context=context,
                 )
             )
         )
@@ -127,7 +132,9 @@ class OdooReadOnlyAdapter:
         fields: list[str],
         limit: int,
         offset: int,
+        context: dict[str, Any] | None = None,
     ) -> list[JsonRecord]:
+        context_kwargs = {"context": context} if context is not None else {}
         last_error: ConnectorError | None = None
         for attempt in range(self._retry_attempts):
             try:
@@ -137,6 +144,7 @@ class OdooReadOnlyAdapter:
                     fields=fields,
                     limit=limit,
                     offset=offset,
+                    **context_kwargs,
                 )
             except ConnectorTimeoutError as exc:
                 last_error = exc

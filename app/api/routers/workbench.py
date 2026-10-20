@@ -176,6 +176,7 @@ from app.application.workbench.purchase_purpose import SubmitPurchasePurposeComm
 from app.application.workbench.review_evidence import EffectiveLineResolution
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.vendor_bill_readback import (
+    VendorBillFxReadbackVerification,
     VendorBillMonetaryReadbackVerification,
     VendorBillReadback,
     VendorBillReadbackError,
@@ -194,6 +195,7 @@ from app.application.workbench.write_authorization import (
 )
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.billing.exceptions import VendorBillBuildError
+from app.billing.fx_rate import FxRatePlan
 from app.schemas.workbench import (
     AcceptedDecisionSummaryResponse,
     AccountingResolutionEnvelope,
@@ -251,6 +253,8 @@ from app.schemas.workbench import (
     SupplierRemediationResponse,
     SupplierResolutionRequest,
     TaxResolutionRequest,
+    VendorBillFxRatePlanResponse,
+    VendorBillFxReadbackResponse,
     VendorBillMonetaryReadbackLineResponse,
     VendorBillMonetaryReadbackResponse,
     VendorBillPreviewEnvelope,
@@ -1549,6 +1553,29 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
         source_total=decimal_to_api(preview.source_total),
         monetary_reconciles=preview.monetary_reconciles,
         monetary_mismatches=list(preview.monetary_mismatches),
+        fx_rate_plan=_fx_rate_plan_response(preview.fx_rate_plan),
+    )
+
+
+def _fx_rate_plan_response(plan: FxRatePlan | None) -> VendorBillFxRatePlanResponse | None:
+    if plan is None:
+        return None
+    return VendorBillFxRatePlanResponse(
+        status=plan.status.value,
+        blocks_vendor_bill=plan.blocks_vendor_bill,
+        document_currency=plan.document_currency,
+        company_currency=plan.company_currency,
+        rate_date=plan.rate_date,
+        source_rate=decimal_to_api(plan.source_rate),
+        odoo_automatic_rate=decimal_to_api(plan.odoo_automatic_rate),
+        selected_rate=decimal_to_api(plan.selected_rate),
+        odoo_invoice_currency_rate=plan.odoo_invoice_currency_rate,
+        rate_difference=decimal_to_api(plan.rate_difference),
+        company_currency_decimal_places=plan.company_currency_decimal_places,
+        expected_company_untaxed=decimal_to_api(plan.expected_company_untaxed),
+        expected_company_tax=decimal_to_api(plan.expected_company_tax),
+        expected_company_total=decimal_to_api(plan.expected_company_total),
+        message=plan.message,
     )
 
 
@@ -1599,6 +1626,30 @@ def _vendor_bill_readback_response(readback: VendorBillReadback) -> VendorBillRe
         ],
         resale_verification=_resale_readback_response(readback.resale_verification),
         monetary_verification=_monetary_readback_response(readback.monetary_verification),
+        fx_verification=_fx_readback_response(readback.fx_verification),
+    )
+
+
+def _fx_readback_response(
+    verification: VendorBillFxReadbackVerification | None,
+) -> VendorBillFxReadbackResponse | None:
+    if verification is None:
+        return None
+    return VendorBillFxReadbackResponse(
+        status=verification.status.value,
+        document_currency=verification.document_currency,
+        company_currency=verification.company_currency,
+        source_rate=decimal_to_api(verification.source_rate),
+        odoo_automatic_rate=decimal_to_api(verification.odoo_automatic_rate),
+        odoo_bill_rate=decimal_to_api(verification.odoo_bill_rate),
+        expected_company_untaxed=decimal_to_api(verification.expected_company_untaxed),
+        expected_company_tax=decimal_to_api(verification.expected_company_tax),
+        expected_company_total=decimal_to_api(verification.expected_company_total),
+        company_untaxed=decimal_to_api(verification.company_untaxed),
+        company_tax=decimal_to_api(verification.company_tax),
+        company_payable=decimal_to_api(verification.company_payable),
+        mismatches=list(verification.mismatches),
+        notes=list(verification.notes),
     )
 
 

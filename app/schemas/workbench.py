@@ -714,6 +714,34 @@ class VendorBillPreviewLineResponse(BaseModel):
     source_line_extension_amount: str | None = None
 
 
+class VendorBillFxRatePlanResponse(BaseModel):
+    """P1: the exchange rate a foreign-currency bill is created with.
+
+    Rates are company-currency units per one bill-currency unit. ``source_rate`` (the
+    invoice's own PricingExchangeRate) is authoritative; ``odoo_automatic_rate`` is shown
+    for comparison only. Any status other than ``source_rate_selected`` / ``not_applicable``
+    blocks EXECUTE before any Odoo write.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    blocks_vendor_bill: bool
+    document_currency: str
+    company_currency: str | None
+    rate_date: date | None
+    source_rate: str | None
+    odoo_automatic_rate: str | None
+    selected_rate: str | None
+    odoo_invoice_currency_rate: float | None
+    rate_difference: str | None
+    company_currency_decimal_places: int | None
+    expected_company_untaxed: str | None
+    expected_company_tax: str | None
+    expected_company_total: str | None
+    message: str
+
+
 class VendorBillPreviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
 
@@ -749,6 +777,8 @@ class VendorBillPreviewResponse(BaseModel):
     source_total: str | None = None
     monetary_reconciles: bool | None = None
     monetary_mismatches: list[str] = Field(default_factory=list)
+    # P1: additive; the invoice's own exchange rate the new bill is created with.
+    fx_rate_plan: VendorBillFxRatePlanResponse | None = None
 
 
 class VendorBillReadbackLineResponse(BaseModel):
@@ -815,6 +845,27 @@ class VendorBillMonetaryReadbackResponse(BaseModel):
     mismatches: list[str]
 
 
+class VendorBillFxReadbackResponse(BaseModel):
+    """P1: a created bill's exchange rate and TRY amounts verified against the invoice rate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    document_currency: str | None
+    company_currency: str | None
+    source_rate: str | None
+    odoo_automatic_rate: str | None
+    odoo_bill_rate: str | None
+    expected_company_untaxed: str | None
+    expected_company_tax: str | None
+    expected_company_total: str | None
+    company_untaxed: str | None
+    company_tax: str | None
+    company_payable: str | None
+    mismatches: list[str]
+    notes: list[str]
+
+
 class VendorBillReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -834,6 +885,8 @@ class VendorBillReadbackResponse(BaseModel):
     resale_verification: VendorBillResaleReadbackResponse | None = None
     # P0-PROD-19E-1: additive; the monetary verification of every Vendor Bill.
     monetary_verification: VendorBillMonetaryReadbackResponse | None = None
+    # P1: additive; the bill's rate and TRY amounts verified against the invoice rate.
+    fx_verification: VendorBillFxReadbackResponse | None = None
 
 
 class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):

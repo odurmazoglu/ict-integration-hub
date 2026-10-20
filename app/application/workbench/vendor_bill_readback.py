@@ -10,6 +10,11 @@ quantity, exact price_unit and subtotal, and the bill's untaxed/tax/total -- aga
 accepted evidence at the bill currency's own precision
 (:func:`app.billing.money.monetary_equal`). Same reporting model: a mismatch is reported
 and the draft bill is left for reconciliation; nothing is corrected or re-created.
+
+P1: a foreign-currency bill is also verified against the invoice's own exchange rate --
+its actual ``invoice_currency_rate``, every TRY line balance, the TRY tax lines and the
+TRY payable (:func:`app.billing.fx_rate.verify_vendor_bill_company_amounts`, the same
+check EXECUTE runs right after the write). Same reporting model: reported, never corrected.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from app.application.workbench.ports import ReviewQueueReader
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin
 from app.application.workbench.resale_decision_gate import PurchasePurposeHistoryReader
+from app.billing.fx_rate import FxVerification, FxVerificationStatus, verify_vendor_bill_company_amounts
 from app.billing.money import MonetaryPrecision, MonetaryPrecisionError, monetary_equal
 from app.billing.reconciliation import monetary_mismatches
 
@@ -165,6 +171,8 @@ class VendorBillReadback(ApplicationDTO):
     resale_verification: VendorBillResaleReadbackVerification | None = None
     # P0-PROD-19E-1: set whenever a monetary verifier is composed.
     monetary_verification: VendorBillMonetaryReadbackVerification | None = None
+    # P1: set whenever an FX verifier is composed.
+    fx_verification: VendorBillFxReadbackVerification | None = None
 
 
 class VendorBillExpectationReader(Protocol):
@@ -297,6 +305,87 @@ def _monetary_mismatch(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class VendorBillFxReadbackVerification(ApplicationDTO):
+    """A created bill's exchange rate and TRY amounts against the invoice's own rate (P1)."""
+
+    status: FxVerificationStatus
+    document_currency: str | None
+    company_currency: str | None
+    #: The invoice's own rate (UBL PricingExchangeRate) the bill must carry.
+    source_rate: Decimal | None = None
+    odoo_automatic_rate: Decimal | None = None
+    #: The bill's actual rate, UBL direction, normalized.
+    odoo_bill_rate: Decimal | None = None
+    expected_company_untaxed: Decimal | None = None
+    expected_company_tax: Decimal | None = None
+    expected_company_total: Decimal | None = None
+    company_untaxed: Decimal | None = None
+    company_tax: Decimal | None = None
+    company_payable: Decimal | None = None
+    mismatches: tuple[str, ...] = field(default_factory=tuple)
+    notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+class VendorBillCompanyAmountsReader(Protocol):
+    def read_vendor_bill_company_amounts(self, *, move_id: int, company_id: int): ...
+
+
+class VendorBillFxReadbackVerifier:
+    """Verify a created bill's rate and TRY amounts against the invoice rate. Read-only."""
+
+    def __init__(
+        self, *, expectation_reader: VendorBillExpectationReader, amounts_reader: VendorBillCompanyAmountsReader
+    ) -> None:
+        self._expectation_reader = expectation_reader
+        self._amounts_reader = amounts_reader
+
+    def verify(
+        self, *, review_id: str, company_id: int, decision_version: int, move_id: int
+    ) -> VendorBillFxReadbackVerification:
+        try:
+            expected = self._expectation_reader.expected_vendor_bill(
+                review_id=review_id, company_id=company_id, decision_version=decision_version
+            )
+        except ApplicationError as exc:
+            return VendorBillFxReadbackVerification(
+                status=FxVerificationStatus.UNVERIFIED,
+                document_currency=None,
+                company_currency=None,
+                mismatches=(f"expected Vendor Bill unavailable: {exc.safe_message}",),
+            )
+        plan = expected.fx_rate_plan
+        if plan is None or not plan.applies_rate:
+            verification = verify_vendor_bill_company_amounts(plan, None)
+        else:
+            verification = verify_vendor_bill_company_amounts(
+                plan, self._amounts_reader.read_vendor_bill_company_amounts(move_id=move_id, company_id=company_id)
+            )
+        return fx_readback_verification(plan, verification)
+
+
+def fx_readback_verification(plan, verification: FxVerification) -> VendorBillFxReadbackVerification:
+    mismatches = verification.mismatches
+    if plan is not None and plan.blocks_vendor_bill:
+        mismatches = (f"invoice rate not applicable: {plan.status.value}: {plan.message}",)
+    return VendorBillFxReadbackVerification(
+        status=verification.status,
+        document_currency=plan.document_currency if plan is not None else None,
+        company_currency=plan.company_currency if plan is not None else None,
+        source_rate=plan.source_rate if plan is not None else None,
+        odoo_automatic_rate=plan.odoo_automatic_rate if plan is not None else None,
+        odoo_bill_rate=verification.actual_rate,
+        expected_company_untaxed=plan.expected_company_untaxed if plan is not None else None,
+        expected_company_tax=plan.expected_company_tax if plan is not None else None,
+        expected_company_total=plan.expected_company_total if plan is not None else None,
+        company_untaxed=verification.company_untaxed,
+        company_tax=verification.company_tax,
+        company_payable=verification.company_payable,
+        mismatches=mismatches,
+        notes=verification.notes,
+    )
+
+
 class VendorBillFiscalPositionReader(Protocol):
     def vendor_bill_fiscal_position_supported(self) -> bool: ...
 
@@ -419,7 +508,9 @@ class GetVendorBillReadbackUseCase:
         line_reader: VendorBillLineVerificationReader,
         resale_verifier: VendorBillResaleReadbackVerifier | None = None,
         monetary_verifier: VendorBillMonetaryReadbackVerifier | None = None,
+        fx_verifier: VendorBillFxReadbackVerifier | None = None,
     ) -> None:
+        self._fx_verifier = fx_verifier
         self._review_reader = review_reader
         self._execution_snapshot_reader = execution_snapshot_reader
         self._header_reader = header_reader
@@ -483,6 +574,16 @@ class GetVendorBillReadbackUseCase:
             if self._monetary_verifier is not None
             else None
         )
+        fx_verification = (
+            self._fx_verifier.verify(
+                review_id=review_id,
+                company_id=company_id,
+                decision_version=snapshot.decision_version,
+                move_id=move_id,
+            )
+            if self._fx_verifier is not None
+            else None
+        )
         return VendorBillReadback(
             review_id=review_id,
             execution_id=snapshot.execution_id,
@@ -491,6 +592,7 @@ class GetVendorBillReadbackUseCase:
             lines=lines,
             resale_verification=resale_verification,
             monetary_verification=monetary_verification,
+            fx_verification=fx_verification,
         )
 
 
