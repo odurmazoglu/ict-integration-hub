@@ -13,6 +13,15 @@ later change to the category or to the accounting resolution can never silently
 change what the decision was accepted on. Nothing here is sent to Odoo by itself.
 
 The persisted shape is a strict, versioned JSON document; any deviation fails closed.
+
+Rollback guard: an INTERNAL_USE decision also stores :data:`INTERNAL_USE_ROLLBACK_GUARD`
+in ``execution_source_invoice_evidence.resale_accounting_pin``. Code that predates this
+module ignores ``internal_use_accounting_pin`` and would send the product lines without
+an account (Odoo would book the category's RESALE account). That older code hydrates the
+RESALE column strictly and refuses to execute, preview or read back any decision whose
+RESALE column holds anything it cannot parse as a RESALE pin for a RESALE decision -- so
+the guard makes a rolled-back deployment fail closed instead of booking the wrong
+account. Current code recognises exactly this document and nothing else.
 """
 
 from __future__ import annotations
@@ -27,6 +36,14 @@ from app.application.workbench.exceptions import WorkbenchContractError
 from app.application.workbench.purchase_purpose import PurchasePurpose
 
 INTERNAL_USE_ACCOUNTING_PIN_SCHEMA_VERSION = 1
+
+#: Stored in the RESALE pin column of every INTERNAL_USE decision; see the module docstring.
+#: Its key set deliberately differs from a RESALE pin's, so pre-INTERNAL_USE code rejects it.
+INTERNAL_USE_ROLLBACK_GUARD: dict[str, Any] = {
+    "rollback_guard": "internal_use_accounting_pin",
+    "purchase_purpose": "internal_use",
+    "schema_version": 1,
+}
 
 
 class InternalUseAccountSource(StrEnum):
@@ -160,6 +177,12 @@ def internal_use_accounting_pin_from_data(data: object) -> InternalUseAccounting
     )
 
 
+def is_internal_use_rollback_guard(data: object) -> bool:
+    """True only for exactly :data:`INTERNAL_USE_ROLLBACK_GUARD` (no extra or missing keys)."""
+
+    return isinstance(data, dict) and data == INTERNAL_USE_ROLLBACK_GUARD
+
+
 def _strict_int(value: object) -> int:
     if type(value) is not int:
         raise WorkbenchContractError("INTERNAL_USE accounting pin integer field is invalid.")
@@ -178,9 +201,11 @@ def _require_positive_int(value: object, field_name: str) -> None:
 
 __all__ = [
     "INTERNAL_USE_ACCOUNTING_PIN_SCHEMA_VERSION",
+    "INTERNAL_USE_ROLLBACK_GUARD",
     "InternalUseAccountSource",
     "InternalUseAccountingLinePin",
     "InternalUseAccountingPin",
     "internal_use_accounting_pin_from_data",
     "internal_use_accounting_pin_to_data",
+    "is_internal_use_rollback_guard",
 ]

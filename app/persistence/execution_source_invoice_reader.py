@@ -26,6 +26,7 @@ from app.application.workbench.exceptions import WorkbenchContractError
 from app.application.workbench.internal_use_accounting_pin import (
     InternalUseAccountingPin,
     internal_use_accounting_pin_from_data,
+    is_internal_use_rollback_guard,
 )
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin, resale_accounting_pin_from_data
 from app.domain.invoice import (
@@ -115,6 +116,11 @@ class SqlAlchemyExecutionSourceInvoiceReader:
             raise ExecutionSourceInvoiceError(SAFE_SOURCE_ERROR) from exc
         if evidence.resale_accounting_pin is None:
             return None
+        if is_internal_use_rollback_guard(evidence.resale_accounting_pin):
+            # An INTERNAL_USE decision's rollback guard, valid only next to its INTERNAL_USE pin.
+            if evidence.internal_use_accounting_pin is None:
+                raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR)
+            return None
         try:
             return resale_accounting_pin_from_data(evidence.resale_accounting_pin)
         except WorkbenchContractError as exc:
@@ -144,6 +150,10 @@ class SqlAlchemyExecutionSourceInvoiceReader:
             raise ExecutionSourceInvoiceError(SAFE_SOURCE_ERROR) from exc
         if evidence.internal_use_accounting_pin is None:
             return None
+        if not is_internal_use_rollback_guard(evidence.resale_accounting_pin):
+            # Every INTERNAL_USE pin is written together with its rollback guard; a pin
+            # without it could execute on rolled-back code with the wrong account.
+            raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR)
         try:
             return internal_use_accounting_pin_from_data(evidence.internal_use_accounting_pin)
         except WorkbenchContractError as exc:

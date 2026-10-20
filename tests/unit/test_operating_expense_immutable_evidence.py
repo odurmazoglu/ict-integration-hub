@@ -67,7 +67,11 @@ from app.persistence.execution_source_invoice_reader import (
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_POLICY
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.resale_execution_support import (
+    NON_INTERNAL_USE_ACCOUNTING_CHECK,
+    NON_RESALE_ACCOUNTING_CHECK,
+    TWO_DECIMAL_CURRENCY_READER,
+)
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 COMPANY_ID = 7
@@ -694,6 +698,7 @@ def test_execution_strategy_passes_operating_expense_match_to_builder() -> None:
 
     builder = _Builder()
     strategy = VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_Reader(),
         vendor_bill_builder=builder,

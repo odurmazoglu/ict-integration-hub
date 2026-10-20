@@ -112,6 +112,7 @@ from app.persistence.execution_source_invoice_reader import (
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
 from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_POLICY
+from tests.unit.resale_execution_support import NON_INTERNAL_USE_ACCOUNTING_CHECK
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK, CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 1
@@ -1131,6 +1132,7 @@ def test_execution_strategy_sends_the_frozen_asset_lines_and_retry_is_identical(
 
     writer = _Writer()
     strategy = VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=_Reader(),
         vendor_bill_builder=VendorBillBuilder(),

@@ -61,6 +61,7 @@ from app.application.workbench.exceptions import (
 )
 from app.application.workbench.expense_account_lookup import ExpenseAccountCandidate
 from app.application.workbench.internal_use_accounting_pin import (
+    INTERNAL_USE_ROLLBACK_GUARD,
     internal_use_accounting_pin_from_data,
     internal_use_accounting_pin_to_data,
 )
@@ -107,7 +108,11 @@ from app.persistence import (
 )
 from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
 from tests.unit.fx_rate_support import MATCHING_FX_RATE_POLICY, TEST_UBL_RATE, with_ubl_rate
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.resale_execution_support import (
+    NON_INTERNAL_USE_ACCOUNTING_CHECK,
+    NON_RESALE_ACCOUNTING_CHECK,
+    TWO_DECIMAL_CURRENCY_READER,
+)
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_18e_1b_resale_workflow_wiring import (
     CHILD_CATEGORY_ID,
@@ -578,7 +583,7 @@ def test_internal_use_decision_pins_the_selected_expense_account(session: Sessio
     _accept_internal_use(session, accounts)
 
     stored = _stored_evidence(session)
-    assert stored.resale_accounting_pin is None
+    assert stored.resale_accounting_pin == INTERNAL_USE_ROLLBACK_GUARD
     pin = internal_use_accounting_pin_from_data(stored.internal_use_accounting_pin)
     assert pin.purchase_purpose is PurchasePurpose.INTERNAL_USE
     assert pin.review_version == 1
@@ -1087,3 +1092,190 @@ def test_resale_validator_still_wired_alongside() -> None:
     source = Path("app/composition/execution.py").read_text(encoding="utf-8")
     assert "resale_accounting_check=build_resale_execution_accounting_validator(" in source
     assert ResaleExecutionAccountingValidator.__name__ in source
+
+
+# =========================================================================== rollback safety
+
+
+class _PreInternalUseSourceReader(SqlAlchemyExecutionSourceInvoiceReader):
+    """The RESALE pin read exactly as code before INTERNAL_USE pinning (def60a1) does it:
+    any stored value is hydrated strictly as a RESALE pin; there is no guard awareness and
+    ``internal_use_accounting_pin`` is unknown."""
+
+    def get_resale_accounting_pin(self, *, review_id: str, company_id: int, decision_version: int):
+        from app.application.execution.exceptions import ExecutionSourceInvoiceIntegrityError
+        from app.application.workbench.exceptions import WorkbenchContractError
+        from app.application.workbench.resale_accounting_pin import resale_accounting_pin_from_data
+
+        stored = self._session.query(ExecutionSourceInvoiceEvidence).filter_by(review_id=review_id).one()
+        if stored.resale_accounting_pin is None:
+            return None
+        try:
+            return resale_accounting_pin_from_data(stored.resale_accounting_pin)
+        except WorkbenchContractError as exc:
+            raise ExecutionSourceInvoiceIntegrityError("integrity") from exc
+
+
+def _pre_internal_use_strategy(session: Session, client: _RecordingAccountMoveClient) -> VendorBillExecutionStrategy:
+    """Execution as the rolled-back image composes it: RESALE check only, no INTERNAL_USE check."""
+
+    return VendorBillExecutionStrategy(
+        source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+        source_invoice_reader=with_ubl_rate(SqlAlchemyExecutionSourceInvoiceReader(session)),
+        vendor_bill_builder=VendorBillBuilder(),
+        vendor_bill_writer=OdooVendorBillWriter(
+            repository=AccountMoveRepository(client=client),
+            policy=OdooVendorBillWritePolicy(
+                production_operations_enabled=True, production_approval_ack=PRODUCTION_APPROVAL_ACK
+            ),
+        ),
+        resale_accounting_check=ResaleExecutionAccountingValidator(
+            pin_reader=_PreInternalUseSourceReader(session),
+            purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
+            product_account_resolver=_FakeProductAccountResolver({}),
+            fiscal_position_reader=object(),
+            approved_category_ids=frozenset({CHILD_CATEGORY_ID}),
+        ),
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
+        currency_reader=TWO_DECIMAL_CURRENCY_READER,
+        fx_rate_policy=MATCHING_FX_RATE_POLICY,
+    )
+
+
+def test_internal_use_decision_writes_the_rollback_guard(session: Session) -> None:
+    _accept_internal_use(session)
+    stored = _stored_evidence(session)
+    assert stored.resale_accounting_pin == INTERNAL_USE_ROLLBACK_GUARD
+    assert stored.internal_use_accounting_pin is not None
+    # The current reader recognises the guard: no RESALE pin, the INTERNAL_USE pin is intact.
+    reader = SqlAlchemyExecutionSourceInvoiceReader(session)
+    query = {"review_id": REVIEW_ID, "company_id": COMPANY_ID, "decision_version": DECISION_VERSION}
+    assert reader.get_resale_accounting_pin(**query) is None
+    assert reader.get_internal_use_accounting_pin(**query) is not None
+
+
+def test_rolled_back_code_fails_closed_on_an_internal_use_decision(session: Session) -> None:
+    """After a rollback, execution must never reach Odoo with the category's RESALE account."""
+
+    _accept_internal_use(session)
+    from app.application.workbench.exceptions import WorkbenchContractError
+    from app.application.workbench.resale_accounting_pin import resale_accounting_pin_from_data
+
+    with pytest.raises(WorkbenchContractError):
+        resale_accounting_pin_from_data(_stored_evidence(session).resale_accounting_pin)
+
+    client = _RecordingAccountMoveClient()
+    result = _pre_internal_use_strategy(session, client).execute(_request())
+
+    assert result.status is ExecutionStepStatus.FAILED
+    assert result.error_code == "resale_execution_accounting_error"
+    assert client.odoo_calls == 0
+
+
+def test_without_the_guard_rolled_back_code_would_book_the_category_account(session: Session) -> None:
+    """The risk the guard removes: the same decision with no guard is billed product-only."""
+
+    _accept_internal_use(session)
+    session.query(ExecutionSourceInvoiceEvidence).update({"resale_accounting_pin": None})
+    client = _RecordingAccountMoveClient()
+
+    result = _pre_internal_use_strategy(session, client).execute(_request())
+
+    assert result.status is ExecutionStepStatus.EXECUTED
+    assert all("account_id" not in line for line in _line_payloads(client))
+
+
+def test_current_code_rejects_a_pin_without_its_guard_and_a_lone_guard(session: Session) -> None:
+    _accept_internal_use(session)
+    reader = SqlAlchemyExecutionSourceInvoiceReader(session)
+    query = {"review_id": REVIEW_ID, "company_id": COMPANY_ID, "decision_version": DECISION_VERSION}
+    from app.application.execution.exceptions import ExecutionSourceInvoiceIntegrityError
+
+    session.query(ExecutionSourceInvoiceEvidence).update({"resale_accounting_pin": None})
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        reader.get_internal_use_accounting_pin(**query)
+    client = _RecordingAccountMoveClient()
+    result = _strategy(session, client).execute(_request())
+    assert result.status is ExecutionStepStatus.FAILED
+    assert result.error_code == "internal_use_execution_accounting_error"
+    assert client.odoo_calls == 0
+
+    session.query(ExecutionSourceInvoiceEvidence).update(
+        {"resale_accounting_pin": dict(INTERNAL_USE_ROLLBACK_GUARD), "internal_use_accounting_pin": None}
+    )
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        reader.get_resale_accounting_pin(**query)
+
+
+@pytest.mark.parametrize(
+    "tampered",
+    [
+        {**INTERNAL_USE_ROLLBACK_GUARD, "extra": 1},
+        {key: value for key, value in INTERNAL_USE_ROLLBACK_GUARD.items() if key != "rollback_guard"},
+        {**INTERNAL_USE_ROLLBACK_GUARD, "purchase_purpose": "resale"},
+    ],
+)
+def test_only_the_exact_guard_document_is_recognised(session: Session, tampered: dict[str, Any]) -> None:
+    _accept_internal_use(session)
+    session.query(ExecutionSourceInvoiceEvidence).update({"resale_accounting_pin": tampered})
+    reader = SqlAlchemyExecutionSourceInvoiceReader(session)
+    query = {"review_id": REVIEW_ID, "company_id": COMPANY_ID, "decision_version": DECISION_VERSION}
+    from app.application.execution.exceptions import ExecutionSourceInvoiceIntegrityError
+
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        reader.get_resale_accounting_pin(**query)
+    with pytest.raises(ExecutionSourceInvoiceIntegrityError):
+        reader.get_internal_use_accounting_pin(**query)
+
+
+def test_resale_decision_keeps_a_real_resale_pin(session: Session) -> None:
+    _seed_unblocked_review(session)
+    _record_purpose(session, PurchasePurpose.RESALE)
+    resolver = _FakeProductAccountResolver({PRODUCT_A: _discovery(PRODUCT_A), PRODUCT_B: _discovery(PRODUCT_B)})
+    _decision_use_case(session, resale_resolver=resolver).execute(_decision())
+
+    stored = _stored_evidence(session)
+    assert stored.resale_accounting_pin != INTERNAL_USE_ROLLBACK_GUARD
+    assert "rollback_guard" not in stored.resale_accounting_pin
+    pin = SqlAlchemyExecutionSourceInvoiceReader(session).get_resale_accounting_pin(
+        review_id=REVIEW_ID, company_id=COMPANY_ID, decision_version=DECISION_VERSION
+    )
+    assert pin is not None and pin.purchase_purpose is PurchasePurpose.RESALE
+
+
+def test_strategy_requires_the_internal_use_check(session: Session) -> None:
+    from app.application.execution.exceptions import ExecutionSourceInvoiceError
+
+    with pytest.raises(ExecutionSourceInvoiceError, match="INTERNAL_USE accounting check is required"):
+        VendorBillExecutionStrategy(
+            source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
+            source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
+            vendor_bill_builder=VendorBillBuilder(),
+            vendor_bill_writer=object(),
+            resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
+            internal_use_accounting_check=None,
+            currency_reader=TWO_DECIMAL_CURRENCY_READER,
+            fx_rate_policy=MATCHING_FX_RATE_POLICY,
+        )
+
+
+def test_studio_view_xml_sets_no_account_and_leaves_4217_alone() -> None:
+    """The prepared Studio extension only adds hints/required modifiers; it never fixes,
+    defaults or pre-selects an expense account and never targets view 4217's own nodes."""
+
+    import xml.etree.ElementTree as ElementTree
+
+    path = Path("docs/odoo_studio/internal_use_workbench_view.xml")
+    root = ElementTree.parse(path).getroot()
+    assert root.tag == "data"
+    anchors = {xpath.get("expr") for xpath in root}
+    assert anchors <= {
+        "//field[@name='x_studio_ipp_req_purpose']",
+        "//field[@name='x_studio_ipp_req_expense_account']",
+        "//field[@name='x_studio_ipp_req_expense_category']",
+    }
+    body = ElementTree.tostring(root, encoding="unicode")
+    for forbidden in ("default", "context", "770000", "ipp_golive_", "domain", "readonly"):
+        assert forbidden not in body, forbidden
+    set_attributes = {node.get("name") for node in root.iter("attribute")}
+    assert set_attributes == {"required"}

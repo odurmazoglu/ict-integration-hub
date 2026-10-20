@@ -52,6 +52,7 @@ from app.application.workbench.exceptions import (
     WorkbenchContractError,
 )
 from app.application.workbench.internal_use_accounting_pin import (
+    INTERNAL_USE_ROLLBACK_GUARD,
     InternalUseAccountingPin,
     internal_use_accounting_pin_to_data,
 )
@@ -1494,12 +1495,18 @@ class SqlAlchemyReviewRepository:
     ) -> None:
         # Same INSERT, same nested transaction as the decision row: the RESALE /
         # INTERNAL_USE pin is either accepted together with the decision or not at all.
+        # An INTERNAL_USE decision also writes the rollback guard into the RESALE column,
+        # so code that predates INTERNAL_USE pinning fails closed on it after a rollback.
+        if internal_use_accounting_pin is not None:
+            resale_column: dict[str, Any] | None = dict(INTERNAL_USE_ROLLBACK_GUARD)
+        elif resale_accounting_pin is not None:
+            resale_column = resale_accounting_pin_to_data(resale_accounting_pin)
+        else:
+            resale_column = None
         self._session.add(
             ExecutionSourceInvoiceEvidence(
                 **serialize_execution_source_invoice(evidence, decision_id=decision.decision_id),
-                resale_accounting_pin=(
-                    resale_accounting_pin_to_data(resale_accounting_pin) if resale_accounting_pin is not None else None
-                ),
+                resale_accounting_pin=resale_column,
                 internal_use_accounting_pin=(
                     internal_use_accounting_pin_to_data(internal_use_accounting_pin)
                     if internal_use_accounting_pin is not None

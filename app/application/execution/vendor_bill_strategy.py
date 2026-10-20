@@ -132,7 +132,7 @@ class VendorBillExecutionStrategy:
         currency_reader: VendorBillCurrencyPrecisionReader,
         source_tax_safety_check: SourceTaxVendorBillCheck,
         fx_rate_policy: VendorBillFxRatePolicy,
-        internal_use_accounting_check: InternalUseExecutionAccountingCheck | None = None,
+        internal_use_accounting_check: InternalUseExecutionAccountingCheck,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._vendor_bill_builder = vendor_bill_builder
@@ -140,9 +140,10 @@ class VendorBillExecutionStrategy:
         # Required, never defaulted: a composition that forgot it could otherwise send a
         # RESALE product line to Odoo without its pinned account.
         self._resale_accounting_check = resale_accounting_check
-        # Optional only so existing non-INTERNAL_USE unit compositions stay unchanged;
-        # production composition always wires it (pinned by a composition test), because
-        # without it an INTERNAL_USE product line would get the product category's account.
+        # Required for the same reason: without it an INTERNAL_USE product line would be
+        # sent without its pinned account and Odoo would book the category's RESALE account.
+        if internal_use_accounting_check is None:
+            raise ExecutionSourceInvoiceError("INTERNAL_USE accounting check is required for Vendor Bill execution.")
         self._internal_use_accounting_check = internal_use_accounting_check
         # Required for the same reason (P0-PROD-19E-2): without the currency's precision a
         # monetary mismatch could not fail closed before the Odoo write.
@@ -163,8 +164,6 @@ class VendorBillExecutionStrategy:
     ) -> Mapping[str, ValidatedInternalUseLineAccount] | None:
         """Pre-write INTERNAL_USE pin validation, on every attempt, before the build."""
 
-        if self._internal_use_accounting_check is None:
-            return None
         return self._internal_use_accounting_check.validate(source)
 
     def supports_mode(self, mode: ExecutionMode) -> bool:

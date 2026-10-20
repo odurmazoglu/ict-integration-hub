@@ -41,14 +41,54 @@ Each step leaves a record:
 
 `next_action` becomes **Muhasebe İşlemi Seçilmeli** once INTERNAL_USE is recorded on an
 unblocked review, and stays there until an expense account is recorded for that version.
-It then returns to **Karar Verilmeli**. The Hub side is complete.
+It then returns to **Karar Verilmeli**. View 4206 already shows Muhasebe İşlemi / Gider
+Hesabı / Gider Kategorisi at that step. View 4217 already shows the purpose field at
+Karar Verilmeli.
 
-Before an operator can do this from the UI, the Studio views must show the existing
-accounting-resolution fields at those stages. That is an Odoo configuration change and
-needs separate approval. Until then, use the API.
+[`odoo_studio/internal_use_workbench_view.xml`](odoo_studio/internal_use_workbench_view.xml)
+is an extension of 3984 at priority 235. It adds two hints and makes the expense account
+and category required when they are submitted. It sets no default account and does not
+modify 4217. Create it only after deploy, with approval.
+
+## Rollback safety
+
+**Pinned decisions (enforced in data).** Every INTERNAL_USE decision also stores
+`INTERNAL_USE_ROLLBACK_GUARD` in `execution_source_invoice_evidence.resale_accounting_pin`.
+Code before this PR (e.g. `def60a1`) strictly hydrates that column and rejects a pin on a
+non-RESALE decision. On a rolled-back image such a decision therefore fails closed:
+- execute: `resale_execution_accounting_error`, before any Odoo call;
+- preview: 409;
+- readback: integrity error.
+
+Without the guard, the old code would send product-only lines and Odoo would book the
+category's RESALE account. Cross-version verified against `def60a1` (see PR). The current
+code accepts only the exact guard document, and only next to an INTERNAL_USE pin. A pin
+without its guard, or a guard without a pin, fails closed.
+
+**Undecided reviews (NOT enforced, operator procedure).** A review with a current-version
+INTERNAL_USE purpose but no decision yet would be accepted by old code without a pin. Before
+a rollback, list them read-only and do not decide them until the new code is back:
+
+```sql
+-- pending product reviews whose current-version purpose is internal_use
+select r.review_id, r.version, r.invoice_number
+from workbench_review_items r
+join workbench_review_purchase_purpose_resolutions p
+  on p.review_id = r.review_id and p.review_version = r.version
+where r.status = 'pending_review' and p.purchase_purpose = 'internal_use'
+  and r.workflow = 'vendor_bill' and r.review_reasons::text = '[]';
+
+-- accepted INTERNAL_USE decisions not yet executed (guarded; listed for awareness)
+select e.review_id, e.decision_version
+from execution_source_invoice_evidence e
+where e.internal_use_accounting_pin is not null
+  and not exists (select 1 from workflow_executions x
+                  where x.review_id = e.review_id and x.decision_version = e.decision_version
+                    and x.state = 'completed');
+```
 
 ## Rollout / rollback
 
-- **Migration `202607170043`:** additive, one nullable JSON column. Downgrade drops it; run the downgrade only while no row holds a pin.
+- **Migration `202607170043`:** additive, one nullable JSON column. Downgrade drops it; run the downgrade only while no row holds a pin. The guard then stays in the RESALE column and keeps old code failing closed for those decisions. The decisions cannot execute until re-deploy.
 - **Feature flags:** none. Behaviour activates only when an operator records INTERNAL_USE on an unblocked product review.
-- **Code rollback:** redeploy the previous image. Decisions pinned in the meantime cannot execute on the old code: the old code ignores the pin, which is exactly the unsafe behaviour this change removes. Do not execute them until the new code is back.
+- **Studio view:** rollback by setting the new view to `active = False`. 4217 is untouched.
