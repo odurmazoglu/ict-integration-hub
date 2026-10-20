@@ -86,7 +86,11 @@ from app.persistence import (
 from app.persistence.review_execution_evidence_reader import SqlAlchemyReviewExecutionEvidenceReader
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_POLICY
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.resale_execution_support import (
+    NON_INTERNAL_USE_ACCOUNTING_CHECK,
+    NON_RESALE_ACCOUNTING_CHECK,
+    TWO_DECIMAL_CURRENCY_READER,
+)
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK, CLEAN_SOURCE_TAX_FACTS_READER
 
 COMPANY_ID = 7
@@ -655,6 +659,7 @@ class _CapturingWriter:
 def _execute_pinned(session: Session, review_id: str):
     writer = _CapturingWriter()
     result = VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
         vendor_bill_builder=VendorBillBuilder(),

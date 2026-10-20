@@ -84,7 +84,7 @@ from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceE
 from app.persistence import SqlAlchemyReviewPurchasePurposeResolutionRepository, SqlAlchemyReviewRepository
 from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
 from tests.unit.fx_rate_support import MATCHING_FX_RATE_POLICY, with_ubl_rate
-from tests.unit.resale_execution_support import TWO_DECIMAL_CURRENCY_READER
+from tests.unit.resale_execution_support import NON_INTERNAL_USE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_15ad_source_amount_preservation import (
     _cloudspark_lines,
@@ -304,6 +304,7 @@ def _validator(
 
 def _strategy(session: Session, validator, client: _RecordingAccountMoveClient) -> VendorBillExecutionStrategy:
     return VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         # USD fixture: the invoice states the rate Odoo applies (P1 FX guard passes).
         source_invoice_reader=with_ubl_rate(SqlAlchemyExecutionSourceInvoiceReader(session)),

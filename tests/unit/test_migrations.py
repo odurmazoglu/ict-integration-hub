@@ -660,6 +660,22 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # P0 INTERNAL_USE (202607170043) added exactly one nullable JSON pin column to the
+    # immutable execution source evidence: one "-1" step removes only it and changes no table.
+    assert "internal_use_accounting_pin" in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+    tables_before_internal_use_downgrade = set(inspector.get_table_names())
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert set(inspector.get_table_names()) == tables_before_internal_use_downgrade
+    assert "internal_use_accounting_pin" not in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+    assert "resale_accounting_pin" in {
+        column["name"] for column in inspector.get_columns("execution_source_invoice_evidence")
+    }
+
     # PR F / F3.1 (202607170042) added exactly two nullable advisory display columns: one "-1"
     # step removes only them and changes no table.
     assert "product_name" in {

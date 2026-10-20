@@ -32,6 +32,7 @@ from app.application.execution.exceptions import ResaleExecutionAccountingError
 from app.application.execution.ports import WorkbenchExecutionSnapshotReader
 from app.application.execution.resale_execution_accounting import ResaleAccountingPinReader, load_decision_resale_pin
 from app.application.execution.runtime import ExecutionState
+from app.application.workbench.internal_use_accounting_pin import InternalUseAccountingPin
 from app.application.workbench.ports import ReviewQueueReader
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin
@@ -128,6 +129,38 @@ class VendorBillResaleReadbackVerification(ApplicationDTO):
     mismatches: tuple[str, ...] = field(default_factory=tuple)
 
 
+class InternalUseReadbackStatus(StrEnum):
+    VERIFIED = "verified"
+    MISMATCH = "mismatch"
+
+
+@dataclass(frozen=True, slots=True)
+class InternalUseReadbackLineCheck(ApplicationDTO):
+    """One Odoo invoice line checked against the pinned INTERNAL_USE product/account."""
+
+    line_id: int
+    product_id: int | None
+    account_id: int | None
+    expected_account_id: int
+    product_matches: bool
+    account_matches: bool
+
+
+@dataclass(frozen=True, slots=True)
+class VendorBillInternalUseReadbackVerification(ApplicationDTO):
+    """Readback of an INTERNAL_USE product bill against its immutable pin: every line must
+    carry a pinned product on the pinned internal expense account."""
+
+    status: InternalUseReadbackStatus
+    pin_review_version: int
+    accounting_resolution_id: int
+    expected_account_id: int
+    expected_account_code: str
+    expense_category: str
+    lines: tuple[InternalUseReadbackLineCheck, ...]
+    mismatches: tuple[str, ...] = field(default_factory=tuple)
+
+
 class MonetaryReadbackStatus(StrEnum):
     VERIFIED = "verified"
     MISMATCH = "mismatch"
@@ -169,6 +202,7 @@ class VendorBillReadback(ApplicationDTO):
     lines: tuple[VendorBillLineVerification, ...]
     # P0-PROD-18F-2: set only for a decision accepted under RESALE.
     resale_verification: VendorBillResaleReadbackVerification | None = None
+    internal_use_verification: VendorBillInternalUseReadbackVerification | None = None
     # P0-PROD-19E-1: set whenever a monetary verifier is composed.
     monetary_verification: VendorBillMonetaryReadbackVerification | None = None
     # P1: set whenever an FX verifier is composed.
@@ -488,6 +522,80 @@ def compare_resale_lines(
     return tuple(checks), tuple(mismatches)
 
 
+class InternalUseReadbackPinReader(Protocol):
+    def get_internal_use_accounting_pin(
+        self, *, review_id: str, company_id: int, decision_version: int
+    ) -> InternalUseAccountingPin | None: ...
+
+
+class VendorBillInternalUseReadbackVerifier:
+    """Verify a created INTERNAL_USE product bill against the decision's immutable pin. Read-only."""
+
+    def __init__(self, *, pin_reader: InternalUseReadbackPinReader) -> None:
+        self._pin_reader = pin_reader
+
+    def verify(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+        lines: tuple[VendorBillLineVerification, ...],
+    ) -> VendorBillInternalUseReadbackVerification | None:
+        try:
+            pin = self._pin_reader.get_internal_use_accounting_pin(
+                review_id=review_id, company_id=company_id, decision_version=decision_version
+            )
+        except ApplicationError as exc:
+            raise VendorBillReadbackIntegrityError("The INTERNAL_USE accounting pin is invalid.") from exc
+        if pin is None:
+            return None
+        checks, mismatches = compare_internal_use_lines(pin, lines)
+        return VendorBillInternalUseReadbackVerification(
+            status=InternalUseReadbackStatus.MISMATCH if mismatches else InternalUseReadbackStatus.VERIFIED,
+            pin_review_version=pin.review_version,
+            accounting_resolution_id=pin.accounting_resolution_id,
+            expected_account_id=pin.expense_account_id,
+            expected_account_code=pin.expense_account_code,
+            expense_category=pin.expense_category,
+            lines=checks,
+            mismatches=mismatches,
+        )
+
+
+def compare_internal_use_lines(
+    pin: InternalUseAccountingPin, lines: tuple[VendorBillLineVerification, ...]
+) -> tuple[tuple[InternalUseReadbackLineCheck, ...], tuple[str, ...]]:
+    """Odoo lines carry no source line number: the bill must hold exactly the pinned
+    products (as a multiset), every line on the single pinned internal expense account."""
+
+    pinned_products = {pinned.product_id for pinned in pin.lines}
+    mismatches: list[str] = []
+    if len(lines) != len(pin.lines):
+        mismatches.append(f"line count {len(lines)} != pinned {len(pin.lines)}")
+    if Counter(line.product_id for line in lines) != Counter(pinned.product_id for pinned in pin.lines):
+        mismatches.append("products differ from the pin")
+    checks: list[InternalUseReadbackLineCheck] = []
+    for line in lines:
+        product_matches = line.product_id in pinned_products
+        account_matches = line.account_id == pin.expense_account_id
+        if not product_matches:
+            mismatches.append(f"line {line.line_id}: product {line.product_id} is not pinned")
+        if not account_matches:
+            mismatches.append(f"line {line.line_id}: account {line.account_id} != pinned {pin.expense_account_id}")
+        checks.append(
+            InternalUseReadbackLineCheck(
+                line_id=line.line_id,
+                product_id=line.product_id,
+                account_id=line.account_id,
+                expected_account_id=pin.expense_account_id,
+                product_matches=product_matches,
+                account_matches=account_matches,
+            )
+        )
+    return tuple(checks), tuple(mismatches)
+
+
 class VendorBillHeaderVerificationReader(Protocol):
     def read_vendor_bill(self, *, move_id: int, company_id: int) -> VendorBillHeaderVerification | None: ...
 
@@ -509,8 +617,10 @@ class GetVendorBillReadbackUseCase:
         resale_verifier: VendorBillResaleReadbackVerifier | None = None,
         monetary_verifier: VendorBillMonetaryReadbackVerifier | None = None,
         fx_verifier: VendorBillFxReadbackVerifier | None = None,
+        internal_use_verifier: VendorBillInternalUseReadbackVerifier | None = None,
     ) -> None:
         self._fx_verifier = fx_verifier
+        self._internal_use_verifier = internal_use_verifier
         self._review_reader = review_reader
         self._execution_snapshot_reader = execution_snapshot_reader
         self._header_reader = header_reader
@@ -563,6 +673,16 @@ class GetVendorBillReadbackUseCase:
             if self._resale_verifier is not None
             else None
         )
+        internal_use_verification = (
+            self._internal_use_verifier.verify(
+                review_id=review_id,
+                company_id=company_id,
+                decision_version=snapshot.decision_version,
+                lines=lines,
+            )
+            if self._internal_use_verifier is not None
+            else None
+        )
         monetary_verification = (
             self._monetary_verifier.verify(
                 review_id=review_id,
@@ -591,6 +711,7 @@ class GetVendorBillReadbackUseCase:
             header=header,
             lines=lines,
             resale_verification=resale_verification,
+            internal_use_verification=internal_use_verification,
             monetary_verification=monetary_verification,
             fx_verification=fx_verification,
         )

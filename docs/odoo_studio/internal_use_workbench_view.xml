@@ -1,0 +1,33 @@
+<!--
+  ICT P0 INTERNAL_USE Workbench accounting guidance (PR #248)
+
+  ir.ui.view record to create AFTER PR #248 is deployed (each step needs approval):
+    name        = ICT P0 INTERNAL_USE Workbench accounting guidance
+    model       = x_ipp_import_workbench
+    inherit_id  = 3984  (Default form view for x_ipp_import_workbench)
+    mode        = extension
+    priority    = 235   (after 4217 = 230; 4217 is NOT modified)
+    active      = True
+  Rollback: set active = False on this record.
+
+  No new field. Anchors are fields defined by view 4206 (ADR-0013), so this view
+  applies even if 4217 is deactivated. View 4206 already shows Muhasebe İşlemi /
+  Gider Hesabı / Gider Kategorisi at "Muhasebe İşlemi Seçilmeli", which PR #248
+  makes the next action of an unblocked INTERNAL_USE review.
+  The expense account gets NO default, context default or fixed value: it stays an
+  explicit, accountant-approved selection (domain account_type = expense, from 4206).
+-->
+<data>
+  <xpath expr="//field[@name='x_studio_ipp_req_purpose']" position="after">
+    <div class="text-muted" colspan="2" name="ipp_internal_use_purpose_hint" invisible="x_studio_ipp_next_action != 'Karar Verilmeli'">Şirket içi kullanım (ör. ICT'nin kendi Microsoft 365 aboneliği) için Yapılacak İşlem = "Satın Alma Amacı" ve Satın Alma Amacı = "Şirket İçi Kullanım" seçip "İşleme Gönder"e basın. Sonraki adımda şirket içi gider hesabı istenir; ürün kategorisinin yeniden satış hesabı kullanılmaz.</div>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_ipp_req_expense_category']" position="after">
+    <div class="alert alert-info" role="alert" colspan="2" name="ipp_internal_use_account_hint" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli'">Gider Hesabı muhasebe onayıyla seçilir; otomatik veya varsayılan hesap yoktur. Gider Kategorisi büyük harfli bir koddur. Ürün kodlu şirket içi kullanım faturalarında yalnız "Gider Hesabı" desteklenir; seçilen hesap karar ile birlikte sabitlenir ve fatura satırları bu hesaba yazılır.</div>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_ipp_req_expense_account']" position="attributes">
+    <attribute name="required">x_studio_ipp_req_action == 'Muhasebe İşlemi' and x_studio_ipp_req_treatment == 'Gider Hesabı'</attribute>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_ipp_req_expense_category']" position="attributes">
+    <attribute name="required">x_studio_ipp_req_action == 'Muhasebe İşlemi' and x_studio_ipp_req_treatment == 'Gider Hesabı'</attribute>
+  </xpath>
+</data>

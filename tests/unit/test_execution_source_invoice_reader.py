@@ -46,7 +46,11 @@ from app.persistence.execution_source_invoice_reader import (
 )
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_POLICY
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.resale_execution_support import (
+    NON_INTERNAL_USE_ACCOUNTING_CHECK,
+    NON_RESALE_ACCOUNTING_CHECK,
+    TWO_DECIMAL_CURRENCY_READER,
+)
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
 
@@ -305,6 +309,7 @@ def test_vendor_bill_execution_strategy_can_consume_returned_source(session: Ses
     _seed_decision_and_evidence(session)
     writer = RecordingVendorBillWriter()
     strategy = VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
         vendor_bill_builder=VendorBillBuilder(),

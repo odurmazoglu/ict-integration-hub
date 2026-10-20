@@ -67,7 +67,11 @@ from tests.unit.fx_rate_support import (
     FixedSourceFxFactsReader,
     pricing_rate,
 )
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, StaticCurrencyPrecisionReader
+from tests.unit.resale_execution_support import (
+    NON_INTERNAL_USE_ACCOUNTING_CHECK,
+    NON_RESALE_ACCOUNTING_CHECK,
+    StaticCurrencyPrecisionReader,
+)
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_19e_1_currency_rounding_reconciliation import _basic_source
 from tests.unit.test_vendor_bill_execution_strategy import (
@@ -479,6 +483,7 @@ def _strategy(*, facts=None, automatic="48.6992", writer=None, amounts=None, sou
         facts_reader=facts, currency_reader=FixedFxRateReader(D(automatic)), amounts_reader=amounts
     )
     strategy = VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(source=source or _source()),
         vendor_bill_builder=VendorBillBuilder(),
@@ -665,6 +670,7 @@ def test_try_bill_reads_nothing_and_sends_no_rate() -> None:
 def test_strategy_requires_the_policy() -> None:
     with pytest.raises(Exception, match="Exchange-rate policy is required"):
         VendorBillExecutionStrategy(
+            internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
             source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
             source_invoice_reader=RecordingSourceInvoiceReader(source=_source()),
             vendor_bill_builder=VendorBillBuilder(),

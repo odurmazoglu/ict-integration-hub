@@ -182,6 +182,9 @@ class OperatorGuidanceFacts(ApplicationDTO):
     #: Most recent purpose recorded for the review (for the completed summary).
     latest_purchase_purpose: PurchasePurpose | None = None
     latest_accounting_resolution: ReviewAccountingResolution | None = None
+    #: An accounting resolution exists for the review's *current* version (the INTERNAL_USE
+    #: product-invoice decision requires exactly that).
+    current_accounting_resolution_recorded: bool = False
     #: Odoo display names for ``latest_accounting_resolution`` (see ``resolve_accounting_labels``).
     accounting_labels: AccountingLabels | None = None
     #: Configured ``ODOO_FIXED_ASSET_ACCOUNT_IDS`` -- the existing eligibility allowlist.
@@ -291,6 +294,16 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
     if codes:
         return OperatorNextAction.TECHNICAL, _todo(
             "Bu engel henüz Odoo'dan çözülemiyor (ürün/vergi/fatura içeriği); teknik destek alın.", findings
+        )
+    if (
+        facts.current_purchase_purpose is PurchasePurpose.INTERNAL_USE
+        and not facts.current_accounting_resolution_recorded
+    ):
+        # A technically unblocked product invoice bought for ICT's own use: the product
+        # category's account is for RESALE, so the decision requires an explicit expense account.
+        return OperatorNextAction.ACCOUNTING, _todo(
+            "Şirket içi kullanım: ürün kategorisinin hesabı yeniden satış içindir. Muhasebe işlemi olarak "
+            "'Gider' seçip şirket içi gider hesabını ve gider kategorisini girin; ardından kararı gönderin."
         )
     return OperatorNextAction.DECISION, _todo("Engel kalmadı: iş akışını seçip kararı gönderin.")
 

@@ -1,5 +1,6 @@
 """Shared test doubles for Vendor Bill execution's required pre-write dependencies:
-P0-PROD-18F-2's RESALE accounting check and P0-PROD-19E-2's currency precision reader."""
+P0-PROD-18F-2's RESALE accounting check, the INTERNAL_USE accounting check and
+P0-PROD-19E-2's currency precision reader."""
 
 from __future__ import annotations
 
@@ -8,6 +9,17 @@ from types import SimpleNamespace
 
 class NonResaleAccountingCheck:
     """A decision that was not accepted under RESALE: no pin, no Odoo read, no accounts."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def validate(self, source):
+        self.calls += 1
+        return None
+
+
+class NonInternalUseAccountingCheck:
+    """A decision not accepted under INTERNAL_USE on a product invoice: no pin, no reads, no accounts."""
 
     def __init__(self) -> None:
         self.calls = 0
@@ -33,4 +45,5 @@ class StaticCurrencyPrecisionReader:
 
 
 NON_RESALE_ACCOUNTING_CHECK = NonResaleAccountingCheck()
+NON_INTERNAL_USE_ACCOUNTING_CHECK = NonInternalUseAccountingCheck()
 TWO_DECIMAL_CURRENCY_READER = StaticCurrencyPrecisionReader(2)

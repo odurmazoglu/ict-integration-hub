@@ -9,6 +9,7 @@ from app.billing.dto import (
     CustomerInvoice,
     CustomerInvoiceBillingInstruction,
     CustomerInvoiceLine,
+    ValidatedInternalUseLineAccount,
     ValidatedResaleLineAccount,
     VendorBill,
     VendorBillLine,
@@ -49,6 +50,7 @@ class VendorBillBuilder:
         validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
         monetary_precision: MonetaryPrecision | None = None,
         fixed_asset_accounting: FixedAssetAccounting | None = None,
+        validated_internal_use_accounts: Mapping[str, ValidatedInternalUseLineAccount] | None = None,
     ) -> VendorBill:
         """Build a deterministic Vendor Bill.
 
@@ -87,6 +89,13 @@ class VendorBillBuilder:
         posted to its ``asset_account_id`` with its ``depreciation_model_id``. It is
         mutually exclusive with every other account/product mode. Omitting it reproduces
         the existing behavior exactly.
+
+        ``validated_internal_use_accounts`` is ``{line_number:
+        ValidatedInternalUseLineAccount}`` for an INTERNAL_USE product-invoice decision whose
+        immutable accounting pin passed execution-time validation. Like RESALE it must
+        cover every line and each line keeps its product; the line's account is the
+        operator-selected internal expense account, never the product category's.
+        Omitting it reproduces the existing behavior exactly.
         """
 
         validation = validate_vendor_bill_inputs(
@@ -102,6 +111,7 @@ class VendorBillBuilder:
             validated_resale_accounts=validated_resale_accounts,
             monetary_precision=monetary_precision,
             fixed_asset_accounting=fixed_asset_accounting,
+            validated_internal_use_accounts=validated_internal_use_accounts,
         )
         if not validation.is_valid:
             raise VendorBillBuildError(validation.errors)
@@ -139,6 +149,7 @@ class VendorBillBuilder:
                 account_only_line_numbers, account_only_expense_match, explicit_account_only_accounts
             )
             resale_accounts = validated_resale_accounts or {}
+            internal_use_accounts = validated_internal_use_accounts or {}
             invoice_lines = tuple(
                 _expense_vendor_bill_line(
                     line, resolved_account_only_account_ids[line.line_number], tax_ids_by_line, monetary_precision
@@ -150,6 +161,7 @@ class VendorBillBuilder:
                     tax_ids_by_line,
                     monetary_precision,
                     resale_account=resale_accounts.get(line.line_number),
+                    internal_use_account=internal_use_accounts.get(line.line_number),
                 )
                 for line in invoice.lines
             )
@@ -246,6 +258,7 @@ def validate_vendor_bill_inputs(
     validated_resale_accounts: Mapping[str, ValidatedResaleLineAccount] | None = None,
     monetary_precision: MonetaryPrecision | None = None,
     fixed_asset_accounting: object | None = None,
+    validated_internal_use_accounts: Mapping[str, ValidatedInternalUseLineAccount] | None = None,
 ) -> VendorBillValidationResult:
     """Validate deterministic Vendor Bill inputs.
 
@@ -287,6 +300,8 @@ def validate_vendor_bill_inputs(
         return validation_result([f"Return invoice (InvoiceTypeCode {return_type_code}) cannot become a vendor bill."])
 
     if fixed_asset_accounting is not None:
+        if validated_internal_use_accounts is not None:
+            return validation_result(["Fixed-asset mode cannot be combined with INTERNAL_USE product accounting."])
         return validation_result(
             _fixed_asset_mode_errors(
                 invoice,
@@ -384,6 +399,17 @@ def validate_vendor_bill_inputs(
                 expense_mode=expense_mode,
                 account_only_line_numbers=account_only_line_numbers,
                 product_by_line=product_by_line,
+            )
+        )
+    if validated_internal_use_accounts is not None:
+        errors.extend(
+            _internal_use_account_errors(
+                invoice,
+                validated_internal_use_accounts,
+                expense_mode=expense_mode,
+                account_only_line_numbers=account_only_line_numbers,
+                product_by_line=product_by_line,
+                resale=validated_resale_accounts is not None,
             )
         )
 
@@ -492,6 +518,39 @@ def _resale_account_errors(
             errors.append(f"RESALE account for line {line_number} does not match the line.")
         elif product_result.product_id != resale_account.product_id:
             errors.append(f"RESALE account for line {line_number} names a different product.")
+    return errors
+
+
+def _internal_use_account_errors(
+    invoice: InternalInvoice,
+    validated_internal_use_accounts: object,
+    *,
+    expense_mode: bool,
+    account_only_line_numbers: frozenset[str],
+    product_by_line: dict[str | None, Any],
+    resale: bool,
+) -> list[str]:
+    """An INTERNAL_USE product bill keeps every line's validated product and carries the
+    pinned internal expense account on every line. Anything else fails the build closed."""
+
+    if not isinstance(validated_internal_use_accounts, Mapping) or not validated_internal_use_accounts:
+        return ["INTERNAL_USE validated accounts must be a non-empty mapping."]
+    if resale:
+        return ["INTERNAL_USE accounting cannot be combined with RESALE accounting."]
+    if expense_mode or account_only_line_numbers:
+        return ["INTERNAL_USE product lines cannot be account-only or operating-expense lines."]
+    if set(validated_internal_use_accounts) != {line.line_number for line in invoice.lines}:
+        return ["INTERNAL_USE validated accounts must cover exactly every invoice line."]
+    errors: list[str] = []
+    for line_number, account in validated_internal_use_accounts.items():
+        if not isinstance(account, ValidatedInternalUseLineAccount) or not account.sealed:
+            errors.append(f"INTERNAL_USE account for line {line_number} was not issued by INTERNAL_USE validation.")
+            continue
+        product_result = product_by_line.get(line_number)
+        if account.line_number != line_number or product_result is None:
+            errors.append(f"INTERNAL_USE account for line {line_number} does not match the line.")
+        elif product_result.product_id != account.product_id:
+            errors.append(f"INTERNAL_USE account for line {line_number} names a different product.")
     return errors
 
 
@@ -640,6 +699,8 @@ def to_odoo_customer_invoice_payload(
 def _line_payload(line: VendorBillLine, product_uom_ids: Mapping[int, int]) -> dict[str, Any]:
     if line.resale_account is not None:
         return _resale_product_line_payload(line, product_uom_ids)
+    if line.internal_use_account is not None:
+        return _internal_use_product_line_payload(line, product_uom_ids)
     if line.depreciation_model_id is not None:
         return _fixed_asset_line_payload(line)
     if line.account_id is not None:
@@ -655,6 +716,16 @@ def _resale_product_line_payload(line: VendorBillLine, product_uom_ids: Mapping[
     assert line.resale_account is not None
     payload = _product_line_payload(line, product_uom_ids)
     payload["account_id"] = line.resale_account.account_id
+    return payload
+
+
+def _internal_use_product_line_payload(line: VendorBillLine, product_uom_ids: Mapping[int, int]) -> dict[str, Any]:
+    """The ordinary product-line payload plus the explicit, immutable pinned INTERNAL_USE
+    expense account -- quantity/price/tax/UoM handling is exactly the product line's."""
+
+    assert line.internal_use_account is not None
+    payload = _product_line_payload(line, product_uom_ids)
+    payload["account_id"] = line.internal_use_account.account_id
     return payload
 
 
@@ -721,6 +792,7 @@ def _vendor_bill_line(
     monetary_precision: MonetaryPrecision | None,
     *,
     resale_account: ValidatedResaleLineAccount | None = None,
+    internal_use_account: ValidatedInternalUseLineAccount | None = None,
 ) -> VendorBillLine:
     assert product_result.product_id is not None
     assert line.quantity is not None
@@ -731,6 +803,16 @@ def _vendor_bill_line(
             product_id=product_result.product_id,
             account_id=resale_account.account_id,
             resale_account=resale_account,
+            quantity=line.quantity,
+            unit_price=_net_unit_price(line, monetary_precision),
+            tax_ids=tax_ids,
+            description=line.description,
+        )
+    if internal_use_account is not None:
+        return VendorBillLine(
+            product_id=product_result.product_id,
+            account_id=internal_use_account.account_id,
+            internal_use_account=internal_use_account,
             quantity=line.quantity,
             unit_price=_net_unit_price(line, monetary_precision),
             tax_ids=tax_ids,
