@@ -10,6 +10,10 @@
 > Bu özet yalnızca muhasebe kararlarının toplanması içindir. Odoo'da vergi oluşturma yetkisi
 > **vermez**. Verginin oluşturulması ve Hub'da kullanıma açılması ayrı onaylar gerektirir.
 > Yalnızca istisna kodu **335** kapsamdadır; 209, 351 ve diğer kodlar bu özetle onaylanmaz.
+>
+> 335 istisna vergisinin otomatik eşleştirilmesi ICT Integration Hub production ortamında şu anda
+> devre dışıdır. Muhasebe onayı, vergi oluşturma ve aktivasyon işlemleri ayrı ayrı tamamlanmadan
+> özellik etkinleştirilmeyecektir.
 
 ## 1. Neden gerekli?
 
