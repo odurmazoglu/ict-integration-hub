@@ -24,6 +24,7 @@ from app.application.execution.exceptions import (
     ExecutionSourceInvoiceError,
     ExecutionSourceInvoiceIntegrityError,
     ExecutionUnsupportedStepError,
+    InternalUseExecutionAccountingError,
     ResaleExecutionAccountingError,
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
@@ -36,6 +37,7 @@ from app.application.ports import VendorBillWriter
 from app.application.source_tax import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
 from app.application.workbench.dto import LineResolution
 from app.billing import (
+    ValidatedInternalUseLineAccount,
     ValidatedResaleLineAccount,
     VendorBill,
     VendorBillBuilder,
@@ -56,6 +58,18 @@ class ResaleExecutionAccountingCheck(Protocol):
     """
 
     def validate(self, source: ExecutionSourceInvoice) -> Mapping[str, ValidatedResaleLineAccount] | None:
+        pass
+
+
+class InternalUseExecutionAccountingCheck(Protocol):
+    """Pre-write INTERNAL_USE product-invoice account safety (``InternalUseExecutionAccountingValidator``).
+
+    ``None`` unless the decision was accepted under INTERNAL_USE on a product invoice;
+    otherwise one validated pinned internal expense account per line, or an
+    ``InternalUseExecutionAccountingError``.
+    """
+
+    def validate(self, source: ExecutionSourceInvoice) -> Mapping[str, ValidatedInternalUseLineAccount] | None:
         pass
 
 
@@ -118,6 +132,7 @@ class VendorBillExecutionStrategy:
         currency_reader: VendorBillCurrencyPrecisionReader,
         source_tax_safety_check: SourceTaxVendorBillCheck,
         fx_rate_policy: VendorBillFxRatePolicy,
+        internal_use_accounting_check: InternalUseExecutionAccountingCheck | None = None,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._vendor_bill_builder = vendor_bill_builder
@@ -125,6 +140,10 @@ class VendorBillExecutionStrategy:
         # Required, never defaulted: a composition that forgot it could otherwise send a
         # RESALE product line to Odoo without its pinned account.
         self._resale_accounting_check = resale_accounting_check
+        # Optional only so existing non-INTERNAL_USE unit compositions stay unchanged;
+        # production composition always wires it (pinned by a composition test), because
+        # without it an INTERNAL_USE product line would get the product category's account.
+        self._internal_use_accounting_check = internal_use_accounting_check
         # Required for the same reason (P0-PROD-19E-2): without the currency's precision a
         # monetary mismatch could not fail closed before the Odoo write.
         self._currency_reader = currency_reader
@@ -138,6 +157,15 @@ class VendorBillExecutionStrategy:
         if fx_rate_policy is None:
             raise ExecutionSourceInvoiceError("Exchange-rate policy is required for Vendor Bill execution.")
         self._fx_rate_policy = fx_rate_policy
+
+    def _internal_use_accounts(
+        self, source: ExecutionSourceInvoice
+    ) -> Mapping[str, ValidatedInternalUseLineAccount] | None:
+        """Pre-write INTERNAL_USE pin validation, on every attempt, before the build."""
+
+        if self._internal_use_accounting_check is None:
+            return None
+        return self._internal_use_accounting_check.validate(source)
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -168,6 +196,9 @@ class VendorBillExecutionStrategy:
                 if validated_resale_accounts is not None
                 else {}
             )
+            validated_internal_use_accounts = self._internal_use_accounts(source)
+            if validated_internal_use_accounts is not None:
+                resale_kwargs["validated_internal_use_accounts"] = validated_internal_use_accounts
             # Frozen CAPITALIZE_FIXED_ASSET selection, pinned in Stage-1/2 evidence and never
             # recomputed; passed only when present so every other build call is unchanged.
             if source.fixed_asset_accounting is not None:
@@ -222,6 +253,8 @@ class VendorBillExecutionStrategy:
         except SourceTaxFactsUnavailableError as exc:
             return _failure_result(request, error_code=SOURCE_TAX_UNAVAILABLE_ERROR_CODE, message=exc.safe_message)
         except ResaleExecutionAccountingError as exc:
+            return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
+        except InternalUseExecutionAccountingError as exc:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
         except VendorBillBuildError as exc:
             return _failure_result(request, error_code="vendor_bill_build_error", message=exc.safe_message)

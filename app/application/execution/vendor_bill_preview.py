@@ -63,10 +63,17 @@ from app.application.execution.contracts import (
 from app.application.execution.exceptions import (
     ExecutionPlanningError,
     ExecutionPreviewCurrencyResolutionError,
+    ExecutionPreviewInternalUseAccountingError,
     ExecutionPreviewProductUomResolutionError,
     ExecutionPreviewResaleAccountingError,
     ExecutionPreviewUnsupportedWorkflowError,
     ExecutionSourceInvoiceIntegrityError,
+    InternalUseExecutionAccountingError,
+)
+from app.application.execution.internal_use_execution_accounting import (
+    InternalUseAccountingPinReader,
+    load_decision_internal_use_pin,
+    pinned_lines_for_source,
 )
 from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.ports import AcceptedReviewDecisionReader, ExecutionSourceInvoiceReader
@@ -169,6 +176,22 @@ class VendorBillPreviewResaleAccounting(ApplicationDTO):
 
 
 @dataclass(frozen=True, slots=True)
+class VendorBillPreviewInternalUseAccounting(ApplicationDTO):
+    """The INTERNAL_USE expense account pinned at decision acceptance for a product invoice.
+
+    Every line is sent with exactly this account (never the product category's).
+    """
+
+    pin_review_version: int
+    accounting_resolution_id: int
+    account_id: int
+    account_code: str
+    account_name: str
+    account_type: str
+    expense_category: str
+
+
+@dataclass(frozen=True, slots=True)
 class VendorBillPreviewLine(ApplicationDTO):
     line_number: str | None
     description: str | None
@@ -235,6 +258,8 @@ class VendorBillPreview(ApplicationDTO):
     monetary_mismatches: tuple[str, ...] = field(default_factory=tuple)
     # P1: set whenever an exchange-rate policy is composed; NOT_APPLICABLE for a TRY bill.
     fx_rate_plan: FxRatePlan | None = None
+    # Set only for an INTERNAL_USE product-invoice decision, from its immutable pin.
+    internal_use_accounting: VendorBillPreviewInternalUseAccounting | None = None
 
 
 class PreviewVendorBillUseCase:
@@ -253,8 +278,10 @@ class PreviewVendorBillUseCase:
         resale_accounting_pin_reader: VendorBillPreviewResaleAccountingPinReader | None = None,
         purchase_purpose_reader: PurchasePurposeHistoryReader | None = None,
         fx_rate_policy: VendorBillFxRatePolicy | None = None,
+        internal_use_accounting_pin_reader: InternalUseAccountingPinReader | None = None,
     ) -> None:
         self._fx_rate_policy = fx_rate_policy
+        self._internal_use_accounting_pin_reader = internal_use_accounting_pin_reader
         self._accepted_decision_reader = accepted_decision_reader
         self._source_invoice_reader = source_invoice_reader
         self._execution_planner = execution_planner
@@ -357,6 +384,7 @@ class PreviewVendorBillUseCase:
             ),
         )
         resale_accounting_by_line = self._pinned_resale_accounting(decision, source, vendor_bill)
+        internal_use_accounting = self._pinned_internal_use_accounting(source, vendor_bill)
 
         step_request = ExecutionStepRequest(
             execution_id=execution_id,
@@ -390,8 +418,12 @@ class PreviewVendorBillUseCase:
                 description=bill_line.description,
                 quantity=bill_line.quantity,
                 unit_price=bill_line.unit_price,
-                account_id=_preview_account_id(
-                    bill_line.account_id, resale_accounting_by_line.get(source_line.line_number)
+                account_id=(
+                    internal_use_accounting.account_id
+                    if internal_use_accounting is not None
+                    else _preview_account_id(
+                        bill_line.account_id, resale_accounting_by_line.get(source_line.line_number)
+                    )
                 ),
                 product_id=bill_line.product_id,
                 tax_ids=bill_line.tax_ids,
@@ -450,6 +482,7 @@ class PreviewVendorBillUseCase:
             monetary_reconciles=not mismatches,
             monetary_mismatches=mismatches,
             fx_rate_plan=self._fx_rate_plan(source, vendor_bill, precision, company_id=decision.company_id),
+            internal_use_accounting=internal_use_accounting,
         )
 
     def _fx_rate_plan(self, source, vendor_bill, precision: MonetaryPrecision, *, company_id: int) -> FxRatePlan | None:
@@ -515,6 +548,38 @@ class PreviewVendorBillUseCase:
                 fiscal_position_mapping=pinned.fiscal_position_mapping,
             )
         return result
+
+    def _pinned_internal_use_accounting(self, source, vendor_bill) -> VendorBillPreviewInternalUseAccounting | None:
+        """The decision's own INTERNAL_USE pin -- Hub persistence only, fail closed; never the
+        product category's account. ``None`` for every other decision."""
+
+        if self._internal_use_accounting_pin_reader is None or self._purchase_purpose_reader is None:
+            return None
+        try:
+            pin = load_decision_internal_use_pin(
+                pin_reader=self._internal_use_accounting_pin_reader,
+                purpose_reader=self._purchase_purpose_reader,
+                source=source,
+            )
+            if pin is None:
+                return None
+            pinned_lines = pinned_lines_for_source(pin, source)
+        except InternalUseExecutionAccountingError as exc:
+            raise ExecutionPreviewInternalUseAccountingError(exc.safe_message) from exc
+        for source_line, bill_line in zip(source.invoice.lines, vendor_bill.invoice_lines, strict=True):
+            if bill_line.product_id != pinned_lines[source_line.line_number].product_id:
+                raise ExecutionPreviewInternalUseAccountingError(
+                    "The INTERNAL_USE accounting pin names a different product."
+                )
+        return VendorBillPreviewInternalUseAccounting(
+            pin_review_version=pin.review_version,
+            accounting_resolution_id=pin.accounting_resolution_id,
+            account_id=pin.expense_account_id,
+            account_code=pin.expense_account_code,
+            account_name=pin.expense_account_name,
+            account_type=pin.expense_account_type,
+            expense_category=pin.expense_category,
+        )
 
     def _accepted_under_resale(self, decision, accepted_on_version: int) -> bool:
         resolutions = self._purchase_purpose_reader.list_purchase_purpose_resolutions(

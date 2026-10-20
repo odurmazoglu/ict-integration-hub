@@ -29,11 +29,13 @@ from app.application.workbench.execution_status_use_cases import GetWorkbenchExe
 from app.application.workbench.vendor_bill_readback import (
     GetVendorBillReadbackUseCase,
     VendorBillFxReadbackVerifier,
+    VendorBillInternalUseReadbackVerifier,
     VendorBillMonetaryReadbackVerifier,
     VendorBillResaleReadbackVerifier,
 )
 from app.billing import CustomerInvoiceBuilder, VendorBillBuilder
 from app.composition.imports import build_runtime_workbench_projection_synchronizer
+from app.composition.internal_use_accounting import build_internal_use_execution_accounting_validator
 from app.composition.purchase_account_discovery import build_get_product_purchase_account_use_case
 from app.composition.source_tax import StoredSourceTaxDocumentReader, build_source_tax_safety_check
 from app.connectors.odoo.client import OdooJson2Client
@@ -115,6 +117,11 @@ def build_vendor_bill_execution_use_case(
             session=session,
             settings=settings,
             odoo_client=resolved_odoo_client,
+        ),
+        # INTERNAL_USE product invoices: the pinned internal expense account, re-validated
+        # before any write; never the product category's account.
+        internal_use_accounting_check=build_internal_use_execution_accounting_validator(
+            session=session, odoo_client=resolved_odoo_client
         ),
         # P0-PROD-19E-2: the same structurally read-only currency resolution preview uses.
         currency_reader=OdooVendorBillExecutionCurrencyReader(adapter=OdooReadOnlyAdapter(client=resolved_odoo_client)),
@@ -364,6 +371,8 @@ def build_vendor_bill_preview_use_case(
         purchase_purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
         # P1: the same read-only exchange-rate check EXECUTE runs, reported, never raised.
         fx_rate_policy=build_vendor_bill_fx_rate_policy(session=session, settings=settings, odoo_client=odoo_client),
+        # INTERNAL_USE product invoices: the decision's own pinned account, Hub persistence only.
+        internal_use_accounting_pin_reader=source_invoice_reader,
     )
 
 
@@ -410,6 +419,10 @@ def build_get_vendor_bill_readback_use_case(
             pin_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
             purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
             fiscal_position_reader=OdooFiscalPositionReader(adapter=adapter),
+        ),
+        # INTERNAL_USE product bills: every line must sit on the pinned internal expense account.
+        internal_use_verifier=VendorBillInternalUseReadbackVerifier(
+            pin_reader=SqlAlchemyExecutionSourceInvoiceReader(session),
         ),
         # P0-PROD-19E-1: every bill's money is checked against the same zero-write preview
         # (same builder, same pinned evidence) that real execution mirrors.

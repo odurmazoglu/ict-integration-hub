@@ -56,6 +56,17 @@ class ResaleDecisionEligibilityError(ReviewDecisionError):
     error_category = "resale_decision_eligibility_error"
 
 
+class InternalUseDecisionEligibilityError(ReviewDecisionError):
+    """Safe error raised when an INTERNAL_USE product-invoice Vendor Bill decision cannot be accepted.
+
+    Covers a missing/foreign-version accounting resolution, a non-expense treatment, an
+    expense account that is no longer eligible, account-only lines and unresolved
+    product lines. The product category's purchase account is never substituted.
+    """
+
+    error_category = "internal_use_decision_eligibility_error"
+
+
 class ReviewVersionConflictError(ReviewDecisionError):
     """Safe error raised when a review decision expected_version is stale."""
 

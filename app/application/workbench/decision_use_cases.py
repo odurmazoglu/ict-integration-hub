@@ -10,6 +10,8 @@ from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewDecisionType
 from app.application.workbench.exceptions import ReviewDecisionError, WorkbenchContractError
+from app.application.workbench.internal_use_accounting_pin import InternalUseAccountingPin
+from app.application.workbench.internal_use_decision_gate import InternalUseDecisionGate
 from app.application.workbench.ports import (
     ReviewBillingEvidenceReader,
     ReviewDecisionWriter,
@@ -56,6 +58,7 @@ class SubmitReviewDecisionUseCase:
         resale_decision_gate: ResaleDecisionGate | None = None,
         projection_synchronizer: ReviewProjectionSynchronizer | None = None,
         source_tax_safety_check: SourceTaxSafetyCheck | None = None,
+        internal_use_decision_gate: InternalUseDecisionGate | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
         self._projection_synchronizer = projection_synchronizer
@@ -65,6 +68,7 @@ class SubmitReviewDecisionUseCase:
         self._selected_product_reader = selected_product_reader
         self._selected_account_reader = selected_account_reader
         self._resale_decision_gate = resale_decision_gate
+        self._internal_use_decision_gate = internal_use_decision_gate
         # PR T W1: like the execution evidence reader, a Vendor Bill decision is refused
         # without it (``_enforce_source_tax_safety``) -- never accepted unchecked.
         self._source_tax_safety_check = source_tax_safety_check
@@ -95,11 +99,17 @@ class SubmitReviewDecisionUseCase:
             # A replay never re-runs the RESALE gate or re-pins: the accepted decision keeps the
             # RESALE accounting pin it was accepted with (P0-PROD-18F-1).
             resale_pin: ResaleAccountingPin | None = None
+            internal_use_pin: InternalUseAccountingPin | None = None
             if not is_replay:
                 _validate_resolved_execution_inputs(command, evidence)
                 resale_pin = self._enforce_resale_eligibility(command, evidence)
-            # Only passed when present, so every non-RESALE write call is byte-identical to before.
-            pin_kwargs = {"resale_accounting_pin": resale_pin} if resale_pin is not None else {}
+                internal_use_pin = self._enforce_internal_use_accounting(command, evidence)
+            # Only passed when present, so every other write call is byte-identical to before.
+            pin_kwargs: dict[str, object] = {}
+            if resale_pin is not None:
+                pin_kwargs["resale_accounting_pin"] = resale_pin
+            if internal_use_pin is not None:
+                pin_kwargs["internal_use_accounting_pin"] = internal_use_pin
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
                 return self._write_and_commit(
@@ -222,6 +232,23 @@ class SubmitReviewDecisionUseCase:
         return _translate_decision_failure(
             lambda: self._resale_decision_gate.enforce(command, evidence),
             "RESALE product eligibility could not be checked safely.",
+        )
+
+    def _enforce_internal_use_accounting(
+        self, command: ReviewDecisionCommand, evidence
+    ) -> InternalUseAccountingPin | None:
+        """Pin the operator's explicit internal expense account for an INTERNAL_USE product invoice.
+
+        A no-op (``None``) unless the current-version purpose is INTERNAL_USE on a
+        product-backed invoice; then the review-scoped EXPENSE_ACCOUNT resolution is
+        mandatory and re-validated read-only. Never the product category's account.
+        """
+
+        if self._internal_use_decision_gate is None:
+            return None
+        return _translate_decision_failure(
+            lambda: self._internal_use_decision_gate.enforce(command, evidence),
+            "INTERNAL_USE accounting could not be checked safely.",
         )
 
     def _validate_selected_expense_accounts(self, command: ReviewDecisionCommand) -> None:

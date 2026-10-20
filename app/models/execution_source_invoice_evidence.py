@@ -53,6 +53,11 @@ class ExecutionSourceInvoiceEvidence(Base):
     # decision and every decision accepted before 18F-1. Written once, never updated,
     # and deliberately outside the execution-source fingerprint: a replay keeps it.
     resale_accounting_pin: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # The immutable INTERNAL_USE expense-account pin accepted with a product-backed
+    # INTERNAL_USE decision (see app.application.workbench.internal_use_accounting_pin).
+    # NULL for every other decision. Written once, never updated, and -- like the RESALE
+    # pin -- outside the execution-source fingerprint.
+    internal_use_accounting_pin: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Frozen CAPITALIZE_FIXED_ASSET selection (asset account + depreciation model), see
     # app.application.fixed_asset_accounting. NULL for every non-fixed-asset row; when
     # NULL the key is absent from the serialized evidence, so historical fingerprints

@@ -695,6 +695,21 @@ class VendorBillPreviewResaleAccountingResponse(BaseModel):
     fiscal_position_mapping: str
 
 
+class VendorBillPreviewInternalUseAccountingResponse(BaseModel):
+    """INTERNAL_USE expense account pinned at decision acceptance for a product invoice;
+    EXECUTE sends exactly this account on every line (never the product category's)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pin_review_version: int
+    accounting_resolution_id: int
+    account_id: int
+    account_code: str
+    account_name: str
+    account_type: str
+    expense_category: str
+
+
 class VendorBillPreviewLineResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -779,6 +794,8 @@ class VendorBillPreviewResponse(BaseModel):
     monetary_mismatches: list[str] = Field(default_factory=list)
     # P1: additive; the invoice's own exchange rate the new bill is created with.
     fx_rate_plan: VendorBillFxRatePlanResponse | None = None
+    # Additive; null unless the decision was accepted under INTERNAL_USE on a product invoice.
+    internal_use_accounting: VendorBillPreviewInternalUseAccountingResponse | None = None
 
 
 class VendorBillReadbackLineResponse(BaseModel):
@@ -815,6 +832,32 @@ class VendorBillResaleReadbackResponse(BaseModel):
     fiscal_position_supported: bool
     fiscal_position_id: int | None
     lines: list[VendorBillResaleReadbackLineResponse]
+    mismatches: list[str]
+
+
+class VendorBillInternalUseReadbackLineResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_id: int
+    product_id: int | None
+    account_id: int | None
+    expected_account_id: int
+    product_matches: bool
+    account_matches: bool
+
+
+class VendorBillInternalUseReadbackResponse(BaseModel):
+    """An INTERNAL_USE product bill verified against its decision's immutable pin."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    pin_review_version: int
+    accounting_resolution_id: int
+    expected_account_id: int
+    expected_account_code: str
+    expense_category: str
+    lines: list[VendorBillInternalUseReadbackLineResponse]
     mismatches: list[str]
 
 
@@ -883,6 +926,8 @@ class VendorBillReadbackResponse(BaseModel):
     lines: list[VendorBillReadbackLineResponse]
     # P0-PROD-18F-2: additive; null unless the decision was accepted under RESALE.
     resale_verification: VendorBillResaleReadbackResponse | None = None
+    # Additive; null unless the decision was accepted under INTERNAL_USE on a product invoice.
+    internal_use_verification: VendorBillInternalUseReadbackResponse | None = None
     # P0-PROD-19E-1: additive; the monetary verification of every Vendor Bill.
     monetary_verification: VendorBillMonetaryReadbackResponse | None = None
     # P1: additive; the bill's rate and TRY amounts verified against the invoice rate.

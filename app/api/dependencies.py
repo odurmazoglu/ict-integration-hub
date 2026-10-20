@@ -99,6 +99,7 @@ from app.composition import (
     build_workbench_quotation_scenario_evidence_workflow,
     build_workbench_vendor_bill_execution_workflow,
 )
+from app.composition.internal_use_accounting import build_internal_use_decision_gate
 from app.composition.operating_expense_mapping import (
     build_list_expense_account_candidates_use_case,
     build_submit_operating_expense_mapping_use_case,
@@ -276,6 +277,8 @@ def get_submit_review_decision_use_case(
         ),
         selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
         resale_decision_gate=build_resale_decision_gate(session=session, settings=settings, odoo_client=odoo_client),
+        # INTERNAL_USE product invoices: the explicit internal expense account is mandatory and pinned.
+        internal_use_decision_gate=build_internal_use_decision_gate(session=session, odoo_client=odoo_client),
         projection_synchronizer=build_runtime_workbench_projection_synchronizer(
             session=session, settings=settings, odoo_client=odoo_client
         ),

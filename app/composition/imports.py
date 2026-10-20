@@ -44,6 +44,7 @@ from app.application.workbench.product_remediation import normalize_seller_item_
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
 from app.application.workflow import ManualReviewReasonCode
 from app.composition.advisory_display import AdvisorySuggestionDisplayReader
+from app.composition.internal_use_accounting import build_internal_use_decision_gate
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.composition.source_tax import build_source_tax_safety_check, build_vat_exemption_tax_policy
 from app.connectors.odoo.client import OdooJson2Client
@@ -355,6 +356,7 @@ def _operator_guidance_facts(
         current_purchase_purpose=current.purchase_purpose if current is not None else None,
         latest_purchase_purpose=purposes[-1].purchase_purpose if purposes else None,
         latest_accounting_resolution=resolution,
+        current_accounting_resolution_recorded=resolution is not None and resolution.review_version == review.version,
         accounting_labels=(
             resolve_accounting_labels(resolution, label_reader)
             if resolution is not None and label_reader is not None
@@ -612,6 +614,8 @@ def build_odoo_decision_submitter(
         ),
         selected_account_reader=OdooSelectedAccountReader(adapter=read_adapter),
         resale_decision_gate=build_resale_decision_gate(session=session, settings=settings, odoo_client=odoo_client),
+        # INTERNAL_USE product invoices: the explicit internal expense account is mandatory and pinned.
+        internal_use_decision_gate=build_internal_use_decision_gate(session=session, odoo_client=odoo_client),
         projection_synchronizer=build_runtime_workbench_projection_synchronizer(
             session=session, settings=settings, odoo_client=odoo_client
         ),
