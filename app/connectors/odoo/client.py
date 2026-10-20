@@ -178,18 +178,19 @@ class OdooJson2Client:
         fields: list[str],
         limit: int = 20,
         offset: int = 0,
+        context: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         if not _is_read_only_model_allowed(model):
             raise ConnectorError("Odoo read-only model is not allowed.")
-        result = await self._post_json(
-            f"/json/2/{model}/search_read",
-            {
-                "domain": domain,
-                "fields": fields,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
+        payload: dict[str, Any] = {
+            "domain": domain,
+            "fields": fields,
+            "limit": limit,
+            "offset": offset,
+        }
+        if context is not None:
+            payload["context"] = context
+        result = await self._post_json(f"/json/2/{model}/search_read", payload)
         if not isinstance(result, list):
             raise ConnectorError("Odoo search_read returned an unexpected response.")
         records: list[dict[str, Any]] = []

@@ -714,6 +714,30 @@ class VendorBillPreviewLineResponse(BaseModel):
     source_line_extension_amount: str | None = None
 
 
+class VendorBillFxRateCheckResponse(BaseModel):
+    """P1: a foreign-currency bill's UBL exchange rate vs the rate Odoo applies.
+
+    Rates are company-currency units per one document-currency unit. Any status other
+    than ``match``/``not_applicable`` blocks EXECUTE before any Odoo write.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    blocks_vendor_bill: bool
+    document_currency: str
+    company_currency: str | None
+    rate_date: date | None
+    source_rate: str | None
+    odoo_rate: str | None
+    document_total: str | None
+    company_currency_decimal_places: int | None
+    source_company_total: str | None
+    odoo_company_total: str | None
+    company_total_difference: str | None
+    message: str
+
+
 class VendorBillPreviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=True)
 
@@ -749,6 +773,8 @@ class VendorBillPreviewResponse(BaseModel):
     source_total: str | None = None
     monetary_reconciles: bool | None = None
     monetary_mismatches: list[str] = Field(default_factory=list)
+    # P1: additive; the invoice exchange rate compared with Odoo's rate for invoice_date.
+    fx_rate_check: VendorBillFxRateCheckResponse | None = None
 
 
 class VendorBillReadbackLineResponse(BaseModel):
@@ -815,6 +841,25 @@ class VendorBillMonetaryReadbackResponse(BaseModel):
     mismatches: list[str]
 
 
+class VendorBillFxReadbackResponse(BaseModel):
+    """P1: a created bill's actual exchange rate and company-currency total."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    document_currency: str | None
+    company_currency: str | None
+    source_rate: str | None
+    odoo_bill_rate: str | None
+    odoo_table_rate: str | None
+    expected_company_total: str | None
+    odoo_company_total: str | None
+    company_total_difference: str | None
+    rounding_tolerance: str | None
+    mismatches: list[str]
+    notes: list[str]
+
+
 class VendorBillReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -834,6 +879,8 @@ class VendorBillReadbackResponse(BaseModel):
     resale_verification: VendorBillResaleReadbackResponse | None = None
     # P0-PROD-19E-1: additive; the monetary verification of every Vendor Bill.
     monetary_verification: VendorBillMonetaryReadbackResponse | None = None
+    # P1: additive; the bill's actual exchange rate revalidated against the invoice rate.
+    fx_verification: VendorBillFxReadbackResponse | None = None
 
 
 class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):

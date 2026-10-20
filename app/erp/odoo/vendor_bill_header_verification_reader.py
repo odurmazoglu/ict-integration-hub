@@ -19,6 +19,9 @@ VENDOR_BILL_HEADER_VERIFICATION_FIELDS = (
     "amount_untaxed",
     "amount_tax",
     "amount_total",
+    # P1: the bill's actual exchange rate and company-currency total.
+    "invoice_currency_rate",
+    "amount_total_signed",
 )
 SAFE_VENDOR_BILL_HEADER_ERROR = "Odoo Vendor Bill header verification read returned an unsafe response."
 
@@ -59,6 +62,8 @@ class OdooVendorBillHeaderVerificationReader:
             amount_tax=_decimal(record.get("amount_tax")),
             amount_total=_decimal(record.get("amount_total")),
             currency_decimal_places=self._currency_decimal_places(currency_id=currency_id, currency=currency),
+            invoice_currency_rate=_optional_decimal(record.get("invoice_currency_rate")),
+            amount_total_signed=_optional_decimal(record.get("amount_total_signed")),
         )
 
     def _currency_decimal_places(self, *, currency_id: int, currency: str) -> int:
@@ -112,6 +117,14 @@ def _required_text(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ErpRepositoryResponseError(SAFE_VENDOR_BILL_HEADER_ERROR)
     return value.strip()
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    """Absent or Odoo's ``False`` reads as None; anything else must be a finite number."""
+
+    if value is None or value is False:
+        return None
+    return _decimal(value)
 
 
 def _decimal(value: object) -> Decimal:

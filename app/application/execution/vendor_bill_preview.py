@@ -32,6 +32,12 @@ line, so a RESALE line's ``account_id`` shows that pinned account (still read on
 the pin). EXECUTE sends it only after its own pre-write drift and fiscal-position
 checks pass -- preview does not run those Odoo reads; if they fail, EXECUTE fails
 closed and creates nothing.
+
+P1 FX rate guard: for a foreign-currency bill the preview also reports
+``fx_rate_check`` -- the original invoice's UBL exchange rate compared with the rate Odoo
+resolves for the same ``invoice_date`` (one more read-only ``res.company``/``res.currency``
+read). The preview reports a blocking result instead of raising; EXECUTE runs the same
+check and fails closed before any write.
 """
 
 from __future__ import annotations
@@ -64,6 +70,11 @@ from app.application.execution.exceptions import (
 )
 from app.application.execution.planner import ExecutionPlanner
 from app.application.execution.ports import AcceptedReviewDecisionReader, ExecutionSourceInvoiceReader
+from app.application.execution.vendor_bill_fx_guard import (
+    VendorBillFxRateReader,
+    unavailable_vendor_bill_fx_rate_check,
+    vendor_bill_fx_rate_check,
+)
 from app.application.execution.vendor_bill_strategy import (
     SourceTaxVendorBillCheck,
     account_only_line_resolution,
@@ -82,6 +93,7 @@ from app.billing import (
     vendor_bill_line_mismatches,
     vendor_bill_money,
 )
+from app.billing.fx_rate import FxRateCheck
 from app.billing.money import MonetaryPrecision
 from app.billing.reconciliation import line_currency_subtotal, monetary_mismatches, source_monetary_totals
 
@@ -224,6 +236,8 @@ class VendorBillPreview(ApplicationDTO):
     source_total: Decimal | None = None
     monetary_reconciles: bool | None = None
     monetary_mismatches: tuple[str, ...] = field(default_factory=tuple)
+    # P1: set whenever an exchange-rate reader is composed; NOT_APPLICABLE for a TRY bill.
+    fx_rate_check: FxRateCheck | None = None
 
 
 class PreviewVendorBillUseCase:
@@ -241,7 +255,9 @@ class PreviewVendorBillUseCase:
         source_tax_safety_check: SourceTaxVendorBillCheck,
         resale_accounting_pin_reader: VendorBillPreviewResaleAccountingPinReader | None = None,
         purchase_purpose_reader: PurchasePurposeHistoryReader | None = None,
+        fx_rate_reader: VendorBillFxRateReader | None = None,
     ) -> None:
+        self._fx_rate_reader = fx_rate_reader
         self._accepted_decision_reader = accepted_decision_reader
         self._source_invoice_reader = source_invoice_reader
         self._execution_planner = execution_planner
@@ -436,7 +452,20 @@ class PreviewVendorBillUseCase:
             source_total=source_totals.total,
             monetary_reconciles=not mismatches,
             monetary_mismatches=mismatches,
+            fx_rate_check=self._fx_rate_check(
+                source, company_id=decision.company_id, rate_date=vendor_bill.invoice_date
+            ),
         )
+
+    def _fx_rate_check(self, source, *, company_id: int, rate_date: date) -> FxRateCheck | None:
+        if self._fx_rate_reader is None:
+            return None
+        try:
+            return vendor_bill_fx_rate_check(
+                self._fx_rate_reader, source.invoice, company_id=company_id, rate_date=rate_date
+            )
+        except ApplicationError:
+            return unavailable_vendor_bill_fx_rate_check(source.invoice, rate_date=rate_date)
 
     def _pinned_resale_accounting(
         self, decision, source, vendor_bill

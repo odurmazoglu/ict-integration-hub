@@ -176,6 +176,7 @@ from app.application.workbench.purchase_purpose import SubmitPurchasePurposeComm
 from app.application.workbench.review_evidence import EffectiveLineResolution
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.vendor_bill_readback import (
+    VendorBillFxReadbackVerification,
     VendorBillMonetaryReadbackVerification,
     VendorBillReadback,
     VendorBillReadbackError,
@@ -194,6 +195,7 @@ from app.application.workbench.write_authorization import (
 )
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.billing.exceptions import VendorBillBuildError
+from app.billing.fx_rate import FxRateCheck
 from app.schemas.workbench import (
     AcceptedDecisionSummaryResponse,
     AccountingResolutionEnvelope,
@@ -251,6 +253,8 @@ from app.schemas.workbench import (
     SupplierRemediationResponse,
     SupplierResolutionRequest,
     TaxResolutionRequest,
+    VendorBillFxRateCheckResponse,
+    VendorBillFxReadbackResponse,
     VendorBillMonetaryReadbackLineResponse,
     VendorBillMonetaryReadbackResponse,
     VendorBillPreviewEnvelope,
@@ -1549,6 +1553,27 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
         source_total=decimal_to_api(preview.source_total),
         monetary_reconciles=preview.monetary_reconciles,
         monetary_mismatches=list(preview.monetary_mismatches),
+        fx_rate_check=_fx_rate_check_response(preview.fx_rate_check),
+    )
+
+
+def _fx_rate_check_response(check: FxRateCheck | None) -> VendorBillFxRateCheckResponse | None:
+    if check is None:
+        return None
+    return VendorBillFxRateCheckResponse(
+        status=check.status.value,
+        blocks_vendor_bill=check.blocks_vendor_bill,
+        document_currency=check.document_currency,
+        company_currency=check.company_currency,
+        rate_date=check.rate_date,
+        source_rate=decimal_to_api(check.source_rate),
+        odoo_rate=decimal_to_api(check.odoo_rate),
+        document_total=decimal_to_api(check.document_total),
+        company_currency_decimal_places=check.company_currency_decimal_places,
+        source_company_total=decimal_to_api(check.source_company_total),
+        odoo_company_total=decimal_to_api(check.odoo_company_total),
+        company_total_difference=decimal_to_api(check.company_total_difference),
+        message=check.message,
     )
 
 
@@ -1599,6 +1624,28 @@ def _vendor_bill_readback_response(readback: VendorBillReadback) -> VendorBillRe
         ],
         resale_verification=_resale_readback_response(readback.resale_verification),
         monetary_verification=_monetary_readback_response(readback.monetary_verification),
+        fx_verification=_fx_readback_response(readback.fx_verification),
+    )
+
+
+def _fx_readback_response(
+    verification: VendorBillFxReadbackVerification | None,
+) -> VendorBillFxReadbackResponse | None:
+    if verification is None:
+        return None
+    return VendorBillFxReadbackResponse(
+        status=verification.status.value,
+        document_currency=verification.document_currency,
+        company_currency=verification.company_currency,
+        source_rate=decimal_to_api(verification.source_rate),
+        odoo_bill_rate=decimal_to_api(verification.odoo_bill_rate),
+        odoo_table_rate=decimal_to_api(verification.odoo_table_rate),
+        expected_company_total=decimal_to_api(verification.expected_company_total),
+        odoo_company_total=decimal_to_api(verification.odoo_company_total),
+        company_total_difference=decimal_to_api(verification.company_total_difference),
+        rounding_tolerance=decimal_to_api(verification.rounding_tolerance),
+        mismatches=list(verification.mismatches),
+        notes=list(verification.notes),
     )
 
 

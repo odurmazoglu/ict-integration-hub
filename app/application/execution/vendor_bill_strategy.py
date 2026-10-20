@@ -26,6 +26,11 @@ from app.application.execution.exceptions import (
     ResaleExecutionAccountingError,
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
+from app.application.execution.vendor_bill_fx_guard import (
+    VendorBillFxRateBlockedError,
+    VendorBillFxRateReader,
+    ensure_vendor_bill_fx_rate_allowed,
+)
 from app.application.ports import VendorBillWriter
 from app.application.source_tax import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
 from app.application.workbench.dto import LineResolution
@@ -103,6 +108,7 @@ class VendorBillExecutionStrategy:
         resale_accounting_check: ResaleExecutionAccountingCheck,
         currency_reader: VendorBillCurrencyPrecisionReader,
         source_tax_safety_check: SourceTaxVendorBillCheck,
+        fx_rate_reader: VendorBillFxRateReader,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._vendor_bill_builder = vendor_bill_builder
@@ -118,6 +124,11 @@ class VendorBillExecutionStrategy:
         if source_tax_safety_check is None:
             raise ExecutionSourceInvoiceError("Source tax safety check is required for Vendor Bill execution.")
         self._source_tax_safety_check = source_tax_safety_check
+        # Required for the same reason (P1 FX rate guard): without it a foreign-currency bill
+        # could be booked at an Odoo rate that differs from the original invoice's rate.
+        if fx_rate_reader is None:
+            raise ExecutionSourceInvoiceError("Exchange-rate reader is required for Vendor Bill execution.")
+        self._fx_rate_reader = fx_rate_reader
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -176,6 +187,14 @@ class VendorBillExecutionStrategy:
             monetary_errors = vendor_bill_monetary_errors(source.invoice, vendor_bill.invoice_lines, monetary_precision)
             if monetary_errors:
                 raise VendorBillBuildError(monetary_errors)
+            # P1: a foreign-currency bill's UBL exchange rate must equal the rate Odoo will
+            # apply for the same invoice_date, before the writer's first call. Read-only.
+            ensure_vendor_bill_fx_rate_allowed(
+                self._fx_rate_reader,
+                source.invoice,
+                company_id=request.company_id,
+                rate_date=vendor_bill.invoice_date,
+            )
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,
                 command=VendorBillWriteCommand(
@@ -196,6 +215,8 @@ class VendorBillExecutionStrategy:
             return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
         except VendorBillBuildError as exc:
             return _failure_result(request, error_code="vendor_bill_build_error", message=exc.safe_message)
+        except VendorBillFxRateBlockedError as exc:
+            return _failure_result(request, error_code=exc.error_code, message=exc.safe_message)
         except ApplicationError as exc:
             return _failure_result(request, error_code=_writer_error_code(exc), message=exc.safe_message)
 

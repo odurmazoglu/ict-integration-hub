@@ -27,6 +27,7 @@ from app.application.execution.vendor_bill_preview import PreviewVendorBillExpec
 from app.application.workbench.execution_status_use_cases import GetWorkbenchExecutionStatusUseCase
 from app.application.workbench.vendor_bill_readback import (
     GetVendorBillReadbackUseCase,
+    VendorBillFxReadbackVerifier,
     VendorBillMonetaryReadbackVerifier,
     VendorBillResaleReadbackVerifier,
 )
@@ -40,6 +41,7 @@ from app.erp.odoo.account_move_line_verification_reader import OdooAccountMoveLi
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
 from app.erp.odoo.fiscal_position_reader import OdooFiscalPositionReader
 from app.erp.odoo.purchase_order_vendor_bill_repository import PurchaseOrderVendorBillRepository
+from app.erp.odoo.vendor_bill_fx_rate_reader import OdooVendorBillFxRateReader
 from app.erp.odoo.vendor_bill_header_verification_reader import OdooVendorBillHeaderVerificationReader
 from app.erp.odoo.vendor_bill_preview_currency_reader import (
     OdooVendorBillExecutionCurrencyReader,
@@ -112,6 +114,8 @@ def build_vendor_bill_execution_use_case(
         currency_reader=OdooVendorBillExecutionCurrencyReader(adapter=OdooReadOnlyAdapter(client=resolved_odoo_client)),
         # PR T W1: the original document's tax content is re-verified on every attempt.
         source_tax_safety_check=source_tax_safety_check,
+        # P1: a foreign-currency bill's UBL rate must equal Odoo's rate before any write.
+        fx_rate_reader=OdooVendorBillFxRateReader(adapter=OdooReadOnlyAdapter(client=resolved_odoo_client)),
     )
     purchase_order_vendor_bill_repository = PurchaseOrderVendorBillRepository(
         client=odoo_client or OdooJson2Client.from_settings(settings),
@@ -329,6 +333,8 @@ def build_vendor_bill_preview_use_case(
         # persistence -- no Odoo accounting reader is composed into preview at all.
         resale_accounting_pin_reader=source_invoice_reader,
         purchase_purpose_reader=SqlAlchemyReviewPurchasePurposeResolutionRepository(session),
+        # P1: the same read-only exchange-rate check EXECUTE runs, reported, never raised.
+        fx_rate_reader=OdooVendorBillFxRateReader(adapter=read_only_adapter),
     )
 
 
@@ -360,6 +366,11 @@ def build_get_vendor_bill_readback_use_case(
 
     resolved_odoo_client = odoo_client or OdooJson2Client.from_settings(settings)
     adapter = OdooReadOnlyAdapter(client=resolved_odoo_client)
+    expectation_reader = PreviewVendorBillExpectationReader(
+        preview_use_case=build_vendor_bill_preview_use_case(
+            session=session, settings=settings, odoo_client=resolved_odoo_client
+        )
+    )
     return GetVendorBillReadbackUseCase(
         review_reader=SqlAlchemyReviewRepository(session),
         execution_snapshot_reader=SqlAlchemyExecutionRuntimeRepository(session),
@@ -373,13 +384,9 @@ def build_get_vendor_bill_readback_use_case(
         ),
         # P0-PROD-19E-1: every bill's money is checked against the same zero-write preview
         # (same builder, same pinned evidence) that real execution mirrors.
-        monetary_verifier=VendorBillMonetaryReadbackVerifier(
-            expectation_reader=PreviewVendorBillExpectationReader(
-                preview_use_case=build_vendor_bill_preview_use_case(
-                    session=session, settings=settings, odoo_client=resolved_odoo_client
-                )
-            )
-        ),
+        monetary_verifier=VendorBillMonetaryReadbackVerifier(expectation_reader=expectation_reader),
+        # P1: a foreign-currency bill's actual rate and company-currency total.
+        fx_verifier=VendorBillFxReadbackVerifier(expectation_reader=expectation_reader),
     )
 
 
