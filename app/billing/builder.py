@@ -14,6 +14,7 @@ from app.billing.dto import (
     VendorBillLine,
 )
 from app.billing.exceptions import CustomerInvoiceBuildError, VendorBillBuildError
+from app.billing.fx_rate import odoo_invoice_currency_rate
 from app.billing.money import MonetaryPrecision, currency_round, monetary_equal
 from app.billing.reconciliation import line_currency_subtotal, monetary_mismatches, source_monetary_totals
 from app.billing.validation import VendorBillValidationResult, validation_result
@@ -606,6 +607,12 @@ def to_odoo_account_move_payload(
         payload["company_id"] = vendor_bill.company_id
     if vendor_bill.notes:
         payload["narration"] = "\n".join(vendor_bill.notes)
+    if vendor_bill.company_currency_rate is not None:
+        # P1: standard Odoo per-document rate (company -> bill currency, the inverse of the
+        # invoice's rate). Odoo protects a given editable computed field on create, so its
+        # automatic rate for invoice_date is not substituted; lines, taxes and the payable
+        # are computed from it. Never res.currency.rate.
+        payload["invoice_currency_rate"] = odoo_invoice_currency_rate(vendor_bill.company_currency_rate)
     return {key: value for key, value in payload.items() if value is not None}
 
 

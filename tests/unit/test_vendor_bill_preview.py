@@ -746,8 +746,8 @@ def test_preview_use_case_never_references_any_write_gate_setting() -> None:
         "purchase_purpose_reader",
         # PR T W1: read-only source-document tax check (Hub persistence + document storage).
         "source_tax_safety_check",
-        # P1: structurally read-only exchange-rate resolution (res.company/res.currency search_read).
-        "fx_rate_reader",
+        # P1: read-only invoice exchange-rate evidence (stored UBL + res.company/res.currency search_read).
+        "fx_rate_policy",
     }
 
 

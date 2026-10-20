@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Protocol
 
 from app.application.commands import VendorBillWriteCommand
@@ -27,16 +28,24 @@ from app.application.execution.exceptions import (
 )
 from app.application.execution.ports import ExecutionSourceInvoiceReader
 from app.application.execution.vendor_bill_fx_guard import (
+    SourceFxFactsUnavailableError,
     VendorBillFxRateBlockedError,
-    VendorBillFxRateReader,
-    ensure_vendor_bill_fx_rate_allowed,
+    VendorBillFxRatePolicy,
 )
 from app.application.ports import VendorBillWriter
 from app.application.source_tax import SourceTaxFactsUnavailableError, SourceTaxSafetyBlockedError
 from app.application.workbench.dto import LineResolution
-from app.billing import ValidatedResaleLineAccount, VendorBillBuilder, vendor_bill_monetary_errors
+from app.billing import (
+    ValidatedResaleLineAccount,
+    VendorBill,
+    VendorBillBuilder,
+    vendor_bill_monetary_errors,
+    vendor_bill_money,
+)
 from app.billing.exceptions import VendorBillBuildError
+from app.billing.fx_rate import FxRatePlan, FxVerificationStatus
 from app.billing.money import MonetaryPrecision
+from app.billing.reconciliation import line_currency_subtotal
 
 
 class ResaleExecutionAccountingCheck(Protocol):
@@ -108,7 +117,7 @@ class VendorBillExecutionStrategy:
         resale_accounting_check: ResaleExecutionAccountingCheck,
         currency_reader: VendorBillCurrencyPrecisionReader,
         source_tax_safety_check: SourceTaxVendorBillCheck,
-        fx_rate_reader: VendorBillFxRateReader,
+        fx_rate_policy: VendorBillFxRatePolicy,
     ) -> None:
         self._source_invoice_reader = source_invoice_reader
         self._vendor_bill_builder = vendor_bill_builder
@@ -124,11 +133,11 @@ class VendorBillExecutionStrategy:
         if source_tax_safety_check is None:
             raise ExecutionSourceInvoiceError("Source tax safety check is required for Vendor Bill execution.")
         self._source_tax_safety_check = source_tax_safety_check
-        # Required for the same reason (P1 FX rate guard): without it a foreign-currency bill
-        # could be booked at an Odoo rate that differs from the original invoice's rate.
-        if fx_rate_reader is None:
-            raise ExecutionSourceInvoiceError("Exchange-rate reader is required for Vendor Bill execution.")
-        self._fx_rate_reader = fx_rate_reader
+        # Required for the same reason (P1): without it a foreign-currency bill would be
+        # booked at Odoo's automatic rate instead of the invoice's own rate.
+        if fx_rate_policy is None:
+            raise ExecutionSourceInvoiceError("Exchange-rate policy is required for Vendor Bill execution.")
+        self._fx_rate_policy = fx_rate_policy
 
     def supports_mode(self, mode: ExecutionMode) -> bool:
         return mode in {ExecutionMode.DRY_RUN, ExecutionMode.EXECUTE}
@@ -187,14 +196,15 @@ class VendorBillExecutionStrategy:
             monetary_errors = vendor_bill_monetary_errors(source.invoice, vendor_bill.invoice_lines, monetary_precision)
             if monetary_errors:
                 raise VendorBillBuildError(monetary_errors)
-            # P1: a foreign-currency bill's UBL exchange rate must equal the rate Odoo will
-            # apply for the same invoice_date, before the writer's first call. Read-only.
-            ensure_vendor_bill_fx_rate_allowed(
-                self._fx_rate_reader,
-                source.invoice,
-                company_id=request.company_id,
-                rate_date=vendor_bill.invoice_date,
+            # P1: the invoice's own validated exchange rate, selected before the writer's first
+            # call on every attempt and applied to this one new draft bill only.
+            fx_plan = plan_vendor_bill_fx_rate(
+                self._fx_rate_policy, source, vendor_bill, monetary_precision, company_id=request.company_id
             )
+            if fx_plan.blocks_vendor_bill:
+                raise VendorBillFxRateBlockedError(fx_plan)
+            if fx_plan.applies_rate:
+                vendor_bill = replace(vendor_bill, company_currency_rate=fx_plan.selected_rate)
             write_result = _run_writer(
                 writer=self._vendor_bill_writer,
                 command=VendorBillWriteCommand(
@@ -217,6 +227,8 @@ class VendorBillExecutionStrategy:
             return _failure_result(request, error_code="vendor_bill_build_error", message=exc.safe_message)
         except VendorBillFxRateBlockedError as exc:
             return _failure_result(request, error_code=exc.error_code, message=exc.safe_message)
+        except SourceFxFactsUnavailableError as exc:
+            return _failure_result(request, error_code=exc.error_category, message=exc.safe_message)
         except ApplicationError as exc:
             return _failure_result(request, error_code=_writer_error_code(exc), message=exc.safe_message)
 
@@ -226,6 +238,10 @@ class VendorBillExecutionStrategy:
                 error_code="vendor_bill_write_failed",
                 message=write_result.safe_message or "Vendor Bill write failed safely.",
             )
+
+        fx_failure = self._verify_created_fx(request, fx_plan, write_result)
+        if fx_failure is not None:
+            return fx_failure
 
         step_status = (
             ExecutionStepStatus.DRY_RUN_OK if request.mode is ExecutionMode.DRY_RUN else ExecutionStepStatus.EXECUTED
@@ -244,6 +260,32 @@ class VendorBillExecutionStrategy:
             ),
         )
 
+    def _verify_created_fx(self, request: ExecutionStepRequest, plan: FxRatePlan, write_result):
+        """P1: prove the created (or recovered) draft carries the invoice rate and Odoo's TRY
+        lines, taxes and payable follow it. The bill is never modified or re-created here:
+        a retry finds the same draft through the writer's idempotency lookup and verifies it
+        again, so an uncertain write is always inspected before anything else happens."""
+
+        if request.mode is ExecutionMode.DRY_RUN or not plan.applies_rate or write_result.external_id is None:
+            return None
+        try:
+            verification = self._fx_rate_policy.verify_created(
+                plan, move_id=write_result.external_id, company_id=request.company_id
+            )
+        except ApplicationError as exc:
+            return _failure_result(request, error_code=_writer_error_code(exc), message=exc.safe_message)
+        if verification.status is FxVerificationStatus.VERIFIED:
+            return None
+        return _failure_result(
+            request,
+            error_code="vendor_bill_fx_verification_failed",
+            message=(
+                f"Draft Vendor Bill {write_result.external_id} does not carry the invoice exchange rate "
+                f"{plan.selected_rate} correctly: {'; '.join(verification.mismatches)}. It was not posted or "
+                "changed; do not post it. Correct the draft's rate in Odoo, then retry (the same draft is reused)."
+            ),
+        )
+
     def _monetary_precision(self, source: ExecutionSourceInvoice) -> MonetaryPrecision:
         currency = self._currency_reader.resolve_vendor_bill_currency(
             (source.invoice.header.currency_code or "").strip()
@@ -252,6 +294,30 @@ class VendorBillExecutionStrategy:
             return MonetaryPrecision(currency.decimal_places)
         except ValueError as exc:
             raise VendorBillBuildError(("Vendor Bill currency precision is not usable.",)) from exc
+
+
+def plan_vendor_bill_fx_rate(
+    policy: VendorBillFxRatePolicy,
+    source: ExecutionSourceInvoice,
+    vendor_bill: VendorBill,
+    precision: MonetaryPrecision,
+    *,
+    company_id: int,
+) -> FxRatePlan:
+    """The P1 rate plan for a built bill, shared verbatim by EXECUTE and preview. The rate
+    date is the bill's ``invoice_date`` exactly as sent to Odoo."""
+
+    money = vendor_bill_money(source.invoice, vendor_bill.invoice_lines, precision)
+    return policy.plan(
+        review_id=source.review_id,
+        company_id=company_id,
+        invoice=source.invoice,
+        rate_date=vendor_bill.invoice_date,
+        line_subtotals=tuple(
+            line_currency_subtotal(line.quantity, line.unit_price, precision) for line in vendor_bill.invoice_lines
+        ),
+        tax_total=money.tax,
+    )
 
 
 def account_only_line_resolution(

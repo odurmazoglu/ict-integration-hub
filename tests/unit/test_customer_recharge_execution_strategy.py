@@ -58,7 +58,7 @@ from app.models.workflow_execution import WorkflowExecution, WorkflowExecutionEv
 from app.persistence import SqlAlchemyExecutionRuntimeRepository
 from app.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
-from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_READER
+from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_POLICY
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 
@@ -335,7 +335,7 @@ def _vendor_bill_strategy(*, writer: RecordingVendorBillWriter) -> VendorBillExe
         vendor_bill_writer=writer,
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
         currency_reader=TWO_DECIMAL_CURRENCY_READER,
-        fx_rate_reader=TRY_ONLY_FX_RATE_READER,
+        fx_rate_policy=TRY_ONLY_FX_RATE_POLICY,
     )
 
 

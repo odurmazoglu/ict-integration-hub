@@ -83,7 +83,7 @@ from app.matching import ProductMatchStatus
 from app.models.execution_source_invoice_evidence import ExecutionSourceInvoiceEvidence
 from app.persistence import SqlAlchemyReviewPurchasePurposeResolutionRepository, SqlAlchemyReviewRepository
 from app.persistence.execution_source_invoice_reader import SqlAlchemyExecutionSourceInvoiceReader
-from tests.unit.fx_rate_support import MATCHING_FX_RATE_READER, with_ubl_rate
+from tests.unit.fx_rate_support import MATCHING_FX_RATE_POLICY, with_ubl_rate
 from tests.unit.resale_execution_support import TWO_DECIMAL_CURRENCY_READER
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_15ad_source_amount_preservation import (
@@ -316,7 +316,7 @@ def _strategy(session: Session, validator, client: _RecordingAccountMoveClient) 
         ),
         resale_accounting_check=validator,
         currency_reader=TWO_DECIMAL_CURRENCY_READER,
-        fx_rate_reader=MATCHING_FX_RATE_READER,
+        fx_rate_policy=MATCHING_FX_RATE_POLICY,
     )
 
 

@@ -124,6 +124,10 @@ class VendorBill:
     company_id: int | None = None
     invoice_lines: tuple[VendorBillLine, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
+    # P1: the invoice's own exchange rate (company-currency units per one bill-currency
+    # unit, exact), set only after the FX rate-selection rule selected it; None for a bill
+    # in the company currency. Sent to Odoo as invoice_currency_rate.
+    company_currency_rate: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

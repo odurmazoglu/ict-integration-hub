@@ -1,4 +1,8 @@
-"""Structurally read-only resolution of the exchange rate Odoo applies to a Vendor Bill.
+"""Structurally read-only Odoo currency facts for a foreign-currency Vendor Bill (P1).
+
+The bill is created with the invoice's own rate; this reader supplies the company
+currency (direction and rounding of every TRY amount) and Odoo's *automatic* rate for
+the bill date, which is displayed next to the invoice rate and never applied.
 
 Odoo computes ``account.move.invoice_currency_rate`` for a draft bill from the bill's
 ``invoice_date`` via ``res.currency`` rate resolution. Reading ``res.currency.rate``
@@ -18,7 +22,7 @@ import math
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from app.billing.fx_rate import OdooDocumentRate
+from app.billing.fx_rate import OdooCurrencyContext
 from app.billing.money import MAX_CURRENCY_DECIMAL_PLACES
 from app.erp.exceptions import ErpRepositoryError, ErpRepositoryResponseError, ErpRepositoryTimeoutError
 from app.erp.odoo.adapter import OdooReadOnlyAdapter
@@ -37,7 +41,7 @@ class OdooVendorBillFxRateReader:
 
     def resolve_vendor_bill_document_rate(
         self, *, company_id: int, currency_code: str, rate_date: date
-    ) -> OdooDocumentRate:
+    ) -> OdooCurrencyContext:
         try:
             return self._resolve(company_id=company_id, currency_code=currency_code, rate_date=rate_date)
         except ErpRepositoryTimeoutError as exc:
@@ -45,7 +49,7 @@ class OdooVendorBillFxRateReader:
         except ErpRepositoryError as exc:
             raise VendorBillWriteUnexpectedErpError(exc.safe_message) from exc
 
-    def _resolve(self, *, company_id: int, currency_code: str, rate_date: date) -> OdooDocumentRate:
+    def _resolve(self, *, company_id: int, currency_code: str, rate_date: date) -> OdooCurrencyContext:
         code = currency_code.strip().upper() if isinstance(currency_code, str) else ""
         if type(company_id) is not int or company_id <= 0 or not code or not isinstance(rate_date, date):
             raise ErpRepositoryResponseError(SAFE_FX_RATE_ERROR)
@@ -65,10 +69,10 @@ class OdooVendorBillFxRateReader:
         )
         if len(records) != 1 or _text(records[0].get("name")) != code:
             raise ErpRepositoryResponseError(SAFE_FX_RATE_ERROR)
-        return OdooDocumentRate(
+        return OdooCurrencyContext(
             company_currency=company_currency,
             company_currency_decimal_places=decimal_places,
-            invoice_currency_rate=_optional_rate(records[0].get("rate")),
+            automatic_invoice_currency_rate=_optional_rate(records[0].get("rate")),
         )
 
     def _company_currency(self, company_id: int) -> tuple[int, str]:

@@ -11,9 +11,10 @@ accepted evidence at the bill currency's own precision
 (:func:`app.billing.money.monetary_equal`). Same reporting model: a mismatch is reported
 and the draft bill is left for reconciliation; nothing is corrected or re-created.
 
-P1 FX rate guard: a foreign-currency bill's actual Odoo rate (``invoice_currency_rate``)
-and company-currency total (``amount_total_signed``) are revalidated against the original
-invoice's UBL exchange rate. Same reporting model: reported, never corrected.
+P1: a foreign-currency bill is also verified against the invoice's own exchange rate --
+its actual ``invoice_currency_rate``, every TRY line balance, the TRY tax lines and the
+TRY payable (:func:`app.billing.fx_rate.verify_vendor_bill_company_amounts`, the same
+check EXECUTE runs right after the write). Same reporting model: reported, never corrected.
 """
 
 from __future__ import annotations
@@ -35,13 +36,7 @@ from app.application.workbench.ports import ReviewQueueReader
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin
 from app.application.workbench.resale_decision_gate import PurchasePurposeHistoryReader
-from app.billing.fx_rate import (
-    FxRateCheck,
-    FxRateCheckStatus,
-    company_rate_from_odoo,
-    convert_to_company_currency,
-    normalized_rate,
-)
+from app.billing.fx_rate import FxVerification, FxVerificationStatus, verify_vendor_bill_company_amounts
 from app.billing.money import MonetaryPrecision, MonetaryPrecisionError, monetary_equal
 from app.billing.reconciliation import monetary_mismatches
 
@@ -84,10 +79,6 @@ class VendorBillHeaderVerification(ApplicationDTO):
     amount_total: Decimal
     # P0-PROD-19E-1: the bill currency's res.currency.decimal_places; None when unread.
     currency_decimal_places: int | None = None
-    # P1: Odoo's document rate (bill-currency units per company-currency unit) and the
-    # signed company-currency total; None when unread.
-    invoice_currency_rate: Decimal | None = None
-    amount_total_signed: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,142 +305,84 @@ def _monetary_mismatch(
     )
 
 
-class FxReadbackStatus(StrEnum):
-    VERIFIED = "verified"
-    MISMATCH = "mismatch"
-    NOT_APPLICABLE = "not_applicable"
-    #: The original rate or Odoo's actual rate is missing or unusable, so nothing can be proven.
-    UNVERIFIED = "unverified"
-
-
 @dataclass(frozen=True, slots=True)
 class VendorBillFxReadbackVerification(ApplicationDTO):
-    """A created bill's actual exchange rate and company-currency total (P1)."""
+    """A created bill's exchange rate and TRY amounts against the invoice's own rate (P1)."""
 
-    status: FxReadbackStatus
+    status: FxVerificationStatus
     document_currency: str | None
     company_currency: str | None
+    #: The invoice's own rate (UBL PricingExchangeRate) the bill must carry.
     source_rate: Decimal | None = None
-    #: Odoo's actual bill rate in the UBL direction, normalized.
+    odoo_automatic_rate: Decimal | None = None
+    #: The bill's actual rate, UBL direction, normalized.
     odoo_bill_rate: Decimal | None = None
-    #: The rate Odoo's currency table resolves for the invoice date now.
-    odoo_table_rate: Decimal | None = None
+    expected_company_untaxed: Decimal | None = None
+    expected_company_tax: Decimal | None = None
     expected_company_total: Decimal | None = None
-    odoo_company_total: Decimal | None = None
-    company_total_difference: Decimal | None = None
-    rounding_tolerance: Decimal | None = None
+    company_untaxed: Decimal | None = None
+    company_tax: Decimal | None = None
+    company_payable: Decimal | None = None
     mismatches: tuple[str, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
 
 
-class VendorBillFxReadbackVerifier:
-    """Revalidate a created bill's actual Odoo rate against the UBL rate. Read-only."""
+class VendorBillCompanyAmountsReader(Protocol):
+    def read_vendor_bill_company_amounts(self, *, move_id: int, company_id: int): ...
 
-    def __init__(self, *, expectation_reader: VendorBillExpectationReader) -> None:
+
+class VendorBillFxReadbackVerifier:
+    """Verify a created bill's rate and TRY amounts against the invoice rate. Read-only."""
+
+    def __init__(
+        self, *, expectation_reader: VendorBillExpectationReader, amounts_reader: VendorBillCompanyAmountsReader
+    ) -> None:
         self._expectation_reader = expectation_reader
+        self._amounts_reader = amounts_reader
 
     def verify(
-        self,
-        *,
-        review_id: str,
-        company_id: int,
-        decision_version: int,
-        header: VendorBillHeaderVerification,
-        lines: tuple[VendorBillLineVerification, ...],
+        self, *, review_id: str, company_id: int, decision_version: int, move_id: int
     ) -> VendorBillFxReadbackVerification:
         try:
             expected = self._expectation_reader.expected_vendor_bill(
                 review_id=review_id, company_id=company_id, decision_version=decision_version
             )
         except ApplicationError as exc:
-            return _fx_unverified(header, None, f"expected Vendor Bill unavailable: {exc.safe_message}")
-        return compare_vendor_bill_fx(expected.fx_rate_check, header, line_count=len(lines))
-
-
-def compare_vendor_bill_fx(
-    check: FxRateCheck | None,
-    header: VendorBillHeaderVerification,
-    *,
-    line_count: int,
-) -> VendorBillFxReadbackVerification:
-    """Pure comparison of a bill's actual rate and company-currency total with the UBL rate.
-
-    Odoo converts each line separately and the payable line is their sum, so the bill's
-    company-currency total may differ from ``total x rate`` by per-line rounding: at most
-    one quantum per invoice line plus one (tax lines never outnumber invoice lines).
-    A larger difference, or any rate difference, is a mismatch.
-    """
-
-    if check is None:
-        return _fx_unverified(header, None, "pre-write exchange-rate check unavailable")
-    if check.status is FxRateCheckStatus.NOT_APPLICABLE and header.currency.strip().upper() == check.document_currency:
-        return VendorBillFxReadbackVerification(
-            status=FxReadbackStatus.NOT_APPLICABLE,
-            document_currency=check.document_currency,
-            company_currency=check.company_currency,
-        )
-    bill_rate = company_rate_from_odoo(header.invoice_currency_rate)
-    if bill_rate is None:
-        return _fx_unverified(header, check, "Odoo bill exchange rate unreadable")
-    if check.source_rate is None or check.status is FxRateCheckStatus.SOURCE_RATE_MISSING:
-        return _fx_unverified(header, check, f"invoice states no exchange rate; Odoo applied {bill_rate}")
-    if check.status is FxRateCheckStatus.SOURCE_RATE_DIRECTION_INVALID:
-        return _fx_unverified(header, check, f"invoice exchange-rate direction invalid; Odoo applied {bill_rate}")
-
-    mismatches: list[str] = []
-    notes: list[str] = []
-    if normalized_rate(check.source_rate) != bill_rate:
-        mismatches.append(f"bill rate {bill_rate} != invoice rate {check.source_rate}")
-    if check.odoo_rate is not None and check.odoo_rate != bill_rate:
-        notes.append(
-            f"bill rate {bill_rate} differs from Odoo's current rate {check.odoo_rate} for the invoice date "
-            "(rate edited on the bill, or the currency table changed after creation)"
-        )
-    expected_total = odoo_total = difference = tolerance = None
-    try:
-        precision = MonetaryPrecision(check.company_currency_decimal_places)  # type: ignore[arg-type]
-    except MonetaryPrecisionError:
-        precision = None
-    if precision is None or check.document_total is None or header.amount_total_signed is None:
-        mismatches.append("company-currency total unavailable")
-    else:
-        expected_total = convert_to_company_currency(check.document_total, check.source_rate, precision)
-        odoo_total = abs(header.amount_total_signed)
-        difference = odoo_total - expected_total
-        tolerance = precision.quantum * (line_count + 1)
-        if abs(difference) > tolerance:
-            mismatches.append(
-                f"company-currency total {odoo_total} != expected {expected_total} (difference {difference})"
+            return VendorBillFxReadbackVerification(
+                status=FxVerificationStatus.UNVERIFIED,
+                document_currency=None,
+                company_currency=None,
+                mismatches=(f"expected Vendor Bill unavailable: {exc.safe_message}",),
             )
-        elif difference:
-            notes.append(f"company-currency total differs by {difference} (per-line rounding, within {tolerance})")
-    return VendorBillFxReadbackVerification(
-        status=FxReadbackStatus.MISMATCH if mismatches else FxReadbackStatus.VERIFIED,
-        document_currency=check.document_currency,
-        company_currency=check.company_currency,
-        source_rate=check.source_rate,
-        odoo_bill_rate=bill_rate,
-        odoo_table_rate=check.odoo_rate,
-        expected_company_total=expected_total,
-        odoo_company_total=odoo_total,
-        company_total_difference=difference,
-        rounding_tolerance=tolerance,
-        mismatches=tuple(mismatches),
-        notes=tuple(notes),
-    )
+        plan = expected.fx_rate_plan
+        if plan is None or not plan.applies_rate:
+            verification = verify_vendor_bill_company_amounts(plan, None)
+        else:
+            verification = verify_vendor_bill_company_amounts(
+                plan, self._amounts_reader.read_vendor_bill_company_amounts(move_id=move_id, company_id=company_id)
+            )
+        return fx_readback_verification(plan, verification)
 
 
-def _fx_unverified(
-    header: VendorBillHeaderVerification, check: FxRateCheck | None, reason: str
-) -> VendorBillFxReadbackVerification:
+def fx_readback_verification(plan, verification: FxVerification) -> VendorBillFxReadbackVerification:
+    mismatches = verification.mismatches
+    if plan is not None and plan.blocks_vendor_bill:
+        mismatches = (f"invoice rate not applicable: {plan.status.value}: {plan.message}",)
     return VendorBillFxReadbackVerification(
-        status=FxReadbackStatus.UNVERIFIED,
-        document_currency=check.document_currency if check is not None else header.currency,
-        company_currency=check.company_currency if check is not None else None,
-        source_rate=check.source_rate if check is not None else None,
-        odoo_bill_rate=company_rate_from_odoo(header.invoice_currency_rate),
-        odoo_table_rate=check.odoo_rate if check is not None else None,
-        mismatches=(reason,),
+        status=verification.status,
+        document_currency=plan.document_currency if plan is not None else None,
+        company_currency=plan.company_currency if plan is not None else None,
+        source_rate=plan.source_rate if plan is not None else None,
+        odoo_automatic_rate=plan.odoo_automatic_rate if plan is not None else None,
+        odoo_bill_rate=verification.actual_rate,
+        expected_company_untaxed=plan.expected_company_untaxed if plan is not None else None,
+        expected_company_tax=plan.expected_company_tax if plan is not None else None,
+        expected_company_total=plan.expected_company_total if plan is not None else None,
+        company_untaxed=verification.company_untaxed,
+        company_tax=verification.company_tax,
+        company_payable=verification.company_payable,
+        mismatches=mismatches,
+        notes=verification.notes,
     )
 
 
@@ -646,8 +579,7 @@ class GetVendorBillReadbackUseCase:
                 review_id=review_id,
                 company_id=company_id,
                 decision_version=snapshot.decision_version,
-                header=header,
-                lines=lines,
+                move_id=move_id,
             )
             if self._fx_verifier is not None
             else None

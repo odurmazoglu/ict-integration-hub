@@ -38,7 +38,7 @@ from app.application.workbench.decision_use_cases import SubmitReviewDecisionUse
 from app.application.workbench.exceptions import ReviewDecisionError
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
 from app.domain.invoice.tax_facts import extract_source_tax_facts
-from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_READER
+from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_POLICY
 from tests.unit.pr_t_w1_fixtures import LineSpec, TaxSpec, synthetic_ubl
 from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK, FixedSourceTaxFactsReader
@@ -301,7 +301,7 @@ def _strategy(check, source):
         resale_accounting_check=resale,
         currency_reader=TWO_DECIMAL_CURRENCY_READER,
         source_tax_safety_check=check,
-        fx_rate_reader=TRY_ONLY_FX_RATE_READER,
+        fx_rate_policy=TRY_ONLY_FX_RATE_POLICY,
     )
     return strategy, builder, writer, resale
 

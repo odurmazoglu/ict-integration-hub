@@ -195,7 +195,7 @@ from app.application.workbench.write_authorization import (
 )
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.billing.exceptions import VendorBillBuildError
-from app.billing.fx_rate import FxRateCheck
+from app.billing.fx_rate import FxRatePlan
 from app.schemas.workbench import (
     AcceptedDecisionSummaryResponse,
     AccountingResolutionEnvelope,
@@ -253,7 +253,7 @@ from app.schemas.workbench import (
     SupplierRemediationResponse,
     SupplierResolutionRequest,
     TaxResolutionRequest,
-    VendorBillFxRateCheckResponse,
+    VendorBillFxRatePlanResponse,
     VendorBillFxReadbackResponse,
     VendorBillMonetaryReadbackLineResponse,
     VendorBillMonetaryReadbackResponse,
@@ -1553,27 +1553,29 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
         source_total=decimal_to_api(preview.source_total),
         monetary_reconciles=preview.monetary_reconciles,
         monetary_mismatches=list(preview.monetary_mismatches),
-        fx_rate_check=_fx_rate_check_response(preview.fx_rate_check),
+        fx_rate_plan=_fx_rate_plan_response(preview.fx_rate_plan),
     )
 
 
-def _fx_rate_check_response(check: FxRateCheck | None) -> VendorBillFxRateCheckResponse | None:
-    if check is None:
+def _fx_rate_plan_response(plan: FxRatePlan | None) -> VendorBillFxRatePlanResponse | None:
+    if plan is None:
         return None
-    return VendorBillFxRateCheckResponse(
-        status=check.status.value,
-        blocks_vendor_bill=check.blocks_vendor_bill,
-        document_currency=check.document_currency,
-        company_currency=check.company_currency,
-        rate_date=check.rate_date,
-        source_rate=decimal_to_api(check.source_rate),
-        odoo_rate=decimal_to_api(check.odoo_rate),
-        document_total=decimal_to_api(check.document_total),
-        company_currency_decimal_places=check.company_currency_decimal_places,
-        source_company_total=decimal_to_api(check.source_company_total),
-        odoo_company_total=decimal_to_api(check.odoo_company_total),
-        company_total_difference=decimal_to_api(check.company_total_difference),
-        message=check.message,
+    return VendorBillFxRatePlanResponse(
+        status=plan.status.value,
+        blocks_vendor_bill=plan.blocks_vendor_bill,
+        document_currency=plan.document_currency,
+        company_currency=plan.company_currency,
+        rate_date=plan.rate_date,
+        source_rate=decimal_to_api(plan.source_rate),
+        odoo_automatic_rate=decimal_to_api(plan.odoo_automatic_rate),
+        selected_rate=decimal_to_api(plan.selected_rate),
+        odoo_invoice_currency_rate=plan.odoo_invoice_currency_rate,
+        rate_difference=decimal_to_api(plan.rate_difference),
+        company_currency_decimal_places=plan.company_currency_decimal_places,
+        expected_company_untaxed=decimal_to_api(plan.expected_company_untaxed),
+        expected_company_tax=decimal_to_api(plan.expected_company_tax),
+        expected_company_total=decimal_to_api(plan.expected_company_total),
+        message=plan.message,
     )
 
 
@@ -1638,12 +1640,14 @@ def _fx_readback_response(
         document_currency=verification.document_currency,
         company_currency=verification.company_currency,
         source_rate=decimal_to_api(verification.source_rate),
+        odoo_automatic_rate=decimal_to_api(verification.odoo_automatic_rate),
         odoo_bill_rate=decimal_to_api(verification.odoo_bill_rate),
-        odoo_table_rate=decimal_to_api(verification.odoo_table_rate),
+        expected_company_untaxed=decimal_to_api(verification.expected_company_untaxed),
+        expected_company_tax=decimal_to_api(verification.expected_company_tax),
         expected_company_total=decimal_to_api(verification.expected_company_total),
-        odoo_company_total=decimal_to_api(verification.odoo_company_total),
-        company_total_difference=decimal_to_api(verification.company_total_difference),
-        rounding_tolerance=decimal_to_api(verification.rounding_tolerance),
+        company_untaxed=decimal_to_api(verification.company_untaxed),
+        company_tax=decimal_to_api(verification.company_tax),
+        company_payable=decimal_to_api(verification.company_payable),
         mismatches=list(verification.mismatches),
         notes=list(verification.notes),
     )
