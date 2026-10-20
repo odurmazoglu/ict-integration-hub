@@ -4,12 +4,15 @@
 |---|---|
 | Konu | KDV istisna kodu **335** için özel Odoo alış vergisi |
 | Şirket | ICT Teknoloji — Odoo Şirket ID 1 |
-| Belge durumu | **Muhasebe onayı bekleniyor** — aşağıdaki kararların hiçbiri henüz onaylanmamıştır |
+| Belge durumu | **Muhasebe onayı bekleniyor** — K1–K5 için önerilen yapılandırma kaydedilmiştir; hiçbiri muhasebeci tarafından onaylanmamıştır |
 | Ayrıntılı form | [ODOO_TAX_335_ACCOUNTING_APPROVAL.md](ODOO_TAX_335_ACCOUNTING_APPROVAL.md) |
 
 > Bu özet yalnızca muhasebe kararlarının toplanması içindir. Odoo'da vergi oluşturma yetkisi
 > **vermez**. Verginin oluşturulması ve Hub'da kullanıma açılması ayrı onaylar gerektirir.
 > Yalnızca istisna kodu **335** kapsamdadır; 209, 351 ve diğer kodlar bu özetle onaylanmaz.
+>
+> "Önerilen yapılandırma" değerleri kullanıcı tarafından sağlanan muhasebe yönlendirmesine ve aşağıdaki
+> kaynaklara dayanır; **muhasebeci onayı yerine geçmez**.
 >
 > 335 istisna vergisinin otomatik eşleştirilmesi ICT Integration Hub production ortamında şu anda
 > devre dışıdır. Muhasebe onayı, vergi oluşturma ve aktivasyon işlemleri ayrı ayrı tamamlanmadan
@@ -40,12 +43,11 @@ gereklidir:
 > ⚠️ **Odoo'daki genel vergi ID 6 ("0%") yeniden kullanılmamalıdır.** Bu amaçla yeniden
 > adlandırılmamalı veya değiştirilmemelidir; 335 için yeni ve ayrı bir vergi oluşturulmalıdır.
 
-> ⚠️ **PUR_BASE_0, PUR_TAX_0 ve 191000 hesabı otomatik olarak onaylı değildir.** Aşağıda yalnızca
-> seçenek olarak yer alırlar. PUR_BASE_0 / PUR_TAX_0 etiketlerinin production Odoo'daki fiili tanımı ve
-> KDV raporundaki karşılığı doğrulanmamıştır; 335 istisnalı alımlar için uygunluğu muhasebe kararıdır.
+> ⚠️ **PUR_BASE_0, PUR_TAX_0 ve 191000 hesabı önerilmemektedir.** Önerilen yapılandırmada 335
+> vergisinin hiçbir KDV beyannamesi gridi/etiketi ve hiçbir vergi hesabı yoktur.
 
 > ⚠️ Bu vergi hiçbir ürüne, ürün kategorisine, şirket varsayılanına veya mali pozisyona varsayılan
-> vergi olarak atanmamalıdır.
+> vergi olarak atanmamalıdır. Mali pozisyon, yerine geçen veya orijinal vergi eşlemesi eklenmemelidir.
 
 ## 4. Referans fatura
 
@@ -58,16 +60,33 @@ gereklidir:
 | Matrah / KDV | 419,49 / 0 |
 | Tevkifat | Yok |
 
-## 5. Muhasebenin karar vermesi gereken konular
+## 5. Vergi hukuku sonuçları ve Odoo yapılandırma önerileri
 
-Aşağıdaki seçenekler kaynak formdaki önerilerdir; **onay değildir**. Hub bu alanları Odoo'dan okuyup
-doğrulayamaz; doğruluklarının tek güvencesi muhasebe onayıdır.
+**Vergi hukuku sonuçları** (kaynak: Bölüm 8)
+
+- Basılı kitap ve süreli yayınların teslimi KDV'den istisnadır (KDVK 13/n). Bu teslimler **satıcı**
+  tarafından KDV beyannamesinde 335 kodlu satırda beyan edilir.
+- **Alıcı**, istisnalı kitap alımının matrahını ve sıfır KDV'yi **KDV-1 beyannamesinde göstermez**.
+- İstisnalı alımda indirilecek KDV oluşmaz.
+
+**Odoo yapılandırma önerileri** (yukarıdaki sonuçlardan türetilmiştir; mevzuat kaynağı değildir)
+
+- Fatura ve iade dağılımında matrah ve vergi gridleri **boş**.
+- Fatura ve iade vergi satırında vergi hesabı **boş**; **191000 kullanılmaz**.
+- Alış gider ve stok hesapları bu vergiden bağımsızdır; ürün, ürün kategorisi veya fatura satırı
+  hesabından gelir. %0 vergi yapılandırması bu hesapları değiştirmez.
+
+## 6. Muhasebenin onaylaması gereken konular
+
+Her konu için **önerilen yapılandırma** yazılmıştır. "Muhasebenin kararı" alanları muhasebeci tarafından
+doldurulur; öneri kabul ediliyorsa aynı değer yazılabilir.
 
 ### K1 — KDV beyannamesinde raporlama
 
 335 istisnalı alımın KDV raporlamasında (beyannamede) nerede ve nasıl gösterileceği.
 
-- Seçenekler: Kaynak formda hazır seçenek yoktur — **muhasebe belirler**.
+- **Önerilen yapılandırma:** Alıcı, istisnalı kitap alımının matrahını ve sıfır KDV'yi KDV-1
+  beyannamesinde göstermez. *(Vergi hukuku sonucu.)*
 
 **Muhasebenin kararı:** ______________________________________________
 
@@ -75,9 +94,8 @@ doğrulayamaz; doğruluklarının tek güvencesi muhasebe onayıdır.
 
 Tutarı 0 olan vergi satırının hangi hesaba bağlanacağı (fatura ve iade için ayrı ayrı).
 
-- (a) 191000 İndirilecek KDV
-- (b) Hesapsız (boş)
-- (c) Diğer
+- **Önerilen yapılandırma:** Fatura: **boş** · İade: **boş** — 191000 kullanılmaz. *(Odoo yapılandırma
+  önerisi.)*
 
 **Muhasebenin kararı:** Fatura: ____________________ İade: ____________________
 
@@ -85,9 +103,8 @@ Tutarı 0 olan vergi satırının hangi hesaba bağlanacağı (fatura ve iade i�
 
 Matrah ve vergi satırlarının KDV raporunda hangi grid/etiketlerle izleneceği (fatura ve iade için).
 
-- (a) PUR_BASE_0 / PUR_TAX_0 (iadede iade yönü)
-- (b) İstisnaya özel grid
-- (c) Etiketsiz
+- **Önerilen yapılandırma:** Fatura matrah/vergi: **boş / boş** · İade matrah/vergi: **boş / boş**.
+  PUR_BASE_0 / PUR_TAX_0 kullanılmaz. *(K1'in Odoo karşılığı.)*
 
 **Muhasebenin kararı:**
 Fatura — matrah: ______________ vergi: ______________
@@ -97,8 +114,8 @@ Fatura — matrah: ______________ vergi: ______________
 
 Verginin hangi vergi grubuna bağlanacağı.
 
-- (a) Mevcut "VAT %0" (grup 4)
-- (b) Yeni özel istisna grubu (ör. "KDV İstisna")
+- **Önerilen yapılandırma:** Mevcut **"VAT %0" (grup ID 4)**. *(Odoo yapılandırma önerisi; muhasebeci
+  tarafından ayrıca onaylanmamıştır.)*
 
 **Muhasebenin kararı:** ______________________________________________
 
@@ -106,13 +123,11 @@ Verginin hangi vergi grubuna bağlanacağı.
 
 Faturada vergi satırında görünecek metin (`invoice_label`).
 
-- (a) "KDV İstisna 335"
-- (b) "%0 KDV (335 İstisna)"
-- (c) Diğer
+- **Önerilen yapılandırma:** **"KDV İstisna 335"**. *(Odoo yapılandırma önerisi.)*
 
 **Muhasebenin kararı:** ______________________________________________
 
-## 6. Muhasebe onayı
+## 7. Muhasebe onayı
 
 | Alan | Değer |
 |---|---|
@@ -120,9 +135,20 @@ Faturada vergi satırında görünecek metin (`invoice_label`).
 | Unvan | |
 | Tarih | |
 | K1–K5 kararları yukarıda eksiksiz dolduruldu | ☐ Evet ☐ Hayır |
+| Önerilen yapılandırma değişiklik olmadan kabul edildi | ☐ Evet ☐ Hayır |
 | Onay | ☐ Onaylıyorum ☐ Onaylamıyorum |
 | İmza | |
 
 *Yukarıdaki kararların yalnızca istisna kodu 335 kapsamındaki alımların muhasebe kaydı ve KDV
 raporlaması için doğru olduğunu onaylarım. Bu onay, verginin Odoo'da oluşturulması için ayrıca verilecek
 onayın yerine geçmez ve 209 veya 351 kodlarını kapsamaz.*
+
+## 8. Kaynaklar
+
+1. **İSMMMO danışmanlık cevabı** — 335 istisnalı kitap alımları (alıcı tarafı). Kullanıcı tarafından
+   referans verilmiştir; metin bu belgede çoğaltılmamıştır.
+2. **GİB** — 3065 sayılı KDV Kanunu 13/n ve KDV Genel Uygulama Tebliği'nde Değişiklik Yapılmasına Dair
+   Tebliğ (Seri No: 25): basılı kitap ve süreli yayın teslimlerinin 335 kodlu satırda beyanı (satıcı
+   tarafı).
+3. **Kullanıcı tarafından sağlanan muhasebe yönlendirmesi** (20.10.2026) — muhasebeci imzalı onay
+   değildir.
