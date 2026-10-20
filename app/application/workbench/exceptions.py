@@ -9,6 +9,22 @@ class WorkbenchContractError(ApplicationError):
     error_category = "workbench_contract_error"
 
 
+DISMISS_COMMENT_REQUIRED_MESSAGE = (
+    "A dismiss decision requires a non-empty comment explaining why the invoice is excluded from Hub "
+    "accounting processing. / Muhasebeleştirme dışı bırakmak için karar açıklaması zorunludur: nedenini "
+    "açıklama alanına yazın."
+)
+
+
+class DismissCommentRequiredError(WorkbenchContractError):
+    """A new DISMISS decision was submitted without a meaningful comment."""
+
+    error_category = "dismiss_comment_required"
+
+    def __init__(self, safe_message: str = DISMISS_COMMENT_REQUIRED_MESSAGE) -> None:
+        super().__init__(safe_message)
+
+
 class ReviewPersistenceError(ApplicationError):
     """Safe base error for Import Workbench review persistence failures."""
 

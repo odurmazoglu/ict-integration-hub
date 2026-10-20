@@ -534,6 +534,8 @@ Validation is read-only and deterministic:
 
 `DISMISS` stores the dismissal decision, moves the review item to `DISMISSED`, and stores no workflow-specific selections.
 
+A new `DISMISS` must carry a non-empty comment explaining the exclusion. It retains all source evidence, is terminal (no in-app reversal) and is not a statutory e-Fatura rejection or cancellation; see [WORKBENCH_DISMISS.md](WORKBENCH_DISMISS.md).
+
 ## UI Responsibilities
 
 Future Workbench screens should support:

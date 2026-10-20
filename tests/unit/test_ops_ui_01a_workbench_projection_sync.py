@@ -405,6 +405,7 @@ def test_dismissed_decision_projects_dismissed_history_without_effective_lines(s
     # No selected workflow on a dismissal: the review's own workflow is shown.
     assert row["x_studio_workflow"] == "Vendor Bill"
     assert "Decision basis — dismissed (decision v2)" in row["x_studio_review_reasons"]
+    assert "not a statutory e-invoice rejection or cancellation" in row["x_studio_review_reasons"]
     assert "→" not in row["x_studio_review_reasons"]
     assert "text-bg-warning" not in row["x_studio_review_reasons"]
 

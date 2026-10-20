@@ -110,6 +110,7 @@ from app.application.workbench.exceptions import (
     AccountingResolutionPurposeRequiredError,
     AccountingResolutionPurposeUnsupportedError,
     DepreciationModelInvalidError,
+    DismissCommentRequiredError,
     ExecutionEvidenceRecoveryBuildError,
     ExecutionEvidenceRecoveryConflictError,
     ExecutionEvidenceRecoveryEligibilityError,
@@ -1857,6 +1858,9 @@ def _status_code_for_exception(exc: Exception) -> int:
         return HTTPStatus.CONFLICT
     if isinstance(exc, PurchaseAccountDiscoveryError):
         return HTTPStatus.INTERNAL_SERVER_ERROR
+    # A new dismissal without a meaningful comment is a semantic validation failure.
+    if isinstance(exc, DismissCommentRequiredError):
+        return HTTPStatus.UNPROCESSABLE_ENTITY
     if isinstance(exc, WorkbenchContractError):
         return HTTPStatus.BAD_REQUEST
     if isinstance(exc, ExecutionPlanningError):

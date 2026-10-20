@@ -477,8 +477,9 @@ async def test_stale_different_decision_conflicts(session: Session) -> None:
         await h.use_case.execute(h.command(resolved_partner_id=9999))
 
 
-async def test_terminal_review_is_rejected(session: Session) -> None:
-    h = _Harness(session, review=_review_item(status=ReviewStatus.DECISION_SUBMITTED))
+@pytest.mark.parametrize("status", [ReviewStatus.DECISION_SUBMITTED, ReviewStatus.DISMISSED])
+async def test_terminal_review_is_rejected(session: Session, status: ReviewStatus) -> None:
+    h = _Harness(session, review=_review_item(status=status))
     with pytest.raises(ReviewStateConflictError):
         await h.use_case.execute(h.command())
 

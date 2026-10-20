@@ -927,7 +927,10 @@ def _render_review_reasons(projection: WorkbenchProjection) -> str:
     if decision is None:
         heading = "Decision basis"
     elif decision.decision_type is ReviewDecisionType.DISMISS:
-        heading = f"Decision basis \u2014 dismissed (decision v{decision.decision_version})"
+        heading = (
+            f"Decision basis \u2014 dismissed (decision v{decision.decision_version}): excluded from Hub "
+            "accounting processing; not a statutory e-invoice rejection or cancellation"
+        )
     else:
         heading = f"Decision basis \u2014 accepted decision v{decision.decision_version}"
     parts = [
