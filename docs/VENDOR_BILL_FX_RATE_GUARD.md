@@ -54,8 +54,10 @@ When every check passes, the exact `Decimal` CalculationRate is selected
    On any difference the step fails as `vendor_bill_fx_verification_failed` and names the draft. The draft is never changed, deleted or posted.
 5. **Idempotency.** It is unchanged. A retry (including after an uncertain write result) goes through the writer's `invoice_origin` lookup first. That lookup finds the same draft, which is then verified again, so no second bill is created. Once the operator has corrected a draft's rate in Odoo, the retry succeeds with `created=false`.
 
-A failed read (timeout) maps to the normal retryable `vendor_bill_transport_failure`, and
-a storage outage maps to `source_fx_facts_unavailable`.
+A failed read before the write (timeout) maps to the normal retryable `vendor_bill_transport_failure`,
+and a storage outage maps to `source_fx_facts_unavailable`. A failed read of the created bill *after*
+the write maps to `vendor_bill_fx_verification_unavailable`: the message names the existing draft and
+tells the operator not to post it or re-enter it by hand; a retry re-verifies the same draft.
 
 ## Preview and readback
 

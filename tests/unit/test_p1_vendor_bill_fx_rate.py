@@ -599,16 +599,60 @@ def test_existing_draft_at_the_invoice_rate_is_compatible() -> None:
     assert amounts.calls[0][0] == 67
 
 
-def test_bill_read_timeout_after_write_is_a_retryable_failure() -> None:
+@pytest.mark.parametrize(
+    "error", [VendorBillWriteTransportError("Odoo request timed out."), VendorBillWriteUnexpectedErpError("bad")]
+)
+def test_bill_read_failure_after_write_names_the_existing_draft(error) -> None:
     writer = RecordingVendorBillWriter()
-    strategy, _, _ = _strategy(
-        writer=writer, amounts=OdooLikeAmountsReader(writer, error=VendorBillWriteTransportError("timeout"))
+    strategy, _, _ = _strategy(writer=writer, amounts=OdooLikeAmountsReader(writer, error=error))
+
+    result = _execute(strategy)
+
+    # Distinct from every pre-write failure: the bill exists, so the result must say so.
+    assert result.status is ExecutionStepStatus.FAILED
+    assert result.error_code == "vendor_bill_fx_verification_unavailable"
+    assert "Draft Vendor Bill 9001 exists in Odoo" in result.message
+    assert "do not create this bill again by hand" in result.message
+    assert "No Vendor Bill was created" not in result.message
+    assert writer.calls == 1
+
+
+def test_bill_read_failure_then_retry_reuses_the_same_draft() -> None:
+    writer = RecordingVendorBillWriter()
+    amounts = OdooLikeAmountsReader(writer, error=VendorBillWriteTransportError("Odoo request timed out."))
+    strategy, _, _ = _strategy(writer=writer, amounts=amounts)
+    request = _step_request(mode=ExecutionMode.EXECUTE, approved_by="finance")
+
+    assert strategy.execute(request).error_code == "vendor_bill_fx_verification_unavailable"
+
+    existing = RecordingVendorBillWriter(
+        result=VendorBillWriteResult(
+            status="existing", idempotency_key=vendor_bill_write_idempotency_key(request), external_id=9001
+        )
     )
+    existing.commands = writer.commands
+    retry, _, _ = _strategy(writer=existing, amounts=OdooLikeAmountsReader(existing))
+    recovered = retry.execute(request)
+
+    assert recovered.status is ExecutionStepStatus.EXECUTED
+    assert [(a.artifact_id, a.created) for a in recovered.produced_artifacts] == [("9001", False)]
+    assert {command.idempotency_key for command in existing.commands} == {vendor_bill_write_idempotency_key(request)}
+
+
+def test_pre_write_odoo_rate_read_timeout_stays_a_transport_failure() -> None:
+    writer = RecordingVendorBillWriter()
+    amounts = OdooLikeAmountsReader(writer)
+    policy = VendorBillFxRatePolicy(
+        facts_reader=FixedSourceFxFactsReader(pricing_rate("48.674900")),
+        currency_reader=FixedFxRateReader(D("48.6992"), error=VendorBillWriteTransportError("timeout")),
+        amounts_reader=amounts,
+    )
+    strategy, _, _ = _strategy(writer=writer, amounts=amounts, policy=policy)
 
     result = _execute(strategy)
 
     assert result.error_code == "vendor_bill_transport_failure"
-    assert writer.calls == 1
+    assert writer.calls == 0 and amounts.calls == []
 
 
 def test_try_bill_reads_nothing_and_sends_no_rate() -> None:

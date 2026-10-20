@@ -273,7 +273,18 @@ class VendorBillExecutionStrategy:
                 plan, move_id=write_result.external_id, company_id=request.company_id
             )
         except ApplicationError as exc:
-            return _failure_result(request, error_code=_writer_error_code(exc), message=exc.safe_message)
+            # The draft exists (its id is known), so this must never read like a pre-write
+            # failure: name the draft so nobody re-enters the bill by hand.
+            return _failure_result(
+                request,
+                error_code="vendor_bill_fx_verification_unavailable",
+                message=(
+                    f"Draft Vendor Bill {write_result.external_id} exists in Odoo, but its exchange rate "
+                    f"could not be verified: {exc.safe_message} It was not posted or changed; do not post "
+                    "it and do not create this bill again by hand. Retry to verify the same draft (no "
+                    "second bill is created)."
+                ),
+            )
         if verification.status is FxVerificationStatus.VERIFIED:
             return None
         return _failure_result(
