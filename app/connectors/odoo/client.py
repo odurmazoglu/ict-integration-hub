@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 import httpx
@@ -5,9 +6,18 @@ import httpx
 from app.connectors.exceptions import (
     ConnectorAuthenticationError,
     ConnectorAuthorizationError,
+    ConnectorConnectionError,
+    ConnectorConnectTimeoutError,
     ConnectorError,
     ConnectorTimeoutError,
     ConnectorValidationError,
+)
+from app.connectors.odoo.transport import (
+    SHARED_HTTP_CLIENTS,
+    SHARED_SELECTION_CACHE,
+    SelectionMetadataCache,
+    SharedOdooHttpClients,
+    odoo_timeout,
 )
 from app.core.config import Settings
 from app.schemas.odoo import OdooProbeResponse
@@ -51,12 +61,19 @@ class OdooJson2Client:
         api_key: str,
         timeout_seconds: float,
         http_client: httpx.AsyncClient | None = None,
+        shared_clients: SharedOdooHttpClients | None = None,
+        selection_cache: SelectionMetadataCache | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._database = database
         self._api_key = api_key
         self._timeout = timeout_seconds
         self._http_client = http_client
+        #: Keep-alive connection pool shared by the process (see ``transport``); ``None``
+        #: keeps the one-connection-per-request behaviour.
+        self._shared_clients = shared_clients
+        #: Studio selection metadata only; ``None`` disables caching.
+        self._selection_cache = selection_cache
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "OdooJson2Client":
@@ -65,6 +82,8 @@ class OdooJson2Client:
             database=settings.odoo_database,
             api_key=settings.odoo_api_key.get_secret_value(),
             timeout_seconds=settings.odoo_timeout_seconds,
+            shared_clients=SHARED_HTTP_CLIENTS,
+            selection_cache=SHARED_SELECTION_CACHE,
         )
 
     async def probe(self) -> OdooProbeResponse:
@@ -234,6 +253,23 @@ class OdooJson2Client:
             raise ConnectorError("Odoo metadata target model is not allowed.")
         if not isinstance(field_name, str) or not field_name.strip():
             raise ConnectorError("Odoo metadata field name is required.")
+        if self._selection_cache is None or not _is_studio_model_allowed(model):
+            return await self._read_field_selection_values(model=model, field_name=field_name)
+        key = SelectionMetadataCache.key(
+            base_url=self._base_url,
+            database=self._database,
+            api_key=self._api_key,
+            model=model,
+            field_name=field_name,
+        )
+        cached = self._selection_cache.get(key)
+        if cached is not None:
+            return cached
+        values = await self._read_field_selection_values(model=model, field_name=field_name)
+        self._selection_cache.put(key, values)
+        return values
+
+    async def _read_field_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
         result = await self._post_json(
             "/json/2/ir.model.fields.selection/search_read",
             {
@@ -278,10 +314,17 @@ class OdooJson2Client:
                 headers["X-Odoo-Database"] = self._database
             if self._http_client is not None:
                 response = await self._http_client.post(path, json=payload, headers=headers)
+            elif self._shared_clients is not None:
+                # Thread-safe pooled client, driven off the event loop: reuses keep-alive
+                # connections across requests, threads and the adapter's per-call loops.
+                pooled = self._shared_clients.get(base_url=self._base_url, timeout_seconds=self._timeout)
+                response = await asyncio.to_thread(pooled.post, path, json=payload, headers=headers)
             else:
-                async with httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout) as client:
+                async with httpx.AsyncClient(base_url=self._base_url, timeout=odoo_timeout(self._timeout)) as client:
                     response = await client.post(path, json=payload, headers=headers)
             response.raise_for_status()
+        except httpx.ConnectTimeout as exc:
+            raise ConnectorConnectTimeoutError("Odoo request timed out.") from exc
         except httpx.TimeoutException as exc:
             raise ConnectorTimeoutError("Odoo request timed out.") from exc
         except httpx.HTTPStatusError as exc:
@@ -300,6 +343,8 @@ class OdooJson2Client:
             if detail:
                 message += f" {detail}"
             raise ConnectorError(message) from exc
+        except httpx.ConnectError as exc:
+            raise ConnectorConnectionError("Odoo request failed.") from exc
         except httpx.HTTPError as exc:
             raise ConnectorError("Odoo request failed.") from exc
 
