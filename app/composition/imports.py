@@ -17,6 +17,7 @@ from app.application.decision import (
 from app.application.effective_supplier import AcceptedSupplierReader, EffectiveSupplierResolver
 from app.application.exceptions.base import ApplicationError
 from app.application.expense_mapping import OperatingExpenseMatchingEngine
+from app.application.expense_mapping.predicates import invoice_has_product_identifier
 from app.application.ports import InvoiceImportHistory
 from app.application.rules import DeterministicRuleEngine, InvoiceDecisionRuleEngine, OdooDecisionRuleFieldMapping
 from app.application.source_tax.exemption import DISABLED_VAT_EXEMPTION_POLICY
@@ -45,6 +46,7 @@ from app.application.workbench.projection_sync import WorkbenchProjectionSources
 from app.application.workflow import ManualReviewReasonCode
 from app.composition.advisory_display import AdvisorySuggestionDisplayReader
 from app.composition.internal_use_accounting import build_internal_use_decision_gate
+from app.composition.product_purchase_purpose_gate import build_product_purchase_purpose_gate
 from app.composition.resale_decision_gate import build_resale_decision_gate
 from app.composition.source_tax import build_source_tax_safety_check, build_vat_exemption_tax_policy
 from app.connectors.odoo.client import OdooJson2Client
@@ -377,7 +379,23 @@ def _operator_guidance_facts(
             and product_name_reader is not None
             else ()
         ),
+        product_coded=_is_product_coded(review, company_id, source_reader),
     )
+
+
+def _is_product_coded(
+    review: ReviewItem, company_id: int, source_reader: SqlAlchemyReviewSourceInvoiceEvidenceReader | None
+) -> bool:
+    """Whether the immutable source invoice is product-coded (presentation only; the decision
+    use case re-checks it). A review without a source row degrades to ``False``."""
+
+    if source_reader is None:
+        return False
+    try:
+        invoice = source_reader.get(review_id=review.review_id, company_id=company_id).invoice
+    except ReviewNotFoundError:
+        return False
+    return invoice_has_product_identifier(invoice)
 
 
 def _unmatched_product_lines(
@@ -616,6 +634,8 @@ def build_odoo_decision_submitter(
         resale_decision_gate=build_resale_decision_gate(session=session, settings=settings, odoo_client=odoo_client),
         # INTERNAL_USE product invoices: the explicit internal expense account is mandatory and pinned.
         internal_use_decision_gate=build_internal_use_decision_gate(session=session, odoo_client=odoo_client),
+        # Product-coded invoices: an explicit RESALE / INTERNAL_USE purpose is mandatory.
+        product_purchase_purpose_gate=build_product_purchase_purpose_gate(session=session),
         projection_synchronizer=build_runtime_workbench_projection_synchronizer(
             session=session, settings=settings, odoo_client=odoo_client
         ),

@@ -67,6 +67,18 @@ class InternalUseDecisionEligibilityError(ReviewDecisionError):
     error_category = "internal_use_decision_eligibility_error"
 
 
+class ProductPurchasePurposeDecisionError(ReviewDecisionError):
+    """Safe error raised when a product-coded Vendor Bill decision has no usable purchase purpose.
+
+    Covers a missing current-version purpose, a purpose without product-invoice
+    accounting safeguards (only RESALE and INTERNAL_USE have them), and a purpose whose
+    safeguard did not produce its accounting pin. Purpose is never inferred from the
+    product or the supplier.
+    """
+
+    error_category = "product_purchase_purpose_decision_error"
+
+
 class ReviewVersionConflictError(ReviewDecisionError):
     """Safe error raised when a review decision expected_version is stale."""
 

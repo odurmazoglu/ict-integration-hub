@@ -26,6 +26,20 @@ from app.application.workflow import ManualReviewReasonCode, WorkflowType
 
 logger = logging.getLogger(__name__)
 
+#: Shown after a draft Vendor Bill is created. Hub never posts; posting, payment and
+#: reconciliation wait for the accounting go-live decision, so the operator must not do them.
+DRAFT_VENDOR_BILL_CREATED_MESSAGE = (
+    "Taslak alış faturası oluşturuldu{bill}. Faturayı Odoo'da kontrol edin. Muhasebe geçiş kararı olmadan "
+    "ONAYLAMAYIN; ödeme veya mutabakat yapmayın."
+)
+
+
+def draft_vendor_bill_created_message(bill: str = "") -> str:
+    """The operator instruction after draft creation; ``bill`` is an optional " (Odoo kayıt N)" suffix."""
+
+    return DRAFT_VENDOR_BILL_CREATED_MESSAGE.format(bill=bill)
+
+
 #: Canonical ``ExecutionState.COMPLETED`` value, as stored on the projection.
 _EXECUTION_COMPLETED = "completed"
 #: Shown instead of a label Odoo could not provide right now; raw ids stay in the
@@ -102,6 +116,8 @@ _OPERATING_EXPENSE_CODES = frozenset(
 )
 #: Purposes the accounting-resolution use case supports (it rejects RESALE / CUSTOMER_PROJECT).
 _ACCOUNTING_PURPOSES = frozenset({PurchasePurpose.INTERNAL_USE, PurchasePurpose.OTHER_OPERATING_EXPENSE})
+#: Purposes a product-coded Vendor Bill decision accepts (``ProductPurchasePurposeGate``).
+_PRODUCT_INVOICE_PURPOSES = frozenset({PurchasePurpose.RESALE, PurchasePurpose.INTERNAL_USE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +211,9 @@ class OperatorGuidanceFacts(ApplicationDTO):
     unmatched_product_lines: tuple[UnmatchedProductLine, ...] = field(default_factory=tuple)
     #: Lines the current version's execution evidence matches to a product, in source order.
     resolved_product_lines: tuple[ResolvedProductLine, ...] = field(default_factory=tuple)
+    #: The source invoice carries a product identifier on at least one line: a Vendor Bill
+    #: decision then requires an explicit RESALE / INTERNAL_USE purpose for the current version.
+    product_coded: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +314,16 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
         return OperatorNextAction.TECHNICAL, _todo(
             "Bu engel henüz Odoo'dan çözülemiyor (ürün/vergi/fatura içeriği); teknik destek alın.", findings
         )
+    if facts.product_coded and facts.current_purchase_purpose is None:
+        return OperatorNextAction.PURPOSE, _todo(
+            "Ürün kodlu fatura: satın alma amacını açıkça seçin (Yeniden Satış veya Şirket İçi Kullanım). "
+            "Amaç ürün veya tedarikçiden çıkarılmaz; amaç kaydedilmeden karar kabul edilmez."
+        )
+    if facts.product_coded and facts.current_purchase_purpose not in _PRODUCT_INVOICE_PURPOSES:
+        return OperatorNextAction.TECHNICAL, _todo(
+            f"Ürün kodlu faturada '{PURPOSE_LABELS[facts.current_purchase_purpose]}' amacıyla karar kabul "
+            "edilmez; yalnızca Yeniden Satış veya Şirket İçi Kullanım desteklenir. Teknik destek alın."
+        )
     if (
         facts.current_purchase_purpose is PurchasePurpose.INTERNAL_USE
         and not facts.current_accounting_resolution_recorded
@@ -313,9 +342,7 @@ def _after_decision(source: GuidanceInput) -> tuple[OperatorNextAction, str]:
         return OperatorNextAction.DONE, _todo("İnceleme reddedildi (karar kaydı mevcut).")
     if source.decision_workflow is WorkflowType.VENDOR_BILL:
         if source.execution_state == _EXECUTION_COMPLETED:
-            return OperatorNextAction.DONE, _todo(
-                "Taslak tedarikçi faturası oluşturuldu. Faturayı Odoo'da kontrol edip onaylayın."
-            )
+            return OperatorNextAction.DONE, _todo(draft_vendor_bill_created_message())
         return OperatorNextAction.EXECUTE, _todo("Karar kabul edildi: taslak tedarikçi faturasını oluşturun.")
     if source.decision_workflow is WorkflowType.CUSTOMER_QUOTATION:
         return OperatorNextAction.TECHNICAL, _todo("Müşteri teklifi yürütmesi henüz Odoo'dan yapılamıyor.")
@@ -393,6 +420,7 @@ def _todo(instruction: str, findings: list[str] | None = None) -> str:
 
 __all__ = [
     "ACCOUNT_LABEL_UNAVAILABLE",
+    "DRAFT_VENDOR_BILL_CREATED_MESSAGE",
     "MODEL_LABEL_UNAVAILABLE",
     "PRODUCT_LABEL_UNAVAILABLE",
     "PURPOSE_LABELS",
@@ -406,6 +434,7 @@ __all__ = [
     "ResolvedProductLine",
     "UnmatchedProductLine",
     "WorkbenchOperatorGuidance",
+    "draft_vendor_bill_created_message",
     "build_operator_guidance",
     "resolve_accounting_labels",
 ]

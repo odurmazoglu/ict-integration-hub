@@ -39,6 +39,7 @@ from app.application.workbench.exceptions import (
     ReviewVersionConflictError,
     WorkbenchContractError,
 )
+from app.application.workbench.operator_guidance import draft_vendor_bill_created_message
 from app.application.workbench.operator_request_ingestion import (
     ALREADY_COMPLETED_MESSAGE,
     STALE_REQUEST_MESSAGE,
@@ -456,7 +457,7 @@ def _execution_outcome(result: WorkbenchVendorBillExecutionResult) -> OperatorAc
     if status is WorkbenchVendorBillExecutionStatus.EXECUTED:
         return OperatorActionOutcome(
             outcome=OperatorRequestOutcome.COMPLETED,
-            message=f"Taslak tedarikçi faturası oluşturuldu{bill}. Faturayı Odoo'da kontrol edip onaylayın.",
+            message=draft_vendor_bill_created_message(bill),
         )
     if status is WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED:
         return OperatorActionOutcome(
