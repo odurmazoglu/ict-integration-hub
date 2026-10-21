@@ -394,7 +394,8 @@ def test_handler_issues_the_create_authorization_and_reports_turkish_results() -
         "auth-9",
     )
     assert outcome.outcome is OperatorRequestOutcome.COMPLETED
-    assert outcome.message.startswith(f"Yeni ürün oluşturuldu: {NAME} (#9900)")
+    assert outcome.message.startswith(f"Yeni ürün oluşturuldu: {NAME}; satır")
+    assert "9900" not in outcome.message
     assert "Kalan eşleştirilecek satırlar: 3." in outcome.message
     already = ProductLineCreateRequestHandler(use_case=_RecordingUseCase(_result(already_applied=True))).handle(
         request, context

@@ -206,7 +206,7 @@ def _execution_result(status: WorkbenchVendorBillExecutionStatus) -> WorkbenchVe
 def test_execute_request_outcome_says_do_not_post_and_keeps_status() -> None:
     outcome = _execution_outcome(_execution_result(WorkbenchVendorBillExecutionStatus.EXECUTED))
     assert outcome.outcome is OperatorRequestOutcome.COMPLETED
-    assert outcome.message == draft_vendor_bill_created_message(" (Odoo kayıt 76)")
+    assert outcome.message == draft_vendor_bill_created_message()  # V1: no technical ids
     already = _execution_outcome(_execution_result(WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED))
     assert already.outcome is OperatorRequestOutcome.ALREADY_COMPLETED
     assert "tekrar oluşturulmadı" in already.message

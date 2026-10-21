@@ -16,7 +16,6 @@ from typing import Any, Protocol
 
 from app.application.execution import (
     ExecutionApproval,
-    ExecutionArtifactType,
     ExecutionMode,
     WorkbenchVendorBillExecutionResult,
     WorkbenchVendorBillExecutionStatus,
@@ -39,7 +38,7 @@ from app.application.workbench.exceptions import (
     ReviewVersionConflictError,
     WorkbenchContractError,
 )
-from app.application.workbench.operator_guidance import draft_vendor_bill_created_message
+from app.application.workbench.operator_guidance import PRODUCT_LABEL_UNAVAILABLE, draft_vendor_bill_created_message
 from app.application.workbench.operator_request_ingestion import (
     ALREADY_COMPLETED_MESSAGE,
     STALE_REQUEST_MESSAGE,
@@ -149,7 +148,7 @@ class ProductMappingRequestHandler:
 
 
 def product_mapping_message(result: MapExistingProductResult) -> str:
-    product = result.product_name or f"#{result.product_id}"
+    product = result.product_name or PRODUCT_LABEL_UNAVAILABLE
     mapping = f"Satır {result.line_number} (satıcı kodu {result.seller_item_code}) → {product}"
     if not result.line_resolved:
         return (
@@ -199,7 +198,7 @@ class ProductLineCreateRequestHandler:
 
 def product_creation_message(result: CreateLineProductResult) -> str:
     created = (
-        f"Yeni ürün oluşturuldu: {result.product_name} (#{result.product_id}); satır {result.line_number} "
+        f"Yeni ürün oluşturuldu: {result.product_name}; satır {result.line_number} "
         f"(satıcı kodu {result.seller_item_code}) bu ürüne bağlandı."
     )
     if not result.line_resolved:
@@ -316,7 +315,7 @@ class DecisionRequestHandler:
         command = review_decision_command(candidate, idempotency_key=decision_idempotency_key(candidate))
         already = bool(getattr(self._submitter, "has_matching_decision", lambda _command: False)(command))
         try:
-            acknowledgement = self._submitter.execute(command)
+            self._submitter.execute(command)
             self._unit_of_work.commit()
         except Exception:
             self._unit_of_work.rollback()
@@ -327,7 +326,7 @@ class DecisionRequestHandler:
             )
         return OperatorActionOutcome(
             outcome=OperatorRequestOutcome.COMPLETED,
-            message=f"Karar kaydedildi (inceleme v{acknowledgement.version}).",
+            message="Karar kaydedildi.",
         )
 
 
@@ -448,21 +447,16 @@ def _applied(result: object, message: str) -> OperatorActionOutcome:
 
 def _execution_outcome(result: WorkbenchVendorBillExecutionResult) -> OperatorActionOutcome:
     status = result.status
-    bill_ids = [
-        artifact.artifact_id
-        for artifact in result.artifacts
-        if artifact.artifact_type is ExecutionArtifactType.VENDOR_BILL
-    ]
-    bill = f" (Odoo kayıt {bill_ids[0]})" if len(bill_ids) == 1 else ""
+    # V1: operator text carries no technical ids; the audit trail keeps the artifact ids.
     if status is WorkbenchVendorBillExecutionStatus.EXECUTED:
         return OperatorActionOutcome(
             outcome=OperatorRequestOutcome.COMPLETED,
-            message=draft_vendor_bill_created_message(bill),
+            message=draft_vendor_bill_created_message(),
         )
     if status is WorkbenchVendorBillExecutionStatus.ALREADY_EXECUTED:
         return OperatorActionOutcome(
             outcome=OperatorRequestOutcome.ALREADY_COMPLETED,
-            message=f"Tedarikçi faturası daha önce oluşturulmuştu{bill}; tekrar oluşturulmadı.",
+            message="Taslak alış faturası daha önce oluşturulmuştu; tekrar oluşturulmadı.",
         )
     if status is WorkbenchVendorBillExecutionStatus.NOT_FOUND:
         return OperatorActionOutcome(outcome=OperatorRequestOutcome.STALE, message=STALE_REQUEST_MESSAGE)
