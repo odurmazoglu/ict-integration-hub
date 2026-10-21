@@ -8,6 +8,14 @@ class ConnectorTimeoutError(ConnectorError):
     pass
 
 
+class ConnectorConnectTimeoutError(ConnectorTimeoutError):
+    """The connection could not be established in time: the request was never sent."""
+
+
+class ConnectorConnectionError(ConnectorError):
+    """The connection failed before a response (refused, reset, DNS); outcome of a write is unknown."""
+
+
 class ConnectorAuthenticationError(ConnectorError):
     pass
 

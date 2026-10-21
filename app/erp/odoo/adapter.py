@@ -1,16 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
-from app.connectors.exceptions import ConnectorError, ConnectorTimeoutError
+from app.connectors.exceptions import (
+    ConnectorAuthenticationError,
+    ConnectorAuthorizationError,
+    ConnectorError,
+    ConnectorTimeoutError,
+    ConnectorValidationError,
+)
 from app.connectors.odoo.client import OdooJson2Client
 from app.core.config import Settings
 from app.erp.exceptions import ErpReadonlyViolationError, ErpRepositoryError, ErpRepositoryTimeoutError
 
 JsonRecord = dict[str, Any]
+
+#: Failures a retry cannot fix: fail on the first attempt instead of repeating the request.
+NON_RETRYABLE_ERRORS = (ConnectorAuthenticationError, ConnectorAuthorizationError, ConnectorValidationError)
+#: Read retries back off exponentially from ``retry_backoff_seconds`` up to this cap, with
+#: jitter (50-100 % of the step) so concurrent readers do not retry in lockstep.
+MAX_RETRY_BACKOFF_SECONDS = 2.0
 
 READONLY_METHOD = "search_read"
 FORBIDDEN_METHODS = frozenset(
@@ -49,12 +62,14 @@ class OdooReadOnlyAdapter:
         client: _SearchReadClient,
         page_size: int = 80,
         retry_attempts: int = 3,
-        retry_backoff_seconds: float = 0.1,
+        retry_backoff_seconds: float = 0.5,
+        jitter: Callable[[], float] = random.random,
     ) -> None:
         self._client = client
         self._page_size = page_size
         self._retry_attempts = max(1, retry_attempts)
         self._retry_backoff_seconds = max(0, retry_backoff_seconds)
+        self._jitter = jitter
 
     @classmethod
     def from_settings(cls, settings: Settings) -> OdooReadOnlyAdapter:
@@ -150,12 +165,13 @@ class OdooReadOnlyAdapter:
                 last_error = exc
                 if attempt + 1 >= self._retry_attempts:
                     raise ErpRepositoryTimeoutError(exc.safe_message) from exc
+            except NON_RETRYABLE_ERRORS as exc:
+                raise ErpRepositoryError(exc.safe_message) from exc
             except ConnectorError as exc:
                 last_error = exc
                 if attempt + 1 >= self._retry_attempts:
                     raise ErpRepositoryError(exc.safe_message) from exc
-            if self._retry_backoff_seconds:
-                await asyncio.sleep(self._retry_backoff_seconds)
+            await self._backoff(attempt)
         raise ErpRepositoryError(last_error.safe_message if last_error else "ERP repository request failed.")
 
     async def _read_model_field_metadata_async(self, *, model: str, field_name: str) -> list[JsonRecord]:
@@ -167,13 +183,22 @@ class OdooReadOnlyAdapter:
                 last_error = exc
                 if attempt + 1 >= self._retry_attempts:
                     raise ErpRepositoryTimeoutError(exc.safe_message) from exc
+            except NON_RETRYABLE_ERRORS as exc:
+                raise ErpRepositoryError(exc.safe_message) from exc
             except ConnectorError as exc:
                 last_error = exc
                 if attempt + 1 >= self._retry_attempts:
                     raise ErpRepositoryError(exc.safe_message) from exc
-            if self._retry_backoff_seconds:
-                await asyncio.sleep(self._retry_backoff_seconds)
+            await self._backoff(attempt)
         raise ErpRepositoryError(last_error.safe_message if last_error else "ERP repository request failed.")
+
+    async def _backoff(self, attempt: int) -> None:
+        """Exponential backoff with jitter between read attempts; reads only (writes never retry)."""
+
+        if not self._retry_backoff_seconds:
+            return
+        step = min(MAX_RETRY_BACKOFF_SECONDS, self._retry_backoff_seconds * 2**attempt)
+        await asyncio.sleep(step * (0.5 + 0.5 * self._jitter()))
 
     @staticmethod
     def _ensure_readonly(*, method: str) -> None:
