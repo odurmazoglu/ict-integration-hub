@@ -104,6 +104,7 @@ from app.composition.operating_expense_mapping import (
     build_list_expense_account_candidates_use_case,
     build_submit_operating_expense_mapping_use_case,
 )
+from app.composition.product_purchase_purpose_gate import build_product_purchase_purpose_gate
 from app.composition.purchase_account_discovery import (
     build_get_product_purchase_account_use_case,
     build_list_category_purchase_accounts_use_case,
@@ -279,6 +280,8 @@ def get_submit_review_decision_use_case(
         resale_decision_gate=build_resale_decision_gate(session=session, settings=settings, odoo_client=odoo_client),
         # INTERNAL_USE product invoices: the explicit internal expense account is mandatory and pinned.
         internal_use_decision_gate=build_internal_use_decision_gate(session=session, odoo_client=odoo_client),
+        # Product-coded invoices: an explicit RESALE / INTERNAL_USE purpose is mandatory.
+        product_purchase_purpose_gate=build_product_purchase_purpose_gate(session=session),
         projection_synchronizer=build_runtime_workbench_projection_synchronizer(
             session=session, settings=settings, odoo_client=odoo_client
         ),
