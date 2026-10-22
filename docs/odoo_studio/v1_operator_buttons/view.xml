@@ -1,0 +1,79 @@
+<!--
+  ICT V1 Workbench operator buttons.
+  Odoo: ir.ui.view, model x_ipp_import_workbench, type form, mode extension,
+  inherit_id 3984, priority 260, name "ICT V1 Workbench operator buttons".
+  The server action placeholders are replaced with the ids of the server actions created from
+  actions/*.py (provision.py does it); every other anchor exists in production
+  (validated against production_form_combined_20261021.xml).
+  Nothing is deleted: action 1026 and the İşlem field stay, only hidden.
+-->
+<data>
+  <!-- Header: the generic "İşleme Gönder" is hidden; one button per workflow step. -->
+  <xpath expr="//header/button[@name='1026']" position="attributes">
+    <attribute name="invisible">1</attribute>
+  </xpath>
+  <xpath expr="//header" position="inside">
+    <button name="__SA_SUPPLIER__" type="action" string="Tedarikçiyi Kaydet" class="btn-primary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            invisible="x_studio_ipp_req_ready or x_studio_ipp_next_action != 'Tedarikçi Doğrulanmalı'"/>
+    <button name="__SA_PURPOSE__" type="action" string="Satın Alma Amacını Kaydet" class="btn-primary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            invisible="x_studio_ipp_req_ready or x_studio_ipp_next_action != 'Satın Alma Amacı Seçilmeli'"/>
+    <button name="__SA_ACCOUNTING__" type="action" string="Muhasebeyi Kaydet" class="btn-primary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            invisible="x_studio_ipp_req_ready or x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli'"/>
+    <button name="__SA_DECISION__" type="action" string="Kararı Gönder" class="btn-primary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            confirm="Karar Hub'a gönderilecek. Kabul edilen karar geri alınamaz. Devam edilsin mi?"
+            invisible="x_studio_ipp_req_ready or x_studio_ipp_next_action != 'Karar Verilmeli'"/>
+    <button name="__SA_PURPOSE__" type="action" string="Satın Alma Amacını Kaydet" class="btn-secondary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            invisible="x_studio_ipp_req_ready or x_studio_ipp_next_action != 'Karar Verilmeli' or not x_studio_ipp_req_purpose"/>
+    <button name="__SA_EXECUTE__" type="action" string="Taslak Alış Faturası Oluştur" class="btn-primary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            confirm="Odoo'da TASLAK alış faturası oluşturulacak. Fatura onaylanmaz; ödeme veya mutabakat yapılmaz. Devam edilsin mi?"
+            invisible="x_studio_ipp_req_ready or x_studio_ipp_next_action != 'Fatura Oluşturulmalı' or x_studio_vendor_bill"/>
+    <button name="__SA_OPEN_BILL__" type="action" string="Taslak Faturayı Aç" class="btn-secondary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            invisible="not x_studio_vendor_bill"/>
+  </xpath>
+
+  <!-- Input group: no generic action selection; the button decides the action. -->
+  <xpath expr="//field[@name='x_studio_ipp_req_action']/../.." position="attributes">
+    <attribute name="string">Bilgileri Girin</attribute>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_ipp_req_action']" position="attributes">
+    <attribute name="invisible">1</attribute>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_ipp_req_note']" position="attributes">
+    <attribute name="string">Not (isteğe bağlı)</attribute>
+    <attribute name="invisible">x_studio_ipp_next_action in ('Karar Verilmeli', 'Fatura Oluşturulmalı')</attribute>
+  </xpath>
+
+  <!-- Long dropdown-era hints: hidden (kept in their views) or shortened. -->
+  <xpath expr="//div[@name='ipp_golive_resale_hint']" position="attributes">
+    <attribute name="invisible">1</attribute>
+  </xpath>
+  <xpath expr="//div[@name='ipp_internal_use_purpose_hint']" position="attributes">
+    <attribute name="invisible">1</attribute>
+  </xpath>
+  <xpath expr="//div[@name='ipp_internal_use_account_hint']" position="replace">
+    <div class="text-muted" colspan="2" name="ipp_internal_use_account_hint" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli'">Hesap muhasebe onayıyla seçilir; varsayılan hesap yoktur. Ürün kodlu şirket içi kullanımda yalnız Gider Hesabı kabul edilir.</div>
+  </xpath>
+
+  <!-- One short instruction per step, replacing the dropdown instruction. -->
+  <xpath expr="//field[@name='x_studio_ipp_req_action']/../../group[2]" position="replace">
+    <group name="ipp_v1_step_help">
+      <div class="text-muted" colspan="2" invisible="x_studio_ipp_next_action != 'Tedarikçi Doğrulanmalı'">Tedarikçi işlemini seçin ve "Tedarikçiyi Kaydet"e basın.</div>
+      <div class="text-muted" colspan="2" invisible="x_studio_ipp_next_action != 'Satın Alma Amacı Seçilmeli'">Satın alma amacını seçin ve "Satın Alma Amacını Kaydet"e basın. Ürün kodlu faturada yalnız Yeniden Satış veya Şirket İçi Kullanım kabul edilir.</div>
+      <div class="text-muted" colspan="2" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli'">Muhasebe işlemini ve hesabı seçin, "Muhasebeyi Kaydet"e basın.</div>
+      <div class="text-muted" colspan="2" invisible="x_studio_ipp_next_action != 'Karar Verilmeli'">Faturayı kontrol edin. Kararı ve iş akışını seçin, "Kararı Gönder"e basın.</div>
+      <div class="text-muted" colspan="2" invisible="x_studio_ipp_next_action != 'Fatura Oluşturulmalı'">Karar kabul edildi. "Taslak Alış Faturası Oluştur"a basın; fatura taslak kalır.</div>
+    </group>
+  </xpath>
+
+  <!-- Draft-only warning: the approved P0 text. -->
+  <xpath expr="//div[@name='ipp_golive_no_post']" position="replace">
+    <div class="alert alert-warning" role="alert" name="ipp_golive_no_post" invisible="x_studio_ipp_next_action != 'Tamamlandı' or not x_studio_vendor_bill">Taslak alış faturası oluşturuldu. Faturayı Odoo'da kontrol edin. Muhasebe geçiş kararı olmadan ONAYLAMAYIN; ödeme veya mutabakat yapmayın.</div>
+  </xpath>
+</data>

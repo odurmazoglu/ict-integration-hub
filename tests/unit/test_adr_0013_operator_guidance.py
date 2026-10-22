@@ -141,8 +141,8 @@ def test_apple_completed_fixed_asset_history_is_done_and_summarised() -> None:
         "✓ Tedarikçi: APPLE",
         "Şirket İçi Kullanım",
         "Muhasebe: Sabit Kıymet / Demirbaş — 2550 — Test Demirbaş — Test Model 3Y",
-        "Tedarikçi Faturası (v5)",
-        "Taslak fatura: Odoo kayıt #69",
+        "Karar: Tedarikçi Faturası",
+        "Taslak alış faturası oluşturuldu (onaylanmadı)",
     ):
         assert expected in html
     assert "ONAYLAMAYIN" in guidance.todo_html  # draft only: no posting before the accounting go-live decision

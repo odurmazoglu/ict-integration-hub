@@ -370,11 +370,12 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
             parts.append(resolution.expense_category)
         done.append("Muhasebe: " + " — ".join(parts))
     if source.decision_type is ReviewDecisionType.DISMISS:
-        done.append(f"Karar: Reddedildi (v{source.decision_version})")
+        done.append("Karar: Reddedildi")
     elif source.decision_workflow is not None:
-        done.append(f"Karar: {WORKFLOW_LABELS[source.decision_workflow]} (v{source.decision_version})")
+        done.append(f"Karar: {WORKFLOW_LABELS[source.decision_workflow]}")
     if source.execution_state == _EXECUTION_COMPLETED and source.vendor_bill_id is not None:
-        done.append(f"Taslak fatura: Odoo kayıt #{source.vendor_bill_id}")
+        # V1: no technical ids in operator text; the bill opens from "Taslak Faturayı Aç".
+        done.append("Taslak alış faturası oluşturuldu (onaylanmadı)")
     if not done:
         return '<p class="text-muted">Henüz tamamlanan adım yok.</p>'
     items = "".join(f"<li>✓ {html.escape(line, quote=False)}</li>" for line in done)
