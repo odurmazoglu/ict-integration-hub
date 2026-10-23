@@ -246,6 +246,24 @@ class GuidanceInput(ApplicationDTO):
 _PREVIOUS_INVOICE_STEPS = frozenset({OperatorNextAction.PURPOSE, OperatorNextAction.ACCOUNTING})
 
 
+#: Generic, supplier-independent caution shown with every previous-invoice block.
+PREVIOUS_INVOICE_REFERENCE_WARNING = (
+    "Geçmiş faturadaki muhasebe bilgileri yalnızca referans amaçlıdır. "
+    "Bu faturanın kullanım amacı ve muhasebe hesabı ayrıca doğrulanmalıdır."
+)
+
+
+def shows_previous_invoice(source: GuidanceInput, facts: OperatorGuidanceFacts) -> bool:
+    """Whether the previous-invoice block is shown: a pending review at the purpose or
+    accounting step. ``facts.previous_invoice`` itself is not consulted, so the composition
+    can ask before it reads any Odoo label for the block."""
+
+    if source.status is not ReviewStatus.PENDING_REVIEW:
+        return False
+    action, _ = _next_action(source, facts)
+    return action in _PREVIOUS_INVOICE_STEPS
+
+
 def build_operator_guidance(source: GuidanceInput, facts: OperatorGuidanceFacts) -> WorkbenchOperatorGuidance:
     action, todo = _next_action(source, facts)
     if (
@@ -415,18 +433,13 @@ def _previous_invoice_html(guidance: PreviousInvoiceGuidance) -> str:
     ]
     if resolution.treatment_type is AccountingTreatmentType.EXPENSE_ACCOUNT and resolution.expense_category:
         lines.append(f"Gider kategorisi: {resolution.expense_category}")
-    warnings = [
-        "Önceki muhasebe sınıflandırması teyit gerektirir: hesap ve kategori bu fatura için muhasebe ile "
-        "doğrulanmalıdır."
-    ]
+    warnings = [PREVIOUS_INVOICE_REFERENCE_WARNING]
     if guidance.mixed_purpose:
         warnings.append(
             f"Bu tedarikçinin son {guidance.completed_count} tamamlanmış faturasında "
             f"{guidance.distinct_classification_count} farklı amaç/muhasebe kararı var (karma amaçlı tedarikçi). "
             "Her faturayı ayrı değerlendirin."
         )
-    if guidance.supplier_note:
-        warnings.append(guidance.supplier_note)
     items = "".join(f"<li>{html.escape(line, quote=False)}</li>" for line in lines)
     cautions = "".join(f"<li>⚠ {html.escape(line, quote=False)}</li>" for line in warnings)
     return (
@@ -481,6 +494,7 @@ __all__ = [
     "ACCOUNT_LABEL_UNAVAILABLE",
     "DRAFT_VENDOR_BILL_CREATED_MESSAGE",
     "MODEL_LABEL_UNAVAILABLE",
+    "PREVIOUS_INVOICE_REFERENCE_WARNING",
     "PRODUCT_LABEL_UNAVAILABLE",
     "PURPOSE_LABELS",
     "TREATMENT_LABELS",
@@ -496,4 +510,5 @@ __all__ = [
     "draft_vendor_bill_created_message",
     "build_operator_guidance",
     "resolve_accounting_labels",
+    "shows_previous_invoice",
 ]

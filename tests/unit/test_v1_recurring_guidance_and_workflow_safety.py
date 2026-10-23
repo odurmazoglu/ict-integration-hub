@@ -29,6 +29,7 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateWorkflowError,
 )
 from app.application.workbench.operator_guidance import (
+    PREVIOUS_INVOICE_REFERENCE_WARNING,
     GuidanceInput,
     OperatorGuidanceFacts,
     OperatorNextAction,
@@ -44,7 +45,7 @@ from app.application.workbench.previous_invoice_guidance import (
     build_previous_invoice_guidance,
 )
 from app.application.workbench.purchase_purpose import PurchasePurpose
-from app.application.workflow import ManualReviewReasonCode, WorkflowType
+from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 from app.composition.imports import _operator_guidance_facts
 from app.core.config import get_settings
 from app.db.base import Base
@@ -75,6 +76,9 @@ CLOUDSPARK_VKN = "1760390647"
 OTHER_VKN = "1111111111"
 COMPANY = 1
 DECIDED_AT = datetime(2026, 10, 22, 8, 10, tzinfo=UTC)
+_PURPOSE_STEP_REASON = ManualReviewReason(
+    code=ManualReviewReasonCode.OPERATING_EXPENSE_MAPPING_REQUIRED, message="Operating expense mapping required."
+)
 
 
 # =========================================================================== workflow safety
@@ -237,25 +241,24 @@ def _previous(review_id: str, invoice_date: date, **overrides: Any) -> PreviousI
 
 
 def test_no_completed_previous_invoice_means_no_guidance() -> None:
-    assert build_previous_invoice_guidance((), supplier_tax_number=CLOUDSPARK_VKN) is None
+    assert build_previous_invoice_guidance(()) is None
 
 
 def test_most_recent_invoice_is_shown_among_several() -> None:
     older = _previous("a", date(2026, 9, 8), resolution={"expense_category": "IT_HARDWARE_INTERNAL"})
     newer = _previous("b", date(2026, 9, 28))
-    guidance = build_previous_invoice_guidance(
-        (older, newer), supplier_tax_number=CLOUDSPARK_VKN, resolve_labels=lambda _r: ("770000 — Genel Giderler", None)
-    )
+    guidance = build_previous_invoice_guidance((older, newer))
     assert guidance is not None
     assert guidance.latest.review_id == "b"
-    assert guidance.account_label == "770000 — Genel Giderler"
+    # Hub rows only: the Odoo label is filled by the composition when the block is shown.
+    assert guidance.account_label is None and guidance.depreciation_model_label is None
     assert guidance.completed_count == 2
 
 
 def test_same_invoice_date_falls_back_to_the_later_decision() -> None:
     first = _previous("a", date(2026, 9, 28))
     second = _previous("b", date(2026, 9, 28), decided_at=DECIDED_AT + timedelta(hours=1))
-    guidance = build_previous_invoice_guidance((second, first), supplier_tax_number=OTHER_VKN)
+    guidance = build_previous_invoice_guidance((second, first))
     assert guidance is not None and guidance.latest.review_id == "b"
 
 
@@ -263,19 +266,41 @@ def test_mixed_purpose_supplier_is_flagged() -> None:
     hardware = _previous("a", date(2026, 9, 8), resolution={"expense_category": "IT_HARDWARE_INTERNAL"})
     cloud = _previous("b", date(2026, 9, 28))
     resale = _previous("c", date(2026, 8, 1), purchase_purpose=PurchasePurpose.RESALE)
-    guidance = build_previous_invoice_guidance((hardware, cloud, resale), supplier_tax_number=OTHER_VKN)
+    guidance = build_previous_invoice_guidance((hardware, cloud, resale))
     assert guidance is not None and guidance.mixed_purpose
     assert guidance.distinct_classification_count == 3
 
-    uniform = build_previous_invoice_guidance((_previous("a", date(2026, 9, 8)), cloud), supplier_tax_number=OTHER_VKN)
+    uniform = build_previous_invoice_guidance((_previous("a", date(2026, 9, 8)), cloud))
     assert uniform is not None and not uniform.mixed_purpose
 
 
-def test_cloudspark_carries_the_legacy_accounting_confirmation_note() -> None:
-    guidance = build_previous_invoice_guidance((_previous("b", date(2026, 9, 28)),), supplier_tax_number=CLOUDSPARK_VKN)
-    assert guidance is not None and "740.30.03" in (guidance.supplier_note or "")
-    other = build_previous_invoice_guidance((_previous("b", date(2026, 9, 28)),), supplier_tax_number=OTHER_VKN)
-    assert other is not None and other.supplier_note is None
+def test_no_supplier_is_special_cased() -> None:
+    import dataclasses
+
+    from app.application.workbench import previous_invoice_guidance
+
+    guidance = build_previous_invoice_guidance((_previous("b", date(2026, 9, 28)),))
+    assert guidance is not None
+    assert {field.name for field in dataclasses.fields(guidance)} == {
+        "latest",
+        "completed_count",
+        "distinct_classification_count",
+        "account_label",
+        "depreciation_model_label",
+    }
+    assert not hasattr(previous_invoice_guidance, "SUPPLIER_ACCOUNTING_CONFIRMATION_NOTES")
+
+
+def test_application_code_has_no_supplier_specific_accounting_logic() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "app"
+    offenders = [
+        str(path.relative_to(root.parent))
+        for path in root.rglob("*.py")
+        if any(token in path.read_text(encoding="utf-8") for token in (CLOUDSPARK_VKN, "740.30.03"))
+    ]
+    assert offenders == []
 
 
 # =========================================================================== guidance rendering
@@ -297,14 +322,16 @@ def _source(status: ReviewStatus = ReviewStatus.PENDING_REVIEW, codes=None) -> G
 
 
 def _cloudspark_guidance():
-    return build_previous_invoice_guidance(
+    import dataclasses
+
+    guidance = build_previous_invoice_guidance(
         (
             _previous("a", date(2026, 9, 8), resolution={"expense_category": "IT_HARDWARE_INTERNAL"}),
             _previous("b", date(2026, 9, 28), invoice_number="I282026000000141"),
-        ),
-        supplier_tax_number=CLOUDSPARK_VKN,
-        resolve_labels=lambda _r: ("770000 — Genel Giderler", None),
+        )
     )
+    assert guidance is not None
+    return dataclasses.replace(guidance, account_label="770000 — Genel Giderler")
 
 
 @pytest.mark.parametrize(
@@ -322,10 +349,26 @@ def test_history_is_shown_at_purpose_and_accounting_steps(purpose, expected_acti
     assert "Şirket İçi Kullanım" in todo
     assert "770000 — Genel Giderler" in todo
     assert "CLOUD_SERVICES_INTERNAL" in todo
-    assert "teyit gerektirir" in todo
+    assert PREVIOUS_INVOICE_REFERENCE_WARNING in todo
     assert "karma amaçlı tedarikçi" in todo
-    assert "740.30.03" in todo
-    assert "onaylanmış bir kural değildir" in todo
+    assert "740.30.03" not in todo
+
+
+def test_reference_warning_is_the_same_for_every_supplier() -> None:
+    import dataclasses
+
+    cloudspark = build_previous_invoice_guidance((_previous("b", date(2026, 9, 28)),))
+    assert cloudspark is not None
+    other = dataclasses.replace(cloudspark, latest=dataclasses.replace(cloudspark.latest, supplier_name="BAŞKA A.Ş."))
+    cloudspark_todo = build_operator_guidance(_source(), OperatorGuidanceFacts(previous_invoice=cloudspark)).todo_html
+    other_todo = build_operator_guidance(_source(), OperatorGuidanceFacts(previous_invoice=other)).todo_html
+    assert cloudspark_todo.replace("CLOUDSPARK BULUT TEKNOLOJİLERİ", "BAŞKA A.Ş.") == other_todo
+    assert (
+        "<li>⚠ Geçmiş faturadaki muhasebe bilgileri yalnızca referans amaçlıdır. Bu faturanın kullanım amacı ve "
+        "muhasebe hesabı ayrıca doğrulanmalıdır.</li>"
+    ) in cloudspark_todo
+    # a single (uniform) history carries no mixed-purpose warning
+    assert "karma amaçlı" not in cloudspark_todo
 
 
 def test_history_is_not_shown_elsewhere_and_never_changes_the_step() -> None:
@@ -352,9 +395,7 @@ def test_history_never_marks_purpose_or_accounting_done() -> None:
 
 
 def test_history_text_is_html_escaped() -> None:
-    guidance = build_previous_invoice_guidance(
-        (_previous("b", date(2026, 9, 28), supplier_name="<b>X</b>"),), supplier_tax_number=OTHER_VKN
-    )
+    guidance = build_previous_invoice_guidance((_previous("b", date(2026, 9, 28), supplier_name="<b>X</b>"),))
     todo = build_operator_guidance(_source(), OperatorGuidanceFacts(previous_invoice=guidance)).todo_html
     assert "<b>X</b>" not in todo and "&lt;b&gt;X&lt;/b&gt;" in todo
 
@@ -566,6 +607,7 @@ def test_guidance_facts_never_write_or_create_supplier_mappings(session: Session
         workflow=WorkflowType.MANUAL_REVIEW,
         status=ReviewStatus.PENDING_REVIEW,
         version=1,
+        review_reasons=(_PURPOSE_STEP_REASON,),
     )
     from app.persistence.workbench_review_accounting_resolution_repository import (
         SqlAlchemyReviewAccountingResolutionRepository,
@@ -600,7 +642,7 @@ def test_guidance_facts_skip_history_for_non_pending_reviews(session: Session) -
         def list_completed_supplier_decisions(self, **kwargs: Any):
             raise AssertionError("must not be read")
 
-    from app.composition.imports import _previous_invoice_guidance
+    from app.composition.imports import _with_previous_invoice
 
     submitted = ReviewItem(
         review_id="review:new",
@@ -614,7 +656,8 @@ def test_guidance_facts_skip_history_for_non_pending_reviews(session: Session) -
         workflow=WorkflowType.VENDOR_BILL,
         status=ReviewStatus.DECISION_SUBMITTED,
     )
-    assert _previous_invoice_guidance(submitted, COMPANY, Boom(), None) is None
+    facts = OperatorGuidanceFacts()
+    assert _with_previous_invoice(submitted, COMPANY, facts, reader=Boom(), label_reader=None, label_memo={}) is facts
 
 
 def _counts(db: Session) -> tuple[int, ...]:
@@ -629,3 +672,251 @@ def _counts(db: Session) -> tuple[int, ...]:
             OperatingExpenseMappingRecord,
         )
     )
+
+
+# =========================================================================== Odoo request budget
+
+
+class CountingLabelReader:
+    """``FixedAssetAccountingReader`` fake: counts every Odoo label read."""
+
+    def __init__(self, *, unavailable: bool = False) -> None:
+        self.account_reads: list[int] = []
+        self.model_reads: list[int] = []
+        self.unavailable = unavailable
+
+    def read_account(self, *, account_id: int):
+        from app.application.workbench.fixed_asset_lookup import FixedAssetAccountRecord
+
+        self.account_reads.append(account_id)
+        if self.unavailable:
+            return None
+        return FixedAssetAccountRecord(
+            id=account_id,
+            code=f"770{account_id}",
+            name=f"Hesap {account_id}",
+            account_type="expense",
+            active=True,
+            company_ids=(COMPANY,),
+            can_create_asset=None,
+        )
+
+    def read_depreciation_model(self, *, model_id: int):
+        from app.application.workbench.fixed_asset_lookup import DepreciationModelRecord
+
+        self.model_reads.append(model_id)
+        return DepreciationModelRecord(id=model_id, name=f"Model {model_id}", active=True, company_id=COMPANY)
+
+
+class StaticHistory:
+    def __init__(self, decisions: tuple[PreviousInvoiceDecision, ...]) -> None:
+        self.decisions = decisions
+        self.calls = 0
+
+    def list_completed_supplier_decisions(self, **kwargs: Any) -> tuple[PreviousInvoiceDecision, ...]:
+        self.calls += 1
+        return self.decisions
+
+
+def _pending(*reasons: ManualReviewReason, review_id: str = "review:new") -> ReviewItem:
+    return ReviewItem(
+        review_id=review_id,
+        invoice_id=f"inv-{review_id}",
+        invoice_number=None,
+        supplier_tax_number=OTHER_VKN,
+        supplier_name="Tedarikçi",
+        invoice_date=None,
+        currency=None,
+        total_amount=None,
+        workflow=WorkflowType.MANUAL_REVIEW,
+        status=ReviewStatus.PENDING_REVIEW,
+        version=1,
+        review_reasons=reasons,
+    )
+
+
+def _with_history(review: ReviewItem, facts: OperatorGuidanceFacts, history, labels, memo=None):
+    from app.composition.imports import _with_previous_invoice
+
+    return _with_previous_invoice(
+        review,
+        COMPANY,
+        facts,
+        reader=history,
+        label_reader=labels,
+        label_memo=memo if memo is not None else {},
+    )
+
+
+def test_label_is_read_only_when_the_block_is_shown() -> None:
+    history = StaticHistory((_previous("b", date(2026, 9, 28)),))
+    labels = CountingLabelReader()
+    supplier_step = _pending(ManualReviewReason(code=ManualReviewReasonCode.SUPPLIER_NOT_FOUND, message="x"))
+    decision_step = _pending()
+    for review in (supplier_step, decision_step):
+        facts = OperatorGuidanceFacts()
+        assert _with_history(review, facts, history, labels) is facts
+    assert labels.account_reads == [] and history.calls == 0
+
+    shown = _with_history(_pending(_PURPOSE_STEP_REASON), OperatorGuidanceFacts(), history, labels)
+    assert shown.previous_invoice is not None
+    assert shown.previous_invoice.account_label == "770247 — Hesap 247"
+    assert labels.account_reads == [247] and history.calls == 1
+
+
+def test_label_is_read_once_per_account_for_a_batch_of_projections() -> None:
+    history = StaticHistory((_previous("b", date(2026, 9, 28)),))
+    labels = CountingLabelReader()
+    memo: dict[tuple[object, ...], Any] = {}
+    for index in range(10):
+        facts = _with_history(
+            _pending(_PURPOSE_STEP_REASON, review_id=f"review:{index}"), OperatorGuidanceFacts(), history, labels, memo
+        )
+        assert facts.previous_invoice is not None
+        assert facts.previous_invoice.account_label == "770247 — Hesap 247"
+    assert labels.account_reads == [247]
+    assert history.calls == 10  # the history itself is never cached
+
+
+def test_label_already_resolved_for_this_projection_is_reused() -> None:
+    from app.application.workbench.operator_guidance import AccountingLabels
+
+    history = StaticHistory((_previous("b", date(2026, 9, 28)),))
+    labels = CountingLabelReader()
+    facts = OperatorGuidanceFacts(
+        current_purchase_purpose=PurchasePurpose.INTERNAL_USE,
+        latest_accounting_resolution=_resolution("review:new", version=1, expense_category="IT_HARDWARE_INTERNAL"),
+        accounting_labels=AccountingLabels(account="770247 — Genel Giderler"),
+    )
+    guided = _with_history(_pending(_PURPOSE_STEP_REASON), facts, history, labels)
+    assert guided.previous_invoice is not None
+    assert guided.previous_invoice.account_label == "770247 — Genel Giderler"
+    assert labels.account_reads == []
+    # Reusing a label never copies the current review's classification into the history.
+    assert guided.previous_invoice.latest.accounting_resolution.expense_category == "CLOUD_SERVICES_INTERNAL"
+
+
+def test_a_different_account_or_model_is_never_served_from_another_label() -> None:
+    from app.application.workbench.operator_guidance import AccountingLabels
+
+    asset = {
+        "treatment_type": AccountingTreatmentType.CAPITALIZE_FIXED_ASSET,
+        "expense_account_id": None,
+        "expense_category": None,
+        "asset_account_id": 74,
+        "depreciation_model_id": 5,
+    }
+    history = StaticHistory((_previous("b", date(2026, 9, 28), resolution=asset),))
+    labels = CountingLabelReader()
+    current = _resolution("review:new", version=1, **{**asset, "depreciation_model_id": 6})
+    facts = OperatorGuidanceFacts(
+        current_purchase_purpose=PurchasePurpose.INTERNAL_USE,
+        latest_accounting_resolution=current,
+        accounting_labels=AccountingLabels(account="2550 — Demirbaş", depreciation_model="Model 6"),
+    )
+    guided = _with_history(_pending(_PURPOSE_STEP_REASON), facts, history, labels)
+    assert guided.previous_invoice is not None
+    assert guided.previous_invoice.depreciation_model_label == "Model 5"
+    assert labels.account_reads == [74] and labels.model_reads == [5]
+
+
+def test_unavailable_label_is_not_memoised() -> None:
+    history = StaticHistory((_previous("b", date(2026, 9, 28)),))
+    labels = CountingLabelReader(unavailable=True)
+    memo: dict[tuple[object, ...], Any] = {}
+    for _ in range(2):
+        facts = _with_history(_pending(_PURPOSE_STEP_REASON), OperatorGuidanceFacts(), history, labels, memo)
+        assert facts.previous_invoice is not None and facts.previous_invoice.account_label is None
+    assert labels.account_reads == [247, 247] and memo == {}
+
+
+class CountingStudio:
+    """Workbench projection adapter fake recording every Odoo call."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def search_read(self, *, model: str, domain: list[Any], fields: list[str], limit: int, offset: int = 0):
+        self.calls.append(("search_read", model))
+        return ()
+
+    def create(self, *, model: str, values: dict[str, Any]) -> int:
+        self.calls.append(("create", model))
+        return 7
+
+    def write(self, *, model: str, record_id: int, values: dict[str, Any]) -> None:
+        self.calls.append(("write", model))
+
+    def read_selection_values(self, *, model: str, field_name: str) -> tuple[str, ...]:
+        from tests.unit.test_adr_0013_operator_guidance import SELECTIONS
+
+        self.calls.append(("read_selection_values", model))
+        if field_name == "x_studio_ipp_next_action":
+            return tuple(action.value for action in OperatorNextAction)
+        return SELECTIONS.get(field_name, ())
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_projection_request_budget_and_write_targets(tmp_path, apply: bool) -> None:
+    """Ten pending invoices of one recurring supplier through the real synchronizer: one
+    label read in total, no extra Workbench call, and writes only to the Workbench row."""
+
+    from app.composition.imports import build_workbench_projection_synchronizer
+    from app.core.config import Settings
+    from tests.unit.test_adr_0013_operator_guidance import MODEL, _mapping
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'hub.sqlite'}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        _completed(db, "review:cb", supplier_tax_number=OTHER_VKN)
+        reasons = [{"code": "OPERATING_EXPENSE_MAPPING_REQUIRED", "message": "x"}]
+        for index in range(10):
+            _review(
+                db,
+                f"review:p{index}",
+                supplier_tax_number=OTHER_VKN,
+                status="pending_review",
+                workflow="manual_review",
+                version=1,
+                review_reasons=reasons,
+            )
+        _review(
+            db,
+            "review:supplier-step",
+            supplier_tax_number=OTHER_VKN,
+            status="pending_review",
+            workflow="manual_review",
+            version=1,
+            review_reasons=[{"code": "SUPPLIER_NOT_FOUND", "message": "x"}],
+        )
+        db.commit()
+
+    studio = CountingStudio()
+    labels = CountingLabelReader()
+    synchronizer = build_workbench_projection_synchronizer(
+        engine=engine,
+        settings=Settings(),
+        projection_adapter=studio,
+        mapping=_mapping(guidance=True),
+        accounting_label_reader=labels,
+    )
+    run = synchronizer.sync if apply else synchronizer.plan
+    for index in range(10):
+        result = run(review_id=f"review:p{index}", company_id=COMPANY)
+        assert result.error is None
+        assert (
+            "Geçmiş bilgi — öneri değildir"
+            in synchronizer.build_projection(
+                review_id=f"review:p{index}", company_id=COMPANY
+            ).operator_guidance.todo_html
+        )
+    supplier_step = run(review_id="review:supplier-step", company_id=COMPANY)
+    assert supplier_step.error is None
+
+    # build_projection above re-uses the memo as well: 1 Odoo label read for 20 builds.
+    assert labels.account_reads == [247] and labels.model_reads == []
+    assert {model for _, model in studio.calls} == {MODEL}
+    writes = [call for call in studio.calls if call[0] in ("create", "write")]
+    assert len(writes) == (11 if apply else 0)
+    # Per projection exactly the pre-PR Workbench calls: 1 search + 3 selection reads (+1 create).
+    assert len(studio.calls) == 11 * 4 + len(writes)

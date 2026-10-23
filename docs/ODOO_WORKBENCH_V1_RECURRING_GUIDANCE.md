@@ -76,11 +76,14 @@ same supplier's most recent completed invoice:
 * supplier name, previous invoice number and date;
 * the purchase purpose and the accounting resolution (treatment, Odoo account label,
   expense category or depreciation model) recorded for that review up to its decision;
-* always: *"Önceki muhasebe sınıflandırması teyit gerektirir…"*;
+* always, for every supplier: *"Geçmiş faturadaki muhasebe bilgileri yalnızca referans
+  amaçlıdır. Bu faturanın kullanım amacı ve muhasebe hesabı ayrıca doğrulanmalıdır."*;
 * if the supplier's completed invoices carry more than one distinct classification
-  (purpose, treatment, account, category, asset account, model): a mixed-purpose warning;
-* CloudSpark (VKN `1760390647`): a note that legacy books may have used **740.30.03**
-  and that the previous Odoo account is **not** an approved supplier-wide rule.
+  (purpose, treatment, account, category, asset account, model): a mixed-purpose warning.
+
+No supplier is special-cased in code: there is no VKN list, no supplier-specific note and
+no configuration for it. Supplier-specific accounting caveats (for example legacy-ledger
+accounts) are for the accountant to confirm per invoice, which the generic warning asks for.
 
 "Completed" = an accepted `select_workflow`/`vendor_bill` decision whose `execute`
 execution reached `completed` (the draft bill exists). The supplier is the review's exact
@@ -92,10 +95,39 @@ Guarantees:
 
 * nothing is selected, pre-filled or applied — the step, the completed summary and every
   gate are byte-identical with or without the block;
-* no `operating_expense_mappings` row is read or written; no new table, no cache — the
-  block is recomputed from committed Hub rows on each projection sync (one extra
-  read-only Odoo account-label read per pending row at those two steps);
-* a read failure only hides the block; the projection still publishes.
+* no `operating_expense_mappings` row is read or written; no new table; the history is
+  recomputed from committed Hub rows on each projection sync and never cached;
+* a read failure only hides the block (or its label); the projection still publishes.
+
+### Odoo request budget
+
+The block adds **no Workbench (Studio) call and no Odoo write**. Its only Odoo traffic is
+the read-only account label (`account.account` `search_read`, plus the existing reader's
+one-time `ir.model.fields` probes), and only when the block is actually shown:
+
+* not read at any other step (supplier, product, decision, technical, done) and not for
+  non-pending rows — the Hub history query is skipped there as well;
+* not read when the same projection already resolved the same account (and model) for the
+  current review's own accounting resolution;
+* memoised per account (+ depreciation model) for the synchronizer's lifetime — one
+  reconcile run or one runtime use case — so a batch of the same supplier reads it once.
+  An unavailable label is not memoised.
+
+Measured with counting fakes (`plan`, zero writes; 4 Workbench calls per projection in
+every column):
+
+| Scenario | Baseline `0fca138` | PR head `4778db8` | This revision |
+|---|---|---|---|
+| 1 invoice (runtime or reconcile) | 4 | 8 | 8 |
+| 10 invoices, one supplier — reconcile (one synchronizer) | 40 | 53 | 44 |
+| 10 invoices, one supplier — runtime (synchronizer per projection) | 40 | 80 | 80 |
+| 10 mixed (4×A, 3×B, 2×no history, 1×A at supplier step) — reconcile | 40 | 51 | 45 |
+| 10 mixed — runtime | 40 | 72 | 68 |
+
+Remaining cost: a runtime synchronizer is built per use case, so each shown block still
+pays the fixed-asset reader's three `ir.model.fields` probes before the label read. They
+are part of the reader that also guards CAPITALIZE_FIXED_ASSET validation and are left
+unchanged here.
 
 Activation: deploying the image is enough (guidance fields are already mapped). Existing
 rows show the block at their next projection sync; a full refresh would need the approved

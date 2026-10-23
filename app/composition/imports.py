@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -30,20 +31,22 @@ from app.application.workbench import (
     WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
-from app.application.workbench.accounting_resolution import ReviewAccountingResolution
+from app.application.workbench.accounting_resolution import AccountingTreatmentType, ReviewAccountingResolution
 from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.exceptions import ReviewNotFoundError, WorkbenchContractError
 from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
 from app.application.workbench.operator_guidance import (
+    AccountingLabels,
+    GuidanceInput,
     OperatorGuidanceFacts,
     ResolvedProductLine,
     UnmatchedProductLine,
     resolve_accounting_labels,
+    shows_previous_invoice,
 )
 from app.application.workbench.ports import SelectedProductReader
 from app.application.workbench.previous_invoice_guidance import (
     PreviousInvoiceDecisionReader,
-    PreviousInvoiceGuidance,
     build_previous_invoice_guidance,
 )
 from app.application.workbench.product_line_projection import PRODUCT_REVIEW_REASON_CODES, ProductLineReadFacts
@@ -240,6 +243,9 @@ def build_workbench_projection_synchronizer(
             "ODOO_WORKBENCH_PRODUCT_LINE_SUGGESTION_SUMMARY_FIELD."
         )
     hints_composed = hints_enabled and line_mapping is not None
+    # V1 previous-invoice labels, memoised for this synchronizer's lifetime (one reconcile
+    # run, or one runtime use case): presentation only, never a classification.
+    previous_invoice_labels: dict[tuple[object, ...], AccountingLabels] = {}
 
     @contextmanager
     def read_scope() -> Iterator[WorkbenchProjectionSources]:
@@ -270,6 +276,7 @@ def build_workbench_projection_synchronizer(
                         execution_evidence_reader=review_repository,
                         product_name_reader=product_name_reader,
                         previous_invoice_reader=SqlAlchemyPreviousInvoiceDecisionReader(read_session),
+                        previous_invoice_labels=previous_invoice_labels,
                     )
                     if guidance_mapped
                     else None
@@ -355,6 +362,7 @@ def _operator_guidance_facts(
     execution_evidence_reader: SqlAlchemyReviewRepository | None = None,
     product_name_reader: SelectedProductReader | None = None,
     previous_invoice_reader: PreviousInvoiceDecisionReader | None = None,
+    previous_invoice_labels: dict[tuple[object, ...], AccountingLabels] | None = None,
 ) -> OperatorGuidanceFacts:
     """ADR-0013 guidance facts, read from the same private read-only session."""
 
@@ -363,7 +371,7 @@ def _operator_guidance_facts(
     resolution = accounting_repository.find_latest_accounting_resolution(
         review_id=review.review_id, company_id=company_id
     )
-    return OperatorGuidanceFacts(
+    facts = OperatorGuidanceFacts(
         current_purchase_purpose=current.purchase_purpose if current is not None else None,
         latest_purchase_purpose=purposes[-1].purchase_purpose if purposes else None,
         latest_accounting_resolution=resolution,
@@ -389,25 +397,40 @@ def _operator_guidance_facts(
             else ()
         ),
         product_coded=_is_product_coded(review, company_id, source_reader),
-        previous_invoice=_previous_invoice_guidance(review, company_id, previous_invoice_reader, label_reader),
+    )
+    return _with_previous_invoice(
+        review,
+        company_id,
+        facts,
+        reader=previous_invoice_reader,
+        label_reader=label_reader,
+        label_memo=previous_invoice_labels if previous_invoice_labels is not None else {},
     )
 
 
-def _previous_invoice_guidance(
+def _with_previous_invoice(
     review: ReviewItem,
     company_id: int,
+    facts: OperatorGuidanceFacts,
+    *,
     reader: PreviousInvoiceDecisionReader | None,
     label_reader: FixedAssetAccountingReader | None,
-) -> PreviousInvoiceGuidance | None:
+    label_memo: dict[tuple[object, ...], AccountingLabels],
+) -> OperatorGuidanceFacts:
     """V1 history for a pending review of a recurring supplier (presentation only).
 
-    Recomputed from committed rows on every sync -- never cached, never applied. A read
-    failure only hides the history; it never fails the projection.
+    The history is recomputed from committed Hub rows on every sync and never applied.
+    Odoo is asked for the account label only when the block is actually shown (purpose /
+    accounting step), and not at all when this projection already resolved the same
+    account or the synchronizer already read it. A read failure only hides the history
+    (or its label); it never fails the projection.
     """
 
     supplier_tax_number = (review.supplier_tax_number or "").strip()
     if reader is None or review.status is not ReviewStatus.PENDING_REVIEW or not supplier_tax_number:
-        return None
+        return facts
+    if not shows_previous_invoice(_pending_guidance_input(review), facts):
+        return facts
     try:
         decisions = reader.list_completed_supplier_decisions(
             company_id=company_id, supplier_tax_number=supplier_tax_number, exclude_review_id=review.review_id
@@ -417,15 +440,65 @@ def _previous_invoice_guidance(
             "workbench.operator_guidance.previous_invoice_unavailable",
             extra={"review_id": review.review_id, "error": exc.safe_message},
         )
-        return None
+        return facts
+    guidance = build_previous_invoice_guidance(decisions)
+    if guidance is None:
+        return facts
+    labels = _previous_invoice_labels(guidance.latest.accounting_resolution, facts, label_reader, label_memo)
+    return dataclasses.replace(
+        facts,
+        previous_invoice=dataclasses.replace(
+            guidance, account_label=labels.account, depreciation_model_label=labels.depreciation_model
+        ),
+    )
 
-    def labels(resolution: ReviewAccountingResolution) -> tuple[str | None, str | None]:
-        if label_reader is None:
-            return None, None
-        resolved = resolve_accounting_labels(resolution, label_reader)
-        return resolved.account, resolved.depreciation_model
 
-    return build_previous_invoice_guidance(decisions, supplier_tax_number=supplier_tax_number, resolve_labels=labels)
+def _pending_guidance_input(review: ReviewItem) -> GuidanceInput:
+    """The guidance input of a pending review: no accepted decision and no execution govern
+    it (the synchronizer projects neither for ``PENDING_REVIEW``)."""
+
+    return GuidanceInput(
+        status=review.status,
+        reason_codes=tuple(reason.code for reason in review.review_reasons),
+        supplier_name=review.supplier_name,
+        decision_type=None,
+        decision_workflow=None,
+        decision_version=None,
+        execution_state=None,
+        vendor_bill_id=None,
+    )
+
+
+def _previous_invoice_labels(
+    resolution: ReviewAccountingResolution,
+    facts: OperatorGuidanceFacts,
+    label_reader: FixedAssetAccountingReader | None,
+    memo: dict[tuple[object, ...], AccountingLabels],
+) -> AccountingLabels:
+    key = _label_key(resolution)
+    current = facts.latest_accounting_resolution
+    if current is not None and facts.accounting_labels is not None and _label_key(current) == key:
+        return facts.accounting_labels
+    if key in memo:
+        return memo[key]
+    if label_reader is None:
+        return AccountingLabels()
+    labels = resolve_accounting_labels(resolution, label_reader)
+    # Only a complete answer is reused; an unavailable label is retried on the next projection.
+    if labels.account is not None and (
+        resolution.treatment_type is not AccountingTreatmentType.CAPITALIZE_FIXED_ASSET
+        or labels.depreciation_model is not None
+    ):
+        memo[key] = labels
+    return labels
+
+
+def _label_key(resolution: ReviewAccountingResolution) -> tuple[object, ...]:
+    """The Odoo records an accounting label names (never the category or the review)."""
+
+    if resolution.treatment_type is AccountingTreatmentType.CAPITALIZE_FIXED_ASSET:
+        return (resolution.treatment_type, resolution.asset_account_id, resolution.depreciation_model_id)
+    return (resolution.treatment_type, resolution.expense_account_id, None)
 
 
 def _is_product_coded(
