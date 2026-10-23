@@ -347,11 +347,6 @@ def test_decision_validation_and_queue() -> None:
     _refused("__SA_DECISION__", _Record(x_studio_ipp_next_action=DECISION), "Karar")
     _refused(
         "__SA_DECISION__",
-        _Record(x_studio_ipp_next_action=DECISION, x_studio_decision="Submit Decision"),
-        "İş Akışı",
-    )
-    _refused(
-        "__SA_DECISION__",
         _Record(x_studio_ipp_next_action=DECISION, x_studio_decision="Dismiss", x_studio_decision_comment="  "),
         "gerekçesi",
     )
@@ -359,6 +354,35 @@ def test_decision_validation_and_queue() -> None:
         x_studio_ipp_next_action=DECISION,
         x_studio_decision="Submit Decision",
         x_studio_selected_workflow="Direct Vendor Bill",
+    )
+    _run("__SA_DECISION__", record)
+    _queued(record, "Karar")
+
+
+def test_decision_defaults_an_empty_workflow_to_direct_vendor_bill() -> None:
+    record = _Record(x_studio_ipp_next_action=DECISION, x_studio_decision="Submit Decision")
+    _run("__SA_DECISION__", record)
+    assert len(record.writes) == 1
+    values = dict(record.writes[0])
+    # Filled in the same write that queues the request, so the Hub reads the same value.
+    assert values.pop("x_studio_selected_workflow") == "Direct Vendor Bill"
+    assert values["x_studio_ipp_req_action"] == "Karar" and values["x_studio_ipp_req_ready"] is True
+
+
+@pytest.mark.parametrize(
+    "workflow", ["Operating Expense", "Existing Purchase Order", "New RFQ + Purchase Order", "Fixed Asset"]
+)
+def test_decision_never_overwrites_and_refuses_an_unsupported_workflow(workflow: str) -> None:
+    record = _Record(
+        x_studio_ipp_next_action=DECISION, x_studio_decision="Submit Decision", x_studio_selected_workflow=workflow
+    )
+    _refused("__SA_DECISION__", record, "yalnız 'Direct Vendor Bill'")
+    assert record.writes == []
+
+
+def test_dismiss_never_sets_a_workflow() -> None:
+    record = _Record(
+        x_studio_ipp_next_action=DECISION, x_studio_decision="Dismiss", x_studio_decision_comment="mükerrer"
     )
     _run("__SA_DECISION__", record)
     _queued(record, "Karar")

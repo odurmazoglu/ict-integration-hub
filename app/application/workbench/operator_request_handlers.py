@@ -30,12 +30,17 @@ from app.application.workbench.accounting_resolution import (
     AccountingTreatmentType,
     SubmitReviewAccountingResolutionCommand,
 )
+from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.decision_ingestion import decision_idempotency_key, review_decision_command
-from app.application.workbench.dto import ReviewDecisionAcknowledgement
+from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewDecisionType
 from app.application.workbench.exceptions import (
+    OperatorDecisionCandidateInvalidError,
+    OperatorDecisionWorkflowNotSupportedError,
     ReviewNotFoundError,
     ReviewVersionConflictError,
+    WorkbenchCandidateDataError,
+    WorkbenchCandidateWorkflowError,
     WorkbenchContractError,
 )
 from app.application.workbench.operator_guidance import PRODUCT_LABEL_UNAVAILABLE, draft_vendor_bill_created_message
@@ -54,6 +59,7 @@ from app.application.workbench.projection import OdooWorkbenchDecisionCandidate
 from app.application.workbench.purchase_purpose import SubmitPurchasePurposeCommand
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.supplier_resolution import SupplierResolutionMode
+from app.application.workflow import WorkflowType
 
 #: Existing ``WriteAuthorizationOperationType`` values, by supplier mode that writes a partner.
 SUPPLIER_AUTHORIZATION_OPERATION = {
@@ -63,6 +69,16 @@ SUPPLIER_AUTHORIZATION_OPERATION = {
 EXECUTE_VENDOR_BILL_OPERATION = "EXECUTE_VENDOR_BILL"
 MAP_EXISTING_PRODUCT_OPERATION = "MAP_EXISTING_PRODUCT"
 CREATE_NEW_PRODUCT_OPERATION = "CREATE_NEW_PRODUCT"
+
+#: V1: Direct Vendor Bill is the only workflow an operator decision may select (the only one
+#: the Hub executes).
+V1_UNSUPPORTED_WORKFLOW_MESSAGE = (
+    "Bu sürümde yalnız 'Direct Vendor Bill' iş akışı desteklenir. İş Akışı alanını "
+    "'Direct Vendor Bill' olarak seçip Kararı Gönder'e yeniden basın."
+)
+V1_INVALID_DECISION_MESSAGE = (
+    "Karar bilgileri geçersiz veya eksik. Karar ve İş Akışı alanlarını kontrol edip Kararı Gönder'e yeniden basın."
+)
 
 
 def run_coroutine[T](awaitable: Awaitable[T]) -> T:
@@ -307,13 +323,16 @@ class DecisionRequestHandler:
         self._unit_of_work = unit_of_work
 
     def handle(self, request: OperatorRequest, context: OperatorActionContext) -> OperatorActionOutcome:
-        candidate = self._reader.get_ready_decision(review_id=request.review_id, company_id=request.company_id)
+        candidate = self._read_candidate(request)
         if candidate.odoo_record_id != request.odoo_record_id or candidate.expected_version != request.expected_version:
             # The row changed between the request scan and the decision read.
             raise ReviewVersionConflictError(STALE_REQUEST_MESSAGE)
         self._validator.validate(candidate, requested_company_id=request.company_id)
         command = review_decision_command(candidate, idempotency_key=decision_idempotency_key(candidate))
         already = bool(getattr(self._submitter, "has_matching_decision", lambda _command: False)(command))
+        if not already:
+            # An already-accepted decision is replayed unchanged; only new decisions are gated.
+            _require_v1_supported_workflow(candidate)
         try:
             self._submitter.execute(command)
             self._unit_of_work.commit()
@@ -328,6 +347,36 @@ class DecisionRequestHandler:
             outcome=OperatorRequestOutcome.COMPLETED,
             message="Karar kaydedildi.",
         )
+
+    def _read_candidate(self, request: OperatorRequest) -> OdooWorkbenchDecisionCandidate:
+        """Row data that cannot form a decision is rejected once (the operator must fix it);
+        only unreachable / missing / ambiguous reads stay retryable."""
+
+        try:
+            return self._reader.get_ready_decision(review_id=request.review_id, company_id=request.company_id)
+        except WorkbenchCandidateWorkflowError as exc:
+            raise OperatorDecisionWorkflowNotSupportedError(V1_UNSUPPORTED_WORKFLOW_MESSAGE) from exc
+        except WorkbenchCandidateDataError as exc:
+            raise OperatorDecisionCandidateInvalidError(V1_INVALID_DECISION_MESSAGE) from exc
+
+
+def _require_v1_supported_workflow(candidate: OdooWorkbenchDecisionCandidate) -> None:
+    """V1 accepts a workflow decision only for Direct Vendor Bill.
+
+    "Existing Purchase Order" also maps to ``VENDOR_BILL`` but always carries an
+    EXISTING_PURCHASE_ORDER allocation, which Direct Vendor Bill forbids, so the pair
+    identifies Direct Vendor Bill exactly. Dismiss is not a workflow and stays allowed.
+    """
+
+    if candidate.decision is not ReviewDecisionType.SELECT_WORKFLOW:
+        return
+    allocations = candidate.business_context_allocations
+    allocation_types = {item.allocation_type for item in allocations.allocations} if allocations is not None else set()
+    if (
+        candidate.selected_workflow is not WorkflowType.VENDOR_BILL
+        or BusinessContextAllocationType.EXISTING_PURCHASE_ORDER in allocation_types
+    ):
+        raise OperatorDecisionWorkflowNotSupportedError(V1_UNSUPPORTED_WORKFLOW_MESSAGE)
 
 
 class _ExecutionDispatcher(Protocol):

@@ -30,7 +30,8 @@ from app.application.workbench import (
     WorkbenchErpReferenceValidator,
     WorkbenchProjectionPublisher,
 )
-from app.application.workbench.dto import ReviewItem
+from app.application.workbench.accounting_resolution import ReviewAccountingResolution
+from app.application.workbench.dto import ReviewItem, ReviewStatus
 from app.application.workbench.exceptions import ReviewNotFoundError, WorkbenchContractError
 from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
 from app.application.workbench.operator_guidance import (
@@ -40,6 +41,11 @@ from app.application.workbench.operator_guidance import (
     resolve_accounting_labels,
 )
 from app.application.workbench.ports import SelectedProductReader
+from app.application.workbench.previous_invoice_guidance import (
+    PreviousInvoiceDecisionReader,
+    PreviousInvoiceGuidance,
+    build_previous_invoice_guidance,
+)
 from app.application.workbench.product_line_projection import PRODUCT_REVIEW_REASON_CODES, ProductLineReadFacts
 from app.application.workbench.product_remediation import normalize_seller_item_code
 from app.application.workbench.projection_sync import WorkbenchProjectionSources, WorkbenchProjectionSynchronizer
@@ -101,6 +107,7 @@ from app.persistence import (
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyUnitOfWork,
 )
+from app.persistence.previous_invoice_decision_reader import SqlAlchemyPreviousInvoiceDecisionReader
 from app.persistence.workbench_review_accounting_resolution_repository import (
     SqlAlchemyReviewAccountingResolutionRepository,
 )
@@ -262,6 +269,7 @@ def build_workbench_projection_synchronizer(
                         product_mapping_enabled=product_mapping,
                         execution_evidence_reader=review_repository,
                         product_name_reader=product_name_reader,
+                        previous_invoice_reader=SqlAlchemyPreviousInvoiceDecisionReader(read_session),
                     )
                     if guidance_mapped
                     else None
@@ -346,6 +354,7 @@ def _operator_guidance_facts(
     product_mapping_enabled: bool = False,
     execution_evidence_reader: SqlAlchemyReviewRepository | None = None,
     product_name_reader: SelectedProductReader | None = None,
+    previous_invoice_reader: PreviousInvoiceDecisionReader | None = None,
 ) -> OperatorGuidanceFacts:
     """ADR-0013 guidance facts, read from the same private read-only session."""
 
@@ -380,7 +389,43 @@ def _operator_guidance_facts(
             else ()
         ),
         product_coded=_is_product_coded(review, company_id, source_reader),
+        previous_invoice=_previous_invoice_guidance(review, company_id, previous_invoice_reader, label_reader),
     )
+
+
+def _previous_invoice_guidance(
+    review: ReviewItem,
+    company_id: int,
+    reader: PreviousInvoiceDecisionReader | None,
+    label_reader: FixedAssetAccountingReader | None,
+) -> PreviousInvoiceGuidance | None:
+    """V1 history for a pending review of a recurring supplier (presentation only).
+
+    Recomputed from committed rows on every sync -- never cached, never applied. A read
+    failure only hides the history; it never fails the projection.
+    """
+
+    supplier_tax_number = (review.supplier_tax_number or "").strip()
+    if reader is None or review.status is not ReviewStatus.PENDING_REVIEW or not supplier_tax_number:
+        return None
+    try:
+        decisions = reader.list_completed_supplier_decisions(
+            company_id=company_id, supplier_tax_number=supplier_tax_number, exclude_review_id=review.review_id
+        )
+    except ApplicationError as exc:
+        logging.getLogger(__name__).warning(
+            "workbench.operator_guidance.previous_invoice_unavailable",
+            extra={"review_id": review.review_id, "error": exc.safe_message},
+        )
+        return None
+
+    def labels(resolution: ReviewAccountingResolution) -> tuple[str | None, str | None]:
+        if label_reader is None:
+            return None, None
+        resolved = resolve_accounting_labels(resolution, label_reader)
+        return resolved.account, resolved.depreciation_model
+
+    return build_previous_invoice_guidance(decisions, supplier_tax_number=supplier_tax_number, resolve_labels=labels)
 
 
 def _is_product_coded(
