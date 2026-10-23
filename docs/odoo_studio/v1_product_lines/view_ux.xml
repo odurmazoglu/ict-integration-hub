@@ -1,0 +1,8 @@
+<data>
+  <xpath expr="//field[@name='x_studio_ipp_product_line_ids']/list/button[@name='1027']" position="attributes">
+    <attribute name="string">Mevcut Ürünle Eşleştir</attribute>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_ipp_product_line_ids']" position="before">
+    <div class="text-muted" name="ipp_v1_product_line_match_hint">Satırı düzenlemek için satıra tıklayın. Mevcut bir Odoo ürünü için "Eşleştirilecek Ürün" sütununda ürünü seçip "Mevcut Ürünle Eşleştir"e basın; bu tedarikçinin aynı kodlu sonraki faturaları otomatik eşleşir. Satın alma amacı ve gider hesabı burada atanmaz.</div>
+  </xpath>
+</data>

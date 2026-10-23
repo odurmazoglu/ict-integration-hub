@@ -660,6 +660,15 @@ def test_uyumsoft_invoice_metadata_migration_upgrade_and_downgrade(
         "uq_workbench_review_accounting_resolutions_review_version" in accounting_resolution_unique_constraints_at_head
     )
 
+    # V1 product creation (202607170044) added exactly one nullable boolean sale_ok column to
+    # the product line creations: one "-1" step removes only it and changes no table.
+    assert "sale_ok" in {column["name"] for column in inspector.get_columns("workbench_product_line_creations")}
+    tables_before_sale_ok_downgrade = set(inspector.get_table_names())
+    command.downgrade(config, "-1")
+    inspector = inspect(create_engine(database_url))
+    assert set(inspector.get_table_names()) == tables_before_sale_ok_downgrade
+    assert "sale_ok" not in {column["name"] for column in inspector.get_columns("workbench_product_line_creations")}
+
     # P0 INTERNAL_USE (202607170043) added exactly one nullable JSON pin column to the
     # immutable execution source evidence: one "-1" step removes only it and changes no table.
     assert "internal_use_accounting_pin" in {

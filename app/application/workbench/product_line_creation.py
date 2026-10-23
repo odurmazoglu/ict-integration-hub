@@ -77,6 +77,13 @@ class NewProductIntent(ApplicationDTO):
     categ_id: int
     uom_id: int
     internal_reference: str | None = None
+    #: V1: whether the new product may be sold (``product.template.sale_ok``). An explicit
+    #: operator choice read from the Workbench row -- unchecked means ``False`` -- never
+    #: inferred from the purchase purpose, the supplier or the category. Products created
+    #: here are always purchasable (``purchase_ok=True``). ``None`` only for a creation
+    #: recorded before this field existed (Odoo defaults applied then); a new creation
+    #: always carries a boolean.
+    sale_ok: bool | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.product_name, str) or not self.product_name.strip():
@@ -101,6 +108,8 @@ class NewProductIntent(ApplicationDTO):
                     f"İç referans tek satır ve en fazla {MAX_INTERNAL_REFERENCE_LENGTH} karakter olmalıdır."
                 )
             object.__setattr__(self, "internal_reference", reference or None)
+        if self.sale_ok is not None and not isinstance(self.sale_ok, bool):
+            raise ProductRemediationContractError("Satılabilir seçimi evet/hayır olmalıdır.")
 
     @property
     def product_type(self) -> str:
@@ -120,6 +129,10 @@ class NewProductIntent(ApplicationDTO):
             "uom_id": self.uom_id,
             "internal_reference": self.internal_reference,
         }
+        if self.sale_ok is not None:
+            # Absent for a pre-V1 creation, so recorded digests (and the authorizations bound
+            # to them) stay valid; always present for a new one.
+            payload["sale_ok"] = self.sale_ok
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -329,6 +342,8 @@ class CreatedProductSnapshot(ApplicationDTO):
     categ_id: int | None
     is_storable: bool | None
     variant_ids: tuple[int, ...]
+    sale_ok: bool | None = None
+    purchase_ok: bool | None = None
 
 
 class CreatedProductReader(Protocol):

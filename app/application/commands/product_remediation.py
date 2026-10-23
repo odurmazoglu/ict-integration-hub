@@ -102,6 +102,10 @@ class CreateProductCommand(Command):
     category: ValidatedProductCategory | None = None
     #: PR D: create the supplier mapping in the same Odoo transaction (see ValidatedSupplierLink).
     supplier_link: ValidatedSupplierLink | None = None
+    #: V1 (supplier-linked creation only): explicit ``sale_ok`` / ``purchase_ok``. ``None``
+    #: leaves the Odoo default (the pre-V1 payload); when set they are written and read back.
+    sale_ok: bool | None = None
+    purchase_ok: bool | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -119,6 +123,11 @@ class CreateProductCommand(Command):
             raise ProductWriteValidationError("A positive uom_id is required.")
         if not isinstance(self.is_storable, bool):
             raise ProductWriteValidationError("is_storable must be a boolean.")
+        for value, label in ((self.sale_ok, "sale_ok"), (self.purchase_ok, "purchase_ok")):
+            if value is not None and not isinstance(value, bool):
+                raise ProductWriteValidationError(f"{label} must be a boolean when provided.")
+        if (self.sale_ok is not None or self.purchase_ok is not None) and self.supplier_link is None:
+            raise ProductWriteValidationError("sale_ok / purchase_ok are only written with a supplier link.")
         if self.default_code is not None and (not isinstance(self.default_code, str) or not self.default_code.strip()):
             raise ProductWriteValidationError("default_code must be a non-empty string when provided.")
         if self.approved_by is not None and (not isinstance(self.approved_by, str) or not self.approved_by.strip()):

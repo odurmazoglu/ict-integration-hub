@@ -149,6 +149,7 @@ def _model(creation: ProductLineCreation) -> WorkbenchProductLineCreation:
         categ_id=intent.categ_id,
         uom_id=intent.uom_id,
         internal_reference=intent.internal_reference,
+        sale_ok=intent.sale_ok,
         intent_digest=intent.digest(),
         supplier_product_name=creation.supplier_product_name,
         approved_by=creation.approved_by,
@@ -167,6 +168,7 @@ def _creation(record: WorkbenchProductLineCreation) -> ProductLineCreation:
             categ_id=int(record.categ_id),
             uom_id=int(record.uom_id),
             internal_reference=record.internal_reference,
+            sale_ok=record.sale_ok,
         )
         if intent.digest() != record.intent_digest:
             raise ProductRemediationDataIntegrityError("A product line creation intent no longer matches its digest.")

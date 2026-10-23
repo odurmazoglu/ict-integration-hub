@@ -25,6 +25,7 @@ through the atomic supplier mapping (see ``_recover``).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -55,6 +56,7 @@ from app.application.workbench.product_line_creation import (
     CreatedProductSnapshot,
     CreateLineProductCommand,
     CreateLineProductResult,
+    NewProductIntent,
     ProductIdentityClaimStore,
     ProductLineCreateDuplicateError,
     ProductLineCreateInFlightError,
@@ -174,6 +176,9 @@ class CreateLineProductUseCase:
     # ------------------------------------------------------------------ fresh attempt
 
     async def _start(self, command: CreateLineProductCommand, line_number: str) -> CreateLineProductResult:
+        if command.intent.sale_ok is None:
+            # V1: every new product carries an explicit sale_ok; only pre-V1 records may lack it.
+            raise ProductRemediationContractError("Satılabilir seçimi okunamadı; yeni ürün oluşturulmadı.")
         self._require_eligible_review(command, line_number)
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
         line = _source_line(source, line_number)
@@ -255,6 +260,9 @@ class CreateLineProductUseCase:
                         company_id=attempt.company_id,
                         product_name=attempt.supplier_product_name,
                     ),
+                    # V1: the operator's explicit saleable choice; always purchasable.
+                    sale_ok=intent.sale_ok,
+                    purchase_ok=True if intent.sale_ok is not None else None,
                 )
             )
         except _CERTAIN_NO_WRITE_EXCEPTIONS:
@@ -339,7 +347,7 @@ class CreateLineProductUseCase:
     async def _resume(
         self, command: CreateLineProductCommand, existing: ProductLineCreation
     ) -> CreateLineProductResult:
-        same_intent = existing.intent == command.intent
+        same_intent = _same_intent(existing.intent, command.intent)
         status = existing.status
         if status is ProductLineCreationStatus.NEEDS_RECONCILIATION:
             raise ProductLineCreateReconciliationRequiredError(
@@ -573,6 +581,14 @@ class CreateLineProductUseCase:
         )
 
 
+def _same_intent(recorded: NewProductIntent, requested: NewProductIntent) -> bool:
+    """The same request. A pre-V1 record (``sale_ok`` unknown) matches on its recorded fields."""
+
+    if recorded.sale_ok is None:
+        return recorded == replace(requested, sale_ok=None)
+    return recorded == requested
+
+
 def _adoptable_variant(
     attempt: ProductLineCreation, row: ExistingSupplierInfo, snapshot: CreatedProductSnapshot | None
 ) -> int | None:
@@ -588,6 +604,7 @@ def _adoptable_variant(
         or snapshot.uom_id != intent.uom_id
         or snapshot.categ_id != intent.categ_id
         or (snapshot.is_storable is not None and snapshot.is_storable is not intent.is_storable)
+        or (intent.sale_ok is not None and (snapshot.sale_ok is not intent.sale_ok or snapshot.purchase_ok is not True))
     ):
         return None
     variant_id = snapshot.variant_ids[0]
