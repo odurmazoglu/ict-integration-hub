@@ -48,6 +48,15 @@ _EXECUTION_COMPLETED = "completed"
 ACCOUNT_LABEL_UNAVAILABLE = "hesap bilgisi şu an okunamadı"
 MODEL_LABEL_UNAVAILABLE = "amortisman modeli bilgisi şu an okunamadı"
 PRODUCT_LABEL_UNAVAILABLE = "ürün bilgisi şu an okunamadı"
+#: DISMISS is a Hub accounting-processing decision only: never a statutory e-Fatura
+#: rejection (ret) or cancellation, which stay with the accountant outside the Hub.
+NOT_STATUTORY_REJECTION = "Bu işlem yasal e-Fatura reddi veya iptali değildir."
+DISMISSED_GUIDANCE = (
+    f"Muhasebeleştirme dışı bırakıldı. Hub bu belge için Vendor Bill oluşturmaz. {NOT_STATUTORY_REJECTION}"
+)
+DISMISS_ACTION_HINT = (
+    f"nedenini Karar Notu alanına yazıp 'Muhasebeleştirme Dışı Bırak' düğmesine basın. {NOT_STATUTORY_REJECTION}"
+)
 TREATMENT_LABELS: dict[AccountingTreatmentType, str] = {
     AccountingTreatmentType.EXPENSE_ACCOUNT: "Gider",
     AccountingTreatmentType.CAPITALIZE_FIXED_ASSET: "Sabit Kıymet / Demirbaş",
@@ -281,7 +290,9 @@ def build_operator_guidance(source: GuidanceInput, facts: OperatorGuidanceFacts)
 
 
 def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[OperatorNextAction, str]:
-    if source.status in (ReviewStatus.RESOLVED, ReviewStatus.DISMISSED):
+    if source.status is ReviewStatus.DISMISSED or source.decision_type is ReviewDecisionType.DISMISS:
+        return OperatorNextAction.DONE, _todo(f"{DISMISSED_GUIDANCE} (Karar kaydı mevcut.)")
+    if source.status is ReviewStatus.RESOLVED:
         return OperatorNextAction.DONE, _todo("İnceleme kapandı; yapılacak işlem yok.")
     if source.status is ReviewStatus.DECISION_SUBMITTED:
         return _after_decision(source)
@@ -292,7 +303,7 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
     if ManualReviewReasonCode.RETURN_INVOICE_NOT_SUPPORTED in codes:
         return OperatorNextAction.TECHNICAL, _todo(
             "Bu belge bir iade faturasıdır; Hub tedarikçi faturası oluşturmaz. İadeyi muhasebe ile "
-            "Odoo'da değerlendirin; gerekirse incelemeyi reddedin.",
+            f"Odoo'da değerlendirin; gerekirse {DISMISS_ACTION_HINT}",
             findings,
         )
     # PR T W0: source-tax hard blocks come before any supplier/product step, which could
@@ -300,7 +311,7 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
     if ManualReviewReasonCode.WITHHOLDING_TAX_NOT_SUPPORTED in codes:
         return OperatorNextAction.TECHNICAL, _todo(
             "Bu faturada vergi tevkifatı var; Hub tevkifatlı faturalar için tedarikçi faturası oluşturmaz. "
-            "Faturayı muhasebe ile Odoo'da değerlendirin; gerekirse incelemeyi reddedin.",
+            f"Faturayı muhasebe ile Odoo'da değerlendirin; gerekirse {DISMISS_ACTION_HINT}",
             findings,
         )
     if ManualReviewReasonCode.SOURCE_DOCUMENT_UNVERIFIED in codes:
@@ -370,8 +381,6 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
 
 
 def _after_decision(source: GuidanceInput) -> tuple[OperatorNextAction, str]:
-    if source.decision_type is ReviewDecisionType.DISMISS:
-        return OperatorNextAction.DONE, _todo("İnceleme reddedildi (karar kaydı mevcut).")
     if source.decision_workflow is WorkflowType.VENDOR_BILL:
         if source.execution_state == _EXECUTION_COMPLETED:
             return OperatorNextAction.DONE, _todo(draft_vendor_bill_created_message())
@@ -402,7 +411,7 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
             parts.append(resolution.expense_category)
         done.append("Muhasebe: " + " — ".join(parts))
     if source.decision_type is ReviewDecisionType.DISMISS:
-        done.append("Karar: Reddedildi")
+        done.append(f"Karar: Muhasebeleştirme dışı bırakıldı; {NOT_STATUTORY_REJECTION}")
     elif source.decision_workflow is not None:
         done.append(f"Karar: {WORKFLOW_LABELS[source.decision_workflow]}")
     if source.execution_state == _EXECUTION_COMPLETED and source.vendor_bill_id is not None:

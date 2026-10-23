@@ -19,6 +19,8 @@ Supported decisions:
 
 `select_workflow` requires `selected_workflow` and may include `business_context_allocations`. `dismiss` rejects workflow-specific selections, including allocation evidence.
 
+A new `dismiss` requires a non-empty `comment` (trimmed); without one the endpoint returns HTTP 422 `dismiss_comment_required`. `dismiss` is a Hub accounting-processing decision, never a statutory e-Fatura rejection or cancellation, and it is terminal; see [WORKBENCH_DISMISS.md](WORKBENCH_DISMISS.md).
+
 `select_workflow` for `customer_quotation` additionally requires `selected_quotation_scenario_ids`: an ordered, unique, non-empty list of stable Odoo Proposal Scenario source identities frozen as approved-for-customer-presentation decision intent. It is rejected for any other workflow and for `dismiss`. It is part of the decision idempotency fingerprint (order-sensitive), so a replay with a changed or reordered selection conflicts; changing the approved selection requires a new decision version.
 
 Example:

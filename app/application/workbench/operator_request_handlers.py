@@ -43,7 +43,11 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateWorkflowError,
     WorkbenchContractError,
 )
-from app.application.workbench.operator_guidance import PRODUCT_LABEL_UNAVAILABLE, draft_vendor_bill_created_message
+from app.application.workbench.operator_guidance import (
+    NOT_STATUTORY_REJECTION,
+    PRODUCT_LABEL_UNAVAILABLE,
+    draft_vendor_bill_created_message,
+)
 from app.application.workbench.operator_request_ingestion import (
     ALREADY_COMPLETED_MESSAGE,
     STALE_REQUEST_MESSAGE,
@@ -75,6 +79,10 @@ CREATE_NEW_PRODUCT_OPERATION = "CREATE_NEW_PRODUCT"
 V1_UNSUPPORTED_WORKFLOW_MESSAGE = (
     "Bu sürümde yalnız 'Direct Vendor Bill' iş akışı desteklenir. İş Akışı alanını "
     "'Direct Vendor Bill' olarak seçip Kararı Gönder'e yeniden basın."
+)
+#: Result shown on the Workbench row after an accepted dismissal (never worded as a rejection).
+DISMISSED_REQUEST_MESSAGE = (
+    f"Muhasebeleştirme dışı bırakıldı; Hub bu fatura için alış faturası oluşturmaz. {NOT_STATUTORY_REJECTION}"
 )
 V1_INVALID_DECISION_MESSAGE = (
     "Karar bilgileri geçersiz veya eksik. Karar ve İş Akışı alanlarını kontrol edip Kararı Gönder'e yeniden basın."
@@ -345,7 +353,9 @@ class DecisionRequestHandler:
             )
         return OperatorActionOutcome(
             outcome=OperatorRequestOutcome.COMPLETED,
-            message="Karar kaydedildi.",
+            message=DISMISSED_REQUEST_MESSAGE
+            if candidate.decision is ReviewDecisionType.DISMISS
+            else "Karar kaydedildi.",
         )
 
     def _read_candidate(self, request: OperatorRequest) -> OdooWorkbenchDecisionCandidate:

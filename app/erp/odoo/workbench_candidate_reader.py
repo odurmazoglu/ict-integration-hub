@@ -327,25 +327,36 @@ class OdooWorkbenchDecisionCandidateReader:
             company_id = _required_many2one_id(record.get(self._mapping.parent.company_id))
             if company_id != requested_company_id:
                 raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+            decision = _required_mapped_value(
+                record.get(self._mapping.parent.decision),
+                ODOO_DECISION_TO_CANONICAL,
+                unsupported_error=WorkbenchCandidateUnsupportedDecisionError,
+            )
+            base = {
+                "odoo_record_id": parent_id,
+                "review_id": _required_text_value(record.get(self._mapping.parent.review_id)),
+                "company_id": company_id,
+                "expected_version": _required_positive_int(record.get(self._mapping.parent.expected_version)),
+                "decision": decision,
+                "idempotency_key": _optional_text_value(record.get(self._mapping.parent.idempotency_key)),
+                "decided_by_odoo_user_id": _required_many2one_id(record.get(self._mapping.parent.decided_by)),
+                "decided_at": _required_aware_datetime(record.get(self._mapping.parent.decided_at)),
+                "decision_ready": True,
+                "comment": _optional_text_value(_field(record, self._mapping.parent.decision_comment)),
+            }
+            if decision is ReviewDecisionType.DISMISS:
+                # A dismissal is review + version + requester + reason only. Workflow, supplier,
+                # line, tax and allocation inputs left on the row (e.g. from an unfinished
+                # supplier or decision step) are ignored -- not even read -- so a review can be
+                # excluded at any pending step without completing or clearing those inputs.
+                return OdooWorkbenchDecisionCandidate(**base)
             allocations = self._allocation_set(parent_record=record, parent_id=parent_id)
             selected_workflow = _selected_workflow(
                 record.get(self._mapping.parent.selected_workflow),
                 allocations,
             )
             return OdooWorkbenchDecisionCandidate(
-                odoo_record_id=parent_id,
-                review_id=_required_text_value(record.get(self._mapping.parent.review_id)),
-                company_id=company_id,
-                expected_version=_required_positive_int(record.get(self._mapping.parent.expected_version)),
-                decision=_required_mapped_value(
-                    record.get(self._mapping.parent.decision),
-                    ODOO_DECISION_TO_CANONICAL,
-                    unsupported_error=WorkbenchCandidateUnsupportedDecisionError,
-                ),
-                idempotency_key=_optional_text_value(record.get(self._mapping.parent.idempotency_key)),
-                decided_by_odoo_user_id=_required_many2one_id(record.get(self._mapping.parent.decided_by)),
-                decided_at=_required_aware_datetime(record.get(self._mapping.parent.decided_at)),
-                decision_ready=True,
+                **base,
                 selected_workflow=selected_workflow,
                 selected_partner_id=_optional_many2one_id(
                     _field(record, self._mapping.parent.selected_partner),
@@ -353,7 +364,6 @@ class OdooWorkbenchDecisionCandidateReader:
                 line_resolutions=_line_resolutions(_field(record, self._mapping.parent.line_resolutions)),
                 tax_resolutions=_tax_resolutions(_field(record, self._mapping.parent.tax_resolutions)),
                 business_context_allocations=allocations,
-                comment=_optional_text_value(_field(record, self._mapping.parent.decision_comment)),
             )
         except WorkbenchCandidateReadError:
             raise

@@ -211,6 +211,7 @@ def _command(
         line_resolutions=line_resolutions,
         decided_by="finance.user",
         idempotency_key="decision:19f",
+        comment="Kişisel harcama — şahsi ödeme" if decision is ReviewDecisionType.DISMISS else None,
     )
 
 

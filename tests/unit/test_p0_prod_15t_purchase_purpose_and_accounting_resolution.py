@@ -44,7 +44,7 @@ from app.application.expense_mapping import OperatingExpenseMatchingEngine
 from app.application.rules.deterministic import DeterministicRuleEngine
 from app.application.use_cases import ImportInvoiceUseCase
 from app.application.use_cases.reclassify_review import ReclassifyWorkbenchReviewUseCase
-from app.application.workbench import ReviewItemCreationService
+from app.application.workbench import ReviewDecisionCommand, ReviewDecisionType, ReviewItemCreationService
 from app.application.workbench.accounting_resolution import (
     AccountingResolutionStatus,
     AccountingTreatmentType,
@@ -52,6 +52,7 @@ from app.application.workbench.accounting_resolution import (
     SubmitReviewAccountingResolutionCommand,
 )
 from app.application.workbench.accounting_resolution_use_cases import SubmitReviewAccountingResolutionUseCase
+from app.application.workbench.decision_use_cases import SubmitReviewDecisionUseCase
 from app.application.workbench.exceptions import (
     AccountingResolutionConflictError,
     AccountingResolutionPurposeRequiredError,
@@ -59,6 +60,7 @@ from app.application.workbench.exceptions import (
     OperatingExpenseMappingAccountInvalidError,
     PurchasePurposeConflictError,
     ReviewNotFoundError,
+    ReviewStateConflictError,
     ReviewVersionConflictError,
 )
 from app.application.workbench.expense_account_lookup import ExpenseAccountCandidate
@@ -82,9 +84,11 @@ from app.matching import (
     ProductMatchResult,
     ProductMatchStatus,
 )
+from app.models.import_receipt import ImportReceipt
 from app.models.operating_expense_mapping import OperatingExpenseMappingRecord
 from app.models.workbench_review_accounting_resolution import WorkbenchReviewAccountingResolution
 from app.models.workbench_review_classification_evidence import WorkbenchReviewClassificationEvidence
+from app.models.workbench_review_decision import WorkbenchReviewDecision
 from app.models.workbench_review_execution_evidence import WorkbenchReviewExecutionEvidence
 from app.models.workbench_review_item import WorkbenchReviewItem
 from app.models.workbench_review_purchase_purpose_resolution import WorkbenchReviewPurchasePurposeResolution
@@ -101,6 +105,7 @@ from app.persistence import (
     SqlAlchemyReviewSupplierRemediationEffectRepository,
     SqlAlchemyUnitOfWork,
 )
+from app.persistence.import_history import SqlAlchemyImportHistory
 from app.tax_mapping import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult, TaxMatchStatus, TaxType
 from tests.unit.effective_supplier_support import CanonicalPartners
 from tests.unit.source_tax_support import CLEAN_SOURCE_TAX_FACTS_READER
@@ -1308,3 +1313,85 @@ async def test_accounting_resolution_endpoint_body_cannot_set_identity_fields(ap
         use_case=_FakeAccountingUseCase(result=_fake_accounting_result()),
     )
     assert response.status_code == 400
+
+
+# =================================================================== DISMISS is terminal (purpose/accounting/import)
+
+
+def _dismiss_imported_review(session: Session, review_id: str) -> None:
+    bind = session.get_bind()
+    WorkbenchReviewDecision.__table__.create(bind, checkfirst=True)
+    ImportReceipt.__table__.create(bind, checkfirst=True)
+    SubmitReviewDecisionUseCase(
+        review_decision_writer=SqlAlchemyReviewRepository(session), unit_of_work=SqlAlchemyUnitOfWork(session)
+    ).execute(
+        ReviewDecisionCommand(
+            review_id=review_id,
+            company_id=COMPANY_ID,
+            expected_version=1,
+            decision=ReviewDecisionType.DISMISS,
+            decided_by=ACTOR,
+            idempotency_key=f"dismiss:{review_id}",
+            comment="Kişisel harcama — şahsi ödeme",
+        )
+    )
+
+
+async def test_dismissed_review_refuses_purchase_purpose(session: Session) -> None:
+    invoice = _invoice(ettn="P0-PROD-15T-DISMISS-P")
+    mapping_repository = SqlAlchemyOperatingExpenseMappingRepository(session)
+    review_id = await _import(
+        session, invoice=invoice, facts=_ambiguous_facts(invoice), mapping_repository=mapping_repository
+    )
+    _dismiss_imported_review(session, review_id)
+
+    with pytest.raises(ReviewStateConflictError):
+        _purpose_use_case(session).execute(_purpose_command(review_id, expected_version=2))
+    assert session.query(WorkbenchReviewPurchasePurposeResolution).count() == 0
+
+
+async def test_dismissed_review_refuses_accounting_resolution_and_reclassification(session: Session) -> None:
+    invoice = _invoice(ettn="P0-PROD-15T-DISMISS-A")
+    mapping_repository = SqlAlchemyOperatingExpenseMappingRepository(session)
+    review_id = await _import(
+        session, invoice=invoice, facts=_ambiguous_facts(invoice), mapping_repository=mapping_repository
+    )
+    # A purpose recorded before the dismissal must not let accounting reopen the review.
+    _purpose_use_case(session).execute(_purpose_command(review_id))
+    session.commit()
+    _dismiss_imported_review(session, review_id)
+
+    with pytest.raises(ReviewStateConflictError):
+        await _accounting_use_case(session, facts=_ambiguous_facts(invoice)).execute(
+            _accounting_command(review_id, expected_version=2)
+        )
+    assert session.query(WorkbenchReviewAccountingResolution).count() == 0
+    assert session.query(WorkbenchReviewReclassification).count() == 0
+    item = session.scalar(select(WorkbenchReviewItem).where(WorkbenchReviewItem.review_id == review_id))
+    assert item.status == "dismissed"
+    assert item.version == 2
+
+
+async def test_reimport_after_dismissal_never_reopens_the_review(session: Session) -> None:
+    invoice = _invoice(ettn="P0-PROD-15T-DISMISS-R")
+    mapping_repository = SqlAlchemyOperatingExpenseMappingRepository(session)
+    review_id = await _import(
+        session, invoice=invoice, facts=_ambiguous_facts(invoice), mapping_repository=mapping_repository
+    )
+    _dismiss_imported_review(session, review_id)
+
+    result = await ImportInvoiceUseCase(
+        import_history=SqlAlchemyImportHistory(session),
+        decision_engine=_decision_engine(_ambiguous_facts(invoice), mapping_repository=mapping_repository),
+        review_item_creation_service=ReviewItemCreationService(SqlAlchemyReviewRepository(session)),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
+    ).execute(
+        ImportInvoiceCommand(
+            invoice=invoice, idempotency_key=f"uyumsoft:{COMPANY_ID}:{invoice.header.ettn}", company_id=COMPANY_ID
+        )
+    )
+
+    assert result.status == "already_imported"
+    assert session.query(WorkbenchReviewItem).count() == 1
+    item = session.scalar(select(WorkbenchReviewItem))
+    assert (item.review_id, item.status, item.version) == (review_id, "dismissed", 2)

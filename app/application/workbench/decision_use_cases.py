@@ -10,6 +10,8 @@ from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewDecisionType
 from app.application.workbench.exceptions import (
+    DISMISS_COMMENT_MIN_LENGTH,
+    DismissCommentRequiredError,
     ProductPurchasePurposeDecisionError,
     ReviewDecisionError,
     WorkbenchContractError,
@@ -85,6 +87,7 @@ class SubmitReviewDecisionUseCase:
     def execute(self, command: ReviewDecisionCommand) -> ReviewDecisionAcknowledgement:
         if not isinstance(command, ReviewDecisionCommand):
             raise WorkbenchContractError("ReviewDecisionCommand is required.")
+        command = self._require_dismiss_comment(command)
         requires_execution_evidence = _requires_execution_evidence(command)
         requires_billing_evidence = _requires_billing_evidence(command)
         if requires_execution_evidence:
@@ -182,6 +185,32 @@ class SubmitReviewDecisionUseCase:
         if not isinstance(command, ReviewDecisionCommand):
             raise WorkbenchContractError("ReviewDecisionCommand is required.")
         return self._review_decision_writer.has_matching_review_decision(command)
+
+    def _require_dismiss_comment(self, command: ReviewDecisionCommand) -> ReviewDecisionCommand:
+        """A new DISMISS must explain why the invoice is excluded from Hub accounting processing.
+
+        Enforced here, the one boundary every new decision passes (the API endpoint, the
+        Workbench decision sync, ADR-0013 operator actions and the Workbench submission
+        orchestrator) -- not in ``ReviewDecisionCommand``, which also rebuilds persisted
+        decisions for fingerprints.
+        The comment is trimmed and must keep at least ``DISMISS_COMMENT_MIN_LENGTH`` characters.
+        An exact replay of an already persisted DISMISS is let through
+        unchanged so the writer returns the existing acknowledgement.
+        """
+
+        if command.decision is not ReviewDecisionType.DISMISS:
+            return command
+        comment = (command.comment or "").strip()
+        if len(comment) >= DISMISS_COMMENT_MIN_LENGTH:
+            return command if comment == command.comment else replace(command, comment=comment)
+        has_matching = getattr(self._review_decision_writer, "has_matching_review_decision", None)
+        is_replay = _translate_decision_failure(
+            lambda: bool(has_matching(command)) if has_matching is not None else False,
+            "Review decision replay could not be checked safely.",
+        )
+        if is_replay:
+            return command
+        raise DismissCommentRequiredError()
 
     def _enforce_source_tax_safety(self, command: ReviewDecisionCommand, evidence) -> None:
         """Re-verify the original UBL document's tax content (PR T W1).

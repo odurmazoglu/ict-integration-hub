@@ -13,6 +13,7 @@ from app.application.workbench.allocations import BusinessContextAllocation, Bus
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.decision_use_cases import SubmitReviewDecisionUseCase
 from app.application.workbench.exceptions import (
+    DismissCommentRequiredError,
     ReviewDecisionError,
     ReviewDecisionIdempotencyConflictError,
     ReviewNotFoundError,
@@ -50,6 +51,8 @@ class WorkbenchDecisionIngestionStatus(StrEnum):
     STALE_REVIEW_VERSION = "stale_review_version"
     INVALID_WORKFLOW = "invalid_workflow"
     INVALID_ALLOCATION = "invalid_allocation"
+    #: A new Dismiss decision without a meaningful comment (nothing is persisted).
+    INVALID_DECISION = "invalid_decision"
     ACKNOWLEDGEMENT_FAILED = "acknowledgement_failed"
     READ_FAILED = "read_failed"
     CONFLICT = "conflict"
@@ -368,6 +371,8 @@ def _expected_failure(
         return _failure(review_id, odoo_record_id, WorkbenchDecisionIngestionStatus.COMPANY_MISMATCH, exc)
     if isinstance(exc, ReviewDecisionIdempotencyConflictError):
         return _failure(review_id, odoo_record_id, WorkbenchDecisionIngestionStatus.CONFLICT, exc)
+    if isinstance(exc, DismissCommentRequiredError):
+        return _failure(review_id, odoo_record_id, WorkbenchDecisionIngestionStatus.INVALID_DECISION, exc)
     if isinstance(exc, WorkbenchCandidateDataError | WorkbenchErpReferenceValidationError | WorkbenchContractError):
         return _failure(review_id, odoo_record_id, WorkbenchDecisionIngestionStatus.INVALID_ALLOCATION, exc)
     return _failure(review_id, odoo_record_id, WorkbenchDecisionIngestionStatus.CONFLICT, exc)
