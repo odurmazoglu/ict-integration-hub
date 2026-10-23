@@ -214,6 +214,30 @@ class WorkbenchCandidateUnsupportedDecisionError(WorkbenchCandidateDataError):
     error_category = "workbench_candidate_unsupported_decision"
 
 
+class WorkbenchCandidateWorkflowError(WorkbenchCandidateDataError):
+    """Safe error raised when the selected workflow (or its required allocation) is invalid."""
+
+    error_category = "workbench_candidate_workflow_error"
+
+
+class OperatorDecisionWorkflowNotSupportedError(ReviewDecisionError):
+    """V1 Workbench: an operator decision selected a workflow other than Direct Vendor Bill.
+
+    Deterministic: the request is rejected once with a visible Turkish message, never retried.
+    """
+
+    error_category = "operator_decision_workflow_not_supported"
+
+
+class OperatorDecisionCandidateInvalidError(ReviewDecisionError):
+    """V1 Workbench: the decision fields on the Odoo row cannot form a valid decision.
+
+    Deterministic (the same row data fails the same way): rejected once, never retried.
+    """
+
+    error_category = "operator_decision_candidate_invalid"
+
+
 class WorkbenchCandidateAmbiguityError(WorkbenchCandidateReadError):
     """Safe error raised when more than one matching candidate projection exists."""
 

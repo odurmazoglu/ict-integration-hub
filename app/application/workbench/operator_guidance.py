@@ -21,6 +21,7 @@ from app.application.exceptions.base import ApplicationError
 from app.application.workbench.accounting_resolution import AccountingTreatmentType, ReviewAccountingResolution
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
 from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
+from app.application.workbench.previous_invoice_guidance import PreviousInvoiceGuidance
 from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
 
@@ -214,6 +215,9 @@ class OperatorGuidanceFacts(ApplicationDTO):
     #: The source invoice carries a product identifier on at least one line: a Vendor Bill
     #: decision then requires an explicit RESALE / INTERNAL_USE purpose for the current version.
     product_coded: bool = False
+    #: V1: the same supplier's most recent completed invoice -- shown as history at the purpose
+    #: and accounting steps only, never applied (see ``previous_invoice_guidance``).
+    previous_invoice: PreviousInvoiceGuidance | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,8 +242,36 @@ class GuidanceInput(ApplicationDTO):
     vendor_bill_id: int | None
 
 
+#: Steps at which the previous invoice is shown: the operator is choosing purpose / accounting.
+_PREVIOUS_INVOICE_STEPS = frozenset({OperatorNextAction.PURPOSE, OperatorNextAction.ACCOUNTING})
+
+
+#: Generic, supplier-independent caution shown with every previous-invoice block.
+PREVIOUS_INVOICE_REFERENCE_WARNING = (
+    "Geçmiş faturadaki muhasebe bilgileri yalnızca referans amaçlıdır. "
+    "Bu faturanın kullanım amacı ve muhasebe hesabı ayrıca doğrulanmalıdır."
+)
+
+
+def shows_previous_invoice(source: GuidanceInput, facts: OperatorGuidanceFacts) -> bool:
+    """Whether the previous-invoice block is shown: a pending review at the purpose or
+    accounting step. ``facts.previous_invoice`` itself is not consulted, so the composition
+    can ask before it reads any Odoo label for the block."""
+
+    if source.status is not ReviewStatus.PENDING_REVIEW:
+        return False
+    action, _ = _next_action(source, facts)
+    return action in _PREVIOUS_INVOICE_STEPS
+
+
 def build_operator_guidance(source: GuidanceInput, facts: OperatorGuidanceFacts) -> WorkbenchOperatorGuidance:
     action, todo = _next_action(source, facts)
+    if (
+        facts.previous_invoice is not None
+        and source.status is ReviewStatus.PENDING_REVIEW
+        and action in _PREVIOUS_INVOICE_STEPS
+    ):
+        todo += _previous_invoice_html(facts.previous_invoice)
     return WorkbenchOperatorGuidance(
         next_action=action,
         todo_html=todo,
@@ -382,6 +414,45 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
     return f'<ul class="o_ipp_completed">{items}</ul>'
 
 
+def _previous_invoice_html(guidance: PreviousInvoiceGuidance) -> str:
+    """History only: what was recorded for the supplier's last completed invoice, with warnings."""
+
+    latest = guidance.latest
+    resolution = latest.accounting_resolution
+    reference = latest.invoice_number or "numarasız fatura"
+    if latest.invoice_date is not None:
+        reference += f" ({latest.invoice_date.isoformat()})"
+    accounting = [TREATMENT_LABELS[resolution.treatment_type], guidance.account_label or ACCOUNT_LABEL_UNAVAILABLE]
+    if resolution.treatment_type is AccountingTreatmentType.CAPITALIZE_FIXED_ASSET:
+        accounting.append(guidance.depreciation_model_label or MODEL_LABEL_UNAVAILABLE)
+    lines = [
+        f"Tedarikçi: {latest.supplier_name or 'bilinmiyor'}",
+        f"Önceki fatura: {reference}",
+        f"Satın alma amacı: {PURPOSE_LABELS[latest.purchase_purpose]}",
+        "Muhasebe: " + " — ".join(accounting),
+    ]
+    if resolution.treatment_type is AccountingTreatmentType.EXPENSE_ACCOUNT and resolution.expense_category:
+        lines.append(f"Gider kategorisi: {resolution.expense_category}")
+    warnings = [PREVIOUS_INVOICE_REFERENCE_WARNING]
+    if guidance.mixed_purpose:
+        warnings.append(
+            f"Bu tedarikçinin son {guidance.completed_count} tamamlanmış faturasında "
+            f"{guidance.distinct_classification_count} farklı amaç/muhasebe kararı var (karma amaçlı tedarikçi). "
+            "Her faturayı ayrı değerlendirin."
+        )
+    items = "".join(f"<li>{html.escape(line, quote=False)}</li>" for line in lines)
+    cautions = "".join(f"<li>⚠ {html.escape(line, quote=False)}</li>" for line in warnings)
+    return (
+        '<div class="o_ipp_previous_invoice">'
+        "<p><strong>Geçmiş bilgi — öneri değildir</strong></p>"
+        "<p>Bu tedarikçinin son tamamlanan faturasında kaydedilen kararlar aşağıdadır. Hub bu kararları "
+        "doğrulamaz ve bu faturaya uygulamaz; amaç ve muhasebe işlemini bu fatura için ayrıca seçin.</p>"
+        f'<ul class="o_ipp_previous_invoice_facts">{items}</ul>'
+        f'<ul class="o_ipp_previous_invoice_warnings">{cautions}</ul>'
+        "</div>"
+    )
+
+
 def _product_todo(lines: tuple[UnmatchedProductLine, ...], findings: list[str]) -> str:
     instruction = (
         "Ürün eşleştirmesi Ürün Satırları sekmesinden yapılır. Mevcut ürün için ilgili satırda Odoo ürününü "
@@ -423,6 +494,7 @@ __all__ = [
     "ACCOUNT_LABEL_UNAVAILABLE",
     "DRAFT_VENDOR_BILL_CREATED_MESSAGE",
     "MODEL_LABEL_UNAVAILABLE",
+    "PREVIOUS_INVOICE_REFERENCE_WARNING",
     "PRODUCT_LABEL_UNAVAILABLE",
     "PURPOSE_LABELS",
     "TREATMENT_LABELS",
@@ -438,4 +510,5 @@ __all__ = [
     "draft_vendor_bill_created_message",
     "build_operator_guidance",
     "resolve_accounting_labels",
+    "shows_previous_invoice",
 ]

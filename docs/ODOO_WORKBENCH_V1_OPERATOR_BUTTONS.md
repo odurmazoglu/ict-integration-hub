@@ -36,7 +36,7 @@ are not bound to the Action menu.
 | Satın Alma Amacı Seçilmeli | Satın Alma Amacını Kaydet | Satın Alma Amacı | Satın Alma Amacı |
 | Karar Verilmeli (amaç seçiliyse, ikincil) | Satın Alma Amacını Kaydet | Satın Alma Amacı | Satın Alma Amacı |
 | Muhasebe İşlemi Seçilmeli | Muhasebeyi Kaydet | Muhasebe İşlemi | Muhasebe İşlemi; Gider: hesap + kategori; Demirbaş: hesap (izinli listede) + amortisman modeli |
-| Karar Verilmeli | Kararı Gönder (onay sorar) | Karar | Karar; Submit Decision: İş Akışı; Dismiss: Karar Notu |
+| Karar Verilmeli | Kararı Gönder (onay sorar) | Karar | Karar; Submit Decision: İş Akışı (prepared update: empty → Direct Vendor Bill, other values refused); Dismiss: Karar Notu |
 | Fatura Oluşturulmalı | Taslak Alış Faturası Oluştur (onay sorar) | Fatura Oluştur | durum Decision Submitted; taslak fatura yok |
 | (taslak fatura varsa) | Taslak Faturayı Aç | — (yazma yok) | fatura bağlantısı var |
 
@@ -114,6 +114,8 @@ Each scenario uses one real pending review; steps that create a draft bill need 
 
 - Studio cannot know whether the invoice is product-coded, so the purpose field offers all
   four purposes; the Hub rejects unsupported ones with a readable reason.
-- *İş Akışı* still lists all workflows; allocation-requiring ones are validated by the Hub.
+- *İş Akışı* still lists all workflows. The Hub accepts only Direct Vendor Bill and rejects any
+  other workflow once, without retries; the prepared 1032 update fills an empty İş Akışı with
+  Direct Vendor Bill. See [ODOO_WORKBENCH_V1_RECURRING_GUIDANCE.md](ODOO_WORKBENCH_V1_RECURRING_GUIDANCE.md).
 - Odoo's own display name of a draft bill contains its id (e.g. "Taslak Fatura (* 76)").
 - Dismiss stays available through *Karar = Dismiss* with a mandatory note; it is terminal.
