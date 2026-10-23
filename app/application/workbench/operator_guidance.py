@@ -55,8 +55,7 @@ DISMISSED_GUIDANCE = (
     f"Muhasebeleştirme dışı bırakıldı. Hub bu belge için Vendor Bill oluşturmaz. {NOT_STATUTORY_REJECTION}"
 )
 DISMISS_ACTION_HINT = (
-    "nedenini karar açıklamasına yazarak 'Muhasebeleştirme Dışı Bırak' (Dismiss) kararı verin. "
-    f"{NOT_STATUTORY_REJECTION}"
+    f"nedenini Karar Notu alanına yazıp 'Muhasebeleştirme Dışı Bırak' düğmesine basın. {NOT_STATUTORY_REJECTION}"
 )
 TREATMENT_LABELS: dict[AccountingTreatmentType, str] = {
     AccountingTreatmentType.EXPENSE_ACCOUNT: "Gider",

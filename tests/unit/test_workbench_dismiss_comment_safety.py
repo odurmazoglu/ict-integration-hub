@@ -214,7 +214,9 @@ def test_dismissed_review_refuses_any_further_decision(session: Session) -> None
     _use_case(session).execute(_dismiss(REASON))
 
     with pytest.raises(ReviewStateConflictError):
-        _use_case(session).execute(_dismiss("Tekrar", expected_version=2, idempotency_key="dismiss-key-2"))
+        _use_case(session).execute(
+            _dismiss("Tekrar dışı bırakma denemesi", expected_version=2, idempotency_key="dismiss-key-2")
+        )
 
     assert _decision_count(session) == 1
 
@@ -283,7 +285,7 @@ async def test_rest_dismiss_without_meaningful_comment_is_422(api_client: AsyncC
     assert response.status_code == 422
     error = response.json()["errors"][0]
     assert error["code"] == "dismiss_comment_required"
-    assert "açıklama" in error["message"]
+    assert "gerekçe" in error["message"]
     assert _status(session) == (ReviewStatus.PENDING_REVIEW.value, 1)
     assert _decision_count(session) == 0
 
@@ -386,7 +388,7 @@ def test_odoo_dismiss_without_comment_is_refused_non_destructively(session: Sess
     candidate_result = result.results[0]
     assert candidate_result.status is WorkbenchDecisionIngestionStatus.INVALID_DECISION
     assert candidate_result.acknowledged is False
-    assert "açıklama" in (candidate_result.message or "")
+    assert "gerekçe" in (candidate_result.message or "")
     assert result.failed_count == 1
     # Nothing persisted and Odoo is not acknowledged: the row stays as the operator left it.
     assert publisher.calls == []
@@ -439,7 +441,7 @@ def test_operator_dismiss_request_without_comment_is_rejected_with_an_actionable
     outcome = _classified_application_error(error.value)
 
     assert outcome.outcome is OperatorRequestOutcome.REJECTED
-    assert "karar açıklaması zorunludur" in outcome.message
+    assert "gerekçe zorunludur" in outcome.message
     assert _status(session) == (ReviewStatus.PENDING_REVIEW.value, 1)
     assert _decision_count(session) == 0
 
@@ -518,6 +520,6 @@ def test_return_and_withholding_guidance_offer_dismissal_without_implying_reject
 
     text = _all_text(guidance)
     assert "Muhasebeleştirme Dışı Bırak" in text
-    assert "karar açıklamasına" in text
+    assert "Karar Notu alanına" in text
     assert NOT_STATUTORY in text
     assert "reddedin" not in text.lower()

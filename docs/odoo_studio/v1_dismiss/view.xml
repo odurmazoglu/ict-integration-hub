@@ -1,0 +1,26 @@
+<!--
+  ICT V1 Workbench "Muhasebeleştirme Dışı Bırak".
+  Odoo: ir.ui.view, model x_ipp_import_workbench, type form, mode extension,
+  inherit_id 3984, priority 270 (after view 4221 "ICT V1 Workbench operator buttons", 260),
+  name "ICT V1 Workbench dismissal".
+  __SA_DISMISS__ is replaced with the id of the server action created from actions/dismiss.py.
+  Nothing existing is deleted or rewritten: one header button is added, the existing
+  "Karar Notu" field is also shown at the other open steps, and one hint line is added.
+-->
+<data>
+  <xpath expr="//header" position="inside">
+    <button name="__SA_DISMISS__" type="action" string="Muhasebeleştirme Dışı Bırak" class="btn-secondary"
+            groups="studio_customization.ipp_workbench_operator_group"
+            confirm="Bu fatura Hub'da muhasebeleştirme dışı bırakılacak. Bu işlem GERİ ALINAMAZ: inceleme kapanır ve Hub bu fatura için alış faturası oluşturmaz. Bu, yasal e-Fatura reddi veya iptali DEĞİLDİR; tedarikçiye veya GİB'e bildirim gönderilmez. Gerekçe Karar Notu alanına yazılmış olmalıdır. Devam edilsin mi?"
+            invisible="x_studio_ipp_req_ready or x_studio_review_status != 'Pending Review' or x_studio_vendor_bill or x_studio_ipp_next_action in (False, 'Tamamlandı', 'Fatura Oluşturulmalı')"/>
+  </xpath>
+
+  <!-- The existing decision comment is the dismissal reason; visible at every open step. -->
+  <xpath expr="//field[@name='x_studio_decision_comment']" position="attributes">
+    <attribute name="string">Karar Notu / Dışı Bırakma Gerekçesi</attribute>
+    <attribute name="invisible">x_studio_review_status != 'Pending Review' or x_studio_vendor_bill or x_studio_ipp_next_action in (False, 'Tamamlandı', 'Fatura Oluşturulmalı')</attribute>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_decision_comment']" position="after">
+    <div class="text-muted" colspan="2" name="ipp_v1_dismiss_hint" invisible="x_studio_review_status != 'Pending Review' or x_studio_vendor_bill or x_studio_ipp_next_action in (False, 'Tamamlandı', 'Fatura Oluşturulmalı')">Fatura Hub'da işlenmeyecekse gerekçeyi bu alana yazıp "Muhasebeleştirme Dışı Bırak"a basın. Tedarikçi veya ürün eşleştirmesi gerekmez. Karar geri alınamaz ve yasal e-Fatura reddi veya iptali değildir. Faturanın muhasebe işlemi (ör. şirkete kesilmiş kişisel alım) muhasebe ile ayrıca belirlenir.</div>
+  </xpath>
+</data>

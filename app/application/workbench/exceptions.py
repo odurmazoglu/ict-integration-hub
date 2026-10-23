@@ -9,10 +9,12 @@ class WorkbenchContractError(ApplicationError):
     error_category = "workbench_contract_error"
 
 
+#: Shortest trimmed reason accepted for a new dismissal ("kişisel" alone is not a reason).
+DISMISS_COMMENT_MIN_LENGTH = 10
 DISMISS_COMMENT_REQUIRED_MESSAGE = (
-    "A dismiss decision requires a non-empty comment explaining why the invoice is excluded from Hub "
-    "accounting processing. / Muhasebeleştirme dışı bırakmak için karar açıklaması zorunludur: nedenini "
-    "açıklama alanına yazın."
+    f"Muhasebeleştirme dışı bırakmak için en az {DISMISS_COMMENT_MIN_LENGTH} karakterlik bir gerekçe zorunludur: "
+    "nedenini Karar Notu alanına yazın. / A dismiss decision requires a comment of at least "
+    f"{DISMISS_COMMENT_MIN_LENGTH} characters explaining why the invoice is excluded from Hub accounting processing."
 )
 
 

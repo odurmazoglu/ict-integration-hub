@@ -10,6 +10,7 @@ from app.application.workbench.allocations import BusinessContextAllocationType
 from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewDecisionType
 from app.application.workbench.exceptions import (
+    DISMISS_COMMENT_MIN_LENGTH,
     DismissCommentRequiredError,
     ProductPurchasePurposeDecisionError,
     ReviewDecisionError,
@@ -192,14 +193,15 @@ class SubmitReviewDecisionUseCase:
         Workbench decision sync, ADR-0013 operator actions and the Workbench submission
         orchestrator) -- not in ``ReviewDecisionCommand``, which also rebuilds persisted
         decisions for fingerprints.
-        The comment is trimmed. An exact replay of an already persisted DISMISS is let through
+        The comment is trimmed and must keep at least ``DISMISS_COMMENT_MIN_LENGTH`` characters.
+        An exact replay of an already persisted DISMISS is let through
         unchanged so the writer returns the existing acknowledgement.
         """
 
         if command.decision is not ReviewDecisionType.DISMISS:
             return command
         comment = (command.comment or "").strip()
-        if comment:
+        if len(comment) >= DISMISS_COMMENT_MIN_LENGTH:
             return command if comment == command.comment else replace(command, comment=comment)
         has_matching = getattr(self._review_decision_writer, "has_matching_review_decision", None)
         is_replay = _translate_decision_failure(
