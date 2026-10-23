@@ -1,0 +1,11 @@
+{
+  "model": "x_ipp_wb_product_line",
+  "name": "x_studio_ipp_new_sale_ok",
+  "ttype": "boolean",
+  "field_description": "Satılabilir",
+  "store": true,
+  "required": false,
+  "readonly": false,
+  "copied": false,
+  "help": "Yeni ürün satış listelerinde de kullanılacaksa işaretleyin. Şirket içi kullanım (ör. hizmet aboneliği) için boş bırakın. Ürün her zaman satın alınabilir oluşturulur."
+}

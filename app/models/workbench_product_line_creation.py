@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, String, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, ForeignKeyConstraint, Index, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -60,6 +60,8 @@ class WorkbenchProductLineCreation(Base):
     categ_id: Mapped[int] = mapped_column(nullable=False)
     uom_id: Mapped[int] = mapped_column(nullable=False)
     internal_reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: V1 explicit "Satılabilir" choice; NULL = recorded before the choice existed (alembic 0044).
+    sale_ok: Mapped[bool | None] = mapped_column(Boolean(), nullable=True)
     #: sha256 of the intent; the consumed authorization is bound to it.
     intent_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     supplier_product_name: Mapped[str | None] = mapped_column(String(512), nullable=True)

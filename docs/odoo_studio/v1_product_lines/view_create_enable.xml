@@ -1,0 +1,12 @@
+<data>
+  <xpath expr="//field[@name='x_studio_ipp_product_line_ids']/list/field[@name='x_studio_ipp_new_uom']" position="after">
+    <field name="x_studio_ipp_new_sale_ok" string="Satılabilir" optional="show" readonly="x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_new_ready"/>
+  </xpath>
+  <xpath expr="//field[@name='x_studio_ipp_product_line_ids']/list/button[@name='1028']" position="attributes">
+    <attribute name="invisible">x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_new_ready or x_studio_ipp_req_ready or x_studio_ipp_req_product or not x_studio_ipp_new_name or not x_studio_ipp_new_kind or not x_studio_ipp_new_categ or not x_studio_ipp_new_uom</attribute>
+    <attribute name="confirm">Odoo'da yeni ürün oluşturulacak ve bu tedarikçinin ürün koduna bağlanacak. Ürün her zaman satın alınabilir; "Satılabilir" işaretli değilse satılamaz. Satın alma amacı, gider hesabı veya alış faturası oluşturulmaz. Devam edilsin mi?</attribute>
+  </xpath>
+  <xpath expr="//div[@name='ipp_v1_product_line_match_hint']" position="after">
+    <div class="text-muted" name="ipp_v1_product_line_create_hint">Odoo'da uygun ürün yoksa satırda Yeni Ürün Adı, Ürün Türü (hizmet için "Hizmet"), Kategori ve Birim (Odoo) seçin. Ürün yeniden satılacaksa "Satılabilir"i işaretleyin; şirket içi kullanımda boş bırakın. Sonra "Yeni Ürün Oluştur"a basın. Aynı ad, iç referans veya tedarikçi koduyla ikinci bir ürün oluşturulmaz.</div>
+  </xpath>
+</data>

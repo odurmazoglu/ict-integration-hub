@@ -34,6 +34,8 @@ PRODUCT_TEMPLATE_FIELDS = ["id", "name", "default_code", "type", "uom_id"]
 # Read back only when a validated category was written (P0-PROD-18E-2), so the
 # no-category create path keeps its exact existing read-back contract.
 PRODUCT_TEMPLATE_CATEGORY_FIELDS = ["categ_id", "is_storable"]
+# Read back only when the command sets them explicitly (V1 supplier-linked creation).
+PRODUCT_TEMPLATE_SALE_PURCHASE_FIELDS = ["sale_ok", "purchase_ok"]
 PRODUCT_VARIANT_FIELDS = ["id"]
 # The create payload is fixed and never caller-supplied; this scan is defense in depth.
 # taxes/barcode/company are explicitly left to documented Odoo defaults (P0-PROD-07F),
@@ -61,7 +63,7 @@ FORBIDDEN_PRODUCT_TEMPLATE_TOKENS = frozenset(
 #: values are operator/invoice text (e.g. "Active Directory ..."), which a value scan would
 #: refuse for no reason, while an allowlist is strictly tighter on the field names.
 SUPPLIER_LINKED_TEMPLATE_KEYS = frozenset(
-    {"name", "type", "uom_id", "is_storable", "default_code", "categ_id", "seller_ids"}
+    {"name", "type", "uom_id", "is_storable", "default_code", "categ_id", "seller_ids", "sale_ok", "purchase_ok"}
 )
 SUPPLIER_LINK_KEYS = frozenset({"partner_id", "product_code", "company_id", "product_name"})
 _MAX_VARIANT_LOOKUP_LIMIT = 5
@@ -92,6 +94,8 @@ class ProductTemplateRecord:
     is_storable: bool | None = None
     type: str | None = None
     uom_id: int | None = None
+    sale_ok: bool | None = None
+    purchase_ok: bool | None = None
 
 
 class OdooProductTemplateRepository:
@@ -104,9 +108,15 @@ class OdooProductTemplateRepository:
         created = await _translate_connector_errors(self._client.create_product_template(payload))
         return _require_positive_id(created, source="Odoo product.template create")
 
-    async def read_template(self, template_id: int, *, include_category: bool = False) -> ProductTemplateRecord:
+    async def read_template(
+        self, template_id: int, *, include_category: bool = False, include_sale_purchase: bool = False
+    ) -> ProductTemplateRecord:
         template_id = _require_positive_id(template_id, source="product.template lookup")
-        fields = PRODUCT_TEMPLATE_FIELDS + (PRODUCT_TEMPLATE_CATEGORY_FIELDS if include_category else [])
+        fields = (
+            PRODUCT_TEMPLATE_FIELDS
+            + (PRODUCT_TEMPLATE_CATEGORY_FIELDS if include_category else [])
+            + (PRODUCT_TEMPLATE_SALE_PURCHASE_FIELDS if include_sale_purchase else [])
+        )
         records = await _translate_connector_errors(
             self._client.search_read(
                 model=PRODUCT_TEMPLATE_MODEL,
@@ -175,7 +185,11 @@ class OdooProductWriter(ProductWriter):
 
         try:
             # Read the template back and validate identity fields never drifted from the request.
-            template = await self._repository.read_template(template_id, include_category=command.category is not None)
+            template = await self._repository.read_template(
+                template_id,
+                include_category=command.category is not None,
+                include_sale_purchase=command.sale_ok is not None or command.purchase_ok is not None,
+            )
             _validate_created_template(template, command=command, template_id=template_id)
 
             # product.template and product.product creation are two separate remote reads/writes;
@@ -213,6 +227,11 @@ def _product_template_payload(command: CreateProductCommand) -> dict[str, Any]:
     if command.supplier_link is not None:
         # One Odoo (0, 0, values) create command: template, variant and supplierinfo commit together.
         payload["seller_ids"] = [[0, 0, _supplier_link_values(command.supplier_link)]]
+    # V1: explicit flags only; omitted keys keep the exact pre-V1 payload (Odoo defaults).
+    if command.sale_ok is not None:
+        payload["sale_ok"] = command.sale_ok
+    if command.purchase_ok is not None:
+        payload["purchase_ok"] = command.purchase_ok
     return payload
 
 
@@ -252,10 +271,16 @@ def _validate_created_template(
             raise ProductDataIntegrityError("Read-back product template type does not match the exact request.")
         if template.uom_id != command.uom_id:
             raise ProductDataIntegrityError("Read-back product template unit of measure does not match the request.")
+    if command.sale_ok is not None and template.sale_ok is not command.sale_ok:
+        raise ProductDataIntegrityError("Read-back product template sale_ok does not match the exact request.")
+    if command.purchase_ok is not None and template.purchase_ok is not command.purchase_ok:
+        raise ProductDataIntegrityError("Read-back product template purchase_ok does not match the exact request.")
 
 
 def _template_record(record: dict[str, Any]) -> ProductTemplateRecord:
     is_storable = record.get("is_storable")
+    sale_ok = record.get("sale_ok")
+    purchase_ok = record.get("purchase_ok")
     return ProductTemplateRecord(
         id=_require_positive_id(record.get("id"), source="Odoo product.template"),
         name=_optional_text(record.get("name")),
@@ -264,6 +289,8 @@ def _template_record(record: dict[str, Any]) -> ProductTemplateRecord:
         is_storable=is_storable if isinstance(is_storable, bool) else None,
         type=_optional_text(record.get("type")),
         uom_id=_optional_uom_id(record.get("uom_id")),
+        sale_ok=sale_ok if isinstance(sale_ok, bool) else None,
+        purchase_ok=purchase_ok if isinstance(purchase_ok, bool) else None,
     )
 
 

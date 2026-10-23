@@ -150,6 +150,8 @@ class CatalogOdoo(InMemoryOdoo):
                     "uom_id": UNITS,
                     "categ_id": SERVICES,
                     "is_storable": False,
+                    "sale_ok": True,
+                    "purchase_ok": True,
                     "active": variant["active"],
                 },
             )
@@ -175,6 +177,9 @@ class CatalogOdoo(InMemoryOdoo):
             "uom_id": payload["uom_id"],
             "categ_id": payload.get("categ_id"),
             "is_storable": payload["is_storable"],
+            # Odoo defaults when the key is omitted (pre-V1 payload).
+            "sale_ok": payload.get("sale_ok", True),
+            "purchase_ok": payload.get("purchase_ok", True),
             "active": True,
         }
         self.variants[variant_id] = {
@@ -253,6 +258,8 @@ class CatalogPort:
             categ_id=row["categ_id"],
             is_storable=row["is_storable"],
             variant_ids=tuple(sorted(vid for vid, v in self.odoo.variants.items() if v["tmpl"] == template_id)),
+            sale_ok=row.get("sale_ok"),
+            purchase_ok=row.get("purchase_ok"),
         )
 
 
@@ -385,6 +392,7 @@ def _intent(**overrides: Any) -> NewProductIntent:
         "categ_id": SERVICES,
         "uom_id": UNITS,
         "internal_reference": None,
+        "sale_ok": False,
     }
     values.update(overrides)
     return NewProductIntent(**values)

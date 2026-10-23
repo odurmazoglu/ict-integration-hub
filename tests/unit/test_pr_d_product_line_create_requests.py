@@ -109,6 +109,7 @@ def _child(line: str = "1", **overrides: Any) -> dict[str, Any]:
         "x_studio_ipp_new_categ": [SERVICES, "Services / Implementation"],
         "x_studio_ipp_new_uom": [UNITS, "Units"],
         "x_studio_ipp_new_ref": False,
+        "x_studio_ipp_new_sale_ok": False,
         "x_studio_ipp_new_ready": True,
         "x_studio_ipp_new_version": 2,
         "x_studio_ipp_new_requested_by": [OPERATOR_UID, "Operator"],
@@ -136,6 +137,7 @@ def _intent(**overrides: Any) -> NewProductIntent:
         "kind": NewProductKind.SERVICE,
         "categ_id": SERVICES,
         "uom_id": UNITS,
+        "sale_ok": False,
     }
     values.update(overrides)
     return NewProductIntent(**values)
@@ -152,6 +154,7 @@ def test_field_defaults_are_the_runbook_contract_and_never_alias_existing_fields
         "x_studio_ipp_new_categ",
         "x_studio_ipp_new_uom",
         "x_studio_ipp_new_ref",
+        "x_studio_ipp_new_sale_ok",
         "x_studio_ipp_new_ready",
         "x_studio_ipp_new_version",
         "x_studio_ipp_new_requested_by",
@@ -293,6 +296,7 @@ def test_completed_acknowledgement_clears_only_the_create_inputs_and_ready_flag(
         "x_studio_ipp_new_categ": False,
         "x_studio_ipp_new_uom": False,
         "x_studio_ipp_new_ref": False,
+        "x_studio_ipp_new_sale_ok": False,
     }
 
 

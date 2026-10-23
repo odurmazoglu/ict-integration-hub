@@ -77,7 +77,17 @@ class OdooCreatedProductReader:
         templates = self._adapter.search_read(
             model=TEMPLATE_MODEL,
             domain=[["id", "=", template_id], ["active", "in", [True, False]]],
-            fields=["id", "name", "default_code", "type", "uom_id", "categ_id", "is_storable"],
+            fields=[
+                "id",
+                "name",
+                "default_code",
+                "type",
+                "uom_id",
+                "categ_id",
+                "is_storable",
+                "sale_ok",
+                "purchase_ok",
+            ],
             limit=2,
         )
         if not templates:
@@ -92,6 +102,8 @@ class OdooCreatedProductReader:
             limit=VARIANT_LOOKUP_LIMIT,
         )
         is_storable = template.get("is_storable")
+        sale_ok = template.get("sale_ok")
+        purchase_ok = template.get("purchase_ok")
         return CreatedProductSnapshot(
             template_id=template_id,
             name=_text(template.get("name")),
@@ -101,6 +113,8 @@ class OdooCreatedProductReader:
             categ_id=many2one_id(template.get("categ_id")),
             is_storable=is_storable if isinstance(is_storable, bool) else None,
             variant_ids=_ids(variants),
+            sale_ok=sale_ok if isinstance(sale_ok, bool) else None,
+            purchase_ok=purchase_ok if isinstance(purchase_ok, bool) else None,
         )
 
 

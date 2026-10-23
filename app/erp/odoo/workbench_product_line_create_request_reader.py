@@ -94,6 +94,8 @@ class OdooProductLineCreateRequestFieldMapping:
     category: str = "x_studio_ipp_new_categ"
     uom: str = "x_studio_ipp_new_uom"
     internal_reference: str = "x_studio_ipp_new_ref"
+    #: V1: Studio boolean "Satılabilir" (unchecked = False = not saleable).
+    sale_ok: str = "x_studio_ipp_new_sale_ok"
     ready: str = "x_studio_ipp_new_ready"
     expected_version: str = "x_studio_ipp_new_version"
     requested_by: str = "x_studio_ipp_new_requested_by"
@@ -125,6 +127,7 @@ class OdooProductLineCreateRequestFieldMapping:
             "category",
             "uom",
             "internal_reference",
+            "sale_ok",
             "ready",
             "expected_version",
             "requested_by",
@@ -135,7 +138,7 @@ class OdooProductLineCreateRequestFieldMapping:
     def input_attributes(cls) -> tuple[str, ...]:
         """The operator inputs cleared after a completed creation."""
 
-        return ("name", "kind", "category", "uom", "internal_reference")
+        return ("name", "kind", "category", "uom", "internal_reference", "sale_ok")
 
     def own_fields(self) -> tuple[str, ...]:
         return tuple(getattr(self, name) for name in self.field_attributes())
@@ -276,6 +279,7 @@ class OdooProductLineCreateRequestReader:
             categ_id=_many2one_id(record.get(mapping.category), "Ürün kategorisi"),
             uom_id=_many2one_id(record.get(mapping.uom), "Ölçü birimi"),
             internal_reference=_optional_text(record.get(mapping.internal_reference)),
+            sale_ok=_sale_ok(record.get(mapping.sale_ok)),
         )
 
 
@@ -319,6 +323,14 @@ class OdooProductLineCreateRequestAcknowledger:
             requested_at=requested_at,
             values=values,
         )
+
+
+def _sale_ok(value: Any) -> bool:
+    """Odoo booleans only: an unchecked "Satılabilir" is ``False``; anything else is refused."""
+
+    if type(value) is bool:
+        return value
+    raise WorkbenchContractError("Satılabilir alanı okunamadı; lütfen satırı yenileyip tekrar deneyin.")
 
 
 def _message(exc: Exception) -> str:
