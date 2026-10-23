@@ -21,9 +21,11 @@ from app.billing.dto import (
     CustomerInvoiceBillingInstruction,
     CustomerInvoiceBillingLine,
     CustomerInvoiceLine,
+    ValidatedInternalUseLineAccount,
     ValidatedResaleLineAccount,
     VendorBill,
     VendorBillLine,
+    issue_validated_internal_use_line_account,
     issue_validated_resale_line_account,
 )
 from app.billing.exceptions import CustomerInvoiceBuildError, VendorBillBuildError
@@ -35,6 +37,7 @@ __all__ = [
     "CustomerInvoiceBuildError",
     "CustomerInvoiceBuilder",
     "CustomerInvoiceLine",
+    "ValidatedInternalUseLineAccount",
     "ValidatedResaleLineAccount",
     "VendorBill",
     "VendorBillBuildError",
@@ -43,6 +46,7 @@ __all__ = [
     "VendorBillMoney",
     "economic_discounts",
     "is_economically_neutral",
+    "issue_validated_internal_use_line_account",
     "issue_validated_resale_line_account",
     "line_gross_total",
     "line_net_total",

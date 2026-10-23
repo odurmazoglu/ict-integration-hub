@@ -21,6 +21,7 @@ from app.application.workbench.exceptions import (
     WorkbenchCandidateNotFoundError,
     WorkbenchCandidateReadError,
     WorkbenchCandidateUnsupportedDecisionError,
+    WorkbenchCandidateWorkflowError,
     WorkbenchContractError,
 )
 from app.application.workbench.projection import (
@@ -593,18 +594,18 @@ def _selected_workflow(
     if _is_empty_optional(value):
         return None
     if not isinstance(value, str) or not value.strip():
-        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+        raise WorkbenchCandidateWorkflowError(SAFE_CANDIDATE_DATA_ERROR)
     try:
         workflow = ODOO_SELECTED_WORKFLOW_TO_CANONICAL[value]
     except KeyError as exc:
-        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR) from exc
+        raise WorkbenchCandidateWorkflowError(SAFE_CANDIDATE_DATA_ERROR) from exc
 
     allocation_types = _allocation_types(allocations)
     required_allocation = ODOO_SELECTED_WORKFLOW_REQUIRED_ALLOCATION.get(value)
     if required_allocation is not None and required_allocation not in allocation_types:
-        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+        raise WorkbenchCandidateWorkflowError(SAFE_CANDIDATE_DATA_ERROR)
     if value == "Direct Vendor Bill" and allocation_types & DIRECT_VENDOR_BILL_CONFLICTING_ALLOCATION_TYPES:
-        raise WorkbenchCandidateDataError(SAFE_CANDIDATE_DATA_ERROR)
+        raise WorkbenchCandidateWorkflowError(SAFE_CANDIDATE_DATA_ERROR)
     return workflow
 
 

@@ -695,6 +695,21 @@ class VendorBillPreviewResaleAccountingResponse(BaseModel):
     fiscal_position_mapping: str
 
 
+class VendorBillPreviewInternalUseAccountingResponse(BaseModel):
+    """INTERNAL_USE expense account pinned at decision acceptance for a product invoice;
+    EXECUTE sends exactly this account on every line (never the product category's)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pin_review_version: int
+    accounting_resolution_id: int
+    account_id: int
+    account_code: str
+    account_name: str
+    account_type: str
+    expense_category: str
+
+
 class VendorBillPreviewLineResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -712,6 +727,34 @@ class VendorBillPreviewLineResponse(BaseModel):
     computed_subtotal: str | None = None
     currency_subtotal: str | None = None
     source_line_extension_amount: str | None = None
+
+
+class VendorBillFxRatePlanResponse(BaseModel):
+    """P1: the exchange rate a foreign-currency bill is created with.
+
+    Rates are company-currency units per one bill-currency unit. ``source_rate`` (the
+    invoice's own PricingExchangeRate) is authoritative; ``odoo_automatic_rate`` is shown
+    for comparison only. Any status other than ``source_rate_selected`` / ``not_applicable``
+    blocks EXECUTE before any Odoo write.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    blocks_vendor_bill: bool
+    document_currency: str
+    company_currency: str | None
+    rate_date: date | None
+    source_rate: str | None
+    odoo_automatic_rate: str | None
+    selected_rate: str | None
+    odoo_invoice_currency_rate: float | None
+    rate_difference: str | None
+    company_currency_decimal_places: int | None
+    expected_company_untaxed: str | None
+    expected_company_tax: str | None
+    expected_company_total: str | None
+    message: str
 
 
 class VendorBillPreviewResponse(BaseModel):
@@ -749,6 +792,10 @@ class VendorBillPreviewResponse(BaseModel):
     source_total: str | None = None
     monetary_reconciles: bool | None = None
     monetary_mismatches: list[str] = Field(default_factory=list)
+    # P1: additive; the invoice's own exchange rate the new bill is created with.
+    fx_rate_plan: VendorBillFxRatePlanResponse | None = None
+    # Additive; null unless the decision was accepted under INTERNAL_USE on a product invoice.
+    internal_use_accounting: VendorBillPreviewInternalUseAccountingResponse | None = None
 
 
 class VendorBillReadbackLineResponse(BaseModel):
@@ -788,6 +835,32 @@ class VendorBillResaleReadbackResponse(BaseModel):
     mismatches: list[str]
 
 
+class VendorBillInternalUseReadbackLineResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    line_id: int
+    product_id: int | None
+    account_id: int | None
+    expected_account_id: int
+    product_matches: bool
+    account_matches: bool
+
+
+class VendorBillInternalUseReadbackResponse(BaseModel):
+    """An INTERNAL_USE product bill verified against its decision's immutable pin."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    pin_review_version: int
+    accounting_resolution_id: int
+    expected_account_id: int
+    expected_account_code: str
+    expense_category: str
+    lines: list[VendorBillInternalUseReadbackLineResponse]
+    mismatches: list[str]
+
+
 class VendorBillMonetaryReadbackLineResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -815,6 +888,27 @@ class VendorBillMonetaryReadbackResponse(BaseModel):
     mismatches: list[str]
 
 
+class VendorBillFxReadbackResponse(BaseModel):
+    """P1: a created bill's exchange rate and TRY amounts verified against the invoice rate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: str
+    document_currency: str | None
+    company_currency: str | None
+    source_rate: str | None
+    odoo_automatic_rate: str | None
+    odoo_bill_rate: str | None
+    expected_company_untaxed: str | None
+    expected_company_tax: str | None
+    expected_company_total: str | None
+    company_untaxed: str | None
+    company_tax: str | None
+    company_payable: str | None
+    mismatches: list[str]
+    notes: list[str]
+
+
 class VendorBillReadbackResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -832,8 +926,12 @@ class VendorBillReadbackResponse(BaseModel):
     lines: list[VendorBillReadbackLineResponse]
     # P0-PROD-18F-2: additive; null unless the decision was accepted under RESALE.
     resale_verification: VendorBillResaleReadbackResponse | None = None
+    # Additive; null unless the decision was accepted under INTERNAL_USE on a product invoice.
+    internal_use_verification: VendorBillInternalUseReadbackResponse | None = None
     # P0-PROD-19E-1: additive; the monetary verification of every Vendor Bill.
     monetary_verification: VendorBillMonetaryReadbackResponse | None = None
+    # P1: additive; the bill's rate and TRY amounts verified against the invoice rate.
+    fx_verification: VendorBillFxReadbackResponse | None = None
 
 
 class WorkbenchQuotationScenarioEvidenceRequest(BaseModel):

@@ -1,0 +1,161 @@
+<form create="0" edit="1" delete="0" duplicate="0">
+  <header>
+      <button name="1026" type="action" string="İşleme Gönder" class="btn-primary" invisible="x_studio_ipp_req_ready or not x_studio_ipp_req_action or x_studio_ipp_next_action in (False, 'Tamamlandı', 'Teknik Destek Gerekli', 'Ürün Eşleştirmesi Yapılmalı')"/>
+    </header>
+  <sheet string="IPP Import Workbench">
+      <widget name="web_ribbon" text="Archived" bg_color="text-bg-danger" invisible="x_active"/>
+      <field name="x_active" invisible="1"/>
+      <field name="x_studio_currency_id" invisible="1" can_create="True" can_write="True"/>
+      <field name="x_studio_ipp_eligible_asset_account_ids" invisible="1" can_create="True" can_write="True"/>
+      <field name="x_studio_ipp_req_ready" invisible="1"/>
+      <field name="x_studio_ipp_req_result" invisible="1"/>
+      <div class="alert alert-info" role="status" invisible="not x_studio_ipp_req_ready">İşlem gönderildi — Hub sırada. Sonuç genellikle bir dakika içinde görünür.</div>
+      <div class="alert alert-success" role="status" invisible="x_studio_ipp_req_ready or x_studio_ipp_req_result != 'Tamamlandı'">
+        <field name="x_studio_ipp_req_message" readonly="1" nolabel="1"/>
+      </div>
+      <div class="alert alert-warning" role="alert" invisible="x_studio_ipp_req_ready or x_studio_ipp_req_result not in ('Güncel Değil', 'Reddedildi', 'Yetkisiz', 'Hata')">
+        <field name="x_studio_ipp_req_message" readonly="1" nolabel="1"/>
+      </div>
+      <notebook>
+        <page string="İnceleme" name="ipp_review">
+          <group string="Fatura">
+            <group>
+              <field name="x_studio_invoice_number" string="Fatura No" readonly="1"/>
+              <field name="x_studio_supplier" string="Tedarikçi" readonly="1"/>
+              <field name="x_studio_invoice_date" string="Fatura Tarihi" readonly="1"/>
+            </group>
+            <group>
+              <field name="x_studio_invoice_total" string="Toplam" readonly="1"/>
+              <field name="x_studio_currency" string="Para Birimi" readonly="1"/>
+              <field name="x_studio_review_status" string="Durum" widget="badge" readonly="1" decoration-warning="x_studio_review_status == 'Pending Review'" decoration-info="x_studio_review_status == 'Decision Submitted'" decoration-success="x_studio_review_status == 'Resolved'" decoration-muted="x_studio_review_status == 'Dismissed'"/>
+            </group>
+          </group>
+          <group string="Yapılması Gerekenler" col="1">
+            <field name="x_studio_ipp_next_action" string="Sıradaki Adım" widget="badge" readonly="1" decoration-success="x_studio_ipp_next_action == 'Tamamlandı'" decoration-danger="x_studio_ipp_next_action == 'Teknik Destek Gerekli'" decoration-warning="x_studio_ipp_next_action not in (False, 'Tamamlandı', 'Teknik Destek Gerekli')"/>
+            <field name="x_studio_ipp_todo" nolabel="1" readonly="1" invisible="x_studio_ipp_next_action == 'Tamamlandı' and x_studio_vendor_bill"/>
+    <div class="alert alert-warning" role="alert" name="ipp_golive_no_post" invisible="x_studio_ipp_next_action != 'Tamamlandı' or not x_studio_vendor_bill">Taslak tedarikçi faturası oluşturuldu. Faturayı kontrol edin. Muhasebe kararı olmadan ONAYLAMAYIN.</div>
+          </group>
+    <div class="alert alert-info" role="status" name="ipp_pr_e_product_lines_hint" invisible="x_studio_ipp_next_action != 'Ürün Eşleştirmesi Yapılmalı'">Ürün eşleştirmesi "Ürün Satırları" sekmesinden yapılır: satırda mevcut ürünü seçip "Eşleştir"e veya yeni ürün bilgilerini girip "Yeni Ürün Oluştur"a basın.</div>
+          <group string="İşlem" invisible="x_studio_ipp_next_action in (False, 'Tamamlandı', 'Teknik Destek Gerekli', 'Ürün Eşleştirmesi Yapılmalı')">
+            <group>
+              <field name="x_studio_ipp_req_action" string="Yapılacak İşlem" readonly="x_studio_ipp_req_ready"/>
+              <field name="x_studio_ipp_req_supplier_mode" string="Tedarikçi İşlemi" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action != 'Tedarikçi Doğrulanmalı'"/>
+              <field name="x_studio_ipp_req_partner" string="Mevcut Tedarikçi" readonly="x_studio_ipp_req_ready" options="{'no_create': True, 'no_open': True}" invisible="x_studio_ipp_next_action != 'Tedarikçi Doğrulanmalı' or x_studio_ipp_req_supplier_mode != 'Mevcut Tedarikçiyi Seç'" can_create="True" can_write="True"/>
+              <field name="x_studio_ipp_req_purpose" string="Satın Alma Amacı" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action not in ('Satın Alma Amacı Seçilmeli', 'Karar Verilmeli')"/>
+    <div class="text-muted" colspan="2" name="ipp_internal_use_purpose_hint" invisible="x_studio_ipp_next_action != 'Karar Verilmeli'">Şirket içi kullanım (ör. ICT'nin kendi Microsoft 365 aboneliği) için Yapılacak İşlem = "Satın Alma Amacı" ve Satın Alma Amacı = "Şirket İçi Kullanım" seçip "İşleme Gönder"e basın. Sonraki adımda şirket içi gider hesabı istenir; ürün kategorisinin yeniden satış hesabı kullanılmaz.</div>
+    <div class="text-muted" colspan="2" name="ipp_golive_resale_hint" invisible="x_studio_ipp_next_action != 'Karar Verilmeli'">Engelsiz bir yeniden satış faturasında önce Yapılacak İşlem = "Satın Alma Amacı" ve Satın Alma Amacı = "Yeniden Satış" seçip "İşleme Gönder"e basın. Sonuç "Tamamlandı" olduktan sonra Yapılacak İşlem = "Karar" seçip kararı gönderin. Bu adımda yalnız "Yeniden Satış" veya ürün kodlu şirket içi kullanım faturaları için "Şirket İçi Kullanım" kabul edilir.</div>
+              <field name="x_studio_ipp_req_treatment" string="Muhasebe İşlemi" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli'"/>
+              <field name="x_studio_ipp_req_expense_account" string="Gider Hesabı" readonly="x_studio_ipp_req_ready" options="{'no_create': True, 'no_open': True}" domain="[('account_type', '=', 'expense')]" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli' or x_studio_ipp_req_treatment != 'Gider Hesabı'" required="x_studio_ipp_req_action == 'Muhasebe İşlemi' and x_studio_ipp_req_treatment == 'Gider Hesabı'" can_create="True" can_write="True"/>
+              <field name="x_studio_ipp_req_expense_category" string="Gider Kategorisi" readonly="x_studio_ipp_req_ready" invisible="1" required="0"/>
+    <field name="x_studio_ipp_req_expense_category_code" string="Gider Kategorisi" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli' or x_studio_ipp_req_treatment != 'Gider Hesabı'" required="x_studio_ipp_next_action == 'Muhasebe İşlemi Seçilmeli' and x_studio_ipp_req_action == 'Muhasebe İşlemi' and x_studio_ipp_req_treatment == 'Gider Hesabı'"/>
+    <div class="alert alert-info" role="alert" colspan="2" name="ipp_internal_use_account_hint" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli'">Gider Hesabı muhasebe onayıyla seçilir; otomatik veya varsayılan hesap yoktur. Gider Kategorisi listeden seçilir ve gider hesabını belirlemez. Ürün kodlu şirket içi kullanım faturalarında yalnız Gider Hesabı desteklenir; seçilen hesap karar ile birlikte sabitlenir.</div>
+  <field name="x_studio_ipp_req_asset_account" string="Demirbaş Hesabı" readonly="x_studio_ipp_req_ready" options="{'no_create': True, 'no_open': True}" domain="[('id', 'in', x_studio_ipp_eligible_asset_account_ids)]" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli' or x_studio_ipp_req_treatment != 'Sabit Kıymet / Demirbaş'" can_create="True" can_write="True"/>
+              <field name="x_studio_ipp_req_depreciation_model" string="Amortisman Modeli" readonly="x_studio_ipp_req_ready" options="{'no_create': True, 'no_open': True}" domain="[('active', '=', True)]" invisible="x_studio_ipp_next_action != 'Muhasebe İşlemi Seçilmeli' or x_studio_ipp_req_treatment != 'Sabit Kıymet / Demirbaş'" can_create="True" can_write="True"/>
+              <field name="x_studio_decision" string="Karar" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action != 'Karar Verilmeli'"/>
+    <div class="alert alert-danger" role="alert" colspan="2" name="ipp_golive_dismiss_warning" invisible="x_studio_ipp_next_action != 'Karar Verilmeli' or x_studio_decision != 'Dismiss'">Dismiss kalıcı bir Hub kararıdır: inceleme kapanır ve geri alınamaz. Bu, e-Faturanın yasal reddi veya itirazı DEĞİLDİR; tedarikçiye veya GİB'e hiçbir bildirim gönderilmez. Karar Notu alanına yazılı gerekçe girilmesi zorunludur.</div>
+              <field name="x_studio_selected_workflow" string="İş Akışı" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action != 'Karar Verilmeli' or x_studio_decision != 'Submit Decision'"/>
+              <field name="x_studio_decision_comment" string="Karar Notu" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action != 'Karar Verilmeli'" required="x_studio_ipp_next_action == 'Karar Verilmeli' and x_studio_decision == 'Dismiss'"/>
+              <field name="x_studio_ipp_req_note" string="Not" readonly="x_studio_ipp_req_ready" invisible="x_studio_ipp_next_action == 'Karar Verilmeli'"/>
+            </group>
+            <group>
+              <div class="text-muted" colspan="2">Sıradaki adıma uygun işlemi seçin ve "İşleme Gönder" düğmesine basın. Hub isteği doğrular; sonuç bu sayfada görünür.</div>
+            </group>
+          </group>
+          <group string="✓ Tamamlananlar" col="1">
+            <field name="x_studio_ipp_completed" nolabel="1" readonly="1"/>
+            <field name="x_studio_vendor_bill" string="Taslak Fatura" readonly="1" invisible="not x_studio_vendor_bill"/>
+          </group>
+        </page>
+        <page string="İş Bağlamı" name="ipp_business_context" invisible="x_studio_business_context_required != 'Required'">
+          <field name="x_studio_allocation_list" nolabel="1" readonly="1">
+            <list default_order="id desc" create="0" delete="0">
+              <field name="x_studio_allocation_type" readonly="1"/>
+              <field name="x_studio_description" readonly="1"/>
+              <field name="x_studio_customer" readonly="1"/>
+              <field name="x_studio_sales_order" readonly="1"/>
+              <field name="x_studio_percentage" widget="percentage" readonly="1"/>
+              <field name="x_studio_amount" readonly="1"/>
+            </list>
+          </field>
+        </page>
+        <page string="Teknik / Denetim" name="ipp_technical">
+          <group>
+            <group string="Hub">
+              <field name="x_studio_review_id" readonly="1"/>
+              <field name="x_studio_company" readonly="1"/>
+              <field name="x_studio_review_version" readonly="1"/>
+              <field name="x_studio_workflow" readonly="1"/>
+              <field name="x_studio_classification" readonly="1"/>
+              <field name="x_studio_matched_rule" readonly="1"/>
+              <field name="x_studio_rule_version" readonly="1"/>
+              <field name="x_studio_conflict" readonly="1"/>
+              <field name="x_studio_review_required" readonly="1"/>
+              <field name="x_studio_business_context_required" readonly="1"/>
+              <field name="x_studio_supplier_tax_number" readonly="1"/>
+              <field name="x_studio_execution_status" readonly="1"/>
+              <field name="x_studio_execution_message" readonly="1"/>
+              <field name="x_studio_last_sync_at" readonly="1"/>
+              <field name="x_studio_trace_id" readonly="1"/>
+            </group>
+            <group string="İstek / Karar Denetimi">
+              <field name="x_studio_ipp_req_version" readonly="1"/>
+              <field name="x_studio_ipp_req_requested_by" readonly="1"/>
+              <field name="x_studio_ipp_req_requested_at" readonly="1"/>
+              <field name="x_studio_ipp_req_ready" readonly="1"/>
+              <field name="x_studio_ipp_req_result" readonly="1"/>
+              <field name="x_studio_ipp_req_processed_at" readonly="1"/>
+              <field name="x_studio_ready_for_hub_processing" readonly="1"/>
+              <field name="x_studio_decided_at" readonly="1"/>
+              <field name="x_studio_decided_by" readonly="1"/>
+              <field name="x_studio_decision_idempotency_key" readonly="1"/>
+            </group>
+          </group>
+          <group string="Bulgular (teknik kodlar)" col="1">
+            <field name="x_studio_review_reasons" readonly="1" nolabel="1"/>
+            <field name="x_studio_warnings" readonly="1"/>
+          </group>
+        </page>
+    <page string="Ürün Satırları" name="ipp_product_lines">
+      <field name="x_studio_ipp_product_line_ids" nolabel="1">
+      <list editable="bottom" create="0" delete="0" default_order="x_studio_ipp_line_sequence asc">
+        <field name="x_studio_ipp_line_sequence" column_invisible="1"/>
+        <field name="x_studio_ipp_req_ready" column_invisible="1"/>
+        <field name="x_studio_ipp_line_number" string="Satır" readonly="1"/>
+        <field name="x_studio_ipp_seller_code" string="Satıcı Ürün Kodu" readonly="1"/>
+        <field name="x_studio_ipp_description" string="Açıklama" readonly="1"/>
+        <field name="x_studio_ipp_quantity" string="Miktar" readonly="1"/>
+        <field name="x_studio_ipp_uom_code" string="Birim" readonly="1"/>
+        <field name="x_studio_ipp_match_state" string="Durum" readonly="1" decoration-success="x_studio_ipp_match_state == 'matched'" decoration-warning="x_studio_ipp_match_state in ('product_not_found', 'product_ambiguous')" decoration-danger="x_studio_ipp_match_state in ('identifier_missing', 'supplier_unresolved')" decoration-muted="x_studio_ipp_match_state in ('resolved_without_product', 'no_evidence')" on_change="1"/>
+        <field name="x_studio_ipp_product_id" string="Eşleşen Ürün" readonly="1"/>
+        <field name="x_studio_ipp_req_product" string="Eşleştirilecek Ürün" domain="[('purchase_ok', '=', True)]" readonly="x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_req_ready" can_create="True" can_write="True"/>
+        <button name="1027" type="action" string="Eşleştir" icon="fa-link" invisible="x_studio_ipp_match_state != 'product_not_found' or not x_studio_ipp_req_product or x_studio_ipp_req_ready"/>
+        <field name="x_studio_ipp_req_result" string="Sonuç" readonly="1" optional="show"/>
+        <field name="x_studio_ipp_req_message" string="Sonuç Mesajı" readonly="1" optional="show"/>
+    <field name="x_studio_ipp_new_ready" column_invisible="1"/>
+    <field name="x_studio_ipp_new_name" string="Yeni Ürün Adı" optional="show" readonly="x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_new_ready"/>
+    <field name="x_studio_ipp_new_kind" string="Ürün Türü" optional="show" readonly="x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_new_ready"/>
+    <field name="x_studio_ipp_new_categ" string="Kategori" optional="show" readonly="x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_new_ready" can_create="True" can_write="True"/>
+    <field name="x_studio_ipp_new_uom" string="Birim (Odoo)" optional="show" readonly="x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_new_ready" can_create="True" can_write="True"/>
+    <field name="x_studio_ipp_new_ref" string="İç Referans" optional="hide" readonly="x_studio_ipp_match_state != 'product_not_found' or x_studio_ipp_new_ready"/>
+    <button name="1028" type="action" string="Yeni Ürün Oluştur" icon="fa-plus" invisible="1"/>
+      </list>
+    </field>
+  </page>
+    <page string="Ürün Önerileri" name="ipp_product_suggestions">
+      <div class="alert alert-warning" role="alert">Öneriler bilgilendirme amaçlıdır. Güncellikleri değişebilir; eşleştirme öncesinde ürünü doğrulayın.</div>
+      <field name="x_studio_ipp_suggestion_line_ids" readonly="1" nolabel="1">
+        <list create="0" delete="0" edit="0" default_order="x_studio_ipp_line_sequence asc">
+          <field name="x_studio_ipp_line_sequence" column_invisible="1"/>
+          <field name="x_studio_ipp_line_number" string="Satır"/>
+          <field name="x_studio_ipp_seller_code" string="Satıcı Ürün Kodu"/>
+          <field name="x_studio_ipp_description" string="Açıklama"/>
+          <field name="x_studio_ipp_suggested_product_ids" string="Önerilen Ürünler" widget="many2many_tags"/>
+          <field name="x_studio_ipp_suggestion_summary" string="Öneri Özeti" optional="show"/>
+        </list>
+      </field>
+    </page>
+      </notebook>
+    </sheet>
+  <chatter/>
+<field name="x_studio_business_context_required" invisible="True" readonly="True" data-used-by="invisible=&quot;x_studio_business_context_required != 'Required'&quot; (page,ipp_business_context)"/>
+</form>

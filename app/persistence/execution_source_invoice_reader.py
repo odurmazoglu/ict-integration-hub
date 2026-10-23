@@ -23,6 +23,11 @@ from app.application.fixed_asset_accounting import (
 )
 from app.application.workbench.dto import LineResolution
 from app.application.workbench.exceptions import WorkbenchContractError
+from app.application.workbench.internal_use_accounting_pin import (
+    InternalUseAccountingPin,
+    internal_use_accounting_pin_from_data,
+    is_internal_use_rollback_guard,
+)
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin, resale_accounting_pin_from_data
 from app.domain.invoice import (
     Address,
@@ -111,8 +116,46 @@ class SqlAlchemyExecutionSourceInvoiceReader:
             raise ExecutionSourceInvoiceError(SAFE_SOURCE_ERROR) from exc
         if evidence.resale_accounting_pin is None:
             return None
+        if is_internal_use_rollback_guard(evidence.resale_accounting_pin):
+            # An INTERNAL_USE decision's rollback guard, valid only next to its INTERNAL_USE pin.
+            if evidence.internal_use_accounting_pin is None:
+                raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR)
+            return None
         try:
             return resale_accounting_pin_from_data(evidence.resale_accounting_pin)
+        except WorkbenchContractError as exc:
+            raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR) from exc
+
+    def get_internal_use_accounting_pin(
+        self,
+        *,
+        review_id: str,
+        company_id: int,
+        decision_version: int,
+    ) -> InternalUseAccountingPin | None:
+        """The immutable INTERNAL_USE accounting pin stored with this accepted decision, if
+        any. A stored-but-invalid pin fails closed; it is never repaired."""
+
+        _validate_query(review_id=review_id, company_id=company_id, decision_version=decision_version)
+        try:
+            decision = self._accepted_decision(
+                review_id=review_id,
+                company_id=company_id,
+                decision_version=decision_version,
+            )
+            evidence = self._evidence_for_decision(decision)
+        except ExecutionSourceInvoiceError:
+            raise
+        except SQLAlchemyError as exc:
+            raise ExecutionSourceInvoiceError(SAFE_SOURCE_ERROR) from exc
+        if evidence.internal_use_accounting_pin is None:
+            return None
+        if not is_internal_use_rollback_guard(evidence.resale_accounting_pin):
+            # Every INTERNAL_USE pin is written together with its rollback guard; a pin
+            # without it could execute on rolled-back code with the wrong account.
+            raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR)
+        try:
+            return internal_use_accounting_pin_from_data(evidence.internal_use_accounting_pin)
         except WorkbenchContractError as exc:
             raise ExecutionSourceInvoiceIntegrityError(SAFE_SOURCE_INTEGRITY_ERROR) from exc
 

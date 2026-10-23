@@ -21,6 +21,13 @@ Ties together the pieces P0-PROD-15T adds, mirroring
        (P0-PROD-15T) consults this exact resolution ahead of any supplier-wide state
     -> report the post-reclassification workflow/reasons; never claim RESOLVED while
        an operating-expense-shaped reason is still present.
+
+A *technically unblocked* review (no reasons, workflow VENDOR_BILL) whose current-version
+purpose is INTERNAL_USE also accepts an EXPENSE_ACCOUNT resolution: a product invoice
+bought for ICT's own use whose category account is meant for RESALE. There is no
+blocker to remediate, so nothing is reclassified and the review version is unchanged;
+the resolution is consumed only by ``InternalUseDecisionGate`` at decision acceptance,
+which pins it into the decision's execution evidence.
 """
 
 from __future__ import annotations
@@ -65,7 +72,7 @@ from app.application.workbench.projection_sync_contracts import ReviewProjection
 from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.queries import ReviewDetailQuery
 from app.application.workbench.reclassification import ReclassifyReviewCommand, ReviewReclassificationTrigger
-from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
+from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 
 SAFE_ACCOUNTING_RESOLUTION_ERROR = "Review-scoped accounting resolution failed."
 
@@ -158,7 +165,7 @@ class SubmitReviewAccountingResolutionUseCase:
             raise ReviewVersionConflictError("The review version does not match expected_version.")
         if review.version != command.expected_version:
             raise ReviewVersionConflictError("The review version does not match expected_version.")
-        self._require_eligible(review)
+        unblocked = self._require_eligible(review)
 
         purpose = self._purpose_reader.find_purchase_purpose_resolution(
             review_id=command.review_id,
@@ -175,6 +182,14 @@ class SubmitReviewAccountingResolutionUseCase:
                 f"purchase_purpose={purpose.purchase_purpose.value} is not supported; the review remains "
                 "manual_review until a supported treatment is chosen."
             )
+        if unblocked and (
+            purpose.purchase_purpose is not PurchasePurpose.INTERNAL_USE
+            or command.treatment_type is not AccountingTreatmentType.EXPENSE_ACCOUNT
+        ):
+            raise AccountingResolutionPurposeUnsupportedError(
+                "A technically unblocked Vendor Bill review accepts only an expense_account treatment for the "
+                "internal_use purchase purpose."
+            )
 
         selection = self._require_eligible_selection(command)
 
@@ -188,6 +203,8 @@ class SubmitReviewAccountingResolutionUseCase:
                 raise AccountingResolutionConflictError(
                     "A different accounting resolution already exists for this review version."
                 )
+            if unblocked:
+                return self._unblocked_result(existing, review, already_applied=True)
             # The resolution row is already durable; a prior attempt's reclassify call
             # may not have completed (e.g. crash between the two commits). Resuming
             # here re-runs reclassification against the SAME persisted row -- never a
@@ -209,6 +226,14 @@ class SubmitReviewAccountingResolutionUseCase:
             note=command.note,
             **selection,
         )
+        if unblocked:
+            try:
+                created = self._accounting_resolution_writer.create_accounting_resolution(resolution)
+                self._unit_of_work.commit()
+            except BaseException:
+                self._unit_of_work.rollback()
+                raise
+            return self._unblocked_result(created, review, already_applied=False)
         try:
             created = self._accounting_resolution_writer.create_accounting_resolution(resolution)
             self._unit_of_work.commit()
@@ -221,15 +246,20 @@ class SubmitReviewAccountingResolutionUseCase:
 
     # ------------------------------------------------------------------ eligibility
 
-    def _require_eligible(self, review) -> None:
+    def _require_eligible(self, review) -> bool:
+        """``True`` for the technically unblocked INTERNAL_USE path, ``False`` for remediation."""
+
         from app.application.workbench.dto import ReviewStatus
 
         if review.status is not ReviewStatus.PENDING_REVIEW:
             raise ReviewStateConflictError("The review is not pending review.")
-        if not _has_operating_expense_reason(review.review_reasons):
-            raise AccountingResolutionEligibilityError(
-                "The review does not currently carry an operating-expense-shaped reason; there is nothing to remediate."
-            )
+        if _has_operating_expense_reason(review.review_reasons):
+            return False
+        if not review.review_reasons and review.workflow is WorkflowType.VENDOR_BILL:
+            return True
+        raise AccountingResolutionEligibilityError(
+            "The review does not currently carry an operating-expense-shaped reason; there is nothing to remediate."
+        )
 
     def _require_eligible_selection(self, command: SubmitReviewAccountingResolutionCommand) -> dict[str, object]:
         """The treatment's own re-validated field set, exactly as it will be persisted."""
@@ -314,6 +344,35 @@ class SubmitReviewAccountingResolutionUseCase:
                     "The accounting resolution was recorded and the review reclassified, but the review "
                     "still carries an operating-expense-shaped reason. Another blocker may remain."
                 )
+            ),
+        )
+
+    def _unblocked_result(
+        self,
+        resolution: ReviewAccountingResolution,
+        review,
+        *,
+        already_applied: bool,
+    ) -> ReviewAccountingResolutionSubmissionResult:
+        """No blocker existed, so nothing was reclassified and the version is unchanged."""
+
+        return ReviewAccountingResolutionSubmissionResult(
+            review_id=resolution.review_id,
+            company_id=resolution.company_id,
+            status=AccountingResolutionStatus.RESOLVED,
+            previous_version=review.version,
+            current_version=review.version,
+            current_workflow=review.workflow,
+            current_review_reasons=review.review_reasons,
+            treatment_type=resolution.treatment_type,
+            expense_account_id=resolution.expense_account_id,
+            expense_category=resolution.expense_category,
+            reclassified=False,
+            already_applied=already_applied,
+            safe_message=(
+                "This accounting resolution was already recorded."
+                if already_applied
+                else "Internal expense account recorded for this review version; the decision will pin it."
             ),
         )
 

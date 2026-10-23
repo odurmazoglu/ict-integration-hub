@@ -746,6 +746,10 @@ def test_preview_use_case_never_references_any_write_gate_setting() -> None:
         "purchase_purpose_reader",
         # PR T W1: read-only source-document tax check (Hub persistence + document storage).
         "source_tax_safety_check",
+        # P1: read-only invoice exchange-rate evidence (stored UBL + res.company/res.currency search_read).
+        "fx_rate_policy",
+        # P0 INTERNAL_USE: Hub-persistence-only read of the decision's INTERNAL_USE pin.
+        "internal_use_accounting_pin_reader",
     }
 
 

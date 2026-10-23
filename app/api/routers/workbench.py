@@ -55,6 +55,7 @@ from app.application.execution import (
 )
 from app.application.execution.exceptions import (
     ExecutionPreviewCurrencyResolutionError,
+    ExecutionPreviewInternalUseAccountingError,
     ExecutionPreviewResaleAccountingError,
     ExecutionPreviewUnsupportedWorkflowError,
     ExecutionSourceInvoiceError,
@@ -64,6 +65,7 @@ from app.application.execution.exceptions import (
 from app.application.execution.vendor_bill_preview import (
     PreviewVendorBillRequest,
     VendorBillPreview,
+    VendorBillPreviewInternalUseAccounting,
     VendorBillPreviewResaleAccounting,
 )
 from app.application.expense_mapping import (
@@ -119,11 +121,13 @@ from app.application.workbench.exceptions import (
     ExecutionEvidenceRecoverySourceMissingError,
     FixedAssetAccountingUnavailableError,
     FixedAssetAccountInvalidError,
+    InternalUseDecisionEligibilityError,
     OneOffVendorArchiveRetiredError,
     OperatingExpenseMappingAccountInvalidError,
     OperatingExpenseMappingEligibilityError,
     OperatingExpenseMappingSupplierUnresolvedError,
     OperatingExpenseMappingWorkflowError,
+    ProductPurchasePurposeDecisionError,
     ProductRemediationConflictError,
     ProductRemediationContractError,
     ProductRemediationDataIntegrityError,
@@ -177,6 +181,8 @@ from app.application.workbench.purchase_purpose import SubmitPurchasePurposeComm
 from app.application.workbench.review_evidence import EffectiveLineResolution
 from app.application.workbench.supplier_remediation import ResolveWorkbenchSupplierCommand
 from app.application.workbench.vendor_bill_readback import (
+    VendorBillFxReadbackVerification,
+    VendorBillInternalUseReadbackVerification,
     VendorBillMonetaryReadbackVerification,
     VendorBillReadback,
     VendorBillReadbackError,
@@ -195,6 +201,7 @@ from app.application.workbench.write_authorization import (
 )
 from app.application.workflow import ManualReviewReason, WorkflowType
 from app.billing.exceptions import VendorBillBuildError
+from app.billing.fx_rate import FxRatePlan
 from app.schemas.workbench import (
     AcceptedDecisionSummaryResponse,
     AccountingResolutionEnvelope,
@@ -252,9 +259,14 @@ from app.schemas.workbench import (
     SupplierRemediationResponse,
     SupplierResolutionRequest,
     TaxResolutionRequest,
+    VendorBillFxRatePlanResponse,
+    VendorBillFxReadbackResponse,
+    VendorBillInternalUseReadbackLineResponse,
+    VendorBillInternalUseReadbackResponse,
     VendorBillMonetaryReadbackLineResponse,
     VendorBillMonetaryReadbackResponse,
     VendorBillPreviewEnvelope,
+    VendorBillPreviewInternalUseAccountingResponse,
     VendorBillPreviewLineResponse,
     VendorBillPreviewResaleAccountingResponse,
     VendorBillPreviewResponse,
@@ -1550,6 +1562,46 @@ def _vendor_bill_preview_response(preview: VendorBillPreview) -> VendorBillPrevi
         source_total=decimal_to_api(preview.source_total),
         monetary_reconciles=preview.monetary_reconciles,
         monetary_mismatches=list(preview.monetary_mismatches),
+        fx_rate_plan=_fx_rate_plan_response(preview.fx_rate_plan),
+        internal_use_accounting=_preview_internal_use_accounting_response(preview.internal_use_accounting),
+    )
+
+
+def _preview_internal_use_accounting_response(
+    pinned: VendorBillPreviewInternalUseAccounting | None,
+) -> VendorBillPreviewInternalUseAccountingResponse | None:
+    if pinned is None:
+        return None
+    return VendorBillPreviewInternalUseAccountingResponse(
+        pin_review_version=pinned.pin_review_version,
+        accounting_resolution_id=pinned.accounting_resolution_id,
+        account_id=pinned.account_id,
+        account_code=pinned.account_code,
+        account_name=pinned.account_name,
+        account_type=pinned.account_type,
+        expense_category=pinned.expense_category,
+    )
+
+
+def _fx_rate_plan_response(plan: FxRatePlan | None) -> VendorBillFxRatePlanResponse | None:
+    if plan is None:
+        return None
+    return VendorBillFxRatePlanResponse(
+        status=plan.status.value,
+        blocks_vendor_bill=plan.blocks_vendor_bill,
+        document_currency=plan.document_currency,
+        company_currency=plan.company_currency,
+        rate_date=plan.rate_date,
+        source_rate=decimal_to_api(plan.source_rate),
+        odoo_automatic_rate=decimal_to_api(plan.odoo_automatic_rate),
+        selected_rate=decimal_to_api(plan.selected_rate),
+        odoo_invoice_currency_rate=plan.odoo_invoice_currency_rate,
+        rate_difference=decimal_to_api(plan.rate_difference),
+        company_currency_decimal_places=plan.company_currency_decimal_places,
+        expected_company_untaxed=decimal_to_api(plan.expected_company_untaxed),
+        expected_company_tax=decimal_to_api(plan.expected_company_tax),
+        expected_company_total=decimal_to_api(plan.expected_company_total),
+        message=plan.message,
     )
 
 
@@ -1599,7 +1651,59 @@ def _vendor_bill_readback_response(readback: VendorBillReadback) -> VendorBillRe
             for line in readback.lines
         ],
         resale_verification=_resale_readback_response(readback.resale_verification),
+        internal_use_verification=_internal_use_readback_response(readback.internal_use_verification),
         monetary_verification=_monetary_readback_response(readback.monetary_verification),
+        fx_verification=_fx_readback_response(readback.fx_verification),
+    )
+
+
+def _internal_use_readback_response(
+    verification: VendorBillInternalUseReadbackVerification | None,
+) -> VendorBillInternalUseReadbackResponse | None:
+    if verification is None:
+        return None
+    return VendorBillInternalUseReadbackResponse(
+        status=verification.status.value,
+        pin_review_version=verification.pin_review_version,
+        accounting_resolution_id=verification.accounting_resolution_id,
+        expected_account_id=verification.expected_account_id,
+        expected_account_code=verification.expected_account_code,
+        expense_category=verification.expense_category,
+        lines=[
+            VendorBillInternalUseReadbackLineResponse(
+                line_id=line.line_id,
+                product_id=line.product_id,
+                account_id=line.account_id,
+                expected_account_id=line.expected_account_id,
+                product_matches=line.product_matches,
+                account_matches=line.account_matches,
+            )
+            for line in verification.lines
+        ],
+        mismatches=list(verification.mismatches),
+    )
+
+
+def _fx_readback_response(
+    verification: VendorBillFxReadbackVerification | None,
+) -> VendorBillFxReadbackResponse | None:
+    if verification is None:
+        return None
+    return VendorBillFxReadbackResponse(
+        status=verification.status.value,
+        document_currency=verification.document_currency,
+        company_currency=verification.company_currency,
+        source_rate=decimal_to_api(verification.source_rate),
+        odoo_automatic_rate=decimal_to_api(verification.odoo_automatic_rate),
+        odoo_bill_rate=decimal_to_api(verification.odoo_bill_rate),
+        expected_company_untaxed=decimal_to_api(verification.expected_company_untaxed),
+        expected_company_tax=decimal_to_api(verification.expected_company_tax),
+        expected_company_total=decimal_to_api(verification.expected_company_total),
+        company_untaxed=decimal_to_api(verification.company_untaxed),
+        company_tax=decimal_to_api(verification.company_tax),
+        company_payable=decimal_to_api(verification.company_payable),
+        mismatches=list(verification.mismatches),
+        notes=list(verification.notes),
     )
 
 
@@ -1874,7 +1978,7 @@ def _status_code_for_exception(exc: Exception) -> int:
         ),
     ):
         return HTTPStatus.BAD_REQUEST
-    if isinstance(exc, ExecutionPreviewResaleAccountingError):
+    if isinstance(exc, (ExecutionPreviewResaleAccountingError, ExecutionPreviewInternalUseAccountingError)):
         return HTTPStatus.CONFLICT
     if isinstance(exc, ExecutionSourceInvoiceNotFoundError):
         return HTTPStatus.NOT_FOUND
@@ -1928,6 +2032,8 @@ def _status_code_for_exception(exc: Exception) -> int:
             PurchasePurposeEligibilityError,
             PurchasePurposeConflictError,
             ResaleDecisionEligibilityError,
+            InternalUseDecisionEligibilityError,
+            ProductPurchasePurposeDecisionError,
             AccountingResolutionEligibilityError,
             AccountingResolutionPurposeRequiredError,
             AccountingResolutionPurposeUnsupportedError,

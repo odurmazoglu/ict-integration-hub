@@ -38,7 +38,12 @@ from app.billing.exceptions import VendorBillBuildError
 from app.billing.money import MonetaryPrecision, currency_round, monetary_equal
 from app.domain.invoice import Discount, InvoiceLine, parse_ubl_invoice
 from app.erp.write.exceptions import VendorBillWriteTransportError
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, StaticCurrencyPrecisionReader
+from tests.unit.fx_rate_support import MATCHING_FX_RATE_POLICY, with_ubl_rate
+from tests.unit.resale_execution_support import (
+    NON_INTERNAL_USE_ACCOUNTING_CHECK,
+    NON_RESALE_ACCOUNTING_CHECK,
+    StaticCurrencyPrecisionReader,
+)
 from tests.unit.source_tax_support import ALLOW_SOURCE_TAX_SAFETY_CHECK
 from tests.unit.test_p0_prod_19e_1_currency_rounding_reconciliation import (
     PRODUCT_ID,
@@ -379,12 +384,15 @@ def _execute(source, *, currency_reader=None):
     writer = RecordingVendorBillWriter()
     currency_reader = currency_reader or StaticCurrencyPrecisionReader(2)
     strategy = VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_tax_safety_check=ALLOW_SOURCE_TAX_SAFETY_CHECK,
-        source_invoice_reader=RecordingSourceInvoiceReader(source=_execution_source(source)),
+        # USD fixture: the invoice states the rate Odoo applies (P1 FX guard passes).
+        source_invoice_reader=with_ubl_rate(RecordingSourceInvoiceReader(source=_execution_source(source))),
         vendor_bill_builder=VendorBillBuilder(),
         vendor_bill_writer=writer,
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
         currency_reader=currency_reader,
+        fx_rate_policy=MATCHING_FX_RATE_POLICY,
     )
     result = strategy.execute(_step_request(mode=ExecutionMode.EXECUTE, approved_by="finance"))
     return result, writer, currency_reader

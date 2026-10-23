@@ -42,3 +42,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Odoo server action code: records/env/UserError/datetime come from the Odoo eval context.
+"docs/odoo_studio/**/actions/*.py" = ["F821"]

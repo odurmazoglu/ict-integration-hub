@@ -49,6 +49,45 @@ def issue_validated_resale_line_account(
     return issued
 
 
+# INTERNAL_USE counterpart of the RESALE seal: only
+# ``issue_validated_internal_use_line_account`` can produce a sealed
+# ``ValidatedInternalUseLineAccount``, and only the INTERNAL_USE execution validator
+# (``app.application.execution.internal_use_execution_accounting``) calls it -- after the
+# decision's immutable INTERNAL_USE pin passed execution-time validation. An
+# architecture test pins that single call site.
+_INTERNAL_USE_LINE_ACCOUNT_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedInternalUseLineAccount:
+    """Proof that one INTERNAL_USE product line's explicit ``account_id`` is the decision's
+    pinned, operator-selected internal expense account (never the product category's)."""
+
+    line_number: str
+    product_id: int
+    account_id: int
+    _seal: object = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        _require_text(self.line_number, "line_number is required.")
+        _require_positive_int(self.product_id, "product_id must be a positive ERP id.")
+        _require_positive_int(self.account_id, "account_id must be a positive ERP account id.")
+
+    @property
+    def sealed(self) -> bool:
+        return self._seal is _INTERNAL_USE_LINE_ACCOUNT_SEAL
+
+
+def issue_validated_internal_use_line_account(
+    *, line_number: str, product_id: int, account_id: int
+) -> ValidatedInternalUseLineAccount:
+    """Internal to the INTERNAL_USE execution validator -- see ``_INTERNAL_USE_LINE_ACCOUNT_SEAL``."""
+
+    issued = ValidatedInternalUseLineAccount(line_number=line_number, product_id=product_id, account_id=account_id)
+    object.__setattr__(issued, "_seal", _INTERNAL_USE_LINE_ACCOUNT_SEAL)
+    return issued
+
+
 @dataclass(frozen=True, slots=True)
 class VendorBillLine:
     """One draft Vendor Bill line.
@@ -61,13 +100,16 @@ class VendorBillLine:
     * RESALE pinned product line (P0-PROD-18F-2) -- ``product_id`` *and* ``account_id``,
       allowed only together with a ``resale_account`` proving the account is the
       decision's immutable, execution-time-validated RESALE pin for this product.
+    * INTERNAL_USE pinned product line -- ``product_id`` *and* ``account_id``, allowed
+      only together with an ``internal_use_account`` proving the account is the
+      decision's immutable, execution-time-validated internal expense account.
 
     An account-only line may additionally carry ``depreciation_model_id`` -- the frozen
     CAPITALIZE_FIXED_ASSET selection (``app.application.fixed_asset_accounting``). It is
     never allowed on a product or RESALE line.
 
-    ``product_id`` and ``account_id`` without ``resale_account`` stays rejected, so no
-    caller can attach an arbitrary account to a product-backed line.
+    ``product_id`` and ``account_id`` without ``resale_account``/``internal_use_account``
+    stays rejected, so no caller can attach an arbitrary account to a product-backed line.
 
     Carries no UoM of any kind (P0-PROD-10E): the source invoice's raw UN/CEFACT
     unit code is immutable source evidence, never an Odoo id, and must never be
@@ -86,12 +128,34 @@ class VendorBillLine:
     account_id: int | None = None
     resale_account: ValidatedResaleLineAccount | None = None
     depreciation_model_id: int | None = None
+    internal_use_account: ValidatedInternalUseLineAccount | None = None
 
     def __post_init__(self) -> None:
         if self.depreciation_model_id is not None:
             _require_positive_int(self.depreciation_model_id, "depreciation_model_id must be a positive ERP id.")
-            if self.product_id is not None or self.resale_account is not None or self.account_id is None:
+            if (
+                self.product_id is not None
+                or self.resale_account is not None
+                or self.internal_use_account is not None
+                or self.account_id is None
+            ):
                 raise ValueError("depreciation_model_id is only valid on an account-only fixed-asset line.")
+        if self.internal_use_account is not None:
+            if self.resale_account is not None:
+                raise ValueError("A line cannot carry both a RESALE and an INTERNAL_USE account.")
+            if (
+                not isinstance(self.internal_use_account, ValidatedInternalUseLineAccount)
+                or not self.internal_use_account.sealed
+            ):
+                raise ValueError("internal_use_account must be issued by INTERNAL_USE execution validation.")
+            _require_positive_int(self.product_id, "product_id must be a positive ERP id.")
+            _require_positive_int(self.account_id, "account_id must be a positive ERP account id.")
+            if (self.product_id, self.account_id) != (
+                self.internal_use_account.product_id,
+                self.internal_use_account.account_id,
+            ):
+                raise ValueError("An INTERNAL_USE line's product and account must be exactly its validated pin.")
+            return
         if self.resale_account is not None:
             if not isinstance(self.resale_account, ValidatedResaleLineAccount) or not self.resale_account.sealed:
                 raise ValueError("resale_account must be issued by RESALE execution validation.")
@@ -124,6 +188,10 @@ class VendorBill:
     company_id: int | None = None
     invoice_lines: tuple[VendorBillLine, ...] = field(default_factory=tuple)
     notes: tuple[str, ...] = field(default_factory=tuple)
+    # P1: the invoice's own exchange rate (company-currency units per one bill-currency
+    # unit, exact), set only after the FX rate-selection rule selected it; None for a bill
+    # in the company currency. Sent to Odoo as invoice_currency_rate.
+    company_currency_rate: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)

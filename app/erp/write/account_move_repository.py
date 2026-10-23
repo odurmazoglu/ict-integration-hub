@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from app.billing import CustomerInvoice, VendorBill, to_odoo_account_move_payload, to_odoo_customer_invoice_payload
+from app.billing.fx_rate import odoo_invoice_currency_rate as to_odoo_rate
 from app.connectors.exceptions import (
     ConnectorAuthenticationError,
     ConnectorAuthorizationError,
@@ -29,6 +31,7 @@ from app.erp.write.exceptions import (
 ACCOUNT_MOVE_MODEL = "account.move"
 VENDOR_BILL_MOVE_TYPE = "in_invoice"
 CUSTOMER_INVOICE_MOVE_TYPE = "out_invoice"
+COMPANY_CURRENCY_CODE = "TRY"
 IDEMPOTENCY_FIELD = "invoice_origin"
 FORBIDDEN_ACCOUNT_MOVE_FIELDS = frozenset(
     {
@@ -185,6 +188,7 @@ class AccountMoveRepository:
             company_id if company_id is not None else vendor_bill.company_id,
             "Vendor Bill",
         )
+        _validate_vendor_bill_rate(vendor_bill)
         payload = to_odoo_account_move_payload(vendor_bill, currency_id=currency_id, product_uom_ids=product_uom_ids)
         payload["company_id"] = company_id
         payload[IDEMPOTENCY_FIELD] = idempotency_key
@@ -340,6 +344,28 @@ def _validate_company_id(company_id: object, label: str) -> int:
     if type(company_id) is not int or company_id <= 0:
         raise VendorBillWriteValidationError(f"{label} company_id is required.")
     return company_id
+
+
+def _validate_vendor_bill_rate(vendor_bill: VendorBill) -> None:
+    """P1 backstop: a foreign-currency bill is never created at Odoo's automatic rate.
+
+    The company currency is TRY (UBL-TR e-invoices); the execution guard has already
+    verified it against Odoo and selected the invoice's own rate before any write.
+    """
+
+    currency = (vendor_bill.currency or "").strip().upper()
+    rate = vendor_bill.company_currency_rate
+    if currency == COMPANY_CURRENCY_CODE:
+        if rate is not None:
+            raise VendorBillWriteValidationError("A company-currency Vendor Bill must not carry an exchange rate.")
+        return
+    if rate is None or not rate.is_finite() or rate <= 0:
+        raise VendorBillWriteValidationError(
+            "A foreign-currency Vendor Bill requires the validated invoice exchange rate."
+        )
+    value = to_odoo_rate(rate)
+    if not math.isfinite(value) or value <= 0:
+        raise VendorBillWriteValidationError("The Vendor Bill exchange rate is not usable.")
 
 
 def _validate_payload(payload: dict[str, Any]) -> None:

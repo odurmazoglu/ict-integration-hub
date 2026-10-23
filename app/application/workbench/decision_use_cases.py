@@ -11,9 +11,12 @@ from app.application.workbench.commands import ReviewDecisionCommand
 from app.application.workbench.dto import ReviewDecisionAcknowledgement, ReviewDecisionType
 from app.application.workbench.exceptions import (
     DismissCommentRequiredError,
+    ProductPurchasePurposeDecisionError,
     ReviewDecisionError,
     WorkbenchContractError,
 )
+from app.application.workbench.internal_use_accounting_pin import InternalUseAccountingPin
+from app.application.workbench.internal_use_decision_gate import InternalUseDecisionGate
 from app.application.workbench.ports import (
     ReviewBillingEvidenceReader,
     ReviewDecisionWriter,
@@ -21,11 +24,13 @@ from app.application.workbench.ports import (
     SelectedAccountReader,
     SelectedProductReader,
 )
+from app.application.workbench.product_purchase_purpose_gate import ProductPurchasePurposeGate
 from app.application.workbench.projection_sync_contracts import (
     ReviewProjectionSynchronizer,
     projection_sync_warnings,
     sync_after_commit,
 )
+from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workbench.resale_accounting_pin import ResaleAccountingPin
 from app.application.workbench.resale_decision_gate import ResaleDecisionGate
 from app.application.workbench.selected_expense_account_resolution import (
@@ -60,6 +65,8 @@ class SubmitReviewDecisionUseCase:
         resale_decision_gate: ResaleDecisionGate | None = None,
         projection_synchronizer: ReviewProjectionSynchronizer | None = None,
         source_tax_safety_check: SourceTaxSafetyCheck | None = None,
+        internal_use_decision_gate: InternalUseDecisionGate | None = None,
+        product_purchase_purpose_gate: ProductPurchasePurposeGate | None = None,
     ) -> None:
         self._review_decision_writer = review_decision_writer
         self._projection_synchronizer = projection_synchronizer
@@ -69,6 +76,9 @@ class SubmitReviewDecisionUseCase:
         self._selected_product_reader = selected_product_reader
         self._selected_account_reader = selected_account_reader
         self._resale_decision_gate = resale_decision_gate
+        self._internal_use_decision_gate = internal_use_decision_gate
+        # Product-coded invoices: an explicit RESALE / INTERNAL_USE purpose is mandatory.
+        self._product_purchase_purpose_gate = product_purchase_purpose_gate
         # PR T W1: like the execution evidence reader, a Vendor Bill decision is refused
         # without it (``_enforce_source_tax_safety``) -- never accepted unchecked.
         self._source_tax_safety_check = source_tax_safety_check
@@ -100,11 +110,19 @@ class SubmitReviewDecisionUseCase:
             # A replay never re-runs the RESALE gate or re-pins: the accepted decision keeps the
             # RESALE accounting pin it was accepted with (P0-PROD-18F-1).
             resale_pin: ResaleAccountingPin | None = None
+            internal_use_pin: InternalUseAccountingPin | None = None
             if not is_replay:
+                purpose = self._require_product_purchase_purpose(command, evidence)
                 _validate_resolved_execution_inputs(command, evidence)
                 resale_pin = self._enforce_resale_eligibility(command, evidence)
-            # Only passed when present, so every non-RESALE write call is byte-identical to before.
-            pin_kwargs = {"resale_accounting_pin": resale_pin} if resale_pin is not None else {}
+                internal_use_pin = self._enforce_internal_use_accounting(command, evidence)
+                _require_purpose_safeguard_pin(purpose, resale_pin, internal_use_pin)
+            # Only passed when present, so every other write call is byte-identical to before.
+            pin_kwargs: dict[str, object] = {}
+            if resale_pin is not None:
+                pin_kwargs["resale_accounting_pin"] = resale_pin
+            if internal_use_pin is not None:
+                pin_kwargs["internal_use_accounting_pin"] = internal_use_pin
             if requires_billing_evidence:
                 billing_instructions = self._billing_instructions(command)
                 return self._write_and_commit(
@@ -238,6 +256,20 @@ class SubmitReviewDecisionUseCase:
         )
         return replace(evidence, product_match=new_product_match)
 
+    def _require_product_purchase_purpose(self, command: ReviewDecisionCommand, evidence) -> PurchasePurpose | None:
+        """Refuse a fresh product-coded Vendor Bill decision without an explicit purpose.
+
+        A no-op (``None``) when not configured, like the RESALE / INTERNAL_USE gates; both
+        production compositions wire it. Replays never reach here.
+        """
+
+        if self._product_purchase_purpose_gate is None:
+            return None
+        return _translate_decision_failure(
+            lambda: self._product_purchase_purpose_gate.require(command, evidence),
+            "Purchase purpose could not be checked safely.",
+        )
+
     def _enforce_resale_eligibility(self, command: ReviewDecisionCommand, evidence) -> ResaleAccountingPin | None:
         """Gate a fresh Vendor Bill decision on RESALE product eligibility (P0-PROD-18E-1B).
 
@@ -252,6 +284,23 @@ class SubmitReviewDecisionUseCase:
         return _translate_decision_failure(
             lambda: self._resale_decision_gate.enforce(command, evidence),
             "RESALE product eligibility could not be checked safely.",
+        )
+
+    def _enforce_internal_use_accounting(
+        self, command: ReviewDecisionCommand, evidence
+    ) -> InternalUseAccountingPin | None:
+        """Pin the operator's explicit internal expense account for an INTERNAL_USE product invoice.
+
+        A no-op (``None``) unless the current-version purpose is INTERNAL_USE on a
+        product-backed invoice; then the review-scoped EXPENSE_ACCOUNT resolution is
+        mandatory and re-validated read-only. Never the product category's account.
+        """
+
+        if self._internal_use_decision_gate is None:
+            return None
+        return _translate_decision_failure(
+            lambda: self._internal_use_decision_gate.enforce(command, evidence),
+            "INTERNAL_USE accounting could not be checked safely.",
         )
 
     def _validate_selected_expense_accounts(self, command: ReviewDecisionCommand) -> None:
@@ -358,6 +407,27 @@ def _validate_billing_coverage(
         raise ReviewDecisionError("Customer billing evidence duplicates allocation coverage.")
     if set(covered) != set(allocation_by_key):
         raise ReviewDecisionError("Customer billing evidence must cover every creation allocation exactly.")
+
+
+def _require_purpose_safeguard_pin(
+    purpose: PurchasePurpose | None,
+    resale_pin: ResaleAccountingPin | None,
+    internal_use_pin: InternalUseAccountingPin | None,
+) -> None:
+    """The purpose's own safeguard must have accepted and pinned the decision.
+
+    Prevents an unintended fallback to the product category's account when a gate is
+    not configured or returned nothing for a RESALE / INTERNAL_USE product invoice.
+    """
+
+    if purpose is PurchasePurpose.RESALE and resale_pin is None:
+        raise ProductPurchasePurposeDecisionError(
+            "RESALE product-invoice safeguards did not accept this decision; it cannot be recorded."
+        )
+    if purpose is PurchasePurpose.INTERNAL_USE and internal_use_pin is None:
+        raise ProductPurchasePurposeDecisionError(
+            "INTERNAL_USE product-invoice accounting did not accept this decision; it cannot be recorded."
+        )
 
 
 def _validate_resolved_execution_inputs(

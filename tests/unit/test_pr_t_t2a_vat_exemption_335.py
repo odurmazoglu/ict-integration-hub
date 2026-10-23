@@ -50,7 +50,12 @@ from app.tax_mapping.exemption import (
     validate_vat_exemption_tax_config,
 )
 from app.tax_mapping.result import InvoiceTaxLineResult, InvoiceTaxMappingResult, TaxMatchResult
-from tests.unit.resale_execution_support import NON_RESALE_ACCOUNTING_CHECK, TWO_DECIMAL_CURRENCY_READER
+from tests.unit.fx_rate_support import TRY_ONLY_FX_RATE_POLICY
+from tests.unit.resale_execution_support import (
+    NON_INTERNAL_USE_ACCOUNTING_CHECK,
+    NON_RESALE_ACCOUNTING_CHECK,
+    TWO_DECIMAL_CURRENCY_READER,
+)
 from tests.unit.source_tax_support import FixedSourceTaxFactsReader
 from tests.unit.test_operating_expense_classification import _FakeMatcher, _matched_product_match, _partner_match
 from tests.unit.test_review_decision_use_case import (
@@ -810,12 +815,14 @@ def run_strategy(check: SourceTaxSafetyCheck, source, mode: ExecutionMode = Exec
     builder = RecordingVendorBillBuilder()
     writer = RecordingVendorBillWriter()
     strategy = VendorBillExecutionStrategy(
+        internal_use_accounting_check=NON_INTERNAL_USE_ACCOUNTING_CHECK,
         source_invoice_reader=RecordingSourceInvoiceReader(source=source),
         vendor_bill_builder=builder,
         vendor_bill_writer=writer,
         resale_accounting_check=NON_RESALE_ACCOUNTING_CHECK,
         currency_reader=TWO_DECIMAL_CURRENCY_READER,
         source_tax_safety_check=check,
+        fx_rate_policy=TRY_ONLY_FX_RATE_POLICY,
     )
     return strategy.execute(_step_request(mode=mode, approved_by="finance.lead")), builder, writer
 

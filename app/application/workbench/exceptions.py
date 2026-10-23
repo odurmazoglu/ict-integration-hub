@@ -72,6 +72,29 @@ class ResaleDecisionEligibilityError(ReviewDecisionError):
     error_category = "resale_decision_eligibility_error"
 
 
+class InternalUseDecisionEligibilityError(ReviewDecisionError):
+    """Safe error raised when an INTERNAL_USE product-invoice Vendor Bill decision cannot be accepted.
+
+    Covers a missing/foreign-version accounting resolution, a non-expense treatment, an
+    expense account that is no longer eligible, account-only lines and unresolved
+    product lines. The product category's purchase account is never substituted.
+    """
+
+    error_category = "internal_use_decision_eligibility_error"
+
+
+class ProductPurchasePurposeDecisionError(ReviewDecisionError):
+    """Safe error raised when a product-coded Vendor Bill decision has no usable purchase purpose.
+
+    Covers a missing current-version purpose, a purpose without product-invoice
+    accounting safeguards (only RESALE and INTERNAL_USE have them), and a purpose whose
+    safeguard did not produce its accounting pin. Purpose is never inferred from the
+    product or the supplier.
+    """
+
+    error_category = "product_purchase_purpose_decision_error"
+
+
 class ReviewVersionConflictError(ReviewDecisionError):
     """Safe error raised when a review decision expected_version is stale."""
 
@@ -205,6 +228,30 @@ class WorkbenchCandidateUnsupportedDecisionError(WorkbenchCandidateDataError):
     """Safe error raised when Odoo carries a decision unsupported by canonical Hub contracts."""
 
     error_category = "workbench_candidate_unsupported_decision"
+
+
+class WorkbenchCandidateWorkflowError(WorkbenchCandidateDataError):
+    """Safe error raised when the selected workflow (or its required allocation) is invalid."""
+
+    error_category = "workbench_candidate_workflow_error"
+
+
+class OperatorDecisionWorkflowNotSupportedError(ReviewDecisionError):
+    """V1 Workbench: an operator decision selected a workflow other than Direct Vendor Bill.
+
+    Deterministic: the request is rejected once with a visible Turkish message, never retried.
+    """
+
+    error_category = "operator_decision_workflow_not_supported"
+
+
+class OperatorDecisionCandidateInvalidError(ReviewDecisionError):
+    """V1 Workbench: the decision fields on the Odoo row cannot form a valid decision.
+
+    Deterministic (the same row data fails the same way): rejected once, never retried.
+    """
+
+    error_category = "operator_decision_candidate_invalid"
 
 
 class WorkbenchCandidateAmbiguityError(WorkbenchCandidateReadError):

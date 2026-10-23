@@ -21,10 +21,25 @@ from app.application.exceptions.base import ApplicationError
 from app.application.workbench.accounting_resolution import AccountingTreatmentType, ReviewAccountingResolution
 from app.application.workbench.dto import ReviewDecisionType, ReviewStatus
 from app.application.workbench.fixed_asset_lookup import FixedAssetAccountingReader
+from app.application.workbench.previous_invoice_guidance import PreviousInvoiceGuidance
 from app.application.workbench.purchase_purpose import PurchasePurpose
 from app.application.workflow import ManualReviewReasonCode, WorkflowType
 
 logger = logging.getLogger(__name__)
+
+#: Shown after a draft Vendor Bill is created. Hub never posts; posting, payment and
+#: reconciliation wait for the accounting go-live decision, so the operator must not do them.
+DRAFT_VENDOR_BILL_CREATED_MESSAGE = (
+    "Taslak alış faturası oluşturuldu{bill}. Faturayı Odoo'da kontrol edin. Muhasebe geçiş kararı olmadan "
+    "ONAYLAMAYIN; ödeme veya mutabakat yapmayın."
+)
+
+
+def draft_vendor_bill_created_message(bill: str = "") -> str:
+    """The operator instruction after draft creation; ``bill`` is an optional " (Odoo kayıt N)" suffix."""
+
+    return DRAFT_VENDOR_BILL_CREATED_MESSAGE.format(bill=bill)
+
 
 #: Canonical ``ExecutionState.COMPLETED`` value, as stored on the projection.
 _EXECUTION_COMPLETED = "completed"
@@ -112,6 +127,8 @@ _OPERATING_EXPENSE_CODES = frozenset(
 )
 #: Purposes the accounting-resolution use case supports (it rejects RESALE / CUSTOMER_PROJECT).
 _ACCOUNTING_PURPOSES = frozenset({PurchasePurpose.INTERNAL_USE, PurchasePurpose.OTHER_OPERATING_EXPENSE})
+#: Purposes a product-coded Vendor Bill decision accepts (``ProductPurchasePurposeGate``).
+_PRODUCT_INVOICE_PURPOSES = frozenset({PurchasePurpose.RESALE, PurchasePurpose.INTERNAL_USE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +209,9 @@ class OperatorGuidanceFacts(ApplicationDTO):
     #: Most recent purpose recorded for the review (for the completed summary).
     latest_purchase_purpose: PurchasePurpose | None = None
     latest_accounting_resolution: ReviewAccountingResolution | None = None
+    #: An accounting resolution exists for the review's *current* version (the INTERNAL_USE
+    #: product-invoice decision requires exactly that).
+    current_accounting_resolution_recorded: bool = False
     #: Odoo display names for ``latest_accounting_resolution`` (see ``resolve_accounting_labels``).
     accounting_labels: AccountingLabels | None = None
     #: Configured ``ODOO_FIXED_ASSET_ACCOUNT_IDS`` -- the existing eligibility allowlist.
@@ -202,6 +222,12 @@ class OperatorGuidanceFacts(ApplicationDTO):
     unmatched_product_lines: tuple[UnmatchedProductLine, ...] = field(default_factory=tuple)
     #: Lines the current version's execution evidence matches to a product, in source order.
     resolved_product_lines: tuple[ResolvedProductLine, ...] = field(default_factory=tuple)
+    #: The source invoice carries a product identifier on at least one line: a Vendor Bill
+    #: decision then requires an explicit RESALE / INTERNAL_USE purpose for the current version.
+    product_coded: bool = False
+    #: V1: the same supplier's most recent completed invoice -- shown as history at the purpose
+    #: and accounting steps only, never applied (see ``previous_invoice_guidance``).
+    previous_invoice: PreviousInvoiceGuidance | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,8 +252,36 @@ class GuidanceInput(ApplicationDTO):
     vendor_bill_id: int | None
 
 
+#: Steps at which the previous invoice is shown: the operator is choosing purpose / accounting.
+_PREVIOUS_INVOICE_STEPS = frozenset({OperatorNextAction.PURPOSE, OperatorNextAction.ACCOUNTING})
+
+
+#: Generic, supplier-independent caution shown with every previous-invoice block.
+PREVIOUS_INVOICE_REFERENCE_WARNING = (
+    "Geçmiş faturadaki muhasebe bilgileri yalnızca referans amaçlıdır. "
+    "Bu faturanın kullanım amacı ve muhasebe hesabı ayrıca doğrulanmalıdır."
+)
+
+
+def shows_previous_invoice(source: GuidanceInput, facts: OperatorGuidanceFacts) -> bool:
+    """Whether the previous-invoice block is shown: a pending review at the purpose or
+    accounting step. ``facts.previous_invoice`` itself is not consulted, so the composition
+    can ask before it reads any Odoo label for the block."""
+
+    if source.status is not ReviewStatus.PENDING_REVIEW:
+        return False
+    action, _ = _next_action(source, facts)
+    return action in _PREVIOUS_INVOICE_STEPS
+
+
 def build_operator_guidance(source: GuidanceInput, facts: OperatorGuidanceFacts) -> WorkbenchOperatorGuidance:
     action, todo = _next_action(source, facts)
+    if (
+        facts.previous_invoice is not None
+        and source.status is ReviewStatus.PENDING_REVIEW
+        and action in _PREVIOUS_INVOICE_STEPS
+    ):
+        todo += _previous_invoice_html(facts.previous_invoice)
     return WorkbenchOperatorGuidance(
         next_action=action,
         todo_html=todo,
@@ -304,15 +358,33 @@ def _next_action(source: GuidanceInput, facts: OperatorGuidanceFacts) -> tuple[O
         return OperatorNextAction.TECHNICAL, _todo(
             "Bu engel henüz Odoo'dan çözülemiyor (ürün/vergi/fatura içeriği); teknik destek alın.", findings
         )
+    if facts.product_coded and facts.current_purchase_purpose is None:
+        return OperatorNextAction.PURPOSE, _todo(
+            "Ürün kodlu fatura: satın alma amacını açıkça seçin (Yeniden Satış veya Şirket İçi Kullanım). "
+            "Amaç ürün veya tedarikçiden çıkarılmaz; amaç kaydedilmeden karar kabul edilmez."
+        )
+    if facts.product_coded and facts.current_purchase_purpose not in _PRODUCT_INVOICE_PURPOSES:
+        return OperatorNextAction.TECHNICAL, _todo(
+            f"Ürün kodlu faturada '{PURPOSE_LABELS[facts.current_purchase_purpose]}' amacıyla karar kabul "
+            "edilmez; yalnızca Yeniden Satış veya Şirket İçi Kullanım desteklenir. Teknik destek alın."
+        )
+    if (
+        facts.current_purchase_purpose is PurchasePurpose.INTERNAL_USE
+        and not facts.current_accounting_resolution_recorded
+    ):
+        # A technically unblocked product invoice bought for ICT's own use: the product
+        # category's account is for RESALE, so the decision requires an explicit expense account.
+        return OperatorNextAction.ACCOUNTING, _todo(
+            "Şirket içi kullanım: ürün kategorisinin hesabı yeniden satış içindir. Muhasebe işlemi olarak "
+            "'Gider' seçip şirket içi gider hesabını ve gider kategorisini girin; ardından kararı gönderin."
+        )
     return OperatorNextAction.DECISION, _todo("Engel kalmadı: iş akışını seçip kararı gönderin.")
 
 
 def _after_decision(source: GuidanceInput) -> tuple[OperatorNextAction, str]:
     if source.decision_workflow is WorkflowType.VENDOR_BILL:
         if source.execution_state == _EXECUTION_COMPLETED:
-            return OperatorNextAction.DONE, _todo(
-                "Taslak tedarikçi faturası oluşturuldu. Faturayı Odoo'da kontrol edip onaylayın."
-            )
+            return OperatorNextAction.DONE, _todo(draft_vendor_bill_created_message())
         return OperatorNextAction.EXECUTE, _todo("Karar kabul edildi: taslak tedarikçi faturasını oluşturun.")
     if source.decision_workflow is WorkflowType.CUSTOMER_QUOTATION:
         return OperatorNextAction.TECHNICAL, _todo("Müşteri teklifi yürütmesi henüz Odoo'dan yapılamıyor.")
@@ -340,15 +412,55 @@ def _completed_html(source: GuidanceInput, facts: OperatorGuidanceFacts) -> str:
             parts.append(resolution.expense_category)
         done.append("Muhasebe: " + " — ".join(parts))
     if source.decision_type is ReviewDecisionType.DISMISS:
-        done.append(f"Karar: Muhasebeleştirme dışı bırakıldı (v{source.decision_version}); {NOT_STATUTORY_REJECTION}")
+        done.append(f"Karar: Muhasebeleştirme dışı bırakıldı; {NOT_STATUTORY_REJECTION}")
     elif source.decision_workflow is not None:
-        done.append(f"Karar: {WORKFLOW_LABELS[source.decision_workflow]} (v{source.decision_version})")
+        done.append(f"Karar: {WORKFLOW_LABELS[source.decision_workflow]}")
     if source.execution_state == _EXECUTION_COMPLETED and source.vendor_bill_id is not None:
-        done.append(f"Taslak fatura: Odoo kayıt #{source.vendor_bill_id}")
+        # V1: no technical ids in operator text; the bill opens from "Taslak Faturayı Aç".
+        done.append("Taslak alış faturası oluşturuldu (onaylanmadı)")
     if not done:
         return '<p class="text-muted">Henüz tamamlanan adım yok.</p>'
     items = "".join(f"<li>✓ {html.escape(line, quote=False)}</li>" for line in done)
     return f'<ul class="o_ipp_completed">{items}</ul>'
+
+
+def _previous_invoice_html(guidance: PreviousInvoiceGuidance) -> str:
+    """History only: what was recorded for the supplier's last completed invoice, with warnings."""
+
+    latest = guidance.latest
+    resolution = latest.accounting_resolution
+    reference = latest.invoice_number or "numarasız fatura"
+    if latest.invoice_date is not None:
+        reference += f" ({latest.invoice_date.isoformat()})"
+    accounting = [TREATMENT_LABELS[resolution.treatment_type], guidance.account_label or ACCOUNT_LABEL_UNAVAILABLE]
+    if resolution.treatment_type is AccountingTreatmentType.CAPITALIZE_FIXED_ASSET:
+        accounting.append(guidance.depreciation_model_label or MODEL_LABEL_UNAVAILABLE)
+    lines = [
+        f"Tedarikçi: {latest.supplier_name or 'bilinmiyor'}",
+        f"Önceki fatura: {reference}",
+        f"Satın alma amacı: {PURPOSE_LABELS[latest.purchase_purpose]}",
+        "Muhasebe: " + " — ".join(accounting),
+    ]
+    if resolution.treatment_type is AccountingTreatmentType.EXPENSE_ACCOUNT and resolution.expense_category:
+        lines.append(f"Gider kategorisi: {resolution.expense_category}")
+    warnings = [PREVIOUS_INVOICE_REFERENCE_WARNING]
+    if guidance.mixed_purpose:
+        warnings.append(
+            f"Bu tedarikçinin son {guidance.completed_count} tamamlanmış faturasında "
+            f"{guidance.distinct_classification_count} farklı amaç/muhasebe kararı var (karma amaçlı tedarikçi). "
+            "Her faturayı ayrı değerlendirin."
+        )
+    items = "".join(f"<li>{html.escape(line, quote=False)}</li>" for line in lines)
+    cautions = "".join(f"<li>⚠ {html.escape(line, quote=False)}</li>" for line in warnings)
+    return (
+        '<div class="o_ipp_previous_invoice">'
+        "<p><strong>Geçmiş bilgi — öneri değildir</strong></p>"
+        "<p>Bu tedarikçinin son tamamlanan faturasında kaydedilen kararlar aşağıdadır. Hub bu kararları "
+        "doğrulamaz ve bu faturaya uygulamaz; amaç ve muhasebe işlemini bu fatura için ayrıca seçin.</p>"
+        f'<ul class="o_ipp_previous_invoice_facts">{items}</ul>'
+        f'<ul class="o_ipp_previous_invoice_warnings">{cautions}</ul>'
+        "</div>"
+    )
 
 
 def _product_todo(lines: tuple[UnmatchedProductLine, ...], findings: list[str]) -> str:
@@ -390,7 +502,9 @@ def _todo(instruction: str, findings: list[str] | None = None) -> str:
 
 __all__ = [
     "ACCOUNT_LABEL_UNAVAILABLE",
+    "DRAFT_VENDOR_BILL_CREATED_MESSAGE",
     "MODEL_LABEL_UNAVAILABLE",
+    "PREVIOUS_INVOICE_REFERENCE_WARNING",
     "PRODUCT_LABEL_UNAVAILABLE",
     "PURPOSE_LABELS",
     "TREATMENT_LABELS",
@@ -403,6 +517,8 @@ __all__ = [
     "ResolvedProductLine",
     "UnmatchedProductLine",
     "WorkbenchOperatorGuidance",
+    "draft_vendor_bill_created_message",
     "build_operator_guidance",
     "resolve_accounting_labels",
+    "shows_previous_invoice",
 ]

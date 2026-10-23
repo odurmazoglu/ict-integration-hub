@@ -79,6 +79,14 @@ class ExecutionPreviewResaleAccountingError(ExecutionError):
     error_category = "execution_preview_resale_accounting_error"
 
 
+class ExecutionPreviewInternalUseAccountingError(ExecutionError):
+    """Safe error raised when a Vendor Bill preview cannot show an INTERNAL_USE decision's
+    pinned expense account (missing, corrupt, or inconsistent with the decision). Preview
+    never falls back to the product category's account."""
+
+    error_category = "execution_preview_internal_use_accounting_error"
+
+
 class ResaleExecutionAccountingError(ExecutionError):
     """Safe error raised when a RESALE Vendor Bill decision's immutable accounting pin
     cannot be proven safe to send to Odoo (P0-PROD-18F-2): the pin is missing, corrupt or
@@ -87,6 +95,15 @@ class ResaleExecutionAccountingError(ExecutionError):
     never updated -- the operator must accept a new decision."""
 
     error_category = "resale_execution_accounting_error"
+
+
+class InternalUseExecutionAccountingError(ExecutionError):
+    """Safe error raised when an INTERNAL_USE product-invoice decision's immutable accounting
+    pin cannot be proven safe to send to Odoo: the pin is missing, corrupt or inconsistent
+    with the decision, or its expense account is no longer eligible or drifted. Raised
+    before any Odoo Vendor Bill write; the pin is never updated."""
+
+    error_category = "internal_use_execution_accounting_error"
 
 
 class ExecutionSourceInvoiceError(ExecutionError):

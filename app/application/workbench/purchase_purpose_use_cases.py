@@ -7,6 +7,13 @@ reclassification and never advances the review version by itself. It exists
 only so ``SubmitReviewAccountingResolutionUseCase`` has an explicit, auditable
 precondition to check before accepting an accounting treatment for a
 mixed-purpose supplier's review.
+
+Eligibility: RESALE on any pending product-shaped review; any purpose on a review
+blocked by an operating-expense-shaped reason; and INTERNAL_USE on a *technically
+unblocked* review (no reasons, workflow VENDOR_BILL) whose invoice is product-shaped --
+e.g. ICT's own Microsoft 365 subscriptions bought from a product supplier. For that
+last case the decision then requires an explicit review-scoped expense account
+(``InternalUseDecisionGate``), so the product category's RESALE account is never used.
 """
 
 from __future__ import annotations
@@ -32,7 +39,7 @@ from app.application.workbench.purchase_purpose import (
     SubmitPurchasePurposeCommand,
 )
 from app.application.workbench.queries import ReviewDetailQuery
-from app.application.workflow import ManualReviewReason, ManualReviewReasonCode
+from app.application.workflow import ManualReviewReason, ManualReviewReasonCode, WorkflowType
 
 
 class SubmitPurchasePurposeUseCase:
@@ -83,6 +90,9 @@ class SubmitPurchasePurposeUseCase:
         source = self._source_invoice_reader.get(review_id=command.review_id, company_id=command.company_id)
         if command.purchase_purpose is PurchasePurpose.RESALE:
             _require_product_shaped(source.invoice)
+        elif not _has_operating_expense_reason(review.review_reasons):
+            # Technically unblocked INTERNAL_USE (see _require_eligible): product invoices only.
+            _require_product_shaped(source.invoice, purpose=command.purchase_purpose)
         resolution = PurchasePurposeResolution(
             review_id=command.review_id,
             company_id=command.company_id,
@@ -109,11 +119,15 @@ class SubmitPurchasePurposeUseCase:
             # P0-PROD-18E-1B: RESALE is product-shaped, never operating-expense-shaped.
             # Its product identity is checked at decision acceptance, not here.
             return
-        if not _has_operating_expense_reason(review.review_reasons):
-            raise PurchasePurposeEligibilityError(
-                "The review does not currently carry an operating-expense-shaped reason; "
-                "there is nothing to explain a purchase purpose for."
-            )
+        if _has_operating_expense_reason(review.review_reasons):
+            return
+        if purchase_purpose is PurchasePurpose.INTERNAL_USE and _is_technically_unblocked(review):
+            return
+        raise PurchasePurposeEligibilityError(
+            "The review does not currently carry an operating-expense-shaped reason; "
+            "there is nothing to explain a purchase purpose for. Only RESALE or INTERNAL_USE can be recorded "
+            "on a technically unblocked Vendor Bill review."
+        )
 
     def _resume_if_already_applied(
         self, command: SubmitPurchasePurposeCommand
@@ -144,8 +158,9 @@ class SubmitPurchasePurposeUseCase:
         )
 
 
-def _require_product_shaped(invoice) -> None:
-    """RESALE needs at least one line carrying a product identifier (P0-PROD-18E-1B).
+def _require_product_shaped(invoice, *, purpose: PurchasePurpose = PurchasePurpose.RESALE) -> None:
+    """RESALE (P0-PROD-18E-1B) and unblocked INTERNAL_USE need at least one line carrying a
+    product identifier.
 
     Uses only the review's own immutable source invoice -- no product match, no
     selected product and no Odoo read are required to record the purpose.
@@ -153,9 +168,15 @@ def _require_product_shaped(invoice) -> None:
 
     if not invoice_has_product_identifier(invoice):
         raise PurchasePurposeEligibilityError(
-            "RESALE requires a product-shaped review: no invoice line carries a buyer item code, seller item code "
-            "or barcode."
+            f"{purpose.name} requires a product-shaped review: no invoice line carries a buyer item code, "
+            "seller item code or barcode."
         )
+
+
+def _is_technically_unblocked(review) -> bool:
+    """No current blocker at all and the effective workflow is already VENDOR_BILL."""
+
+    return not review.review_reasons and review.workflow is WorkflowType.VENDOR_BILL
 
 
 def _has_operating_expense_reason(reasons: tuple[ManualReviewReason, ...]) -> bool:

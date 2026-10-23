@@ -645,7 +645,7 @@ def test_decision_uses_existing_candidate_parsing_validation_and_idempotency_key
     assert command.idempotency_key == decision_idempotency_key(candidate)
     assert command.expected_version == 4 and command.decided_by == "odoo:2"
     assert validator.calls == 1 and uow.commits == 1
-    assert outcome.outcome is OperatorRequestOutcome.COMPLETED and "v5" in outcome.message
+    assert outcome.outcome is OperatorRequestOutcome.COMPLETED and outcome.message == "Karar kaydedildi."
 
 
 def test_duplicate_decision_reports_already_completed() -> None:
@@ -713,7 +713,7 @@ def test_execution_issues_narrow_authorization_and_runs_existing_dispatcher_in_e
     assert issued == ["EXECUTE_VENDOR_BILL"]
     assert call["mode"] is ExecutionMode.EXECUTE and call["decision_version"] == 4
     assert call["approval"].approved_by == "operator" and call["authorization_id"] == "auth-1"
-    assert outcome.outcome is OperatorRequestOutcome.COMPLETED and "69" in outcome.message
+    assert outcome.outcome is OperatorRequestOutcome.COMPLETED and "69" not in outcome.message
 
 
 @pytest.mark.parametrize(
@@ -1120,7 +1120,7 @@ def test_execute_replay_never_issues_an_unused_authorization() -> None:
     ]
     replay = workflow.run(company_id=COMPANY).results[0]
     assert replay.outcome is OperatorRequestOutcome.ALREADY_COMPLETED
-    assert "daha önce oluşturulmuştu" in replay.message and "69" in replay.message
+    assert "daha önce oluşturulmuştu" in replay.message and "69" not in replay.message
     assert len(issuer.calls) == 1  # no new authorization
     assert len(runtime.executions) == 1  # no new Vendor Bill
     assert runtime.calls[-1]["authorization_id"] is None and runtime.calls[-1]["mode"] is ExecutionMode.EXECUTE

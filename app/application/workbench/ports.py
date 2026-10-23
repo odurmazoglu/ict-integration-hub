@@ -16,6 +16,7 @@ from app.application.workbench.evidence import (
     ReviewSourceInvoiceEvidence,
 )
 from app.application.workbench.expense_account_lookup import ExpenseAccountCandidate
+from app.application.workbench.internal_use_accounting_pin import InternalUseAccountingPin
 from app.application.workbench.one_off_vendor_retirement import OneOffVendorRetirement, OneOffVendorRetirementStatus
 from app.application.workbench.product_remediation import (
     ProductIdentityClaim,
@@ -412,9 +413,11 @@ class ReviewDecisionWriter(Protocol):
         evidence: ExecutionSourceInvoice,
         *,
         resale_accounting_pin: ResaleAccountingPin | None = None,
+        internal_use_accounting_pin: InternalUseAccountingPin | None = None,
     ) -> ReviewDecisionAcknowledgement:
-        """``resale_accounting_pin`` (P0-PROD-18F-1) is persisted atomically with a new
-        decision's execution evidence; an existing (replayed) decision keeps its own."""
+        """``resale_accounting_pin`` (P0-PROD-18F-1) / ``internal_use_accounting_pin`` is
+        persisted atomically with a new decision's execution evidence; an existing
+        (replayed) decision keeps its own."""
 
     def submit_review_decision_with_execution_and_billing_evidence(
         self,
@@ -423,6 +426,7 @@ class ReviewDecisionWriter(Protocol):
         billing_instructions: tuple[CustomerInvoiceBillingInstruction, ...],
         *,
         resale_accounting_pin: ResaleAccountingPin | None = None,
+        internal_use_accounting_pin: InternalUseAccountingPin | None = None,
     ) -> ReviewDecisionAcknowledgement:
         pass
 
